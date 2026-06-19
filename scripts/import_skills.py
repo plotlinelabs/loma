@@ -32,10 +32,15 @@ async def run(source: Path, actor: str) -> dict:
     db = client[OBSERVABILITY_DB_NAME]
     try:
         await skill_service.ensure_skill_indexes(db)
-        imported = []
+        imported: list[str] = []
+        failed: list[dict] = []
         for child in sorted(p for p in source.iterdir() if p.is_dir()):
-            imported.append(await skill_service.import_skill_directory(db, child, actor=actor))
-        return {"imported": [item.get("slug") for item in imported], "count": len(imported)}
+            try:
+                item = await skill_service.import_skill_directory(db, child, actor=actor)
+                imported.append(item.get("slug"))
+            except Exception as exc:  # keep going so one bad skill can't abort the run
+                failed.append({"slug": child.name, "error": str(exc)})
+        return {"imported": imported, "failed": failed, "count": len(imported)}
     finally:
         client.close()
 
