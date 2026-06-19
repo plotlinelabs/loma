@@ -38,9 +38,23 @@ async def _stream_response(client, channel, thread_ts, react_ts, agent_stream):
     """
     last_text = ""
 
-    async for text in agent_stream:
-        last_text = text
-        logger.info("[SLACK] Received chunk (%d chars), buffering...", len(text))
+    async for event in agent_stream:
+        if isinstance(event, dict):
+            if event.get("type") != "text":
+                continue
+            text = str(event.get("text") or "")
+            if not text:
+                continue
+            if event.get("append"):
+                last_text += text
+            else:
+                last_text = f"{last_text}\n\n{text}" if last_text else text
+        else:
+            text = str(event or "")
+            if not text:
+                continue
+            last_text = text
+        logger.info("[SLACK] Received text chunk (%d chars), buffering...", len(text))
 
     # Remove the hourglass reaction
     try:
