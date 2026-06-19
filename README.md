@@ -218,6 +218,11 @@ Open `http://localhost:3001`. The first local user created with `LOMA_SETUP_TOKE
 
 Channel-wide automations are disabled in this first OSS release. They will become dashboard-managed company workflows in a later release.
 
+If DMs do not receive a response, first confirm `message.im` is subscribed and
+the bot token has `im:write`. Slack only applies new OAuth scopes after you
+reinstall the app to the workspace; updating the scope list without reinstalling
+leaves the running token under-scoped.
+
 ## Dashboard auth setup
 
 Loma defaults to local email/password auth so a fresh EC2 or GCP VM can run on a public IP without DNS. The first admin account is created from the login page by entering:
