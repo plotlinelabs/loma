@@ -59,3 +59,24 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: dashboard
+
+  deploy:
+    needs: [public-content-scan, secret-scan, backend, dashboard]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 600 /dev/null key
+          printf '%s' "$SSH_KEY" > key
+          ssh -i key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            "$SSH_USER@$SSH_HOST" \
+            'set -e; cd ~/loma; git fetch origin --prune; git reset --hard origin/main; bash scripts/deploy.sh'
