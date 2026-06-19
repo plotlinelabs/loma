@@ -4,6 +4,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git curl ca-certificates \
     && OPENCODE_INSTALL_DIR=/usr/local/bin sh -c 'curl -fsSL https://opencode.ai/install | bash' \
+    && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
+    && opencode --version \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 COPY requirements.txt .
