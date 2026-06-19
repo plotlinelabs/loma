@@ -14,6 +14,7 @@
     "@xterm/xterm": "^6.0.0",
     "mammoth": "^1.8.0",
     "mermaid": "^11.4.1",
+    "mongodb": "^7.3.0",
     "next": "^16.2.9",
     "next-auth": "^5.0.0-beta.30",
     "react": "19.2.3",

@@ -1,6 +1,6 @@
 # Loma
 
-**Loma is an AI agent factory for companies.** It gives a team a self-hosted Slack agent, a dashboard for chat and observability, Google OAuth user management, and an integration framework for connecting company tools.
+**Loma is an AI agent factory for companies.** It gives a team a self-hosted Slack agent, a dashboard for chat and observability, local-first user management, and an integration framework for connecting company tools.
 
 This repository is the clean OSS codebase. Company-specific knowledge, prompts, playbooks, credentials, and deployment details should live in your database, environment variables, or private configuration exports - not in source code.
 
@@ -9,7 +9,8 @@ This repository is the clean OSS codebase. Company-specific knowledge, prompts, 
 - Slack Socket Mode bot for app mentions and DMs
 - Thread context and Slack file download support
 - Dashboard chat and conversation history
-- Google OAuth login through NextAuth
+- Local email/password dashboard login through NextAuth
+- Optional Google OAuth dashboard login for teams with a configured domain
 - First-user-becomes-admin provisioning
 - User, team, and role management
 - MongoDB-backed conversations, prompt settings, flows, users, and integrations
@@ -24,7 +25,7 @@ Slack workspace ── Socket Mode ── Python backend (:3000) ── MongoDB
                                       │
                                       ├── Agent runtime + optional MCP tools
                                       │
-Dashboard (:3001) ── Google OAuth ────┘
+Dashboard (:3001) ── Auth.js login ───┘
 ```
 
 ## Prerequisites
@@ -33,8 +34,8 @@ Dashboard (:3001) ── Google OAuth ────┘
 - Node.js 20+
 - MongoDB database
 - Slack workspace where you can create an app
-- Google OAuth client for dashboard login
 - OpenCode API key for the default agent runtime
+- Optional Google OAuth client for dashboard login
 - Optional Anthropic API key or Claude dashboard accounts if you want Claude Agent SDK fallback
 
 ## Fresh EC2 Quickstart
@@ -90,6 +91,7 @@ Minimum values for an EC2 smoke test:
 
 ```text
 PUBLIC_BASE_URL=http://<ec2-public-ip>:3001
+LOMA_SETUP_TOKEN=<random-first-admin-token>
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 OPENCODE_API_KEY=opencode-...
@@ -113,20 +115,23 @@ Minimum values:
 
 ```text
 AUTH_SECRET=<random-long-secret>
-AUTH_GOOGLE_ID=...
-AUTH_GOOGLE_SECRET=...
+AUTH_PROVIDER=local
+NEXT_PUBLIC_AUTH_PROVIDER=local
+LOMA_SETUP_TOKEN=<same-random-first-admin-token>
+OBSERVABILITY_MONGODB_URI=mongodb+srv://...
+OBSERVABILITY_DB_NAME=loma_observability
 AUTH_URL=http://<ec2-public-ip>:3001
 BACKEND_URL=http://loma-backend:3000
 NEXT_PUBLIC_API_URL=http://<ec2-public-ip>:3000
 ```
 
-6. Configure Google OAuth with this redirect URI:
+Generate secrets on the instance with:
 
-```text
-http://<ec2-public-ip>:3001/api/auth/callback/google
+```bash
+openssl rand -base64 32
 ```
 
-7. Configure Slack:
+6. Configure Slack:
 
 - Create a Slack app at <https://api.slack.com/apps>.
 - Enable Socket Mode.
@@ -135,16 +140,16 @@ http://<ec2-public-ip>:3001/api/auth/callback/google
 - Subscribe to `app_mention` and `message.im` bot events.
 - Install the app and set the bot token as `SLACK_BOT_TOKEN`.
 
-8. Start Loma:
+7. Start Loma:
 
 ```bash
 docker compose up --build
 ```
 
-9. Smoke test:
+8. Smoke test:
 
 - Open `http://<ec2-public-ip>:3001`.
-- Log in with Google; the first user should become `admin`.
+- Create the first admin with your email, a password, and `LOMA_SETUP_TOKEN`.
 - Send a message in dashboard chat.
 - Mention the Slack bot in a channel where it has been invited.
 - DM the Slack bot.
@@ -185,7 +190,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:3001`. The first Google-authenticated user is automatically provisioned as `admin`.
+Open `http://localhost:3001`. The first local user created with `LOMA_SETUP_TOKEN` is automatically provisioned as `admin`.
 
 ## Slack app setup
 
@@ -213,7 +218,29 @@ Open `http://localhost:3001`. The first Google-authenticated user is automatical
 
 Channel-wide automations are disabled in this first OSS release. They will become dashboard-managed company workflows in a later release.
 
-## Google OAuth setup
+## Dashboard auth setup
+
+Loma defaults to local email/password auth so a fresh EC2 or GCP VM can run on a public IP without DNS. The first admin account is created from the login page by entering:
+
+- email
+- password with at least 8 characters
+- `LOMA_SETUP_TOKEN`
+
+Set these in `dashboard/.env`:
+
+```text
+AUTH_SECRET=...
+AUTH_PROVIDER=local
+NEXT_PUBLIC_AUTH_PROVIDER=local
+LOMA_SETUP_TOKEN=...
+OBSERVABILITY_MONGODB_URI=mongodb+srv://user:pass@cluster.example.com/loma
+OBSERVABILITY_DB_NAME=loma_observability
+AUTH_URL=http://localhost:3001
+```
+
+Use the same MongoDB database as the backend so the dashboard-created admin is visible to the Python API.
+
+## Optional Google OAuth setup
 
 Create an OAuth client in Google Cloud Console. For local development, add:
 
@@ -225,12 +252,16 @@ Set these in `dashboard/.env`:
 
 ```text
 AUTH_SECRET=...
+AUTH_PROVIDER=google
+NEXT_PUBLIC_AUTH_PROVIDER=google
 AUTH_GOOGLE_ID=...
 AUTH_GOOGLE_SECRET=...
 AUTH_URL=http://localhost:3001
 ```
 
 In production, set `AUTH_URL` to your dashboard URL and add the matching callback URL in Google Cloud Console.
+
+Google OAuth requires a valid top-level domain for production redirect URIs. For raw IP self-hosted testing, keep `AUTH_PROVIDER=local`.
 
 ## MongoDB setup
 
@@ -294,11 +325,11 @@ A minimal Docker Compose setup is included:
 docker compose up --build
 ```
 
-For EC2/GCP, run the backend behind a process manager and the dashboard behind your reverse proxy. Use HTTPS for the dashboard URL configured in Google OAuth.
+For EC2/GCP, run the backend behind a process manager and the dashboard behind your reverse proxy. Use HTTPS for the dashboard URL when you add domain-based OAuth.
 
 ## Team onboarding
 
-- First login becomes `admin`.
+- First local setup-token login becomes `admin`.
 - Admins can manage users, teams, and roles in the dashboard.
 - Roles are: `admin`, `maintainer`, `operator`, `analyst`, and `chatter`.
 
