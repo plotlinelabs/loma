@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
     && OPENCODE_INSTALL_DIR=/usr/local/bin sh -c 'curl -fsSL https://opencode.ai/install | bash' \
     && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
     && opencode --version \
+    && npm install -g @anthropic-ai/claude-code \
+    && claude --version \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 COPY requirements.txt .
