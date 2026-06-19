@@ -135,10 +135,10 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 )
 
 FAVORITE_MODEL_IDS = (
+    "opencode-go/deepseek-v4-flash",
     "anthropic/claude-opus-4-8",
     "anthropic/claude-opus-4-7",
     "anthropic/claude-opus-4-6",
-    "opencode-go/deepseek-v4-flash",
     "openai/gpt-5.5",
 )
 
@@ -809,7 +809,7 @@ async def handle_chat(request: web.Request) -> web.Response:
         metadata = {
             "source": "dashboard",
             "prompt": message,
-            "model": selected_model or os.environ.get("CLAUDE_MODEL", ""),
+            "model": selected_model or os.environ.get("AGENT_DEFAULT_MODEL", "opencode-go/deepseek-v4-flash"),
             "user_name": user_email,
         }
         if existing_conversation_id:
@@ -925,6 +925,7 @@ async def handle_chat(request: web.Request) -> web.Response:
 async def handle_agent_models(request: web.Request) -> web.Response:
     """GET /api/agent-models — dynamic model catalog for dashboard chat."""
     default_claude_model = ClientPool.default_model()
+    default_agent_model = os.environ.get("AGENT_DEFAULT_MODEL", "opencode-go/deepseek-v4-flash")
 
     def _claude_entry(model_id: str) -> dict:
         return {
@@ -961,15 +962,15 @@ async def handle_agent_models(request: web.Request) -> web.Response:
 
         catalog = {
             **catalog,
-            "default_model": f"anthropic/{default_claude_model}",
+            "default_model": default_agent_model,
             "models": _order_agent_models(_ensure_favorite_models(filtered_models)),
         }
         return web.json_response(catalog)
     except Exception as e:
         logger.exception("Failed to load OpenCode model catalog")
         return web.json_response({
-            "default_model": f"anthropic/{default_claude_model}",
-            "models": claude_models,
+            "default_model": default_agent_model,
+            "models": _order_agent_models(_ensure_favorite_models(claude_models)),
             "warning": str(e),
         })
 

@@ -11,10 +11,10 @@ import type { Artifact } from "./ArtifactViewer";
 const RECOVERY_MESSAGE = "Connection lost \u2014 checking on your request...";
 const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 const FAVORITE_MODEL_IDS = [
+  "opencode-go/deepseek-v4-flash",
   "anthropic/claude-opus-4-8",
   "anthropic/claude-opus-4-7",
   "anthropic/claude-opus-4-6",
-  "opencode-go/deepseek-v4-flash",
   "openai/gpt-5.5",
 ] as const;
 

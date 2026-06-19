@@ -149,6 +149,28 @@ def test_claude_model_selection_detection():
 
 
 @pytest.mark.asyncio
+async def test_stream_agent_uses_opencode_runtime_by_default(monkeypatch):
+    import agent.opencode_runtime as opencode_runtime
+    from agent.client import stream_agent
+
+    seen = {}
+
+    async def fake_run_opencode_agent(**kwargs):
+        seen.update(kwargs)
+        yield {"type": "account_info", "runtime": "opencode", "provider": "opencode-go", "model": "deepseek-v4-flash"}
+        yield "ok"
+
+    monkeypatch.setattr(opencode_runtime, "run_opencode_agent", fake_run_opencode_agent)
+
+    events = []
+    async for event in stream_agent("hello", include_steps=True, source="dashboard"):
+        events.append(event)
+
+    assert seen["selected_model"] == "opencode-go/deepseek-v4-flash"
+    assert events[-1] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_stream_agent_uses_opencode_runtime_when_model_selected(monkeypatch):
     import agent.opencode_runtime as opencode_runtime
     from agent.client import stream_agent

@@ -29,8 +29,13 @@ logger = logging.getLogger(__name__)
 
 # Max times to transparently retry with a different account on rate limit
 MAX_ACCOUNT_RETRIES = 3
+DEFAULT_AGENT_MODEL = "opencode-go/deepseek-v4-flash"
 
 CONFIG_PATH = Path(os.environ.get("AGENT_CONFIG_PATH", Path(__file__).parent.parent / "config.yaml"))
+
+
+def _default_agent_model() -> str:
+    return os.environ.get("AGENT_DEFAULT_MODEL", DEFAULT_AGENT_MODEL).strip() or DEFAULT_AGENT_MODEL
 
 
 def _selected_model_is_claude(selected_model: str | None) -> bool:
@@ -781,10 +786,11 @@ async def stream_agent(
     if observer:
         observer.turn_count = 0
 
+    selected_model = selected_model or _default_agent_model()
     selected_claude_model = _normalize_claude_model(selected_model)
 
-    # Dashboard chat can opt into OpenCode by selecting a provider/model. Claude
-    # family selections stay on the Claude Agent SDK runtime.
+    # OpenCode is the default runtime for OSS installs. Claude family selections
+    # stay on the Claude Agent SDK runtime when explicitly selected/configured.
     if selected_model and not selected_claude_model:
         try:
             from agent.opencode_runtime import run_opencode_agent
@@ -853,7 +859,7 @@ async def stream_agent(
             "type": "account_info",
             "runtime": "claude",
             "provider": "anthropic",
-            "model": getattr(client, "_pool_model", None) or selected_claude_model or os.environ.get("CLAUDE_MODEL", ""),
+            "model": getattr(client, "_pool_model", None) or selected_claude_model or selected_model or os.environ.get("CLAUDE_MODEL", ""),
             "account_type": "round_robin",
             "account_email": account_email,
             "pool_available": pool_status["available"],

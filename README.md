@@ -14,6 +14,7 @@ This repository is the clean OSS codebase. Company-specific knowledge, prompts, 
 - User, team, and role management
 - MongoDB-backed conversations, prompt settings, flows, users, and integrations
 - Optional integration registry for tools such as GitHub, Linear, HubSpot, Google, Slack, Sentry, and databases
+- OpenCode as the default agent runtime, with optional Claude Agent SDK fallback
 - Feature flags so optional providers do not block startup
 
 ## Architecture
@@ -33,7 +34,8 @@ Dashboard (:3001) ── Google OAuth ────┘
 - MongoDB database
 - Slack workspace where you can create an app
 - Google OAuth client for dashboard login
-- Anthropic API key or another model provider supported by your runtime configuration
+- OpenCode API key for the default agent runtime
+- Optional Anthropic API key or Claude dashboard accounts if you want Claude Agent SDK fallback
 
 ## Local backend setup
 
@@ -118,6 +120,21 @@ OBSERVABILITY_DB_NAME=loma_observability
 
 Loma creates indexes on startup.
 
+## OpenCode setup
+
+Loma uses OpenCode by default. The backend Docker image installs the `opencode` CLI with OpenCode's official install script. Local non-Docker installs can use the same script or `npm install -g opencode-ai`.
+
+Create an OpenCode API key, set `OPENCODE_API_KEY`, and keep the default model unless you want to override it:
+
+```text
+OPENCODE_API_KEY=opencode-...
+AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
+```
+
+OpenCode starts an app-managed local server on `127.0.0.1:4097` by default. Override with `OPENCODE_HOST`, `OPENCODE_PORT`, or `OPENCODE_SERVER_URL` if you manage OpenCode separately.
+
+To use Claude Agent SDK instead, set `AGENT_DEFAULT_MODEL=anthropic/<model>` and configure `ANTHROPIC_API_KEY` or dashboard Claude accounts.
+
 ## Required backend environment
 
 See `.env.example` for a complete starter. Minimum useful setup:
@@ -125,7 +142,8 @@ See `.env.example` for a complete starter. Minimum useful setup:
 ```text
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
-ANTHROPIC_API_KEY=sk-ant-...
+OPENCODE_API_KEY=opencode-...
+AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
 OBSERVABILITY_MONGODB_URI=mongodb+srv://...
 WEBHOOK_PORT=3000
 APP_NAME=Loma

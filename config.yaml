@@ -4,8 +4,8 @@
 #
 # Required env vars for Sentry:
 #   SENTRY_ACCESS_TOKEN - User Auth Token from https://sentry.io/settings/account/api/auth-tokens/
-#   EMBEDDED_AGENT_PROVIDER - "anthropic" (for AI-powered natural language search)
-#   ANTHROPIC_API_KEY - Anthropic API key (already required for the agent)
+#   EMBEDDED_AGENT_PROVIDER - provider used by the Sentry MCP server, for example "anthropic"
+#   ANTHROPIC_API_KEY - Anthropic API key, only required if that optional Sentry provider is used
 
 mcp_servers:
   sentry:
