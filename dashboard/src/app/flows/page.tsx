@@ -7,9 +7,8 @@ import { fetchFlows, fetchLabels, pauseFlow, resumeFlow, deleteFlow, triggerFlow
 import type { Flow } from "../../lib/api";
 import { basePath } from "../../lib/api";
 import ClientTimestamp from "../../components/ClientTimestamp";
-import SuggestedFlowsTab from "./SuggestedFlowsTab";
 
-type FlowTab = "all" | "suggested" | "drafts" | "disabled";
+type FlowTab = "all" | "drafts" | "disabled";
 
 const STATUS_FILTERS = ["all", "active", "paused", "completed"] as const;
 const TRIGGER_TYPE_FILTERS = ["all", "scheduled", "webhook"] as const;
@@ -234,21 +233,13 @@ export default function FlowsPage() {
         </div>
       </div>
 
-      {/* Tab bar — All flows / Suggested / Drafts / Disabled */}
+      {/* Tab bar — All flows / Drafts / Disabled */}
       <div className="flex items-center gap-6 border-b border-gray-200">
         <FlowTabButton
           label="All flows"
           count={flows.length}
           active={activeTab === "all"}
           onClick={() => setActiveTab("all")}
-        />
-        <FlowTabButton
-          label="Suggested"
-          count={4}
-          active={activeTab === "suggested"}
-          onClick={() => setActiveTab("suggested")}
-          prefix="+"
-          accent
         />
         <FlowTabButton
           label="Drafts"
@@ -264,9 +255,7 @@ export default function FlowsPage() {
         />
       </div>
 
-      {activeTab === "suggested" ? (
-        <SuggestedFlowsTab />
-      ) : activeTab === "drafts" ? (
+      {activeTab === "drafts" ? (
         <div className="bg-surface rounded-xl border border-gray-200 p-12 text-center">
           <div className="text-gray-400 text-sm">No drafts yet.</div>
         </div>
@@ -402,15 +391,11 @@ function FlowTabButton({
   count,
   active,
   onClick,
-  prefix,
-  accent,
 }: {
   label: string;
   count: number;
   active: boolean;
   onClick: () => void;
-  prefix?: string;
-  accent?: boolean;
 }) {
   return (
     <button
@@ -425,18 +410,15 @@ function FlowTabButton({
         fontWeight: active ? 600 : 500,
       }}
     >
-      {prefix && (
-        <span style={{ color: accent && active ? "#5B7A0E" : undefined, fontWeight: 600 }}>{prefix}</span>
-      )}
       <span>{label}</span>
       <span
         className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 min-w-[18px]"
         style={{
-          background: accent && active ? "#FBFEEC" : active ? "#F0EDE6" : "#F0EDE6",
-          border: accent && active ? "1px solid #C8E84A" : "none",
+          background: "#F0EDE6",
+          border: "none",
           fontFamily: "var(--font-jetbrains), ui-monospace, monospace",
           fontSize: 10,
-          color: accent && active ? "#5B7A0E" : "#5C5650",
+          color: "#5C5650",
           fontWeight: 600,
         }}
       >
