@@ -1,9 +1,9 @@
 // Base path for preview deployments (e.g. /pr/27). Empty in production.
 export const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
-// In dev, Next.js rewrites proxy /api/* to port 3000. Use relative URLs.
-// For preview deployments with basePath, prefix API calls accordingly.
-const API_BASE = basePath || process.env.NEXT_PUBLIC_API_URL || "";
+// Keep browser API calls same-origin so Next.js middleware can inject auth
+// headers before rewrites proxy requests to the Python backend.
+const API_BASE = basePath;
 
 export interface Conversation {
   _id: string;

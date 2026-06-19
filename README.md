@@ -40,7 +40,7 @@ Dashboard (:3001) ── Auth.js login ───┘
 
 ## Fresh EC2 Quickstart
 
-Use this path to test a brand-new self-hosted install on Ubuntu 24.04 LTS or Ubuntu 26.04 LTS. Temporarily allow inbound TCP `22`, `3000`, and `3001` in the instance security group while testing.
+Use this path to test a brand-new self-hosted install on Ubuntu 24.04 LTS or Ubuntu 26.04 LTS. Temporarily allow inbound TCP `22` and `3001` in the instance security group while testing. Open `3000` only if you need external webhooks or direct backend debugging.
 
 1. SSH into the instance:
 
@@ -122,7 +122,7 @@ OBSERVABILITY_MONGODB_URI=mongodb+srv://...
 OBSERVABILITY_DB_NAME=loma_observability
 AUTH_URL=http://<ec2-public-ip>:3001
 BACKEND_URL=http://loma-backend:3000
-NEXT_PUBLIC_API_URL=http://<ec2-public-ip>:3000
+NEXT_PUBLIC_API_URL=
 ```
 
 Generate secrets on the instance with:

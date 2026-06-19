@@ -557,7 +557,7 @@ function getFileIcon(mimeType: string, name: string): { icon: string; color: str
 function FileAttachmentCard({ file }: { file: FileAttachment }) {
   const { icon, color, bg } = getFileIcon(file.mime_type, file.name);
   const isImage = file.mime_type.startsWith("image/");
-  const downloadUrl = (process.env.NEXT_PUBLIC_API_URL || "") + file.url;
+  const downloadUrl = `${basePath}${file.url}`;
 
   return (
     <a
