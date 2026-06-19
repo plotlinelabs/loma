@@ -87,7 +87,7 @@ async def main():
     # Webhook HTTP server
     webhook_app = web.Application(
         middlewares=[log_404_middleware, auth_middleware],
-        client_max_size=20 * 1024 * 1024,  # 20 MB (default 1 MB is too small for file uploads)
+        client_max_size=110 * 1024 * 1024,  # Supports skill assets up to 100 MB.
     )
     if LOMA_ENABLE_WEBHOOKS:
         setup_linear_webhook_routes(webhook_app)

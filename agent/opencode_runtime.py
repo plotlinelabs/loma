@@ -24,7 +24,6 @@ from agent.prompt import build_pooled_system_prompt
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PROJECT_SKILLS_DIR = PROJECT_ROOT / ".claude" / "skills"
 DEFAULT_OPENCODE_HOST = "127.0.0.1"
 DEFAULT_OPENCODE_PORT = 4097
 OPENCODE_START_TIMEOUT_SECONDS = 20
@@ -114,21 +113,6 @@ def _opencode_session_permission_rules() -> list[dict]:
         {"permission": "*", "pattern": "*", "action": "allow"},
         {"permission": "external_directory", "pattern": "*", "action": "allow"},
     ]
-
-
-def _opencode_skill_fingerprint() -> str:
-    """Fingerprint project skills so OpenCode restarts after skill edits."""
-    if not PROJECT_SKILLS_DIR.is_dir():
-        return ""
-
-    parts: list[str] = []
-    for skill_file in sorted(PROJECT_SKILLS_DIR.glob("**/SKILL.md")):
-        try:
-            stat = skill_file.stat()
-        except OSError:
-            continue
-        parts.append(f"{skill_file.relative_to(PROJECT_ROOT)}:{stat.st_mtime_ns}:{stat.st_size}")
-    return "\n".join(parts)
 
 
 class OpenCodeError(RuntimeError):
@@ -321,12 +305,9 @@ async def _write_managed_opencode_config() -> tuple[Path, str]:
         "$schema": "https://opencode.ai/config.json",
         "mcp": mcp_config,
         "permission": _opencode_permission_config(),
-        "skills": {"paths": [str(PROJECT_SKILLS_DIR)]},
     }
     config_text = json.dumps(opencode_config, indent=2, sort_keys=True)
-    config_hash = hashlib.sha256(
-        f"{config_text}\n{_opencode_skill_fingerprint()}".encode()
-    ).hexdigest()
+    config_hash = hashlib.sha256(config_text.encode()).hexdigest()
 
     if _opencode_config_home is None:
         _opencode_config_home = Path(tempfile.mkdtemp(prefix="loma-opencode-config-"))

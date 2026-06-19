@@ -17,11 +17,17 @@ from agent.opencode_runtime import get_agent_models, get_opencode_pool_status
 from agent.pool import ClientPool
 from observability.db import get_db
 from observability.observer import ConversationObserver
-from api.auth_helpers import get_system_role, get_user_email, require_admin, require_analyst_or_above
+from api.auth_helpers import (
+    get_system_role,
+    get_user_email,
+    require_admin,
+    require_analyst_or_above,
+    require_maintainer_or_above,
+)
 from api.dashboard_ingestion import ingest_dashboard_chat
+from api import skill_service
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = PROJECT_ROOT / ".claude" / "skills"
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 # ── File serving for dashboard chat attachments ────────────────────────────
@@ -976,159 +982,262 @@ async def handle_agent_models(request: web.Request) -> web.Response:
 
 
 async def handle_list_skills(request: web.Request) -> web.Response:
-    """GET /api/skills — list all agent skills."""
-    skills = []
-    if SKILLS_DIR.is_dir():
-        for child in sorted(SKILLS_DIR.iterdir()):
-            if not child.is_dir():
-                continue
-            skill_md = child / "SKILL.md"
-            if not skill_md.exists():
-                continue
-            content = skill_md.read_text(encoding="utf-8")
-            # Parse YAML frontmatter for description
-            description = ""
-            if content.startswith("---"):
-                end = content.find("---", 3)
-                if end != -1:
-                    for line in content[3:end].splitlines():
-                        if line.strip().startswith("description:"):
-                            description = line.split(":", 1)[1].strip()
-                            break
-            # List extra files in the skill directory
-            files = [f.name for f in child.iterdir() if f.name != "SKILL.md"]
-            skills.append({
-                "name": child.name,
-                "description": description,
-                "has_extra_files": len(files) > 0,
-                "files": files,
-            })
+    """GET /api/skills — list DB-native agent skills."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    skills = await skill_service.list_skills(db)
     return web.json_response({"skills": skills})
 
 
-async def handle_get_skill(request: web.Request) -> web.Response:
-    """GET /api/skills/{name} — return skill content + extra files."""
+def _skill_error_response(exc: skill_service.SkillError) -> web.Response:
+    return web.json_response({"error": str(exc)}, status=exc.status)
+
+
+async def handle_create_skill(request: web.Request) -> web.Response:
+    """POST /api/skills — create a live DB-native skill."""
+    require_maintainer_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        body = await request.json()
+        slug = skill_service.slugify(body.get("slug") or body.get("name") or "")
+        content = body.get("content")
+        if not isinstance(content, str):
+            return web.json_response({"error": "content must be a string"}, status=400)
+        files = [skill_service.validate_text_file("SKILL.md", content)]
+        for extra in body.get("files") or []:
+            files.append(skill_service.validate_text_file(extra.get("path", ""), extra.get("content", "")))
+        skill = await skill_service.upsert_skill(
+            db,
+            slug=slug,
+            files=files,
+            actor=get_user_email(request),
+            source="dashboard",
+            message="Created skill",
+        )
+        return web.json_response(skill, status=201)
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_update_skill(request: web.Request) -> web.Response:
+    """PUT /api/skills/{name} — replace text files for a skill."""
+    require_maintainer_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
     name = request.match_info["name"]
-    skill_dir = SKILLS_DIR / name
-    if not skill_dir.is_dir():
-        return web.json_response({"error": "Skill not found"}, status=404)
+    try:
+        body = await request.json()
+        current = await skill_service.get_skill(db, name)
+        by_path = {f["path"]: f for f in current["files"]}
+        if "content" in body:
+            by_path["SKILL.md"] = skill_service.validate_text_file("SKILL.md", body.get("content") or "")
+        for extra in body.get("files") or []:
+            by_path[skill_service.normalize_file_path(extra.get("path", ""))] = skill_service.validate_text_file(
+                extra.get("path", ""),
+                extra.get("content", ""),
+            )
+        skill = await skill_service.upsert_skill(
+            db,
+            slug=name,
+            files=list(by_path.values()),
+            actor=get_user_email(request),
+            source="dashboard",
+            message=body.get("message") or "Updated skill",
+        )
+        return web.json_response(skill)
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
 
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.exists():
-        return web.json_response({"error": "Skill not found"}, status=404)
 
-    content = skill_md.read_text(encoding="utf-8")
+async def handle_get_skill(request: web.Request) -> web.Response:
+    """GET /api/skills/{name} — return skill content + files."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    name = request.match_info["name"]
+    try:
+        return web.json_response(await skill_service.get_skill(db, name))
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
 
-    # Read extra files
-    extra_files = {}
-    for f in sorted(skill_dir.iterdir()):
-        if f.name == "SKILL.md" or not f.is_file():
-            continue
-        try:
-            extra_files[f.name] = f.read_text(encoding="utf-8")
-        except Exception:
-            extra_files[f.name] = "(binary file)"
 
-    return web.json_response({
-        "name": name,
-        "content": content,
-        "extra_files": extra_files,
-    })
+async def handle_update_skill_file(request: web.Request) -> web.Response:
+    """PUT /api/skills/{name}/files — create or update one text file."""
+    require_maintainer_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        body = await request.json()
+        file_doc = skill_service.validate_text_file(body.get("path", ""), body.get("content", ""))
+        return web.json_response(await skill_service.update_skill_file(
+            db,
+            slug=request.match_info["name"],
+            file_doc=file_doc,
+            actor=get_user_email(request),
+            source="dashboard",
+        ))
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_upload_skill_asset(request: web.Request) -> web.Response:
+    """POST /api/skills/{name}/assets — upload or replace a local asset file."""
+    require_maintainer_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        reader = await request.multipart()
+        path = ""
+        data = b""
+        filename = None
+        async for part in reader:
+            if part.name == "path":
+                path = (await part.text()).strip()
+            elif part.name == "file":
+                filename = part.filename
+                data = await part.read(decode=False)
+        if not path or not data:
+            return web.json_response({"error": "Multipart fields path and file are required"}, status=400)
+        slug = skill_service.slugify(request.match_info["name"])
+        file_doc = skill_service.store_asset(slug, path, data, filename)
+        return web.json_response(await skill_service.update_skill_file(
+            db,
+            slug=slug,
+            file_doc=file_doc,
+            actor=get_user_email(request),
+            source="dashboard",
+            message=f"Uploaded {path}",
+        ))
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_delete_skill_file(request: web.Request) -> web.Response:
+    require_maintainer_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        body = await request.json()
+        return web.json_response(await skill_service.delete_skill_file(
+            db,
+            slug=request.match_info["name"],
+            path=body.get("path", ""),
+            actor=get_user_email(request),
+            source="dashboard",
+        ))
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_delete_skill(request: web.Request) -> web.Response:
+    require_maintainer_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        await skill_service.delete_skill(
+            db,
+            slug=request.match_info["name"],
+            actor=get_user_email(request),
+            source="dashboard",
+        )
+        return web.json_response({"ok": True})
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_get_skill_asset(request: web.Request) -> web.StreamResponse:
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        file_doc = await skill_service.get_skill_file(
+            db,
+            request.match_info["name"],
+            request.match_info["path"],
+        )
+        if file_doc.get("kind") != "local_asset":
+            return web.json_response({"error": "Skill file is not an asset"}, status=400)
+        asset_path = skill_service.copy_asset_to_response_path(file_doc)
+        return web.FileResponse(
+            path=asset_path,
+            headers={
+                "Content-Type": file_doc.get("content_type") or "application/octet-stream",
+                "Content-Disposition": f'inline; filename="{file_doc.get("original_filename") or asset_path.name}"',
+            },
+        )
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
 
 
 async def handle_get_skill_history(request: web.Request) -> web.Response:
-    """GET /api/skills/{name}/history — git log for a skill's files."""
+    """GET /api/skills/{name}/history — DB version history."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
     name = request.match_info["name"]
-    skill_dir = SKILLS_DIR / name
-    if not skill_dir.is_dir():
-        return web.json_response({"error": "Skill not found"}, status=404)
-
-    rel_path = str(skill_dir.relative_to(PROJECT_ROOT))
-    proc = await asyncio.create_subprocess_exec(
-        "git", "log", "--format=%H|%an|%ae|%aI|%s", "--follow", "--", rel_path,
-        cwd=str(PROJECT_ROOT),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-
     commits = []
-    for line in stdout.decode().strip().splitlines():
-        parts = line.split("|", 4)
-        if len(parts) == 5:
-            commits.append({
-                "sha": parts[0],
-                "author": parts[1],
-                "email": parts[2],
-                "date": parts[3],
-                "message": parts[4],
-            })
-
+    for doc in await skill_service.history(db, name):
+        actor = doc.get("actor_email") or "unknown"
+        created_at = doc.get("created_at")
+        commits.append({
+            "sha": doc["version_id"],
+            "author": actor,
+            "email": actor,
+            "date": created_at.isoformat() if isinstance(created_at, datetime) else str(created_at),
+            "message": doc.get("message") or "Updated skill",
+        })
     return web.json_response({"name": name, "commits": commits})
 
 
 async def handle_get_skill_version(request: web.Request) -> web.Response:
-    """GET /api/skills/{name}/version/{sha} — skill content at a specific commit."""
+    """GET /api/skills/{name}/version/{sha} — skill content at a DB version."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
     name = request.match_info["name"]
     sha = request.match_info["sha"]
-
-    # Validate sha is hex-only to prevent injection
-    if not re.match(r"^[0-9a-fA-F]+$", sha):
-        return web.json_response({"error": "Invalid SHA"}, status=400)
-
-    rel_path = f".claude/skills/{name}/SKILL.md"
-    proc = await asyncio.create_subprocess_exec(
-        "git", "show", f"{sha}:{rel_path}",
-        cwd=str(PROJECT_ROOT),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-
-    if proc.returncode != 0:
-        return web.json_response({"error": "Version not found"}, status=404)
-
-    return web.json_response({
-        "name": name,
-        "sha": sha,
-        "content": stdout.decode("utf-8", errors="replace"),
-    })
+    try:
+        version_doc = await skill_service.version(db, name, sha)
+        return web.json_response({
+            "name": name,
+            "sha": sha,
+            "content": skill_service.version_skill_md(version_doc),
+        })
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
 
 
 async def handle_get_skill_diff(request: web.Request) -> web.Response:
-    """GET /api/skills/{name}/diff?from=sha1&to=sha2 — unified diff between two versions.
-
-    If ``to`` is omitted, diffs against HEAD.
-    """
+    """GET /api/skills/{name}/diff?from=v1&to=v2 — unified diff between DB versions."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
     name = request.match_info["name"]
-    skill_dir = SKILLS_DIR / name
-    if not skill_dir.is_dir():
-        return web.json_response({"error": "Skill not found"}, status=404)
-
     sha_from = request.query.get("from", "")
     sha_to = request.query.get("to", "HEAD")
-
-    hex_re = re.compile(r"^[0-9a-fA-F]+$")
-    if not hex_re.match(sha_from):
-        return web.json_response({"error": "Invalid 'from' SHA"}, status=400)
-    if sha_to != "HEAD" and not hex_re.match(sha_to):
-        return web.json_response({"error": "Invalid 'to' SHA"}, status=400)
-
-    rel_path = str(skill_dir.relative_to(PROJECT_ROOT))
-    proc = await asyncio.create_subprocess_exec(
-        "git", "diff", "--unified=5", sha_from, sha_to, "--", rel_path,
-        cwd=str(PROJECT_ROOT),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-
-    return web.json_response({
-        "name": name,
-        "from_sha": sha_from,
-        "to_sha": sha_to,
-        "diff": stdout.decode("utf-8", errors="replace"),
-    })
+    try:
+        return web.json_response({
+            "name": name,
+            "from_sha": sha_from,
+            "to_sha": sha_to,
+            "diff": await skill_service.diff_versions(db, name, sha_from, sha_to),
+        })
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
 
 
 # Descriptions for known MCP servers (shown in the dashboard)
@@ -1526,9 +1635,16 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/agent-models", handle_agent_models)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_get("/api/skills", handle_list_skills)
+    app.router.add_post("/api/skills", handle_create_skill)
     app.router.add_get("/api/skills/{name}/history", handle_get_skill_history)
     app.router.add_get("/api/skills/{name}/version/{sha}", handle_get_skill_version)
     app.router.add_get("/api/skills/{name}/diff", handle_get_skill_diff)
+    app.router.add_put("/api/skills/{name}", handle_update_skill)
+    app.router.add_delete("/api/skills/{name}", handle_delete_skill)
+    app.router.add_put("/api/skills/{name}/files", handle_update_skill_file)
+    app.router.add_delete("/api/skills/{name}/files", handle_delete_skill_file)
+    app.router.add_post("/api/skills/{name}/assets", handle_upload_skill_asset)
+    app.router.add_get("/api/skills/{name}/assets/{path:.*}", handle_get_skill_asset)
     app.router.add_get("/api/skills/{name}", handle_get_skill)
     app.router.add_get("/api/memory/recent", handle_memory_recent)
     app.router.add_get("/api/mcp-servers", handle_list_mcp_servers)

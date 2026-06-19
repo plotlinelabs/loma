@@ -1,491 +1,311 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import {
+  basePath,
+  deleteSkill,
+  deleteSkillFile,
   fetchSkill,
   fetchSkillHistory,
-  fetchSkillVersion,
-  fetchSkillDiff,
-  basePath,
+  skillAssetUrl,
+  updateSkillFile,
+  uploadSkillAsset,
 } from "../../../lib/api";
-import type { SkillDetailResponse, SkillCommit } from "../../../lib/api";
-import { DiffViewer } from "../../../components/DiffViewer";
+import type { SkillCommit, SkillDetailResponse, SkillFile } from "../../../lib/api";
 
-/* ── Helpers ─────────────────────────────────────────────────────── */
-
-function formatSkillName(name: string): string {
-  return name
-    .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+function isAsset(file: SkillFile): boolean {
+  return file.kind === "local_asset";
 }
 
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return content;
-  const end = content.indexOf("---", 3);
-  if (end === -1) return content;
-  return content.slice(end + 3).trimStart();
+function formatBytes(size?: number): string {
+  if (!size) return "-";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
-
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(ms / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  return `${months}mo ago`;
-}
-
-function authorInitial(name: string): string {
-  return name.charAt(0).toUpperCase();
-}
-
-const PROSE_CLASSES =
-  "prose prose-sm max-w-none prose-headings:text-gray-900 prose-p:text-gray-700 prose-a:text-brand-600 prose-strong:text-gray-800 prose-code:text-brand-700 prose-code:bg-brand-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-pre:bg-gray-50 prose-pre:border prose-pre:border-gray-100 prose-li:text-gray-700 prose-table:text-sm";
-
-/* ── History Panel ───────────────────────────────────────────────── */
-
-type ViewMode = "content" | "diff";
-
-function HistoryPanel({
-  commits,
-  loading,
-  activeVersion,
-  viewMode,
-  compareTarget,
-  onSelectVersion,
-  onResetVersion,
-  onToggleViewMode,
-  onChangeCompareTarget,
-}: {
-  commits: SkillCommit[];
-  loading: boolean;
-  activeVersion: string | null;
-  viewMode: ViewMode;
-  compareTarget: string;
-  onSelectVersion: (sha: string) => void;
-  onResetVersion: () => void;
-  onToggleViewMode: (mode: ViewMode) => void;
-  onChangeCompareTarget: (sha: string) => void;
-}) {
-  if (loading) {
-    return (
-      <div className="bg-surface border border-gray-200 rounded-xl p-5">
-        <div className="skeleton h-4 w-20 rounded mb-4" />
-        <div className="space-y-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="flex gap-3">
-              <div className="skeleton w-7 h-7 rounded-full flex-shrink-0" />
-              <div className="flex-1 space-y-1.5">
-                <div className="skeleton h-3 w-24 rounded" />
-                <div className="skeleton h-2.5 w-full rounded" />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (commits.length === 0) {
-    return (
-      <div className="bg-surface border border-gray-200 rounded-xl p-5">
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">History</h3>
-        <p className="text-xs text-gray-400">No git history found.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-surface border border-gray-200 rounded-xl p-5">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-gray-900">History</h3>
-        <span className="text-[10px] text-gray-400 font-medium">
-          {commits.length} commit{commits.length !== 1 ? "s" : ""}
-        </span>
-      </div>
-
-      {/* Back + view mode toggle when viewing a version */}
-      {activeVersion && (
-        <div className="space-y-2 mb-3">
-          <button
-            onClick={onResetVersion}
-            className="w-full text-[11px] font-medium text-brand-600 bg-brand-50 border border-brand-200 rounded-lg px-3 py-1.5 hover:bg-brand-100 transition-colors text-left flex items-center gap-1.5"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3" />
-            </svg>
-            Back to current
-          </button>
-
-          {/* Content / Diff toggle */}
-          <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-            <button
-              onClick={() => onToggleViewMode("content")}
-              className={`flex-1 text-[10px] font-semibold py-1.5 transition-colors ${
-                viewMode === "content"
-                  ? "bg-[#1F1D1A] dark:bg-[#E8E4DD] text-[#FDFBF7] dark:text-[#0A0A0A]"
-                  : "bg-surface text-gray-500 hover:bg-gray-50"
-              }`}
-            >
-              Content
-            </button>
-            <button
-              onClick={() => onToggleViewMode("diff")}
-              className={`flex-1 text-[10px] font-semibold py-1.5 transition-colors border-l border-gray-200 ${
-                viewMode === "diff"
-                  ? "bg-[#1F1D1A] dark:bg-[#E8E4DD] text-[#FDFBF7] dark:text-[#0A0A0A]"
-                  : "bg-surface text-gray-500 hover:bg-gray-50"
-              }`}
-            >
-              Diff
-            </button>
-          </div>
-
-          {/* Compare target selector (only in diff mode) */}
-          {viewMode === "diff" && (
-            <div>
-              <label className="text-[10px] text-gray-400 font-medium block mb-1">
-                Compare with
-              </label>
-              <select
-                value={compareTarget}
-                onChange={(e) => onChangeCompareTarget(e.target.value)}
-                className="w-full text-[11px] text-gray-700 border border-gray-200 rounded-lg px-2.5 py-1.5 bg-surface focus:outline-none focus:border-accent-200 focus:ring-1 focus:ring-accent-200"
-              >
-                <option value="HEAD">Current version</option>
-                {commits
-                  .filter((c) => c.sha !== activeVersion)
-                  .map((c) => (
-                    <option key={c.sha} value={c.sha}>
-                      {c.sha.slice(0, 7)} — {c.message.slice(0, 40)}{c.message.length > 40 ? "…" : ""}
-                    </option>
-                  ))}
-              </select>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Timeline */}
-      <div className="relative">
-        <div className="absolute left-[13px] top-3 bottom-3 w-px bg-gray-200" />
-
-        <div className="space-y-0">
-          {commits.map((commit, i) => {
-            const isFirst = i === 0;
-            const isActive = activeVersion === commit.sha;
-
-            return (
-              <div key={commit.sha} className="relative flex gap-3 py-2.5 group">
-                {/* Timeline dot */}
-                <div
-                  className={`relative z-10 w-[26px] h-[26px] rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-bold border-2 transition-colors
-                    ${isActive
-                      ? "bg-brand-100 border-brand-500 text-brand-700"
-                      : isFirst
-                        ? "bg-green-50 border-green-400 text-green-700"
-                        : "bg-surface border-gray-200 text-gray-400"
-                    }`}
-                >
-                  {authorInitial(commit.author)}
-                </div>
-
-                {/* Commit info */}
-                <div className="flex-1 min-w-0 pt-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-semibold text-gray-800 truncate">
-                      {commit.author}
-                    </span>
-                    <span className="text-[10px] text-gray-400 flex-shrink-0">
-                      {relativeTime(commit.date)}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-gray-500 truncate mt-0.5 leading-tight">
-                    {commit.message}
-                  </p>
-
-                  {/* Action buttons */}
-                  {!isActive && (
-                    <div className="mt-1 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => onSelectVersion(commit.sha)}
-                        className="text-[10px] font-medium text-gray-400 hover:text-brand-600 transition-colors flex items-center gap-1"
-                      >
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-                        </svg>
-                        View
-                      </button>
-                    </div>
-                  )}
-                  {isActive && (
-                    <span className="mt-1 text-[10px] font-medium text-brand-600 flex items-center gap-1">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                      </svg>
-                      Viewing
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── Page ─────────────────────────────────────────────────────────── */
 
 export default function SkillDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const name = params.name as string;
 
   const [skill, setSkill] = useState<SkillDetailResponse | null>(null);
-  const [commits, setCommits] = useState<SkillCommit[]>([]);
+  const [history, setHistory] = useState<SkillCommit[]>([]);
+  const [selectedPath, setSelectedPath] = useState("SKILL.md");
+  const [draft, setDraft] = useState("");
+  const [newPath, setNewPath] = useState("");
+  const [assetPath, setAssetPath] = useState("");
+  const [assetFile, setAssetFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
-  const [historyLoading, setHistoryLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  // Version viewing state
-  const [activeVersion, setActiveVersion] = useState<string | null>(null);
-  const [versionContent, setVersionContent] = useState<string | null>(null);
-  const [versionLoading, setVersionLoading] = useState(false);
-  const [versionCommit, setVersionCommit] = useState<SkillCommit | null>(null);
-
-  // Diff state
-  const [viewMode, setViewMode] = useState<ViewMode>("content");
-  const [compareTarget, setCompareTarget] = useState("HEAD");
-  const [diffText, setDiffText] = useState("");
-  const [diffLoading, setDiffLoading] = useState(false);
-
-  useEffect(() => {
+  const load = () => {
     if (!name) return;
-
     setLoading(true);
-    setHistoryLoading(true);
-
-    fetchSkill(name)
-      .then(setSkill)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+    Promise.all([fetchSkill(name), fetchSkillHistory(name)])
+      .then(([skillData, historyData]) => {
+        setSkill(skillData);
+        setHistory(historyData.commits);
+        const file = skillData.files.find((f) => f.path === selectedPath) || skillData.files.find((f) => f.path === "SKILL.md");
+        const path = file?.path || "SKILL.md";
+        setSelectedPath(path);
+        setDraft(path === "SKILL.md" ? skillData.content : skillData.extra_files[path] || "");
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load skill"))
       .finally(() => setLoading(false));
-
-    fetchSkillHistory(name)
-      .then((data) => setCommits(data.commits))
-      .catch(() => setCommits([]))
-      .finally(() => setHistoryLoading(false));
-  }, [name]);
-
-  // Fetch diff when mode, version, or compare target changes
-  const loadDiff = useCallback(
-    (sha: string, target: string) => {
-      setDiffLoading(true);
-      fetchSkillDiff(name, sha, target)
-        .then((data) => setDiffText(data.diff))
-        .catch(() => setDiffText("Failed to load diff."))
-        .finally(() => setDiffLoading(false));
-    },
-    [name],
-  );
-
-  const handleSelectVersion = (sha: string) => {
-    const commit = commits.find((c) => c.sha === sha);
-    setActiveVersion(sha);
-    setVersionCommit(commit || null);
-    setViewMode("content");
-    setCompareTarget("HEAD");
-    setVersionLoading(true);
-
-    fetchSkillVersion(name, sha)
-      .then((data) => setVersionContent(data.content))
-      .catch(() => setVersionContent("Failed to load this version."))
-      .finally(() => setVersionLoading(false));
   };
 
-  const handleResetVersion = () => {
-    setActiveVersion(null);
-    setVersionContent(null);
-    setVersionCommit(null);
-    setViewMode("content");
-    setDiffText("");
+  useEffect(load, [name]);
+
+  const files = useMemo(() => {
+    if (!skill) return [];
+    return [...skill.files].sort((a, b) => a.path.localeCompare(b.path));
+  }, [skill]);
+
+  const selectedFile = files.find((f) => f.path === selectedPath);
+
+  const selectFile = (path: string) => {
+    if (!skill) return;
+    setSelectedPath(path);
+    setNotice(null);
+    setError(null);
+    setDraft(path === "SKILL.md" ? skill.content : skill.extra_files[path] || "");
   };
 
-  const handleToggleViewMode = (mode: ViewMode) => {
-    setViewMode(mode);
-    if (mode === "diff" && activeVersion) {
-      loadDiff(activeVersion, compareTarget);
+  const refreshSkill = (updated: SkillDetailResponse) => {
+    setSkill(updated);
+    setDraft(selectedPath === "SKILL.md" ? updated.content : updated.extra_files[selectedPath] || "");
+    fetchSkillHistory(name).then((data) => setHistory(data.commits)).catch(() => {});
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await updateSkillFile(name, selectedPath, draft);
+      refreshSkill(updated);
+      setNotice("Saved live.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save file");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleChangeCompareTarget = (target: string) => {
-    setCompareTarget(target);
-    if (activeVersion) {
-      loadDiff(activeVersion, target);
+  const handleAddTextFile = async () => {
+    const path = newPath.trim();
+    if (!path) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateSkillFile(name, path, "");
+      refreshSkill(updated);
+      setSelectedPath(path);
+      setDraft("");
+      setNewPath("");
+      setNotice("Text file added.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add file");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUploadAsset = async () => {
+    if (!assetPath.trim() || !assetFile) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await uploadSkillAsset(name, assetPath.trim(), assetFile);
+      refreshSkill(updated);
+      setAssetPath("");
+      setAssetFile(null);
+      setNotice("Asset uploaded.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to upload asset");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteFile = async (path: string) => {
+    if (path === "SKILL.md" || !confirm(`Remove ${path} from this skill?`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await deleteSkillFile(name, path);
+      refreshSkill(updated);
+      setSelectedPath("SKILL.md");
+      setDraft(updated.content);
+      setNotice("File removed from live skill.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to remove file");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteSkill = async () => {
+    if (!confirm(`Delete ${name}? The skill is disabled but version history is retained.`)) return;
+    setSaving(true);
+    try {
+      await deleteSkill(name);
+      router.push("/skills");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete skill");
+      setSaving(false);
     }
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="flex items-center gap-2 text-gray-400">
-          <svg className="animate-spin w-4 h-4 text-brand-600" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          Loading skill...
-        </div>
-      </div>
-    );
+    return <div className="py-20 text-center text-sm text-gray-400">Loading skill...</div>;
   }
 
-  if (error || !skill) {
-    return (
-      <div className="text-red-600 text-center py-20 bg-red-50 rounded-xl border border-red-200">
-        {error || "Skill not found"}
-      </div>
-    );
+  if (!skill) {
+    return <div className="py-20 text-center text-sm text-red-600">{error || "Skill not found"}</div>;
   }
-
-  const currentBody = stripFrontmatter(skill.content);
-  const displayBody =
-    activeVersion && versionContent ? stripFrontmatter(versionContent) : currentBody;
-  const extraFileNames = Object.keys(skill.extra_files);
 
   return (
     <div className="space-y-4">
-      {/* Back link */}
-      <a
-        href={`${basePath}/skills`}
-        className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors font-medium"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-        </svg>
+      <a href={`${basePath}/skills`} className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 font-medium">
         Back to skills
       </a>
 
-      {/* Two-column layout */}
-      <div className="flex flex-col md:flex-row gap-5">
-        {/* Left: Skill content */}
-        <div className="flex-1 min-w-0 space-y-5">
-          <div className="bg-surface border border-gray-200 rounded-xl p-6">
-            <div className="flex items-center gap-3 mb-5">
-              <span className="text-xs px-2.5 py-1 rounded-full font-medium border bg-brand-100 text-brand-700 border-brand-200">
-                Skill
-              </span>
-              <h1 className="text-xl font-semibold text-gray-900">
-                {formatSkillName(name)}
-              </h1>
-            </div>
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">{skill.slug || name}</h1>
+          <p className="text-sm text-gray-500 mt-1">{skill.description || "No description yet."}</p>
+        </div>
+        <button
+          onClick={handleDeleteSkill}
+          disabled={saving}
+          className="px-3 py-2 text-sm font-semibold rounded-lg border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-50"
+        >
+          Delete Skill
+        </button>
+      </div>
 
-            {/* Version banner */}
-            {activeVersion && versionCommit && (
-              <div className="mb-5 flex items-center gap-2.5 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg">
-                <svg className="w-4 h-4 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-                <div className="flex-1 min-w-0">
-                  <span className="text-xs font-medium text-amber-800">
-                    {viewMode === "diff" ? "Comparing" : "Viewing"} version from{" "}
-                    {relativeTime(versionCommit.date)} by {versionCommit.author}
-                  </span>
-                  <span className="text-[10px] text-amber-600 ml-2 font-mono">
-                    {versionCommit.sha.slice(0, 7)}
-                  </span>
-                  {viewMode === "diff" && (
-                    <span className="text-[10px] text-amber-600 ml-1">
-                      → {compareTarget === "HEAD" ? "current" : compareTarget.slice(0, 7)}
-                    </span>
+      {(error || notice) && (
+        <div className={`text-sm rounded-lg px-4 py-3 border ${error ? "text-red-700 bg-red-50 border-red-200" : "text-green-700 bg-green-50 border-green-200"}`}>
+          {error || notice}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr_280px] gap-4">
+        <div className="bg-surface border border-gray-200 rounded-xl p-4 space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 mb-3">Files</h2>
+            <div className="space-y-1">
+              {files.map((file) => (
+                <div key={file.path} className="flex items-center gap-2">
+                  <button
+                    onClick={() => selectFile(file.path)}
+                    className={`flex-1 min-w-0 text-left px-2.5 py-2 rounded-lg text-xs font-mono ${
+                      selectedPath === file.path ? "bg-brand-50 text-brand-800" : "hover:bg-gray-50 text-gray-600"
+                    }`}
+                  >
+                    <span className="truncate block">{file.path}</span>
+                    {isAsset(file) && <span className="text-[10px] text-gray-400">{formatBytes(file.size_bytes)}</span>}
+                  </button>
+                  {file.path !== "SKILL.md" && (
+                    <button onClick={() => handleDeleteFile(file.path)} className="text-xs text-gray-400 hover:text-red-600 px-1">
+                      Remove
+                    </button>
                   )}
                 </div>
-                <button
-                  onClick={handleResetVersion}
-                  className="text-[11px] font-medium text-amber-700 hover:text-amber-900 transition-colors flex-shrink-0"
-                >
-                  Back to current
-                </button>
-              </div>
-            )}
-
-            {/* Skill content or diff view */}
-            {viewMode === "diff" && activeVersion ? (
-              <DiffViewer diff={diffText} loading={diffLoading} />
-            ) : versionLoading ? (
-              <div className="space-y-3">
-                <div className="skeleton h-4 w-3/4 rounded" />
-                <div className="skeleton h-3 w-full rounded" />
-                <div className="skeleton h-3 w-5/6 rounded" />
-                <div className="skeleton h-3 w-full rounded" />
-                <div className="skeleton h-3 w-2/3 rounded" />
-              </div>
-            ) : (
-              <div className={PROSE_CLASSES}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayBody}</ReactMarkdown>
-              </div>
-            )}
+              ))}
+            </div>
           </div>
 
-          {/* Extra files (only show for current version in content mode) */}
-          {!activeVersion && extraFileNames.length > 0 && (
-            <div className="space-y-4">
-              <h2 className="text-sm font-semibold text-gray-900">
-                Additional Files ({extraFileNames.length})
-              </h2>
-              {extraFileNames.map((fileName) => {
-                const content = skill.extra_files[fileName];
-                const isMarkdown = fileName.endsWith(".md");
+          <div className="border-t border-gray-100 pt-4 space-y-2">
+            <input
+              value={newPath}
+              onChange={(e) => setNewPath(e.target.value)}
+              placeholder="notes/reference.md"
+              className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-surface"
+            />
+            <button onClick={handleAddTextFile} disabled={saving} className="w-full px-3 py-2 text-xs font-semibold rounded-lg bg-gray-900 text-white disabled:opacity-50">
+              Add Text File
+            </button>
+          </div>
 
-                return (
-                  <div key={fileName} className="bg-surface border border-gray-200 rounded-xl p-5">
-                    <div className="flex items-center gap-2 mb-3">
-                      <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-                      </svg>
-                      <span className="text-sm font-medium text-gray-700">{fileName}</span>
-                    </div>
-                    {isMarkdown ? (
-                      <div className={PROSE_CLASSES}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {stripFrontmatter(content)}
-                        </ReactMarkdown>
-                      </div>
-                    ) : (
-                      <pre className="whitespace-pre-wrap text-xs text-gray-600 leading-relaxed bg-gray-50 rounded-lg p-4 border border-gray-100 overflow-x-auto max-h-96 overflow-y-auto">
-                        {content}
-                      </pre>
-                    )}
-                  </div>
-                );
-              })}
+          <div className="border-t border-gray-100 pt-4 space-y-2">
+            <input
+              value={assetPath}
+              onChange={(e) => setAssetPath(e.target.value)}
+              placeholder="assets/example.pdf"
+              className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-surface"
+            />
+            <input
+              type="file"
+              onChange={(e) => setAssetFile(e.target.files?.[0] || null)}
+              className="w-full text-xs text-gray-500"
+            />
+            <button onClick={handleUploadAsset} disabled={saving || !assetFile} className="w-full px-3 py-2 text-xs font-semibold rounded-lg bg-gray-900 text-white disabled:opacity-50">
+              Upload Asset
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-surface border border-gray-200 rounded-xl p-4 min-h-[520px]">
+          {selectedFile && isAsset(selectedFile) ? (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900">{selectedFile.path}</h2>
+                <p className="text-xs text-gray-500 mt-1">{selectedFile.content_type || "asset"} · {formatBytes(selectedFile.size_bytes)}</p>
+              </div>
+              {selectedFile.content_type?.startsWith("image/") && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={skillAssetUrl(name, selectedFile.path)} alt={selectedFile.path} className="max-w-full rounded-lg border border-gray-200" />
+              )}
+              {selectedFile.content_type === "application/pdf" && (
+                <iframe src={skillAssetUrl(name, selectedFile.path)} className="w-full h-[620px] rounded-lg border border-gray-200" />
+              )}
+              <a href={skillAssetUrl(name, selectedFile.path)} target="_blank" rel="noreferrer" className="inline-flex px-3 py-2 text-sm font-semibold rounded-lg bg-gray-900 text-white">
+                Open Asset
+              </a>
+            </div>
+          ) : (
+            <div className="space-y-3 h-full">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-gray-900">{selectedPath}</h2>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="px-3 py-2 text-sm font-semibold rounded-lg bg-brand-500 text-gray-950 hover:bg-brand-400 disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : "Save Live"}
+                </button>
+              </div>
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck={false}
+                className="w-full min-h-[620px] font-mono text-xs leading-relaxed border border-gray-200 rounded-lg p-4 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-300"
+              />
             </div>
           )}
         </div>
 
-        {/* Right: History panel */}
-        <div className="w-full md:w-[300px] flex-shrink-0">
-          <div className="md:sticky md:top-4">
-            <HistoryPanel
-              commits={commits}
-              loading={historyLoading}
-              activeVersion={activeVersion}
-              viewMode={viewMode}
-              compareTarget={compareTarget}
-              onSelectVersion={handleSelectVersion}
-              onResetVersion={handleResetVersion}
-              onToggleViewMode={handleToggleViewMode}
-              onChangeCompareTarget={handleChangeCompareTarget}
-            />
-          </div>
+        <div className="bg-surface border border-gray-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold text-gray-900 mb-3">History</h2>
+          {history.length === 0 ? (
+            <p className="text-xs text-gray-400">No versions yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {history.slice(0, 20).map((commit) => (
+                <div key={commit.sha} className="border-b border-gray-100 pb-3 last:border-0">
+                  <p className="text-xs font-medium text-gray-800">{commit.message}</p>
+                  <p className="text-[11px] text-gray-400 mt-1">{commit.author} · {new Date(commit.date).toLocaleString()}</p>
+                  <p className="text-[10px] font-mono text-gray-300 mt-1">{commit.sha.slice(0, 10)}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

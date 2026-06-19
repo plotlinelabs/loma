@@ -14,6 +14,7 @@ This repository is the clean OSS codebase. Company-specific knowledge, prompts, 
 - First-user-becomes-admin provisioning
 - User, team, and role management
 - MongoDB-backed conversations, prompt settings, flows, users, and integrations
+- MongoDB-backed agent skills with dashboard editing and local disk asset storage
 - Optional integration registry for tools such as GitHub, Linear, HubSpot, Google, Slack, Sentry, and databases
 - OpenCode as the default agent runtime, with optional Claude Agent SDK fallback
 - Feature flags so optional providers do not block startup
@@ -23,7 +24,8 @@ This repository is the clean OSS codebase. Company-specific knowledge, prompts, 
 ```text
 Slack workspace ── Socket Mode ── Python backend (:3000) ── MongoDB
                                       │
-                                      ├── Agent runtime + optional MCP tools
+                                      ├── Agent runtime + Loma skill tools + optional MCP tools
+                                      ├── Local skill assets (LOMA_SKILL_ASSET_DIR)
                                       │
 Dashboard (:3001) ── Auth.js login ───┘
 ```
@@ -98,6 +100,7 @@ OPENCODE_API_KEY=opencode-...
 AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
 OBSERVABILITY_MONGODB_URI=mongodb+srv://...
 OBSERVABILITY_DB_NAME=loma_observability
+LOMA_SKILL_ASSET_DIR=/var/lib/loma/skill-assets
 WEBHOOK_PORT=3000
 ENV=PROD
 ```
@@ -151,6 +154,7 @@ docker compose up --build
 - Open `http://<ec2-public-ip>:3001`.
 - Create the first admin with your email, a password, and `LOMA_SETUP_TOKEN`.
 - Send a message in dashboard chat.
+- Create a skill from the Skills page, then ask the agent to use or update it.
 - Mention the Slack bot in a channel where it has been invited.
 - DM the Slack bot.
 - Confirm conversation history appears in the dashboard.
@@ -179,6 +183,24 @@ python app.py
 ```
 
 The backend listens on `WEBHOOK_PORT`, default `3000`.
+
+## Skills and company knowledge
+
+Skills are company playbooks the agent can search, read, and update through Loma-managed tools. They are not loaded from `.claude/skills` and Loma does not create a runtime skills directory.
+
+- Text skill files such as `SKILL.md`, `.md`, `.py`, `.json`, `.xml`, `.yaml`, `.txt`, and `.csv` are stored inline in MongoDB.
+- Non-text assets such as PDFs, images, spreadsheets, screenshots, and archives are stored under `LOMA_SKILL_ASSET_DIR`.
+- MongoDB stores asset metadata, version history, and local file references.
+- The dashboard Skills page supports creating skills, editing text files, uploading assets, previewing browser-supported PDFs/images, and viewing history.
+- Back up both MongoDB and `LOMA_SKILL_ASSET_DIR`.
+
+To import existing file-based skills into the database:
+
+```bash
+python3 scripts/import_skills.py --source /path/to/.claude/skills --actor admin@example.com
+```
+
+The import stores text files in MongoDB and copies non-text files into `LOMA_SKILL_ASSET_DIR`.
 
 ## Local dashboard setup
 
@@ -277,6 +299,12 @@ OBSERVABILITY_MONGODB_URI=mongodb+srv://user:pass@cluster.example.com/loma
 OBSERVABILITY_DB_NAME=loma_observability
 ```
 
+If you use skills with PDFs, images, spreadsheets, or other assets, also set and back up:
+
+```text
+LOMA_SKILL_ASSET_DIR=/var/lib/loma/skill-assets
+```
+
 Loma creates indexes on startup.
 
 ## OpenCode setup
@@ -344,7 +372,7 @@ The integration registry is included, but each provider must be configured befor
 
 ## Roadmap
 
-Next major workstream: company knowledge, playbooks, and Slack workflows become configurable from the Loma dashboard and stored in MongoDB.
+Next major workstream: richer workflow automation and optional external asset storage backends for multi-server deployments.
 
 ## Security
 

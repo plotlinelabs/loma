@@ -6,6 +6,8 @@ services:
     env_file: .env
     ports:
       - "3000:3000"
+    volumes:
+      - loma-skill-assets:/var/lib/loma/skill-assets
     restart: unless-stopped
 
   loma-dashboard:
@@ -20,3 +22,6 @@ services:
     depends_on:
       - loma-backend
     restart: unless-stopped
+
+volumes:
+  loma-skill-assets:

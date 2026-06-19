@@ -3,11 +3,10 @@
 Single source of truth for the points-sizing prompt. Consumed by:
   - webhooks/linear.py — fires on `Released to Production` / `Done` state entry
   - flows collection in loma_observability — "Daily Linear Ticket Sizing" sweep
-  - .claude/skills/bug-triage + feature-request-triage SKILL.md (text copy)
+  - optional DB-backed Loma skills that mirror this rubric
 
-The same rubric must appear in the two SKILL.md files. If you edit
-ESTIMATION_RUBRIC below, also update those two files and re-run
-`scripts/deploy_sizing_flow.py` to refresh the flow doc in MongoDB.
+If you mirror this rubric into skills, update those skill files from the
+dashboard or `tools/loma_skills.py` when this source changes.
 """
 
 ESTIMATION_RUBRIC = """\

@@ -685,6 +685,31 @@ async def stream_agent(
             f"## Conversation Context (previous messages in this thread)\n"
             f"{conversation_context}"
         )
+
+    try:
+        from observability.db import get_db
+        from api.skill_service import skill_index_text
+
+        db = get_db()
+        if db is not None:
+            skills_text = await skill_index_text(db)
+            skill_tool_auth = ""
+            if user_email:
+                skill_tool_auth = (
+                    f" For write commands, pass `--user-email {user_email} --auth-token {auth_token}`."
+                )
+            text_parts.append(
+                "## Loma Skills\n"
+                "Loma skills are stored in MongoDB and are available through the first-party CLI "
+                "`python3 tools/loma_skills.py`. Use `list`, `search`, `get`, `file`, and `asset` "
+                "to inspect skills. Only update skills when the user explicitly asks you to change "
+                f"company playbooks or skills.{skill_tool_auth}\n\n"
+                "Available skill index:\n"
+                f"{skills_text}"
+            )
+    except Exception:
+        logger.exception("Failed to inject Loma skill index")
+
     text_parts.append(f"## Current Message\n{prompt}")
 
     # Append file contents inline; save images to temp files for the agent to read

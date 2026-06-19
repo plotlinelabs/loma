@@ -16,6 +16,7 @@ APP_NAME = os.environ.get("APP_NAME", "Loma")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3001")
 OBSERVABILITY_DB_NAME = os.environ.get("OBSERVABILITY_DB_NAME", "loma_observability")
 GITHUB_DEFAULT_ORG = os.environ.get("GITHUB_DEFAULT_ORG", "")
+LOMA_SKILL_ASSET_DIR = os.environ.get("LOMA_SKILL_ASSET_DIR", "/var/lib/loma/skill-assets")
 
 LOMA_ENABLE_SCHEDULER = env_flag("LOMA_ENABLE_SCHEDULER", default=False)
 LOMA_ENABLE_WEBHOOKS = env_flag("LOMA_ENABLE_WEBHOOKS", default=True)

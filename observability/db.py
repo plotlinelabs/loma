@@ -107,6 +107,15 @@ async def init_observability():
     # Core prompt settings edited from the dashboard
     await _db.prompt_settings.create_index("setting_key", unique=True)
 
+    # DB-native skills
+    await _db.skills.create_index("slug", unique=True)
+    await _db.skills.create_index("enabled")
+    await _db.skills.create_index([("updated_at", -1)])
+    await _db.skill_files.create_index([("skill_slug", 1), ("path", 1)], unique=True)
+    await _db.skill_files.create_index("content_hash")
+    await _db.skill_versions.create_index([("skill_slug", 1), ("created_at", -1)])
+    await _db.skill_versions.create_index("version_id", unique=True)
+
     # Event ingestion (Pass 1) indexes
     await _db.events.create_index("event_id", unique=True)
     await _db.events.create_index("source_event_id", unique=True)

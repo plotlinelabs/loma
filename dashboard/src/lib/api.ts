@@ -226,16 +226,35 @@ export async function generateTitles(): Promise<{ processed: number; message: st
 }
 
 export interface Skill {
+  slug?: string;
   name: string;
   description: string;
+  tags?: string[];
   has_extra_files: boolean;
   files: string[];
+  file_details?: SkillFile[];
+  updated_at?: string;
+}
+
+export interface SkillFile {
+  path: string;
+  kind: "inline_text" | "local_asset";
+  content_type?: string;
+  size_bytes?: number;
+  content_hash?: string;
+  original_filename?: string;
 }
 
 export interface SkillDetailResponse {
+  slug?: string;
   name: string;
+  description?: string;
+  tags?: string[];
   content: string;
   extra_files: Record<string, string>;
+  files: SkillFile[];
+  assets?: SkillFile[];
+  updated_at?: string;
 }
 
 export async function fetchSkills(): Promise<{ skills: Skill[] }> {
@@ -248,6 +267,86 @@ export async function fetchSkill(name: string): Promise<SkillDetailResponse> {
   const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error(`Failed to fetch skill: ${res.status}`);
   return res.json();
+}
+
+export async function createSkill(payload: { slug: string; content: string }): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to create skill: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function updateSkill(name: string, payload: { content?: string; files?: { path: string; content: string }[]; message?: string }): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to update skill: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function updateSkillFile(name: string, path: string, content: string): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/files`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to update skill file: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteSkillFile(name: string, path: string): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/files`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to delete skill file: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function uploadSkillAsset(name: string, path: string, file: File): Promise<SkillDetailResponse> {
+  const form = new FormData();
+  form.set("path", path);
+  form.set("file", file);
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/assets`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to upload skill asset: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteSkill(name: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to delete skill: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function skillAssetUrl(name: string, path: string): string {
+  return `${API_BASE}/api/skills/${encodeURIComponent(name)}/assets/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 export interface SkillCommit {

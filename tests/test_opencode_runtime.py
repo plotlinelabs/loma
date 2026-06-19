@@ -128,6 +128,26 @@ def test_claude_mcp_to_opencode_converts_local_and_remote_servers():
     }
 
 
+def test_opencode_config_does_not_use_native_skill_paths(monkeypatch, tmp_path):
+    import asyncio
+    import agent.opencode_runtime as opencode_runtime
+
+    monkeypatch.setattr(opencode_runtime, "_opencode_config_home", tmp_path)
+    monkeypatch.setattr(opencode_runtime, "_opencode_config_hash", None)
+    monkeypatch.setattr(opencode_runtime, "_opencode_config_checked_at", 0.0)
+
+    async def fake_load_config():
+        return {"mcp_servers": {}}
+
+    monkeypatch.setattr(opencode_runtime, "_load_current_agent_config", fake_load_config)
+
+    config_home, _ = asyncio.run(opencode_runtime._write_managed_opencode_config())
+    config_text = (config_home / "opencode" / "opencode.json").read_text()
+
+    assert "skills" not in config_text
+    assert ".claude/skills" not in config_text
+
+
 def test_opencode_runtime_uses_shared_pooled_prompt():
     from agent.opencode_runtime import _opencode_system_prompt
     from agent.prompt import build_pooled_system_prompt
