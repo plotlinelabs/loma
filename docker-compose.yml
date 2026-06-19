@@ -11,6 +11,9 @@ services:
       # Mount the real .env so the dashboard Environment admin (/api/env) can read & edit it.
       # env_file injects values into the process env, but does not place a file at /app/.env.
       - ./.env:/app/.env
+      # Persist connected Claude Code accounts (CLAUDE_USERS_DIR) across container
+      # recreation — otherwise `claude login` creds are lost on every rebuild/redeploy.
+      - loma-claude-users:/opt/claude-users
     restart: unless-stopped
 
   loma-dashboard:
@@ -28,3 +31,4 @@ services:
 
 volumes:
   loma-skill-assets:
+  loma-claude-users:
