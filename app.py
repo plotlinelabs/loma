@@ -1,9 +1,18 @@
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 from aiohttp import web
 from dotenv import load_dotenv
+
+# Load .env (bind-mounted at /app/.env in Docker) BEFORE importing modules that
+# read env at import time (e.g. config.app_config), and override the container's
+# env_file values. This makes dashboard edits to .env take effect when "Restart
+# Service" re-execs this process: os.execv carries the stale environment forward,
+# so we must re-read the file and override to pick up changes.
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
+
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
@@ -34,8 +43,6 @@ from agent.client import load_config, merge_db_integrations
 from agent.pool import init_pool
 from agent.prompt import refresh_prompt_settings_from_db
 from config.app_config import APP_NAME, LOMA_ENABLE_SCHEDULER, LOMA_ENABLE_WEBHOOKS
-
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
