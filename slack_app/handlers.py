@@ -157,7 +157,7 @@ async def _handle_agent_request(
             metadata = {
                 "source": source,
                 "prompt": prompt,
-                "model": os.environ.get("CLAUDE_MODEL", ""),
+                "model": os.environ.get("AGENT_DEFAULT_MODEL", "opencode-go/deepseek-v4-flash"),
                 "slack_user_id": user_id,
                 "slack_channel_id": channel,
                 "slack_thread_ts": thread_ts,
