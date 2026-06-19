@@ -8,6 +8,9 @@ services:
       - "3000:3000"
     volumes:
       - loma-skill-assets:/var/lib/loma/skill-assets
+      # Mount the real .env so the dashboard Environment admin (/api/env) can read & edit it.
+      # env_file injects values into the process env, but does not place a file at /app/.env.
+      - ./.env:/app/.env
     restart: unless-stopped
 
   loma-dashboard:
