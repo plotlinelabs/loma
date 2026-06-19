@@ -1,0 +1,528 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  /* Gray: warm neutrals */
+  --color-gray-50: #FDFBF7;
+  --color-gray-100: #F7F4EF;
+  --color-gray-200: #E8E4DD;
+  --color-gray-300: #D4CFC7;
+  --color-gray-400: #B8B1A8;
+  --color-gray-500: #8C857D;
+  --color-gray-600: #5C5650;
+  --color-gray-700: #1F1D1A;
+  --color-gray-800: #0A0A0A;
+  --color-gray-900: #0A0A0A;
+
+  /* Brand: warm neutral for active/selected states */
+  --color-brand-50: #FDFBF7;
+  --color-brand-100: #F7F4EF;
+  --color-brand-200: #E8E4DD;
+  --color-brand-300: #D4CFC7;
+  --color-brand-400: #B8B1A8;
+  --color-brand-500: #8C857D;
+  --color-brand-600: #5C5650;
+  --color-brand-700: #1F1D1A;
+  --color-brand-800: #0A0A0A;
+  --color-brand-900: #0A0A0A;
+
+  /* Accent: yellow-green for primary actions */
+  --color-accent-50: #fdfff0;
+  --color-accent-100: #f5ffd6;
+  --color-accent-200: #E8FF5A;
+  --color-accent-300: #F0FF85;
+  --color-accent-400: #c5e04a;
+  --color-accent-500: #8FB800;
+  --color-accent-600: #7A8F00;
+
+  /* Surface: cards, panels, modals (white in light, warm dark in dark) */
+  --color-surface: #FFFFFF;
+
+  /* Text on accent backgrounds — always dark regardless of theme */
+  --color-accent-on: #1F1D1A;
+}
+
+/* ── Dark mode palette inversion ─────────────────────────────────────────── */
+
+[data-theme="dark"] {
+  --color-gray-50: #0A0A0A;
+  --color-gray-100: #141311;
+  --color-gray-200: #2A2723;
+  --color-gray-300: #3A3632;
+  --color-gray-400: #8C857D;
+  --color-gray-500: #B8B1A8;
+  --color-gray-600: #D4CFC7;
+  --color-gray-700: #E8E4DD;
+  --color-gray-800: #F7F4EF;
+  --color-gray-900: #FDFBF7;
+
+  --color-brand-50: #0A0A0A;
+  --color-brand-100: #141311;
+  --color-brand-200: #2A2723;
+  --color-brand-300: #3A3632;
+  --color-brand-400: #8C857D;
+  --color-brand-500: #B8B1A8;
+  --color-brand-600: #D4CFC7;
+  --color-brand-700: #E8E4DD;
+  --color-brand-800: #F7F4EF;
+  --color-brand-900: #FDFBF7;
+
+  --color-accent-50: #0d0f00;
+  --color-accent-100: #1a1f00;
+  --color-accent-200: #E8FF5A;
+  --color-accent-300: #c5e04a;
+  --color-accent-400: #F0FF85;
+  --color-accent-500: #8FB800;
+  --color-accent-600: #7A8F00;
+
+  --color-surface: #1C1A17;
+
+  /* Semantic color badge overrides: flip light bg/border to dark equivalents.
+     -50 (badge bg) → very dark tint | -100 → slightly brighter | -200 (border) → muted dark
+     -700 (text) → lighter for readability on dark */
+
+  /* Blue */
+  --color-blue-50: color-mix(in srgb, #3b82f6 10%, #0A0A0A);
+  --color-blue-100: color-mix(in srgb, #3b82f6 15%, #0A0A0A);
+  --color-blue-200: color-mix(in srgb, #3b82f6 25%, #0A0A0A);
+  --color-blue-700: #60a5fa;
+
+  /* Red */
+  --color-red-50: color-mix(in srgb, #ef4444 10%, #0A0A0A);
+  --color-red-100: color-mix(in srgb, #ef4444 15%, #0A0A0A);
+  --color-red-200: color-mix(in srgb, #ef4444 25%, #0A0A0A);
+  --color-red-700: #f87171;
+
+  /* Green */
+  --color-green-50: color-mix(in srgb, #22c55e 10%, #0A0A0A);
+  --color-green-100: color-mix(in srgb, #22c55e 15%, #0A0A0A);
+  --color-green-200: color-mix(in srgb, #22c55e 25%, #0A0A0A);
+  --color-green-700: #4ade80;
+
+  /* Amber */
+  --color-amber-50: color-mix(in srgb, #f59e0b 10%, #0A0A0A);
+  --color-amber-100: color-mix(in srgb, #f59e0b 15%, #0A0A0A);
+  --color-amber-200: color-mix(in srgb, #f59e0b 25%, #0A0A0A);
+  --color-amber-700: #fbbf24;
+
+  /* Emerald */
+  --color-emerald-50: color-mix(in srgb, #10b981 10%, #0A0A0A);
+  --color-emerald-100: color-mix(in srgb, #10b981 15%, #0A0A0A);
+  --color-emerald-200: color-mix(in srgb, #10b981 25%, #0A0A0A);
+  --color-emerald-700: #34d399;
+
+  /* Purple */
+  --color-purple-50: color-mix(in srgb, #a855f7 10%, #0A0A0A);
+  --color-purple-100: color-mix(in srgb, #a855f7 15%, #0A0A0A);
+  --color-purple-200: color-mix(in srgb, #a855f7 25%, #0A0A0A);
+  --color-purple-700: #c084fc;
+
+  /* Indigo */
+  --color-indigo-50: color-mix(in srgb, #6366f1 10%, #0A0A0A);
+  --color-indigo-100: color-mix(in srgb, #6366f1 15%, #0A0A0A);
+  --color-indigo-200: color-mix(in srgb, #6366f1 25%, #0A0A0A);
+  --color-indigo-700: #818cf8;
+
+  /* Orange */
+  --color-orange-50: color-mix(in srgb, #f97316 10%, #0A0A0A);
+  --color-orange-100: color-mix(in srgb, #f97316 15%, #0A0A0A);
+  --color-orange-200: color-mix(in srgb, #f97316 25%, #0A0A0A);
+  --color-orange-700: #fb923c;
+
+  /* Yellow */
+  --color-yellow-50: color-mix(in srgb, #eab308 10%, #0A0A0A);
+  --color-yellow-100: color-mix(in srgb, #eab308 15%, #0A0A0A);
+  --color-yellow-200: color-mix(in srgb, #eab308 25%, #0A0A0A);
+  --color-yellow-700: #facc15;
+
+  /* Pink */
+  --color-pink-50: color-mix(in srgb, #ec4899 10%, #0A0A0A);
+  --color-pink-100: color-mix(in srgb, #ec4899 15%, #0A0A0A);
+  --color-pink-200: color-mix(in srgb, #ec4899 25%, #0A0A0A);
+  --color-pink-700: #f472b6;
+
+  /* Teal */
+  --color-teal-50: color-mix(in srgb, #14b8a6 10%, #0A0A0A);
+  --color-teal-100: color-mix(in srgb, #14b8a6 15%, #0A0A0A);
+  --color-teal-200: color-mix(in srgb, #14b8a6 25%, #0A0A0A);
+  --color-teal-700: #2dd4bf;
+
+  /* Cyan */
+  --color-cyan-50: color-mix(in srgb, #06b6d4 10%, #0A0A0A);
+  --color-cyan-100: color-mix(in srgb, #06b6d4 15%, #0A0A0A);
+  --color-cyan-200: color-mix(in srgb, #06b6d4 25%, #0A0A0A);
+  --color-cyan-700: #22d3ee;
+
+  /* Violet */
+  --color-violet-50: color-mix(in srgb, #8b5cf6 10%, #0A0A0A);
+  --color-violet-100: color-mix(in srgb, #8b5cf6 15%, #0A0A0A);
+  --color-violet-200: color-mix(in srgb, #8b5cf6 25%, #0A0A0A);
+  --color-violet-700: #a78bfa;
+
+  /* Rose */
+  --color-rose-50: color-mix(in srgb, #f43f5e 10%, #0A0A0A);
+  --color-rose-100: color-mix(in srgb, #f43f5e 15%, #0A0A0A);
+  --color-rose-200: color-mix(in srgb, #f43f5e 25%, #0A0A0A);
+  --color-rose-700: #fb7185;
+
+  /* Lime */
+  --color-lime-50: color-mix(in srgb, #84cc16 10%, #0A0A0A);
+  --color-lime-200: color-mix(in srgb, #84cc16 25%, #0A0A0A);
+
+  /* Sky */
+  --color-sky-50: color-mix(in srgb, #0ea5e9 10%, #0A0A0A);
+  --color-sky-200: color-mix(in srgb, #0ea5e9 25%, #0A0A0A);
+}
+
+@layer base {
+  body {
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.01em;
+    background: var(--color-gray-50);
+    transition: background-color 0.2s ease-out, color 0.2s ease-out;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D4CFC7;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #B8B1A8;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #3A3632;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #4A4540;
+}
+
+/* ── Animation Keyframes ───────────────────────────────────────────────────── */
+
+/* Shimmer effect for skeleton loaders */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #F7F4EF 25%, #E8E4DD 50%, #F7F4EF 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+[data-theme="dark"] .skeleton {
+  background: linear-gradient(90deg, #1C1A17 25%, #2A2723 50%, #1C1A17 75%);
+  background-size: 200% 100%;
+}
+
+/* Fade-in-up for content appearing */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.3s ease-out both;
+}
+
+/* Simple fade-in (for overlays / backdrops) */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s ease-out both;
+}
+
+/* Staggered children: apply to parent, children get delayed fade-in */
+.stagger-children > * {
+  animation: fadeInUp 0.3s ease-out both;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 40ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 80ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 120ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 160ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 200ms; }
+.stagger-children > *:nth-child(7) { animation-delay: 240ms; }
+.stagger-children > *:nth-child(8) { animation-delay: 280ms; }
+.stagger-children > *:nth-child(9) { animation-delay: 320ms; }
+.stagger-children > *:nth-child(10) { animation-delay: 360ms; }
+.stagger-children > *:nth-child(n+11) { animation-delay: 400ms; }
+
+/* Bouncing dots typing indicator */
+@keyframes bounceDot {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+.typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  animation: bounceDot 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Chat message fade-in */
+@keyframes messageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-message-in {
+  animation: messageFadeIn 0.25s ease-out both;
+}
+
+/* Artifact viewer slide-in from right */
+@keyframes artifactSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-artifact-slide-in {
+  animation: artifactSlideIn 0.25s ease-out both;
+}
+
+/* Steps expand */
+@keyframes expandIn {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 500px;
+  }
+}
+
+.animate-expand {
+  animation: expandIn 0.2s ease-out both;
+  overflow: hidden;
+}
+
+/* Card hover lift */
+.hover-lift {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+.hover-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(30, 25, 15, 0.06);
+}
+
+[data-theme="dark"] .hover-lift:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Button press */
+.press-scale {
+  transition: transform 0.1s ease-out;
+}
+.press-scale:active {
+  transform: scale(0.97);
+}
+
+/* ── Responsive helpers ──────────────────────────────────────────────────── */
+
+/* Hide desktop-only table on mobile, show mobile card list */
+@media (max-width: 767px) {
+  .desktop-table { display: none !important; }
+  .mobile-cards { display: block !important; }
+
+  /* Disable hover-lift on touch devices to avoid sticky hover */
+  .hover-lift:hover {
+    transform: none;
+    box-shadow: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .mobile-cards { display: none !important; }
+}
+
+/* ── Agent Graph ───────────────────────────────────────────────────── */
+
+/* Loma breathing glow — yellow energy */
+@keyframes centerGlow {
+  0%, 100% { box-shadow: 0 0 20px rgba(232, 255, 90, 0.3), 0 0 50px rgba(232, 255, 90, 0.1); }
+  50% { box-shadow: 0 0 35px rgba(232, 255, 90, 0.5), 0 0 80px rgba(232, 255, 90, 0.2); }
+}
+
+.center-node {
+  animation: centerGlow 2.5s ease-in-out infinite;
+}
+
+/* Expanding energy rings around Loma */
+@keyframes ringPulse {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.35; }
+  100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+}
+
+.loma-ring {
+  position: absolute;
+  left: 50%; top: 50%;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: ringPulse 3s ease-out infinite;
+}
+
+.loma-ring-delayed {
+  position: absolute;
+  left: 50%; top: 50%;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: ringPulse 3s ease-out 1.5s infinite;
+}
+
+/* Node hover transitions */
+.graph-node {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, border-color 0.15s ease-out;
+}
+
+/* Skill pill styling */
+.skill-pill {
+  transition: all 0.15s ease-out;
+}
+.skill-pill:hover {
+  transform: translateY(-1px);
+}
+
+/* Short-term Memory node — futuristic accent yellow-green glow */
+@keyframes memoryGlow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(197, 224, 74, 0.3), 0 0 50px rgba(143, 184, 0, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(197, 224, 74, 0.5), 0 0 70px rgba(143, 184, 0, 0.2);
+  }
+}
+
+.memory-node {
+  animation: memoryGlow 3s ease-in-out infinite;
+}
+
+/* Scanning line inside memory node */
+@keyframes memoryScan {
+  0% { transform: translateY(-100%); opacity: 0; }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.6; }
+  100% { transform: translateY(100%); opacity: 0; }
+}
+
+.memory-scan-line {
+  animation: memoryScan 2.5s ease-in-out infinite;
+}
+
+/* Data stream particles around memory node */
+@keyframes memoryOrbit {
+  0% { transform: rotate(0deg) translateX(36px) rotate(0deg); }
+  100% { transform: rotate(360deg) translateX(36px) rotate(-360deg); }
+}
+
+.memory-orbit {
+  animation: memoryOrbit 4s linear infinite;
+}
+
+.memory-orbit-reverse {
+  animation: memoryOrbit 6s linear infinite reverse;
+}
+
+/* ── Short-term Memory Page ────────────────────────────────────────────── */
+
+/* Turn bar segments fill in from left */
+@keyframes turnBarReveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+.turn-bar {
+  animation: turnBarReveal 0.6s ease-out both;
+}
+
+/* Resolution bar segments grow in */
+@keyframes barGrow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.resolution-bar > div {
+  transform-origin: left;
+  animation: barGrow 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Memory card entrance */
+@keyframes memoryCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.memory-card {
+  animation: memoryCardIn 0.35s ease-out both;
+}
+
+/* Subtle glow on hover for memory cards */
+.memory-card:hover {
+  box-shadow: 0 4px 20px rgba(30, 25, 15, 0.06), 0 0 0 1px rgba(30, 25, 15, 0.04);
+}
+
+[data-theme="dark"] .memory-card:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* Stat card number count-up feel */
+@keyframes statPop {
+  0% { transform: scale(0.8); opacity: 0; }
+  60% { transform: scale(1.05); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.stat-number {
+  animation: statPop 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}

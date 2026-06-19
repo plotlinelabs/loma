@@ -1,0 +1,127 @@
+import asyncio
+import logging
+import os
+
+from aiohttp import web
+from dotenv import load_dotenv
+from slack_bolt.async_app import AsyncApp
+from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+
+from slack_app.handlers import register_handlers
+from slack_app.ingestion import register_ingestion_middleware
+from webhooks.linear import setup_linear_webhook_routes
+from webhooks.grain import setup_grain_webhook_routes
+from webhooks.pylon import setup_pylon_webhook_routes
+from webhooks.hubspot import setup_hubspot_webhook_routes
+from webhooks.github import setup_github_webhook_routes
+from webhooks.incoming import setup_incoming_webhook_routes
+from observability.db import init_observability
+from api.routes import setup_api_routes
+from api.auth_middleware import auth_middleware
+from api.governance_routes import setup_governance_routes
+from api.oauth_routes import setup_oauth_routes
+from api.webhook_log_routes import setup_webhook_log_routes
+from api.env_routes import setup_env_routes
+from api.usage_routes import setup_usage_routes
+from api.terminal_routes import setup_terminal_routes
+from api.claude_auth_routes import setup_claude_auth_routes
+from api.file_routes import setup_file_routes
+from api.integration_routes import setup_integration_routes
+from api.prompt_settings_routes import setup_prompt_settings_routes
+from recovery import start_recovery_loop
+from scheduler.engine import init_scheduler
+from agent.client import load_config, merge_db_integrations
+from agent.pool import init_pool
+from agent.prompt import refresh_prompt_settings_from_db
+from config.app_config import APP_NAME, LOMA_ENABLE_SCHEDULER, LOMA_ENABLE_WEBHOOKS
+
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+app = AsyncApp(token=os.environ["SLACK_BOT_TOKEN"])
+register_handlers(app)
+register_ingestion_middleware(app)
+
+
+@web.middleware
+async def log_404_middleware(request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPNotFound:
+        logger.error("[WEBHOOK] 404 Not Found: %s %s", request.method, request.path)
+        return web.json_response({"error": "Not Found", "path": request.path}, status=404)
+
+
+async def main():
+    # Initialize observability MongoDB
+    await init_observability()
+    await refresh_prompt_settings_from_db()
+
+    # Pre-warm Claude SDK client pool (background \u2014 doesn't block startup)
+    agent_config = load_config()
+    agent_config = await merge_db_integrations(agent_config)
+    await init_pool(config=agent_config)
+
+    # Start periodic recovery loop for interrupted conversations
+    start_recovery_loop()
+
+    # In dev mode, skip Slack and scheduled tasks
+    is_dev = os.environ.get("ENV", "").upper() == "DEV"
+
+    # Initialize task scheduler (loads active tasks from MongoDB)
+    if not is_dev and LOMA_ENABLE_SCHEDULER:
+        await init_scheduler()
+    elif not is_dev:
+        logger.info("Scheduler disabled (set LOMA_ENABLE_SCHEDULER=true to enable)")
+
+    # Slack Socket Mode
+    handler = None
+    if not is_dev:
+        handler = AsyncSocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+
+    # Webhook HTTP server
+    webhook_app = web.Application(
+        middlewares=[log_404_middleware, auth_middleware],
+        client_max_size=20 * 1024 * 1024,  # 20 MB (default 1 MB is too small for file uploads)
+    )
+    if LOMA_ENABLE_WEBHOOKS:
+        setup_linear_webhook_routes(webhook_app)
+        setup_grain_webhook_routes(webhook_app)
+        setup_pylon_webhook_routes(webhook_app)
+        setup_hubspot_webhook_routes(webhook_app)
+        setup_github_webhook_routes(webhook_app)
+        setup_incoming_webhook_routes(webhook_app)
+    setup_api_routes(webhook_app)
+    setup_governance_routes(webhook_app)
+    setup_oauth_routes(webhook_app)
+    setup_webhook_log_routes(webhook_app)
+    setup_env_routes(webhook_app)
+    setup_usage_routes(webhook_app)
+    setup_terminal_routes(webhook_app)
+    setup_claude_auth_routes(webhook_app)
+    setup_file_routes(webhook_app)
+    setup_integration_routes(webhook_app)
+    setup_prompt_settings_routes(webhook_app)
+    runner = web.AppRunner(webhook_app)
+    await runner.setup()
+    port = int(os.environ.get("WEBHOOK_PORT", "3000"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Webhook server running on port %d", port)
+
+    logger.info("%s is running!", APP_NAME)
+    if handler:
+        await handler.start_async()
+    else:
+        logger.info("Slack & scheduler disabled (ENV=DEV)")
+        # Keep the process alive for the HTTP server
+        await asyncio.Event().wait()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

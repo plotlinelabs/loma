@@ -1,0 +1,22 @@
+services:
+  loma-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  loma-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    env_file: ./dashboard/.env
+    environment:
+      BACKEND_URL: http://loma-backend:3000
+    ports:
+      - "3001:3001"
+    depends_on:
+      - loma-backend
+    restart: unless-stopped

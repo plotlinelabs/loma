@@ -1,0 +1,20 @@
+# MCP server configurations loaded directly from environment variables.
+# These servers don't require setup via the Integrations page.
+# Env vars are resolved using ${VAR_NAME} syntax.
+#
+# Required env vars for Sentry:
+#   SENTRY_ACCESS_TOKEN - User Auth Token from https://sentry.io/settings/account/api/auth-tokens/
+#   EMBEDDED_AGENT_PROVIDER - "anthropic" (for AI-powered natural language search)
+#   ANTHROPIC_API_KEY - Anthropic API key (already required for the agent)
+
+mcp_servers:
+  sentry:
+    type: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@sentry/mcp-server"
+    env:
+      SENTRY_ACCESS_TOKEN: "${SENTRY_ACCESS_TOKEN}"
+      EMBEDDED_AGENT_PROVIDER: "${EMBEDDED_AGENT_PROVIDER}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"

@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+dashboard/.env
+dashboard/.env.*
+.venv
+__pycache__
+.pytest_cache
+node_modules
+dashboard/node_modules
+dashboard/.next
+private
+.loma-private
+secrets
