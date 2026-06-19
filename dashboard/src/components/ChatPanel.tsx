@@ -41,6 +41,26 @@ const MAX_TEXT_SIZE = 50 * 1024; // 50 KB
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]);
 
+function createConversationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function isImageFile(name: string): boolean {
   const ext = name.split(".").pop()?.toLowerCase() || "";
   return IMAGE_EXTENSIONS.has(ext);
@@ -923,7 +943,7 @@ export default function ChatPanel({
     // is updated immediately (before the SSE stream establishes).
     let activeConversationId = conversationId;
     if (!activeConversationId) {
-      activeConversationId = crypto.randomUUID();
+      activeConversationId = createConversationId();
       setConversationId(activeConversationId);
       window.history.replaceState(null, "", `${basePath}/chat?continue=${activeConversationId}`);
       onConversationCreated?.(activeConversationId);
