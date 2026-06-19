@@ -37,6 +37,128 @@ Dashboard (:3001) ── Google OAuth ────┘
 - OpenCode API key for the default agent runtime
 - Optional Anthropic API key or Claude dashboard accounts if you want Claude Agent SDK fallback
 
+## Fresh EC2 Quickstart
+
+Use this path to test a brand-new self-hosted install on Ubuntu 24.04 LTS. Temporarily allow inbound TCP `22`, `3000`, and `3001` in the instance security group while testing.
+
+1. SSH into the instance:
+
+```bash
+ssh -i your-key.pem ubuntu@<ec2-public-ip>
+```
+
+2. Install Docker Engine and Docker Compose plugin:
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl git
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker ubuntu
+```
+
+Log out and SSH back in so Docker group permissions apply.
+
+3. Clone Loma:
+
+```bash
+git clone https://github.com/plotlinelabs/loma.git
+cd loma
+```
+
+4. Create the backend environment file:
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Minimum values for an EC2 smoke test:
+
+```text
+PUBLIC_BASE_URL=http://<ec2-public-ip>:3001
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+OPENCODE_API_KEY=opencode-...
+AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
+OBSERVABILITY_MONGODB_URI=mongodb+srv://...
+OBSERVABILITY_DB_NAME=loma_observability
+WEBHOOK_PORT=3000
+```
+
+5. Create the dashboard environment file:
+
+```bash
+cd dashboard
+cp .env.example .env
+nano .env
+cd ..
+```
+
+Minimum values:
+
+```text
+AUTH_SECRET=<random-long-secret>
+AUTH_GOOGLE_ID=...
+AUTH_GOOGLE_SECRET=...
+AUTH_URL=http://<ec2-public-ip>:3001
+BACKEND_URL=http://loma-backend:3000
+NEXT_PUBLIC_BACKEND_URL=http://<ec2-public-ip>:3000
+```
+
+6. Configure Google OAuth with this redirect URI:
+
+```text
+http://<ec2-public-ip>:3001/api/auth/callback/google
+```
+
+7. Configure Slack:
+
+- Create a Slack app at <https://api.slack.com/apps>.
+- Enable Socket Mode.
+- Create an app-level token with `connections:write` and set it as `SLACK_APP_TOKEN`.
+- Add the bot scopes listed in the Slack setup section below.
+- Subscribe to `app_mention` and `message.im` bot events.
+- Install the app and set the bot token as `SLACK_BOT_TOKEN`.
+
+8. Start Loma:
+
+```bash
+docker compose up --build
+```
+
+9. Smoke test:
+
+- Open `http://<ec2-public-ip>:3001`.
+- Log in with Google; the first user should become `admin`.
+- Send a message in dashboard chat.
+- Mention the Slack bot in a channel where it has been invited.
+- DM the Slack bot.
+- Confirm conversation history appears in the dashboard.
+
+Useful debugging commands:
+
+```bash
+docker compose ps
+docker compose logs -f loma-backend
+docker compose logs -f loma-dashboard
+```
+
+If OpenCode fails, check backend logs for missing `OPENCODE_API_KEY`, `opencode binary not found`, or `OpenCode server did not become ready`. The backend Docker image installs the `opencode` CLI automatically, so most first-run issues are missing credentials or blocked network access.
+
 ## Local backend setup
 
 ```bash
