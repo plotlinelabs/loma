@@ -97,6 +97,7 @@ AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
 OBSERVABILITY_MONGODB_URI=mongodb+srv://...
 OBSERVABILITY_DB_NAME=loma_observability
 WEBHOOK_PORT=3000
+ENV=PROD
 ```
 
 5. Create the dashboard environment file:
@@ -268,6 +269,7 @@ OPENCODE_API_KEY=opencode-...
 AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
 OBSERVABILITY_MONGODB_URI=mongodb+srv://...
 WEBHOOK_PORT=3000
+ENV=PROD
 APP_NAME=Loma
 PUBLIC_BASE_URL=http://localhost:3001
 ```
