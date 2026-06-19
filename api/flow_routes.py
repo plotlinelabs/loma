@@ -147,9 +147,7 @@ async def handle_get_flow(request: web.Request) -> web.Response:
 
 async def handle_create_flow(request: web.Request) -> web.Response:
     """POST /api/flows — create a new flow (scheduled or webhook-triggered)."""
-    # Flow creation is intentionally open: the dashboard chat agent creates flows
-    # via a local curl that bypasses the Next.js auth layer (no X-User-Email), so an
-    # operator gate blocked legitimate maintainers. No auth check here by design.
+    require_operator_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "DB not configured"}, status=503)
