@@ -23,7 +23,7 @@ type ViewMode = "preview" | "code";
 
 // ── Language detection ──────────────────────────────────────────────────────
 
-const PREVIEWABLE_LANGUAGES = new Set(["html", "markdown", "md", "svg", "mermaid", "jsx", "tsx", "pdf", "docx", "xlsx", "pptx"]);
+const PREVIEWABLE_LANGUAGES = new Set(["html", "markdown", "md", "svg", "mermaid", "jsx", "tsx", "pdf", "docx", "pptx"]);
 const CODE_LANGUAGES = new Set([
   "javascript", "js", "typescript", "ts", "tsx", "jsx",
   "python", "py", "java", "go", "rust", "ruby", "rb",
@@ -482,98 +482,6 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
   );
 }
 
-// ── Spreadsheet Renderer (SheetJS/xlsx) ─────────────────────────────────────
-
-function SpreadsheetRenderer({ fileUrl }: { fileUrl: string }) {
-  const [sheets, setSheets] = useState<{ name: string; html: string }[]>([]);
-  const [activeSheet, setActiveSheet] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function convert() {
-      setLoading(true);
-      setError(null);
-      try {
-        const response = await fetch(fileUrl);
-        if (!response.ok) throw new Error(`Failed to fetch file: ${response.status}`);
-        const arrayBuffer = await response.arrayBuffer();
-        const XLSX = await import("xlsx");
-        const workbook = XLSX.read(arrayBuffer, { type: "array" });
-        const sheetData = workbook.SheetNames.map((name: string) => ({
-          name,
-          html: XLSX.utils.sheet_to_html(workbook.Sheets[name]),
-        }));
-        if (!cancelled) {
-          setSheets(sheetData);
-          setLoading(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to render spreadsheet");
-          setLoading(false);
-        }
-      }
-    }
-    convert();
-    return () => { cancelled = true; };
-  }, [fileUrl]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full bg-white rounded-b-lg">
-        <div className="flex items-center gap-2 text-gray-400 text-sm">
-          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          Loading spreadsheet...
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="p-4 h-full overflow-auto bg-white rounded-b-lg">
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <div className="text-red-700 text-sm font-medium mb-2">Spreadsheet Error</div>
-          <pre className="text-xs text-red-600 whitespace-pre-wrap font-mono">{error}</pre>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="h-full flex flex-col bg-white rounded-b-lg">
-      {sheets.length > 1 && (
-        <div className="flex gap-1 px-3 pt-2 border-b border-gray-200 overflow-x-auto flex-shrink-0">
-          {sheets.map((sheet, i) => (
-            <button
-              key={sheet.name}
-              onClick={() => setActiveSheet(i)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-t-lg border border-b-0 transition-colors ${
-                i === activeSheet
-                  ? "bg-white border-gray-200 text-gray-800"
-                  : "bg-gray-50 border-transparent text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              {sheet.name}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="flex-1 overflow-auto p-2">
-        <div
-          className="spreadsheet-preview [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-gray-200 [&_td]:px-2 [&_td]:py-1 [&_td]:text-xs [&_th]:border [&_th]:border-gray-200 [&_th]:px-2 [&_th]:py-1 [&_th]:text-xs [&_th]:font-medium [&_th]:bg-gray-50"
-          dangerouslySetInnerHTML={{ __html: sheets[activeSheet]?.html || "" }}
-        />
-      </div>
-    </div>
-  );
-}
-
 // ── PPTX Renderer (download prompt) ─────────────────────────────────────────
 
 function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
@@ -866,8 +774,6 @@ export default function ArtifactViewer({
             <PdfRenderer fileUrl={artifact.file_url} />
           ) : artifact.file_url && artifact.language === "docx" ? (
             <DocxRenderer fileUrl={artifact.file_url} />
-          ) : artifact.file_url && artifact.language === "xlsx" ? (
-            <SpreadsheetRenderer fileUrl={artifact.file_url} />
           ) : artifact.file_url && artifact.language === "pptx" ? (
             <PptxRenderer fileUrl={artifact.file_url} title={artifact.title} />
           ) : artifact.file_url ? (
