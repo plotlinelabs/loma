@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
     && opencode --version \
     && npm install -g @anthropic-ai/claude-code \
     && claude --version \
+    && pip install --no-cache-dir uv \
+    && uv --version \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 COPY requirements.txt .
