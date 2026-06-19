@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web
-from dotenv import dotenv_values, set_key, unset_key, load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 from observability.db import get_db
 from api.auth_helpers import require_maintainer_or_above, get_user_email
@@ -41,6 +41,36 @@ OPENCODE_PROVIDER_VARS = frozenset({"OPENCODE_API_KEY", "OPENAI_API_KEY"})
 
 # Valid env var key pattern
 KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _write_env_in_place(path: str, key: str, value: str | None) -> None:
+    """Set (value given) or delete (value None) a key in the .env file by
+    rewriting it in place.
+
+    python-dotenv's set_key/unset_key write a temp file and os.rename() it over
+    the target, which fails with EBUSY when .env is a bind-mounted single file in
+    Docker (you cannot rename over a mount point). Truncating and rewriting the
+    same inode avoids the rename and preserves comments/ordering of other lines.
+    """
+    p = Path(path)
+    try:
+        lines = p.read_text().splitlines()
+    except FileNotFoundError:
+        lines = []
+    key_re = re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=")
+    out: list[str] = []
+    found = False
+    for line in lines:
+        if key_re.match(line):
+            found = True
+            if value is not None:
+                out.append(f"{key}={value}")
+            # value is None -> delete: drop the line
+        else:
+            out.append(line)
+    if value is not None and not found:
+        out.append(f"{key}={value}")
+    p.write_text("\n".join(out) + ("\n" if out else ""))
 
 
 def _is_sensitive(key: str) -> bool:
@@ -245,7 +275,7 @@ async def handle_update_env(request: web.Request) -> web.Response:
                     "new_preview": _mask_for_audit(key, new_value, custom_sensitive),
                 })
                 try:
-                    set_key(DOTENV_PATH, key, new_value, quote_mode="never")
+                    _write_env_in_place(DOTENV_PATH, key, new_value)
                 except Exception as e:
                     return web.json_response(
                         {"error": f"Failed to set key '{key}': {e}"}, status=500
@@ -260,7 +290,7 @@ async def handle_update_env(request: web.Request) -> web.Response:
                     "new_preview": None,
                 })
                 try:
-                    unset_key(DOTENV_PATH, key)
+                    _write_env_in_place(DOTENV_PATH, key, None)
                 except Exception as e:
                     return web.json_response(
                         {"error": f"Failed to delete key '{key}': {e}"}, status=500
