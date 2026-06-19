@@ -84,11 +84,11 @@ export default function ToolDetailPage() {
   if (!isValidTool) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <Link href="/mcp" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
+        <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
           </svg>
-          Back to Graph
+          Back to Admin
         </Link>
         <div className="bg-surface rounded-xl border border-gray-200 p-12 text-center">
           <p className="text-gray-500">Tool not found</p>
@@ -116,11 +116,11 @@ export default function ToolDetailPage() {
   return (
     <div className="space-y-5 animate-fade-in-up">
       {/* Back link */}
-      <Link href="/mcp" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
+      <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
         </svg>
-        Back to Graph
+        Back to Admin
       </Link>
 
       {/* Tool Header */}

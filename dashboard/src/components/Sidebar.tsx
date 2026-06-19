@@ -61,21 +61,6 @@ const navigation: NavItem[] = [
     ),
   },
   {
-    name: "Context Graph",
-    href: "/mcp",
-    minRole: "analyst",
-    icon: (
-      <svg className="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <circle cx="6" cy="6" r="2.25" stroke="currentColor" />
-        <circle cx="18" cy="6" r="2.25" stroke="currentColor" />
-        <circle cx="18" cy="18" r="2.25" stroke="currentColor" />
-        <circle cx="6" cy="18" r="2.25" stroke="currentColor" />
-        <circle cx="12" cy="12" r="2.25" stroke="currentColor" />
-        <path strokeLinecap="round" d="M8 7l2.5 3.5M14 7l-2.5 3.5M14 13.5l2.5 3M8 17l2.5-3.5" />
-      </svg>
-    ),
-  },
-  {
     name: "Analytics",
     href: "/analytics",
     minRole: "analyst",
