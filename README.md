@@ -39,7 +39,7 @@ Dashboard (:3001) ── Google OAuth ────┘
 
 ## Fresh EC2 Quickstart
 
-Use this path to test a brand-new self-hosted install on Ubuntu 24.04 LTS. Temporarily allow inbound TCP `22`, `3000`, and `3001` in the instance security group while testing.
+Use this path to test a brand-new self-hosted install on Ubuntu 24.04 LTS or Ubuntu 26.04 LTS. Temporarily allow inbound TCP `22`, `3000`, and `3001` in the instance security group while testing.
 
 1. SSH into the instance:
 
@@ -116,7 +116,7 @@ AUTH_GOOGLE_ID=...
 AUTH_GOOGLE_SECRET=...
 AUTH_URL=http://<ec2-public-ip>:3001
 BACKEND_URL=http://loma-backend:3000
-NEXT_PUBLIC_BACKEND_URL=http://<ec2-public-ip>:3000
+NEXT_PUBLIC_API_URL=http://<ec2-public-ip>:3000
 ```
 
 6. Configure Google OAuth with this redirect URI:
