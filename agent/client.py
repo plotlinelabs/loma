@@ -701,8 +701,11 @@ async def stream_agent(
             text_parts.append(
                 "## Loma Skills\n"
                 "Loma skills are stored in MongoDB and are available through the first-party CLI "
-                "`python3 tools/loma_skills.py`. Use `list`, `search`, `get`, `file`, and `asset` "
-                "to inspect skills. Only update skills when the user explicitly asks you to change "
+                "`python3 tools/loma_skills.py`. Do not use the built-in `skill` tool for Loma skills. "
+                "Use `python3 tools/loma_skills.py list`, `python3 tools/loma_skills.py search --query QUERY`, "
+                "`python3 tools/loma_skills.py get --slug SLUG`, `python3 tools/loma_skills.py file --slug SLUG --path PATH`, "
+                "and `python3 tools/loma_skills.py asset --slug SLUG --path PATH` to inspect skills. "
+                "Only update skills when the user explicitly asks you to change "
                 f"company playbooks or skills.{skill_tool_auth}\n\n"
                 "Available skill index:\n"
                 f"{skills_text}"
