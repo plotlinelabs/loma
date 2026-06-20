@@ -10,7 +10,6 @@ or none).  Every request is logged to the ``webhook_logs`` collection for
 debugging, regardless of auth or execution outcome.
 """
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -193,12 +192,12 @@ async def handle_incoming_webhook(request: web.Request) -> web.Response:
 
     await update_webhook_log(db, log_id, auth_result="success")
 
-    # 5. Fire-and-forget execution
-    from scheduler.webhook_executor import execute_webhook_flow
+    # 5. Fire-and-forget execution. dispatch_webhook_flow supersedes any in-flight
+    # run for the same (flow_id, thread_id) so only the latest webhook executes;
+    # without an extractable thread_id it stays independent and concurrent.
+    from scheduler.webhook_executor import dispatch_webhook_flow
 
-    asyncio.create_task(
-        execute_webhook_flow(flow, raw_body, headers, log_id)
-    )
+    dispatch_webhook_flow(flow, raw_body, headers, log_id)
 
     logger.info("[WEBHOOK] Accepted webhook for flow %s (%s), log=%s", flow_id, flow_name, log_id)
     return web.json_response({"status": "accepted", "log_id": log_id}, status=202)

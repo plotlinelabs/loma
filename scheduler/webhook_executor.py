@@ -35,6 +35,12 @@ Flow name: {flow_name}
 # Keeps token usage bounded for long-running conversations.
 _MAX_CONTEXT_MESSAGES = 20
 
+# In-flight webhook runs keyed by f"{flow_id}:{thread_id}". When a newer webhook
+# arrives for the same key, the older run is cancelled so only the latest executes.
+# Only used when a thread_id can be extracted; without one, runs stay independent.
+# In-process only (single backend process / one event loop).
+_inflight: dict[str, asyncio.Task] = {}
+
 
 def _flow_model(flow: dict) -> str:
     """Return the provider/model id configured for this flow."""
@@ -193,7 +199,9 @@ async def execute_webhook_flow(
                 {
                     "metadata.thread_id": thread_id,
                     "metadata.flow_id": flow_id,
-                    "status": {"$in": ["completed", "running"]},
+                    # "interrupted" lets the latest run resume a conversation whose
+                    # prior run we just cancelled (supersede), keeping one thread.
+                    "status": {"$in": ["completed", "running", "interrupted"]},
                 },
                 sort=[("finished_at", -1)],
             )
@@ -238,6 +246,17 @@ async def execute_webhook_flow(
         ):
             if isinstance(chunk, str):
                 last_text = chunk
+    except asyncio.CancelledError:
+        # Superseded by a newer webhook for the same (flow_id, thread_id), or a
+        # server shutdown. stream_agent's own finally releases the pooled client
+        # and SIGKILLs the agent subprocess; here we just settle the records.
+        # Shield so the status writes survive the cancellation in flight.
+        logger.info(
+            "[WEBHOOK-EXEC] Flow %s interrupted (conversation %s)",
+            flow_id, observer.conversation_id,
+        )
+        await asyncio.shield(_finalize_interrupted(db, observer, log_id))
+        raise
     except Exception as exc:
         logger.exception("[WEBHOOK-EXEC] Flow %s execution failed", flow_id)
         error_message = f"Flow execution failed: {exc}"
@@ -305,3 +324,79 @@ async def execute_webhook_flow(
         flow_id, observer.conversation_id,
     )
     return observer.conversation_id
+
+
+async def _finalize_interrupted(db, observer: ConversationObserver, log_id: str) -> None:
+    """Settle a superseded run: mark the conversation interrupted + flag the log."""
+    await observer.mark_interrupted("Superseded by newer webhook for same issue")
+    try:
+        await db.webhook_logs.update_one(
+            {"log_id": log_id},
+            {"$set": {
+                "execution_status": "interrupted",
+                "conversation_id": observer.conversation_id,
+            }},
+        )
+    except Exception:
+        logger.warning("[WEBHOOK-EXEC] Failed to mark webhook log %s interrupted", log_id)
+
+
+async def _run_superseding(
+    key: str,
+    predecessor: asyncio.Task | None,
+    flow: dict,
+    raw_body: bytes,
+    headers: dict,
+    log_id: str,
+) -> str | None:
+    """Run the latest webhook after letting a cancelled predecessor tear down.
+
+    Waiting for the predecessor avoids two agents writing the same conversation
+    at once and lets the latest run resume the just-interrupted thread cleanly.
+    `asyncio.wait` never raises for the predecessor's own outcome (cancelled or
+    errored); it only propagates a cancellation of *this* task — in which case an
+    even-newer webhook has superseded us and we must not start.
+    """
+    if predecessor is not None and not predecessor.done():
+        await asyncio.wait({predecessor}, timeout=30)
+    return await execute_webhook_flow(flow, raw_body, headers, log_id)
+
+
+def dispatch_webhook_flow(flow: dict, raw_body: bytes, headers: dict, log_id: str) -> None:
+    """Schedule a webhook run, superseding any in-flight run for the same
+    (flow_id, thread_id). Returns immediately so the HTTP handler can 202 fast.
+
+    With no extractable thread_id, runs stay independent and concurrent (the
+    prior behavior) — there is no key to dedupe on.
+    """
+    flow_id = flow["flow_id"]
+
+    try:
+        payload = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = {}
+    thread_id = extract_thread_id(flow, payload) if isinstance(payload, dict) else None
+
+    if not thread_id:
+        asyncio.create_task(execute_webhook_flow(flow, raw_body, headers, log_id))
+        return
+
+    key = f"{flow_id}:{thread_id}"
+    predecessor = _inflight.get(key)
+    if predecessor is not None and not predecessor.done():
+        logger.info("[WEBHOOK-EXEC] Newer webhook superseding in-flight run for %s", key)
+        predecessor.cancel()
+
+    # No await between read/cancel/create/store → atomic w.r.t. the event loop.
+    task = asyncio.create_task(
+        _run_superseding(key, predecessor, flow, raw_body, headers, log_id)
+    )
+    _inflight[key] = task
+
+    def _cleanup(done_task: asyncio.Task, _key: str = key) -> None:
+        # Only clear if we're still the current run for this key (don't clobber a
+        # newer task that already replaced us).
+        if _inflight.get(_key) is done_task:
+            _inflight.pop(_key, None)
+
+    task.add_done_callback(_cleanup)
