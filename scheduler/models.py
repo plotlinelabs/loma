@@ -59,11 +59,6 @@ async def create_flow(db, data: dict) -> dict:
         "creation_conversation_id": data.get("creation_conversation_id"),
         "last_run_conversation_id": None,
         "last_error": None,
-
-        # Rolling memory — summarized feedback from previous runs.
-        # Updated only when a user replies in the flow output Slack thread.
-        # Kept to ~500 tokens max via Haiku summarization.
-        "memory_state": "",
     }
 
     await db.flows.insert_one(flow)

@@ -60,7 +60,6 @@ function ChatPageContent() {
           `Here's the current configuration for **${flow.name}** (\`${flow.flow_id}\`):`,
           "",
           `- **Schedule:** ${flow.frequency || flow.cron || "One-time"}`,
-          `- **Channel:** ${flow.channel_name || flow.channel_id}`,
           `- **Timezone:** ${flow.timezone}`,
           `- **Status:** ${flow.status}`,
           "",

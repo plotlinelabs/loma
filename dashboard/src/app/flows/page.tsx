@@ -147,7 +147,7 @@ export default function FlowsPage() {
   }
 
   async function handleRunNow(flow: Flow) {
-    try { await triggerFlow(flow.flow_id); alert(`Flow "${flow.name}" triggered. Check the target channel for results.`); }
+    try { await triggerFlow(flow.flow_id); alert(`Flow "${flow.name}" triggered. Check the execution history for results.`); }
     catch (e) { console.error("Failed to trigger flow:", e); }
   }
 
@@ -339,10 +339,6 @@ export default function FlowsPage() {
                         <span className="flex items-center gap-1">
                           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
                           {flow.frequency || flow.cron || "One-time"}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M5.25 8.25h15m-16.5 7.5h15m-1.8-13.5-3.9 19.5m-2.1-19.5-3.9 19.5" /></svg>
-                          {flow.channel_name || flow.channel_id}
                         </span>
                       </>
                     )}

@@ -167,7 +167,7 @@ async def handle_create_flow(request: web.Request) -> web.Response:
                     {"error": f"Missing required field: {field}"}, status=400,
                 )
     else:
-        for field in ("name", "prompt", "schedule_type", "channel_id"):
+        for field in ("name", "prompt", "schedule_type"):
             if field not in body:
                 return web.json_response(
                     {"error": f"Missing required field: {field}"}, status=400,
