@@ -99,6 +99,16 @@ export async function updateUser(
   return data.user;
 }
 
+export async function deleteUser(email: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/governance/users/${encodeURIComponent(email)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to remove user: ${res.status}`);
+  }
+}
+
 export async function fetchTeams(): Promise<Team[]> {
   const res = await fetch(`${API_BASE}/api/governance/teams`);
   if (!res.ok) throw new Error(`Failed to fetch teams: ${res.status}`);
