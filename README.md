@@ -2,7 +2,7 @@
 
 # Loma
 
-**Self-hosted AI agents for your whole team.**
+**An AI Agents Factory for your whole team.**
 
 One agent — in Slack and a dashboard — that knows your tools, runs on open models *or* your pooled Claude subscriptions, automates work on schedules and webhooks, and shares a team-wide skill library that gets better over time.
 
