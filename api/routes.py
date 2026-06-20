@@ -14,7 +14,8 @@ from aiohttp import web
 
 from agent.client import stream_agent
 from agent.opencode_runtime import get_agent_models, get_opencode_pool_status
-from agent.pool import ClientPool
+from agent.pool import ClientPool, get_pool
+from agent.prompt import refresh_loma_skill_index_from_db
 from observability.db import get_db
 from observability.observer import ConversationObserver
 from api.auth_helpers import (
@@ -995,6 +996,18 @@ def _skill_error_response(exc: skill_service.SkillError) -> web.Response:
     return web.json_response({"error": str(exc)}, status=exc.status)
 
 
+async def _refresh_skill_prompt_cache() -> None:
+    """Best-effort refresh for system prompts after DB-backed skill mutations."""
+    try:
+        await refresh_loma_skill_index_from_db()
+        try:
+            await get_pool().reload_prompt()
+        except RuntimeError:
+            logger.info("Skipping prompt reload: client pool is not initialized")
+    except Exception:
+        logger.exception("Failed to refresh Loma skill prompt cache")
+
+
 async def handle_create_skill(request: web.Request) -> web.Response:
     """POST /api/skills — create a live DB-native skill."""
     require_maintainer_or_above(request)
@@ -1018,6 +1031,7 @@ async def handle_create_skill(request: web.Request) -> web.Response:
             source="dashboard",
             message="Created skill",
         )
+        await _refresh_skill_prompt_cache()
         return web.json_response(skill, status=201)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
@@ -1049,6 +1063,7 @@ async def handle_update_skill(request: web.Request) -> web.Response:
             source="dashboard",
             message=body.get("message") or "Updated skill",
         )
+        await _refresh_skill_prompt_cache()
         return web.json_response(skill)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
@@ -1076,13 +1091,15 @@ async def handle_update_skill_file(request: web.Request) -> web.Response:
     try:
         body = await request.json()
         file_doc = skill_service.validate_text_file(body.get("path", ""), body.get("content", ""))
-        return web.json_response(await skill_service.update_skill_file(
+        skill = await skill_service.update_skill_file(
             db,
             slug=request.match_info["name"],
             file_doc=file_doc,
             actor=get_user_email(request),
             source="dashboard",
-        ))
+        )
+        await _refresh_skill_prompt_cache()
+        return web.json_response(skill)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
 
@@ -1108,14 +1125,16 @@ async def handle_upload_skill_asset(request: web.Request) -> web.Response:
             return web.json_response({"error": "Multipart fields path and file are required"}, status=400)
         slug = skill_service.slugify(request.match_info["name"])
         file_doc = skill_service.store_asset(slug, path, data, filename)
-        return web.json_response(await skill_service.update_skill_file(
+        skill = await skill_service.update_skill_file(
             db,
             slug=slug,
             file_doc=file_doc,
             actor=get_user_email(request),
             source="dashboard",
             message=f"Uploaded {path}",
-        ))
+        )
+        await _refresh_skill_prompt_cache()
+        return web.json_response(skill)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
 
@@ -1127,13 +1146,15 @@ async def handle_delete_skill_file(request: web.Request) -> web.Response:
         return web.json_response({"error": "MongoDB is not configured"}, status=503)
     try:
         body = await request.json()
-        return web.json_response(await skill_service.delete_skill_file(
+        skill = await skill_service.delete_skill_file(
             db,
             slug=request.match_info["name"],
             path=body.get("path", ""),
             actor=get_user_email(request),
             source="dashboard",
-        ))
+        )
+        await _refresh_skill_prompt_cache()
+        return web.json_response(skill)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
 
@@ -1150,6 +1171,7 @@ async def handle_delete_skill(request: web.Request) -> web.Response:
             actor=get_user_email(request),
             source="dashboard",
         )
+        await _refresh_skill_prompt_cache()
         return web.json_response({"ok": True})
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)

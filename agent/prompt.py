@@ -11,6 +11,7 @@ PROMPT_SETTING_TITLES = {
 }
 
 _prompt_settings_cache: dict[str, str] = {}
+_loma_skill_index_cache = "No Loma skills are configured yet."
 
 
 def set_prompt_settings_cache(settings: dict[str, str]) -> None:
@@ -20,6 +21,12 @@ def set_prompt_settings_cache(settings: dict[str, str]) -> None:
         key: (settings.get(key) or "").strip()
         for key in PROMPT_SETTING_KEYS
     }
+
+
+def set_loma_skill_index_cache(skill_index_text: str) -> None:
+    """Replace the in-memory Loma skill index used by prompt builders."""
+    global _loma_skill_index_cache
+    _loma_skill_index_cache = (skill_index_text or "").strip() or "No Loma skills are configured yet."
 
 
 async def refresh_prompt_settings_from_db() -> None:
@@ -42,6 +49,24 @@ async def refresh_prompt_settings_from_db() -> None:
         logger.exception("Failed to load prompt settings from MongoDB")
 
 
+async def refresh_loma_skill_index_from_db() -> None:
+    """Load DB-backed Loma skill summaries into the prompt cache."""
+    try:
+        from observability.db import get_db
+        from api.skill_service import skill_index_text
+
+        db = get_db()
+        if db is None:
+            logger.warning("Loma skill index unavailable: DB not configured")
+            set_loma_skill_index_cache("No Loma skills are configured yet.")
+            return
+
+        set_loma_skill_index_cache(await skill_index_text(db))
+        logger.info("Loaded Loma skill index into prompt cache")
+    except Exception:
+        logger.exception("Failed to load Loma skill index from MongoDB")
+
+
 _TOOLS_AND_SKILLS_SECTION = """
 ## Available Tools
 
@@ -56,6 +81,27 @@ Optional personal tool examples, when configured:
 - `send-email --to user@example.com --subject "Subject" --body "Body" [--attachments /path/to/file1 /path/to/file2]`
 - `create-draft --to user@example.com --subject "Subject" --body "Body" [--attachments /path/to/file1]`
 - `slack-personal send-message --channel CHANNEL --text "Message" [--file /path/to/file] [--file-title TITLE]`
+""".strip()
+
+
+def _build_loma_skills_section() -> str:
+    return f"""
+## Loma Skills
+
+Loma skills are DB-backed company playbooks and references stored in MongoDB. Use the first-party CLI via Bash to discover and read them:
+
+- `python3 tools/loma_skills.py list`
+- `python3 tools/loma_skills.py search --query QUERY`
+- `python3 tools/loma_skills.py get --slug SLUG`
+- `python3 tools/loma_skills.py file --slug SLUG --path PATH`
+- `python3 tools/loma_skills.py asset --slug SLUG --path PATH`
+
+Do not use the built-in `Skill` tool for Loma DB-backed skills. Search or read the relevant Loma skill before starting work when the user asks for a domain-specific workflow, playbook, runbook, review, implementation, support investigation, or company procedure.
+
+Only update skills when the user explicitly asks you to change company playbooks or skills. For write commands, use the authenticated user's `--user-email` and `--auth-token` values when they are provided in the current message.
+
+Available skill index:
+{_loma_skill_index_cache}
 """.strip()
 
 
@@ -135,7 +181,7 @@ def build_system_prompt(source: str = "slack") -> str:
     formatting = _FORMATTING_DASHBOARD if source == "dashboard" else _FORMATTING_SLACK
     prompt = SYSTEM_PROMPT_WRAPPER.format(
         rulebook=load_rulebook(),
-        tools_and_skills=_TOOLS_AND_SKILLS_SECTION,
+        tools_and_skills=f"{_TOOLS_AND_SKILLS_SECTION}\n\n{_build_loma_skills_section()}",
         formatting=formatting,
         gh_pr=_GH_PR_SECTION,
     )
@@ -147,7 +193,7 @@ def build_pooled_system_prompt() -> str:
     """Build a universal system prompt for pooled clients."""
     prompt = SYSTEM_PROMPT_WRAPPER.format(
         rulebook=load_rulebook(),
-        tools_and_skills=_TOOLS_AND_SKILLS_SECTION,
+        tools_and_skills=f"{_TOOLS_AND_SKILLS_SECTION}\n\n{_build_loma_skills_section()}",
         formatting=_FORMATTING_POOLED,
         gh_pr=_GH_PR_SECTION,
     )

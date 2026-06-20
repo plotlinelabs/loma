@@ -41,7 +41,7 @@ from recovery import start_recovery_loop
 from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
 from agent.pool import init_pool
-from agent.prompt import refresh_prompt_settings_from_db
+from agent.prompt import refresh_loma_skill_index_from_db, refresh_prompt_settings_from_db
 from config.app_config import APP_NAME, LOMA_ENABLE_SCHEDULER, LOMA_ENABLE_WEBHOOKS, LOMA_ENABLE_SLACK
 
 logging.basicConfig(
@@ -68,6 +68,7 @@ async def main():
     # Initialize observability MongoDB
     await init_observability()
     await refresh_prompt_settings_from_db()
+    await refresh_loma_skill_index_from_db()
 
     # Pre-warm Claude SDK client pool (background \u2014 doesn't block startup)
     agent_config = load_config()
