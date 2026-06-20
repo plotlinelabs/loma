@@ -118,7 +118,11 @@ jobs:
           if [ -n "$WEBHOOK_TOKEN" ]; then
             auth=(-H "Authorization: Bearer $WEBHOOK_TOKEN")
           fi
+          # The deploy restarts the stack, so the webhook host is briefly down.
+          # Wait for it to come back, then retry to ride out any remaining blip.
+          sleep 30
           curl -sS --fail-with-body -X POST "$WEBHOOK_URL" \
+            --retry 5 --retry-delay 10 --retry-connrefused --retry-all-errors \
             -H "Content-Type: application/json" \
             "${auth[@]}" \
             -d "$payload"
