@@ -19,7 +19,8 @@ async def create_flow(db, data: dict) -> dict:
         "prompt": data.get("prompt", ""),
         "model": data.get("model"),
 
-        # Trigger type: "scheduled" (cron/one-time) or "webhook" (event-driven)
+        # Trigger type: "scheduled" (cron/one-time), "webhook" (event-driven),
+        # or "slack" (responds to top-level messages in a Slack channel)
         "trigger_type": trigger_type,
 
         # Schedule (used by scheduled flows)
@@ -30,13 +31,18 @@ async def create_flow(db, data: dict) -> dict:
         "start_time": data.get("start_time"),
         "end_time": data.get("end_time"),
 
-        # Channel (used by scheduled flows for Slack posting)
+        # Channel — used by scheduled flows for Slack posting, and by Slack-triggered
+        # flows as the channel whose top-level messages the agent responds to.
         "channel_id": data.get("channel_id", ""),
         "channel_name": data.get("channel_name", ""),
 
         # Webhook config (used by webhook flows)
         "prompt_template": data.get("prompt_template", ""),
         "webhook_config": data.get("webhook_config", {}),
+
+        # Slack-triggered config (used by slack flows). allow_bot_messages lets the
+        # flow respond to messages from bots/automations (e.g. alert channels).
+        "slack_config": data.get("slack_config", {}),
 
         # Status
         "status": data.get("status", "active"),

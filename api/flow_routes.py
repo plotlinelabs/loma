@@ -145,8 +145,24 @@ async def handle_get_flow(request: web.Request) -> web.Response:
     return web.json_response({"flow": _serialize(flow)})
 
 
+async def _slack_channel_taken(db, channel_id: str, exclude_flow_id: str | None = None) -> bool:
+    """Return True if an active Slack-triggered flow already watches this channel.
+
+    Enforces the "one active Slack flow per channel" rule so a top-level message
+    maps to exactly one flow/prompt.
+    """
+    query: dict = {
+        "trigger_type": "slack",
+        "status": "active",
+        "channel_id": channel_id,
+    }
+    if exclude_flow_id:
+        query["flow_id"] = {"$ne": exclude_flow_id}
+    return await db.flows.find_one(query) is not None
+
+
 async def handle_create_flow(request: web.Request) -> web.Response:
-    """POST /api/flows — create a new flow (scheduled or webhook-triggered)."""
+    """POST /api/flows — create a new flow (scheduled, webhook, or Slack-triggered)."""
     require_operator_or_above(request)
     db = get_db()
     if db is None:
@@ -166,6 +182,17 @@ async def handle_create_flow(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": f"Missing required field: {field}"}, status=400,
                 )
+    elif trigger_type == "slack":
+        for field in ("name", "prompt", "channel_id"):
+            if field not in body:
+                return web.json_response(
+                    {"error": f"Missing required field: {field}"}, status=400,
+                )
+        if await _slack_channel_taken(db, body["channel_id"]):
+            return web.json_response(
+                {"error": "Another active Slack-triggered flow already watches this channel"},
+                status=409,
+            )
     else:
         for field in ("name", "prompt", "schedule_type"):
             if field not in body:
@@ -197,8 +224,8 @@ async def handle_create_flow(request: web.Request) -> web.Response:
 
     flow = await create_flow(db, body)
 
-    # Add to live scheduler if active (scheduled flows only)
-    if flow["status"] == "active" and trigger_type != "webhook":
+    # Add to live scheduler if active (scheduled flows only — webhook/slack are event-driven)
+    if flow["status"] == "active" and trigger_type == "scheduled":
         await add_flow_to_scheduler(flow)
         next_run = get_next_run_time(flow["flow_id"])
         if next_run:
@@ -243,6 +270,18 @@ async def handle_update_flow(request: web.Request) -> web.Response:
     if model_error is not None:
         return model_error
 
+    # Enforce "one active Slack flow per channel" if the watched channel is changing.
+    target_trigger = body.get("trigger_type", existing.get("trigger_type", "scheduled"))
+    if target_trigger == "slack" and "channel_id" in body:
+        target_status = body.get("status", existing.get("status"))
+        if target_status == "active" and await _slack_channel_taken(
+            db, body["channel_id"], exclude_flow_id=flow_id,
+        ):
+            return web.json_response(
+                {"error": "Another active Slack-triggered flow already watches this channel"},
+                status=409,
+            )
+
     # Parse datetime fields if present
     if "start_time" in body:
         body["start_time"] = _parse_datetime(body["start_time"])
@@ -254,7 +293,7 @@ async def handle_update_flow(request: web.Request) -> web.Response:
         return web.json_response({"error": "Flow not found"}, status=404)
 
     # Re-schedule if schedule-related fields changed (scheduled flows only)
-    if flow.get("trigger_type", "scheduled") != "webhook":
+    if flow.get("trigger_type", "scheduled") == "scheduled":
         schedule_fields = {"schedule_type", "cron", "timezone", "start_time", "end_time"}
         if schedule_fields & body.keys():
             await remove_flow_from_scheduler(flow_id)
@@ -317,10 +356,19 @@ async def handle_resume_flow(request: web.Request) -> web.Response:
     if existing is None or not _check_flow_access(existing, request):
         return web.json_response({"error": "Flow not found"}, status=404)
 
+    # A Slack flow can't be resumed if another active flow took its channel while paused.
+    if existing.get("trigger_type") == "slack" and await _slack_channel_taken(
+        db, existing.get("channel_id", ""), exclude_flow_id=flow_id,
+    ):
+        return web.json_response(
+            {"error": "Another active Slack-triggered flow already watches this channel"},
+            status=409,
+        )
+
     flow = await update_flow(db, flow_id, {"status": "active"})
 
     # Only register with APScheduler for scheduled flows
-    if flow.get("trigger_type", "scheduled") != "webhook":
+    if flow.get("trigger_type", "scheduled") == "scheduled":
         await add_flow_to_scheduler(flow)
         next_run = get_next_run_time(flow_id)
         if next_run:
@@ -348,6 +396,11 @@ async def handle_run_now(request: web.Request) -> web.Response:
     if flow.get("trigger_type") == "webhook":
         return web.json_response(
             {"error": "Webhook flows cannot be triggered manually — they require event data"},
+            status=400,
+        )
+    if flow.get("trigger_type") == "slack":
+        return web.json_response(
+            {"error": "Slack-triggered flows run when a message is posted in their channel"},
             status=400,
         )
 

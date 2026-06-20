@@ -11,7 +11,7 @@ import ClientTimestamp from "../../components/ClientTimestamp";
 type FlowTab = "all" | "drafts" | "disabled";
 
 const STATUS_FILTERS = ["all", "active", "paused", "completed"] as const;
-const TRIGGER_TYPE_FILTERS = ["all", "scheduled", "webhook"] as const;
+const TRIGGER_TYPE_FILTERS = ["all", "scheduled", "webhook", "slack"] as const;
 
 const LABEL_COLORS = [
   { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
@@ -334,6 +334,11 @@ export default function FlowsPage() {
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" /></svg>
                         Webhook{flow.webhook_config?.auth_method ? ` \u00b7 ${flow.webhook_config.auth_method}` : ""}
                       </span>
+                    ) : flow.trigger_type === "slack" ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M5.25 8.25h15m-16.5 7.5h15m-1.8-13.5-3.9 19.5m-2.1-19.5-3.9 19.5" /></svg>
+                        Slack{flow.channel_name ? ` \u00b7 ${flow.channel_name}` : (flow.channel_id ? ` \u00b7 ${flow.channel_id}` : "")}
+                      </span>
                     ) : (
                       <>
                         <span className="flex items-center gap-1">
@@ -359,7 +364,7 @@ export default function FlowsPage() {
                       )}
                     </button>
                   )}
-                  {flow.status === "active" && flow.trigger_type !== "webhook" && (
+                  {flow.status === "active" && (flow.trigger_type || "scheduled") === "scheduled" && (
                     <button onClick={() => handleRunNow(flow)} className="p-1.5 rounded-lg text-gray-400 hover:text-brand-700 hover:bg-brand-50 transition-colors press-scale" title="Run now">
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3 8.689c0-.864.933-1.406 1.683-.977l7.108 4.061a1.125 1.125 0 0 1 0 1.954l-7.108 4.061A1.125 1.125 0 0 1 3 16.811V8.69ZM12.75 8.689c0-.864.933-1.406 1.683-.977l7.108 4.061a1.125 1.125 0 0 1 0 1.954l-7.108 4.061a1.125 1.125 0 0 1-1.683-.977V8.69Z" /></svg>
                     </button>

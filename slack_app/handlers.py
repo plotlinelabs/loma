@@ -84,12 +84,33 @@ async def _stream_response(client, channel, thread_ts, react_ts, agent_stream):
     )
 
 
+async def _record_flow_run(db, flow_id, conversation_id):
+    """Record a run on a Slack-triggered flow so the dashboard shows run stats/history."""
+    from datetime import datetime, timezone
+    try:
+        await db.flows.update_one(
+            {"flow_id": flow_id},
+            {
+                "$set": {
+                    "last_run_at": datetime.now(timezone.utc),
+                    "last_run_conversation_id": conversation_id,
+                    "last_error": None,
+                },
+                "$inc": {"run_count": 1},
+            },
+        )
+    except Exception:
+        logger.exception("[SLACK] Failed to record flow run for %s", flow_id)
+
+
 async def _handle_agent_request(
     client, channel, thread_ts, event_ts, prompt, context, files, source, user_id,
+    flow_id=None,
 ):
     """Common flow: hourglass \u2192 observer \u2192 stream agent \u2192 post responses.
 
-    Used by app_mention, DM, and monitored channel handlers to avoid duplication.
+    Used by app_mention, DM, monitored-channel, and Slack-flow handlers to avoid
+    duplication. When ``flow_id`` is set, the run is attributed to that flow.
     """
     # Add hourglass reaction as acknowledgement
     logger.info("[SLACK] Adding hourglass reaction to message...")
@@ -131,6 +152,8 @@ async def _handle_agent_request(
                 "slack_thread_ts": thread_ts,
                 "user_name": user_email or user_id,
             }
+            if flow_id:
+                metadata["flow_id"] = flow_id
             if existing_convo:
                 observer = ConversationObserver(
                     db, metadata=metadata,
@@ -170,6 +193,11 @@ async def _handle_agent_request(
             asyncio.create_task(ingest_dashboard_chat(
                 observer.conversation_id, prompt, user_email or "",
             ))
+            # Attribute the run to its Slack-triggered flow (run stats + history).
+            if flow_id and db is not None:
+                asyncio.create_task(
+                    _record_flow_run(db, flow_id, observer.conversation_id)
+                )
 
     except Exception as e:
         logger.exception("Error in agent request")
@@ -231,7 +259,7 @@ def register_handlers(app):
             files = await download_slack_files(client.token, all_raw_files)
 
         # Check if this is a monitored channel — prepend channel context if so
-        channel_config = get_channel_config(channel)
+        channel_config = await get_channel_config(channel)
         if channel_config:
             prompt = channel_config["prompt_prefix"] + user_message
             source = channel_config["source"]
@@ -242,6 +270,7 @@ def register_handlers(app):
 
         await _handle_agent_request(
             client, channel, thread_ts, event_ts, prompt, context, files, source, user,
+            flow_id=channel_config.get("flow_id") if channel_config else None,
         )
 
     @app.event("message")
@@ -253,7 +282,7 @@ def register_handlers(app):
         subtype = event.get("subtype")
         is_bot = bool(event.get("bot_id"))
         if is_bot:
-            channel_cfg = get_channel_config(event.get("channel", ""))
+            channel_cfg = await get_channel_config(event.get("channel", ""))
             if not (channel_cfg and channel_cfg.get("allow_bot_messages")):
                 return
         if subtype and subtype not in ("file_share", "bot_message"):
@@ -267,7 +296,7 @@ def register_handlers(app):
         has_files = bool(event.get("files"))
 
         # --- Monitored channels (e.g., #bugs, #feature-requests-clients) ---
-        channel_config = get_channel_config(channel)
+        channel_config = await get_channel_config(channel)
         if channel_config:
             # Skip messages that contain a bot @mention — those are handled by app_mention
             if BOT_MENTION_RE.search(text):
@@ -298,6 +327,7 @@ def register_handlers(app):
             await _handle_agent_request(
                 client, channel, thread_ts, event_ts, prompt, "", files,
                 channel_config["source"], user,
+                flow_id=channel_config.get("flow_id"),
             )
             return
 

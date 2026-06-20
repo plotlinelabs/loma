@@ -418,13 +418,17 @@ export interface WebhookConfig {
   signature_header?: string;
 }
 
+export interface SlackConfig {
+  allow_bot_messages?: boolean;
+}
+
 export interface Flow {
   flow_id: string;
   name: string;
   description: string;
   prompt: string;
   model?: string | null;
-  trigger_type?: "scheduled" | "webhook";
+  trigger_type?: "scheduled" | "webhook" | "slack";
   schedule_type: "once" | "recurring";
   frequency: string;
   cron: string | null;
@@ -435,6 +439,7 @@ export interface Flow {
   channel_name: string;
   prompt_template?: string;
   webhook_config?: WebhookConfig;
+  slack_config?: SlackConfig;
   status: "active" | "paused" | "completed";
   labels: string[];
   visibility?: "private" | "shared";
