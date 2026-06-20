@@ -23,6 +23,6 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
-    "/((?!login|webhook|metrics|api/auth|_next/static|_next/image|favicon.ico).*)",
+    "/((?!login|webhook|metrics|api/auth|api/signup|_next/static|_next/image|favicon.ico).*)",
   ],
 };
