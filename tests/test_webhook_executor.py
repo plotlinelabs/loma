@@ -7,6 +7,7 @@ Covers:
 - execute_webhook_flow: resume vs create logic with mocked DB and agent
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -505,6 +506,131 @@ class TestExecuteWebhookFlowThreadContinuity:
                 flow, json.dumps(payload).encode(), {}, "log-skip"
             )
             assert result is None
+
+
+class TestDispatchSupersede:
+    """dispatch_webhook_flow: supersede in-flight runs for the same (flow_id, thread_id)."""
+
+    @pytest.mark.asyncio
+    async def test_no_thread_id_runs_independently(self):
+        """Without a thread_id, no registry entry is made — runs stay independent."""
+        import scheduler.webhook_executor as we
+        we._inflight.clear()
+        flow = _make_flow()
+        ran = asyncio.Event()
+
+        async def fake_exec(flow, raw_body, headers, log_id):
+            ran.set()
+            return "c"
+
+        with patch.object(we, "execute_webhook_flow", fake_exec):
+            we.dispatch_webhook_flow(flow, json.dumps({"event": "x"}).encode(), {}, "log-1")
+            await asyncio.wait_for(ran.wait(), timeout=1)
+            assert we._inflight == {}
+
+    @pytest.mark.asyncio
+    async def test_same_thread_supersedes_predecessor(self):
+        """A newer webhook for the same thread cancels the in-flight run; latest completes."""
+        import scheduler.webhook_executor as we
+        we._inflight.clear()
+        flow = _make_flow()
+        started: list[str] = []
+        first_cancelled = asyncio.Event()
+        release = asyncio.Event()
+        body = json.dumps(_make_payload(issue_id="iss-1")).encode()
+
+        async def fake_exec(flow, raw_body, headers, log_id):
+            started.append(log_id)
+            try:
+                await release.wait()
+                return f"convo-{log_id}"
+            except asyncio.CancelledError:
+                if log_id == "log-A":
+                    first_cancelled.set()
+                raise
+
+        with patch.object(we, "execute_webhook_flow", fake_exec):
+            we.dispatch_webhook_flow(flow, body, {}, "log-A")
+            await asyncio.sleep(0)  # let the first run start
+            we.dispatch_webhook_flow(flow, body, {}, "log-B")
+            task_b = we._inflight[f"{flow['flow_id']}:iss-1"]
+
+            # Predecessor (A) is cancelled by the newer webhook.
+            await asyncio.wait_for(first_cancelled.wait(), timeout=1)
+            # Let the latest (B) finish.
+            release.set()
+            result = await asyncio.wait_for(task_b, timeout=1)
+
+        assert started == ["log-A", "log-B"]
+        assert result == "convo-log-B"
+        assert we._inflight == {}  # cleaned up via done-callback
+
+    @pytest.mark.asyncio
+    async def test_different_threads_run_concurrently(self):
+        """Distinct thread_ids do not supersede each other."""
+        import scheduler.webhook_executor as we
+        we._inflight.clear()
+        flow = _make_flow()
+        started: list[str] = []
+        release = asyncio.Event()
+
+        async def fake_exec(flow, raw_body, headers, log_id):
+            started.append(log_id)
+            await release.wait()
+            return log_id
+
+        with patch.object(we, "execute_webhook_flow", fake_exec):
+            we.dispatch_webhook_flow(flow, json.dumps(_make_payload(issue_id="a")).encode(), {}, "log-a")
+            we.dispatch_webhook_flow(flow, json.dumps(_make_payload(issue_id="b")).encode(), {}, "log-b")
+            await asyncio.sleep(0)
+            assert len(we._inflight) == 2
+            tasks = list(we._inflight.values())
+            release.set()
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
+
+        assert sorted(started) == ["log-a", "log-b"]
+        assert we._inflight == {}
+
+    @pytest.mark.asyncio
+    async def test_cancelled_run_marked_interrupted(self):
+        """Cancelling execute_webhook_flow marks the conversation interrupted + flags the log."""
+        db = _make_db_mock(existing_convo=None)
+        flow = _make_flow()
+        payload = _make_payload(issue_id="iss-int")
+        release = asyncio.Event()
+
+        async def _blocking_agen(*args, **kwargs):
+            await release.wait()  # suspend here so the task can be cancelled mid-run
+            return
+            yield  # noqa: unreachable — makes this an async generator
+
+        with patch("scheduler.webhook_executor.get_db", return_value=db), \
+             patch("scheduler.webhook_executor.stream_agent", _blocking_agen), \
+             patch("scheduler.webhook_executor.ConversationObserver") as MockObserver:
+
+            obs = MagicMock()
+            obs.conversation_id = "convo-int"
+            obs.start = AsyncMock()
+            obs.resume = AsyncMock()
+            obs.mark_interrupted = AsyncMock()
+            MockObserver.return_value = obs
+
+            from scheduler.webhook_executor import execute_webhook_flow
+            task = asyncio.create_task(
+                execute_webhook_flow(flow, json.dumps(payload).encode(), {}, "log-int")
+            )
+            await asyncio.sleep(0)  # reach the streaming await
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        obs.mark_interrupted.assert_awaited_once()
+        # webhook log flagged interrupted
+        statuses = [
+            c.kwargs.get("$set", c.args[1].get("$set") if len(c.args) > 1 else {})
+            for c in db.webhook_logs.update_one.call_args_list
+        ]
+        assert any(s.get("execution_status") == "interrupted" for s in statuses)
 
 
 # ---------------------------------------------------------------------------
