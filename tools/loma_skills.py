@@ -4,8 +4,9 @@
 Examples:
   python3 tools/loma_skills.py list
   python3 tools/loma_skills.py search --query onboarding
-  python3 tools/loma_skills.py get --slug onboarding
+  python3 tools/loma_skills.py get --slug onboarding        # metadata + SKILL.md only
   python3 tools/loma_skills.py file --slug onboarding --path SKILL.md
+  python3 tools/loma_skills.py dump --slug onboarding       # all inline text files
   python3 tools/loma_skills.py update-file --slug onboarding --path SKILL.md --content-file /tmp/SKILL.md --user-email u@co.com --auth-token TOKEN
 """
 
@@ -78,7 +79,17 @@ async def _run(args) -> int:
 
         if args.command == "get":
             skill = await skill_service.get_skill(db, args.slug)
-            return _json(_compact_skill(skill) | {"content": skill.get("content", "")})
+            return _json(
+                _compact_skill(skill) | {
+                    "content": skill.get("content", ""),
+                    "note": "get returns metadata plus SKILL.md content only; use dump for all inline text files.",
+                }
+            )
+
+        if args.command == "dump":
+            skill = await skill_service.get_skill(db, args.slug)
+            print(skill_service.format_skill_dump_markdown(skill), end="")
+            return 0
 
         if args.command == "file":
             file_doc = await skill_service.get_skill_file(db, args.slug, args.path)
@@ -188,9 +199,12 @@ def main() -> int:
     search.add_argument("query_text", nargs="?")
     search.add_argument("--query")
     add_auth(search)
-    get = sub.add_parser("get")
+    get = sub.add_parser("get", help="Show skill metadata and SKILL.md content only")
     get.add_argument("--slug", required=True)
     add_auth(get)
+    dump = sub.add_parser("dump", help="Print all inline text files in one markdown response")
+    dump.add_argument("--slug", required=True)
+    add_auth(dump)
     file_cmd = sub.add_parser("file")
     file_cmd.add_argument("--slug", required=True)
     file_cmd.add_argument("--path", required=True)

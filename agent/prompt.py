@@ -92,11 +92,12 @@ Loma skills are DB-backed company playbooks and references stored in MongoDB. Us
 
 - `python3 tools/loma_skills.py list`
 - `python3 tools/loma_skills.py search --query QUERY`
-- `python3 tools/loma_skills.py get --slug SLUG`
+- `python3 tools/loma_skills.py get --slug SLUG` — metadata plus `SKILL.md`
+- `python3 tools/loma_skills.py dump --slug SLUG` — all inline text files in one response
 - `python3 tools/loma_skills.py file --slug SLUG --path PATH`
 - `python3 tools/loma_skills.py asset --slug SLUG --path PATH`
 
-Do not use the built-in `Skill` tool for Loma DB-backed skills. Search or read the relevant Loma skill before starting work when the user asks for a domain-specific workflow, playbook, runbook, review, implementation, support investigation, or company procedure.
+Do not use the built-in `Skill` tool for Loma DB-backed skills. Search or read the relevant Loma skill before starting work when the user asks for a domain-specific workflow, playbook, runbook, review, implementation, support investigation, or company procedure. When the user asks to print, inspect, or load an entire skill, use `dump --slug` instead of repeatedly calling `file`.
 
 Only update skills when the user explicitly asks you to change company playbooks or skills. For write commands, use the authenticated user's `--user-email` and `--auth-token` values when they are provided in the current message.
 

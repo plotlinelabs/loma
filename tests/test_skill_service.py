@@ -35,3 +35,28 @@ def test_store_asset_uses_local_asset_dir(monkeypatch, tmp_path):
     assert doc["asset_path"].startswith(str(tmp_path))
     assert doc["content_hash"] in doc["asset_path"]
     assert doc["size_bytes"] == len(b"%PDF-1.4")
+
+
+def test_format_skill_dump_markdown_includes_all_inline_files_and_assets():
+    skill = {
+        "slug": "demo-skill",
+        "name": "Demo Skill",
+        "description": "Demo description",
+        "tags": ["demo", "test"],
+        "files": [
+            skill_service.validate_text_file("SKILL.md", "Main instructions"),
+            skill_service.validate_text_file("notes/extra.md", "Extra context"),
+            skill_service.validate_asset_file("assets/example.pdf", b"%PDF-1.4", "example.pdf"),
+        ],
+    }
+
+    rendered = skill_service.format_skill_dump_markdown(skill)
+
+    assert "# Demo Skill" in rendered
+    assert "Slug: `demo-skill`" in rendered
+    assert "Description: Demo description" in rendered
+    assert "Tags: demo, test" in rendered
+    assert "## SKILL.md\n\nMain instructions" in rendered
+    assert "## notes/extra.md\n\nExtra context" in rendered
+    assert "## Asset files" in rendered
+    assert "`assets/example.pdf` (application/pdf, 8 bytes)" in rendered
