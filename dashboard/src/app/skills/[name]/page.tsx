@@ -59,7 +59,7 @@ function buildEditSkillPrompt(skill: SkillDetailResponse, fallbackSlug: string):
     "Current files:",
     buildFileList(skill) || "- SKILL.md",
     "",
-    `First fetch the full skill with \`python3 tools/loma_skills.py get --slug ${slug}\` and inspect any supporting files you need with \`python3 tools/loma_skills.py file --slug ${slug} --path <path>\` or \`python3 tools/loma_skills.py asset --slug ${slug} --path <path>\`.`,
+    `First fetch the full skill with \`python3 tools/loma_skills.py dump --slug ${slug}\` and inspect any specific supporting file you need with \`python3 tools/loma_skills.py file --slug ${slug} --path <path>\` or \`python3 tools/loma_skills.py asset --slug ${slug} --path <path>\`.`,
     "",
     "Help me decide the exact change. Only update the live skill after I explicitly confirm what to change.",
   ].join("\n");
@@ -76,7 +76,7 @@ function buildEditSkillFilePrompt(skill: SkillDetailResponse, fallbackSlug: stri
     `File kind: ${file.kind}`,
     `Content type: ${file.content_type || "unknown"}`,
     "",
-    `First inspect it with \`${readCommand}\` and fetch the whole skill with \`python3 tools/loma_skills.py get --slug ${slug}\` if you need broader context.`,
+    `First inspect it with \`${readCommand}\` and fetch the whole skill with \`python3 tools/loma_skills.py dump --slug ${slug}\` if you need broader context.`,
     "",
     "Help me decide the exact change. Only update the live skill after I explicitly confirm what to change.",
   ].join("\n");

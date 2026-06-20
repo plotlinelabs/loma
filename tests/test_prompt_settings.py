@@ -35,6 +35,8 @@ def test_pooled_prompt_includes_loma_skill_discovery_commands():
 
     assert "## Loma Skills" in prompt
     assert "python3 tools/loma_skills.py search --query QUERY" in prompt
+    assert "python3 tools/loma_skills.py dump --slug SLUG" in prompt
+    assert "use `dump --slug` instead of repeatedly calling `file`" in prompt
     assert "Do not use the built-in `Skill` tool" in prompt
 
 

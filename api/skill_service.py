@@ -183,6 +183,45 @@ def _skill_metadata_from_files(slug: str, files: list[dict[str, Any]]) -> dict[s
     return {"name": name, "description": description, "tags": [str(t) for t in tags]}
 
 
+def format_skill_dump_markdown(skill: dict[str, Any]) -> str:
+    """Render all inline text files in a skill as one markdown document."""
+    slug = str(skill.get("slug") or "skill")
+    name = str(skill.get("name") or slug)
+    description = str(skill.get("description") or "").strip()
+    tags = [str(tag) for tag in (skill.get("tags") or [])]
+
+    lines = [f"# {name}", "", f"Slug: `{slug}`"]
+    if description:
+        lines.append(f"Description: {description}")
+    if tags:
+        lines.append(f"Tags: {', '.join(tags)}")
+
+    files = skill.get("files") or []
+    inline_files = [
+        file_doc for file_doc in files
+        if file_doc.get("kind") == "inline_text"
+    ]
+    asset_files = [
+        file_doc for file_doc in files
+        if file_doc.get("kind") == "local_asset"
+    ]
+
+    for file_doc in inline_files:
+        path = file_doc.get("path") or "file"
+        content = file_doc.get("content") or ""
+        lines.extend(["", f"## {path}", "", content.rstrip()])
+
+    if asset_files:
+        lines.extend(["", "## Asset files", ""])
+        for file_doc in asset_files:
+            path = file_doc.get("path") or "asset"
+            content_type = file_doc.get("content_type") or "application/octet-stream"
+            size = int(file_doc.get("size_bytes") or 0)
+            lines.append(f"- `{path}` ({content_type}, {size} bytes)")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 async def ensure_skill_indexes(db) -> None:
     await db.skills.create_index("slug", unique=True)
     await db.skills.create_index("enabled")
