@@ -80,3 +80,45 @@ jobs:
           ssh -i key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
             "$SSH_USER@$SSH_HOST" \
             'set -e; cd ~/loma; git fetch origin --prune; git reset --hard origin/main; bash scripts/deploy.sh'
+
+  # Post a deploy notification to a webhook (e.g. a Loma webhook flow that relays
+  # to Slack). Runs only after a successful deploy (inherits the implicit success()
+  # gate from `needs`), so it is skipped on PRs and on forks where the deploy job
+  # never runs. The endpoint lives entirely in the DEPLOY_NOTIFY_WEBHOOK_URL secret —
+  # nothing is exposed in this public file — and the step no-ops when it is unset.
+  notify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify deploy webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.DEPLOY_NOTIFY_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.DEPLOY_NOTIFY_WEBHOOK_TOKEN }}
+          COMMITS_JSON: ${{ toJSON(github.event.commits) }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          REPO: ${{ github.repository }}
+          SENDER: ${{ github.actor }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "DEPLOY_NOTIFY_WEBHOOK_URL not set — skipping deploy notification."
+            exit 0
+          fi
+          # PR number from the squash-merge commit subject, e.g. "… (#25)".
+          PR_NUMBER=$(printf '%s' "$HEAD_MSG" | grep -oP '#\K[0-9]+' | head -1 || echo "")
+          payload=$(jq -n \
+            --arg repo "$REPO" \
+            --arg ref "$REF" \
+            --arg pr "$PR_NUMBER" \
+            --argjson commits "${COMMITS_JSON:-[]}" \
+            --arg sender "$SENDER" \
+            '{repo: $repo, ref: $ref, pr_number: $pr, commits: $commits, sender: $sender}')
+          # Optional bearer auth — sent only if the flow uses bearer_token auth.
+          auth=()
+          if [ -n "$WEBHOOK_TOKEN" ]; then
+            auth=(-H "Authorization: Bearer $WEBHOOK_TOKEN")
+          fi
+          curl -sS --fail-with-body -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            "${auth[@]}" \
+            -d "$payload"
