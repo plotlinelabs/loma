@@ -47,8 +47,11 @@ MONGO_URI="$(read_secret OBSERVABILITY_MONGODB_URI)"
 SETUP_TOKEN="$(read_secret LOMA_SETUP_TOKEN)"
 
 # --- Backend .env: live integration secrets + preview overrides ---
+# Strip Compose-control + host-port vars from the secrets file: if the source
+# (e.g. a copied prod .env) sets COMPOSE_FILE/COMPOSE_PROJECT_NAME or fixed host
+# ports, they would hijack this stack's `docker compose` invocation.
 {
-  cat "$SECRETS_FILE"
+  grep -vE '^(COMPOSE_FILE|COMPOSE_PROJECT_NAME|COMPOSE_PROFILES|BACKEND_HOST_PORT|DASHBOARD_HOST_PORT|NGINX_HOST_PORT|NGINX_HOST_BIND)=' "$SECRETS_FILE"
   cat <<EOF
 
 # --- preview overrides (pr-${PR}; appended, so they win over the lines above) ---
