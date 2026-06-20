@@ -10,6 +10,7 @@ import {
   fetchTeams,
   fetchToolConfigs,
   updateUser,
+  deleteUser,
   getEffectiveRole,
   type User,
   type Team,
@@ -115,7 +116,7 @@ function StatusCell({ role, source, oauthStatus, authMode }: {
 /* ── Page ─────────────────────────────────────────────────────────── */
 
 export default function AdminPage() {
-  const { isAdmin, hasRole, loading: userLoading } = useUser();
+  const { user: currentUser, isAdmin, hasRole, loading: userLoading } = useUser();
   const isMaintainerOrAbove = hasRole("maintainer");
   const router = useRouter();
   const [tab, setTab] = useState<"users" | "teams" | "environment" | "settings" | "usage">("teams");
@@ -676,6 +677,9 @@ export default function AdminPage() {
                       <span className="text-[9px] text-gray-400 font-medium leading-tight">Slack</span>
                     </div>
                   </th>
+                  <th className="py-3 px-2 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-wider min-w-[90px]">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -817,6 +821,34 @@ export default function AdminPage() {
                         oauthStatus={user.tool_assignments?.["slack-personal"]?.oauth_status ?? "not_connected"}
                         authMode="tool-managed"
                       />
+                    </td>
+                    {/* Actions */}
+                    <td className="py-3 px-2 text-center">
+                      {currentUser?.email === user.email ? (
+                        <span className="text-[10px] text-gray-300">You</span>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            if (
+                              !confirm(
+                                `Remove ${user.name || user.email} from the workspace? They will lose access immediately. This cannot be undone.`
+                              )
+                            )
+                              return;
+                            const prev = users;
+                            setUsers((us) => us.filter((u) => u.email !== user.email));
+                            try {
+                              await deleteUser(user.email);
+                            } catch (e) {
+                              setUsers(prev);
+                              alert(e instanceof Error ? e.message : "Failed to remove user");
+                            }
+                          }}
+                          className="text-[11px] font-medium text-red-600 hover:text-red-700 hover:underline"
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

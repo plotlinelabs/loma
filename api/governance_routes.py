@@ -257,6 +257,40 @@ async def handle_update_user(request: web.Request) -> web.Response:
     return web.json_response({"user": _serialize(user)})
 
 
+async def handle_delete_user(request: web.Request) -> web.Response:
+    """DELETE /api/governance/users/{email} — remove a user from the workspace."""
+    require_admin(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+
+    email = request.match_info["email"]
+
+    if email == get_user_email(request):
+        return web.json_response({"error": "You cannot remove yourself."}, status=400)
+
+    target = await db.users.find_one({"email": email})
+    if target is None:
+        return web.json_response({"error": "User not found"}, status=404)
+
+    # Never leave the workspace without an admin.
+    if target.get("system_role") == "admin":
+        admin_count = await db.users.count_documents({"system_role": "admin"})
+        if admin_count <= 1:
+            return web.json_response({"error": "Cannot remove the last admin."}, status=400)
+
+    await db.users.delete_one({"email": email})
+
+    # The removed user may have been a Claude pool account — refresh the list.
+    try:
+        from agent.pool import get_pool
+        get_pool().refresh_accounts()
+    except RuntimeError:
+        pass
+
+    return web.json_response({"deleted": True})
+
+
 # ── Teams CRUD (admin only) ───────────────────────────────────────────────
 
 
@@ -434,6 +468,7 @@ def setup_governance_routes(app: web.Application):
     app.router.add_get("/api/governance/users", handle_list_users)
     app.router.add_get("/api/governance/users/{email}", handle_get_user)
     app.router.add_patch("/api/governance/users/{email}", handle_update_user)
+    app.router.add_delete("/api/governance/users/{email}", handle_delete_user)
 
     # Teams (admin only)
     app.router.add_get("/api/governance/teams", handle_list_teams)
