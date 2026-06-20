@@ -85,6 +85,8 @@ async def handle_get_me(request: web.Request) -> web.Response:
             "name": email.split("@")[0].replace(".", " ").title(),
             "avatar": email[0].upper(),
             "system_role": "admin" if count == 0 else _DEFAULT_ROLE,
+            # First user ever is auto-approved; everyone else awaits admin approval.
+            "status": "active" if count == 0 else "pending",
             "tool_assignments": {},
             "theme_preference": "light",
             "claude_pool_enabled": True,
@@ -92,9 +94,14 @@ async def handle_get_me(request: web.Request) -> web.Response:
             "updated_at": datetime.now(timezone.utc),
         }
         await db.users.insert_one(user)
-        logger.info("Auto-provisioned user %s with role %s", email, user["system_role"])
+        logger.info(
+            "Auto-provisioned user %s with role %s (status %s)",
+            email, user["system_role"], user["status"],
+        )
 
     serialized_user = _serialize(user)
+    # Legacy users created before the approval flow are treated as active.
+    serialized_user.setdefault("status", "active")
     if request.get("preview_fallback_user"):
         serialized_user["system_role"] = _DEFAULT_ROLE
 
@@ -145,6 +152,8 @@ async def handle_list_users(request: web.Request) -> web.Response:
     # Enrich with Claude auth status per user
     claude_users_dir = Path(os.environ.get("CLAUDE_USERS_DIR", "/opt/claude-users"))
     for user in serialized:
+        # Legacy users created before the approval flow are treated as active.
+        user.setdefault("status", "active")
         email = user.get("email", "")
         config_file = claude_users_dir / email / ".claude.json"
         if config_file.exists():
@@ -206,6 +215,15 @@ async def handle_update_user(request: web.Request) -> web.Response:
                 status=400,
             )
         updates["system_role"] = role
+
+    if "status" in body:
+        status = body["status"]
+        if status not in ("active", "pending", "rejected"):
+            return web.json_response(
+                {"error": "Invalid status. Must be one of: active, pending, rejected"},
+                status=400,
+            )
+        updates["status"] = status
 
     if "tool_assignments" in body:
         updates["tool_assignments"] = body["tool_assignments"]

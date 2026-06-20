@@ -19,11 +19,18 @@ function LoginContent() {
   );
   const showLocal = authProviders.includes("all") || authProviders.includes("local");
   const showGoogle = authProviders.includes("all") || authProviders.includes("google");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
   const [setupToken, setSetupToken] = useState("");
   const [localError, setLocalError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const switchMode = (next: "signin" | "signup") => {
+    setMode(next);
+    setLocalError("");
+  };
 
   const submitLocalLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -45,6 +52,44 @@ function LoginContent() {
     }
 
     setLocalError("Unable to sign in. Check your email, password, and setup token.");
+  };
+
+  const submitSignup = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLocalError("");
+    setIsSubmitting(true);
+    try {
+      const res = await fetch("/api/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setIsSubmitting(false);
+        setLocalError(data?.error || "Unable to create account.");
+        return;
+      }
+      // Account created (pending approval) — sign in so the app can show the
+      // "awaiting approval" screen.
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+        callbackUrl: "/",
+      });
+      setIsSubmitting(false);
+      if (result?.ok) {
+        router.push("/");
+        router.refresh();
+        return;
+      }
+      setLocalError("Account created. Please sign in.");
+      setMode("signin");
+    } catch {
+      setIsSubmitting(false);
+      setLocalError("Unable to create account.");
+    }
   };
 
   return (
@@ -72,7 +117,7 @@ function LoginContent() {
           </div>
         )}
 
-        {showLocal && (
+        {showLocal && mode === "signin" && (
           <form className="space-y-4" onSubmit={submitLocalLogin}>
             <label className="block">
               <span className="text-sm font-medium text-gray-700">Email</span>
@@ -96,19 +141,6 @@ function LoginContent() {
                 className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-gray-400"
               />
             </label>
-            <label className="block">
-              <span className="text-sm font-medium text-gray-700">Setup token</span>
-              <input
-                type="password"
-                value={setupToken}
-                onChange={(event) => setSetupToken(event.target.value)}
-                autoComplete="one-time-code"
-                className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-gray-400"
-              />
-              <span className="mt-1 block text-xs text-gray-400">
-                Required only when creating the first admin account.
-              </span>
-            </label>
             <button
               type="submit"
               disabled={isSubmitting}
@@ -116,6 +148,86 @@ function LoginContent() {
             >
               {isSubmitting ? "Signing in..." : "Sign in"}
             </button>
+            <label className="block">
+              <span className="text-xs text-gray-400">
+                First admin setup token (leave blank otherwise)
+              </span>
+              <input
+                type="password"
+                value={setupToken}
+                onChange={(event) => setSetupToken(event.target.value)}
+                autoComplete="one-time-code"
+                className="mt-1 w-full rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600 outline-none transition-colors focus:border-gray-300"
+              />
+            </label>
+            <p className="text-center text-sm text-gray-500">
+              Need an account?{" "}
+              <button
+                type="button"
+                onClick={() => switchMode("signup")}
+                className="font-medium text-gray-900 underline-offset-2 hover:underline"
+              >
+                Create one
+              </button>
+            </p>
+          </form>
+        )}
+
+        {showLocal && mode === "signup" && (
+          <form className="space-y-4" onSubmit={submitSignup}>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Name</span>
+              <input
+                type="text"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="name"
+                className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-gray-400"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Email</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+                required
+                className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-gray-400"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="new-password"
+                required
+                minLength={8}
+                className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-gray-400"
+              />
+              <span className="mt-1 block text-xs text-gray-400">
+                At least 8 characters. New accounts require admin approval before access.
+              </span>
+            </label>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSubmitting ? "Creating account..." : "Create account"}
+            </button>
+            <p className="text-center text-sm text-gray-500">
+              Have an account?{" "}
+              <button
+                type="button"
+                onClick={() => switchMode("signin")}
+                className="font-medium text-gray-900 underline-offset-2 hover:underline"
+              >
+                Sign in
+              </button>
+            </p>
           </form>
         )}
 
