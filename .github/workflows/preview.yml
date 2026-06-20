@@ -1,0 +1,129 @@
+name: PR Preview
+
+# Ephemeral per-PR preview environments on the preview box.
+#
+# Gating (see docs/preview-deployments.md):
+#   - same-repo PRs only (forks never reach the live-credential preview box);
+#   - a maintainer applies the `preview` label;
+#   - the labeling actor must be in the PREVIEW_MAINTAINERS allowlist (repo variable).
+# Secrets/domain live in the repo/environment settings, never in this file, so the
+# preview URL/host is not exposed by the public workflow.
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize, reopened, closed]
+
+concurrency:
+  group: preview-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    # Same-repo only; then deploy on (re)label/new-commits, tear down on close/unlabel.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        github.event.action == 'closed' ||
+        (github.event.action == 'unlabeled' && github.event.label.name == 'preview') ||
+        (github.event.action == 'labeled' && github.event.label.name == 'preview') ||
+        ((github.event.action == 'synchronize' || github.event.action == 'reopened') &&
+          contains(github.event.pull_request.labels.*.name, 'preview'))
+      )
+    runs-on: ubuntu-latest
+    environment: preview
+    steps:
+      # Distinguish deploy vs teardown for later steps.
+      - name: Decide action
+        id: decide
+        run: |
+          if [ "${{ github.event.action }}" = "closed" ] || \
+             { [ "${{ github.event.action }}" = "unlabeled" ] && [ "${{ github.event.label.name }}" = "preview" ]; }; then
+            echo "mode=down" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=up" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only an allowlisted maintainer may spin up a preview (runs live integrations).
+      - name: Authorize actor
+        if: steps.decide.outputs.mode == 'up'
+        env:
+          ALLOWLIST: ${{ vars.PREVIEW_MAINTAINERS }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          case " $ALLOWLIST " in
+            *" $ACTOR "*) echo "actor '$ACTOR' authorized" ;;
+            *) echo "::error::'$ACTOR' is not in the PREVIEW_MAINTAINERS allowlist"; exit 1 ;;
+          esac
+
+      - name: Write SSH key
+        env:
+          SSH_KEY: ${{ secrets.PREVIEW_SSH_KEY }}
+        run: |
+          install -m 600 /dev/null key
+          printf '%s\n' "$SSH_KEY" > key
+
+      - name: Deploy preview
+        if: steps.decide.outputs.mode == 'up'
+        env:
+          SSH_HOST: ${{ secrets.PREVIEW_SSH_HOST }}
+          SSH_USER: ${{ secrets.PREVIEW_SSH_USER }}
+          BASE_DOMAIN: ${{ secrets.PREVIEW_BASE_DOMAIN }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          ssh -i key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            "$SSH_USER@$SSH_HOST" \
+            "PR='$PR' SHA='$SHA' REPO_URL='$REPO_URL' PREVIEW_BASE_DOMAIN='$BASE_DOMAIN' bash -s" <<'REMOTE'
+          set -euo pipefail
+          dir="$HOME/previews/pr-$PR"
+          mkdir -p "$dir"
+          [ -d "$dir/.git" ] || git clone --quiet "$REPO_URL" "$dir"
+          cd "$dir"
+          git fetch --quiet origin "pull/$PR/head"
+          git checkout --quiet -f "$SHA"
+          bash scripts/preview_up.sh "$PR"
+          REMOTE
+
+      - name: Teardown preview
+        if: steps.decide.outputs.mode == 'down'
+        env:
+          SSH_HOST: ${{ secrets.PREVIEW_SSH_HOST }}
+          SSH_USER: ${{ secrets.PREVIEW_SSH_USER }}
+          BASE_DOMAIN: ${{ secrets.PREVIEW_BASE_DOMAIN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          ssh -i key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            "$SSH_USER@$SSH_HOST" \
+            "PR='$PR' PREVIEW_BASE_DOMAIN='$BASE_DOMAIN' bash -s" <<'REMOTE'
+          set -euo pipefail
+          dir="$HOME/previews/pr-$PR"
+          if [ -f "$dir/scripts/preview_down.sh" ]; then
+            cd "$dir" && bash scripts/preview_down.sh "$PR"
+          else
+            COMPOSE_PROJECT_NAME="loma-pr-$PR" docker compose -p "loma-pr-$PR" down -v --remove-orphans || true
+          fi
+          REMOTE
+
+      # Notify the team privately — the URL goes to Slack, never to the PR/logs.
+      - name: Notify Slack
+        if: steps.decide.outputs.mode == 'up' && success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          BASE_DOMAIN: ${{ secrets.PREVIEW_BASE_DOMAIN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          [ -n "${SLACK_WEBHOOK_URL:-}" ] || { echo "no SLACK_WEBHOOK_URL; skipping"; exit 0; }
+          url="https://pr-${PR}.${BASE_DOMAIN}"
+          payload=$(printf '{"text":"Loma preview for PR #%s is ready: %s"}' "$PR" "$url")
+          curl -sf -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL" >/dev/null
+
+      # Public comment with NO url — just tells reviewers where to find the link.
+      - name: Comment on PR
+        if: steps.decide.outputs.mode == 'up' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --repo "${{ github.repository }}" \
+            --body "✅ Preview environment deployed. The link was sent to the internal Slack channel (access requires SSO)." || true

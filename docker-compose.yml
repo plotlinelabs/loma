@@ -5,8 +5,10 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     # Loopback only — reached externally through the nginx proxy, not directly.
+    # Host port is env-driven so multiple stacks can coexist on one box (preview
+    # deployments); unset → 3000, identical to a normal single-stack deploy.
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-3000}:3000"
     volumes:
       - loma-skill-assets:/var/lib/loma/skill-assets
       # Mount the real .env so the dashboard Environment admin (/api/env) can read & edit it.
@@ -31,7 +33,7 @@ services:
       BACKEND_URL: http://loma-backend:3000
     # Loopback only — reached externally through the nginx proxy, not directly.
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-3001}:3001"
     depends_on:
       - loma-backend
     restart: unless-stopped
@@ -41,8 +43,11 @@ services:
   # be exposed. For HTTPS on :443 see deploy/nginx/README.md.
   nginx:
     image: nginx:1.27-alpine
+    # Defaults to publishing on all interfaces :80 (normal deploy). Preview stacks
+    # bind a unique loopback port (e.g. 127.0.0.1:20002) and sit behind a shared
+    # front proxy that routes pr-<N>.preview.<domain> to them.
     ports:
-      - "80:80"
+      - "${NGINX_HOST_BIND:-0.0.0.0}:${NGINX_HOST_PORT:-80}:80"
     volumes:
       - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./deploy/nginx/certbot/www:/var/www/certbot:ro

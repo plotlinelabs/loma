@@ -42,7 +42,7 @@ from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
 from agent.pool import init_pool
 from agent.prompt import refresh_prompt_settings_from_db
-from config.app_config import APP_NAME, LOMA_ENABLE_SCHEDULER, LOMA_ENABLE_WEBHOOKS
+from config.app_config import APP_NAME, LOMA_ENABLE_SCHEDULER, LOMA_ENABLE_WEBHOOKS, LOMA_ENABLE_SLACK
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,10 +86,16 @@ async def main():
     elif not is_dev:
         logger.info("Scheduler disabled (set LOMA_ENABLE_SCHEDULER=true to enable)")
 
-    # Slack Socket Mode
+    # Slack Socket Mode. Disabled in dev, when LOMA_ENABLE_SLACK is off, or when
+    # no app token is set — the latter two let preview/ephemeral stacks run without
+    # double-consuming the production Slack app's events.
     handler = None
-    if not is_dev:
+    if not is_dev and LOMA_ENABLE_SLACK and os.environ.get("SLACK_APP_TOKEN"):
         handler = AsyncSocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+    elif not is_dev:
+        logger.info(
+            "Slack Socket Mode disabled (LOMA_ENABLE_SLACK=false or SLACK_APP_TOKEN unset)"
+        )
 
     # Webhook HTTP server
     webhook_app = web.Application(
@@ -125,7 +131,7 @@ async def main():
     if handler:
         await handler.start_async()
     else:
-        logger.info("Slack & scheduler disabled (ENV=DEV)")
+        logger.info("Slack Socket Mode not started; keeping HTTP server alive")
         # Keep the process alive for the HTTP server
         await asyncio.Event().wait()
 
