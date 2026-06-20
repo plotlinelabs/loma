@@ -1203,7 +1203,7 @@ async def _process_pr_review(
         "## IMPORTANT: First Steps (MUST DO)",
         "",
         "Before anything else, you MUST:",
-        "1. Use the `Skill` tool to load `code-review` - this contains the review methodology",
+        "1. Read the DB-backed `code-review` skill with `python3 tools/loma_skills.py get --slug code-review` - this contains the review methodology",
         "2. Check for repo-specific rules by fetching `.agent/skills/review/SKILL.md` from the repo",
         "",
         f"## PR Details",
@@ -1247,7 +1247,7 @@ async def _process_pr_review(
     prompt_parts.extend([
         "## Review Workflow",
         "",
-        "After loading the skill, follow this workflow:",
+        "After reading the code-review skill, follow this workflow:",
         "",
         "1. **Get the list of changed files first:**",
         f"   `mcp__github__list_pull_request_files` with owner=`{repo_owner}`, repo=`{repo_name}`, pull_number={pr_number}",
