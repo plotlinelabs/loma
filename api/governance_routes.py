@@ -75,6 +75,10 @@ async def handle_get_me(request: web.Request) -> web.Response:
         return web.json_response({"error": "DB not configured"}, status=503)
 
     email = get_user_email(request)
+    if not email:
+        # No identity on the request (e.g. proxy did not forward X-User-Email).
+        # Don't auto-provision a blank user or crash on email[0]; report unauthenticated.
+        return web.json_response({"error": "Authentication required"}, status=401)
     user = await db.users.find_one({"email": email})
 
     if user is None:
