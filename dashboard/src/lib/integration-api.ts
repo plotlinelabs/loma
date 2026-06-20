@@ -27,6 +27,10 @@ export interface Integration {
   connected_by?: string | null;
   connected_at?: string | null;
   has_webhook_secret?: boolean;
+  // Custom (admin-added) remote MCP connectors
+  is_custom?: boolean;
+  url?: string;
+  has_token?: boolean;
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────
@@ -66,6 +70,38 @@ export async function disconnectIntegration(provider: string): Promise<void> {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Failed to disconnect ${provider}: ${res.status}`);
+  }
+}
+
+export async function addCustomConnector(input: {
+  name: string;
+  url: string;
+  token?: string;
+  authHeader?: string;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/integrations/custom`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: input.name,
+      url: input.url,
+      token: input.token || "",
+      auth_header: input.authHeader || "",
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to add connector: ${res.status}`);
+  }
+}
+
+export async function removeCustomConnector(provider: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/integrations/custom/${provider}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to remove connector: ${res.status}`);
   }
 }
 
