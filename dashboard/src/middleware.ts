@@ -2,7 +2,8 @@ import { auth } from "./auth";
 import { NextResponse } from "next/server";
 
 // Paths under /api that must NOT require auth or get the X-User-Email header.
-const PUBLIC_API_PREFIXES = ["/api/auth", "/api/signup"];
+// /api/whoami is the nginx auth_request target; its own handler reads the session.
+const PUBLIC_API_PREFIXES = ["/api/auth", "/api/signup", "/api/whoami"];
 // Backend-only paths the dashboard never needs to gate (also routed straight to
 // the backend by the reverse proxy).
 const BYPASS_PREFIXES = ["/webhook", "/metrics"];
