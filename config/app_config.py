@@ -21,3 +21,7 @@ LOMA_SKILL_ASSET_DIR = os.environ.get("LOMA_SKILL_ASSET_DIR", "/var/lib/loma/ski
 LOMA_ENABLE_SCHEDULER = env_flag("LOMA_ENABLE_SCHEDULER", default=False)
 LOMA_ENABLE_WEBHOOKS = env_flag("LOMA_ENABLE_WEBHOOKS", default=True)
 LOMA_ENABLE_METRICS = env_flag("LOMA_ENABLE_METRICS", default=False)
+# Slack Socket Mode consumer. Defaults to on so existing deployments are
+# unchanged; preview/ephemeral stacks set this to false (or omit SLACK_APP_TOKEN)
+# so they don't double-consume the production Slack app's events.
+LOMA_ENABLE_SLACK = env_flag("LOMA_ENABLE_SLACK", default=True)
