@@ -54,8 +54,21 @@ server {
     proxy_read_timeout 3600s;
     proxy_buffering off;
 
-    # Webhooks → backend; everything else (incl. /api/*) → dashboard, which injects
-    # X-User-Email before proxying /api to the backend. See loma.conf for why.
+    # Identity for /api via an auth_request to the dashboard. See loma.conf.
+    location = /_whoami {
+        internal;
+        proxy_pass http://loma_dashboard/api/whoami;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+    }
+    location /api/auth/  { proxy_pass http://loma_dashboard; }
+    location /api/signup { proxy_pass http://loma_dashboard; }
+    location /api/ {
+        auth_request /_whoami;
+        auth_request_set $auth_email $upstream_http_x_auth_email;
+        proxy_set_header X-User-Email $auth_email;
+        proxy_pass http://loma_backend;
+    }
     location /webhooks/ { proxy_pass http://loma_backend; }
     location = /webhook { proxy_pass http://loma_backend; }
     location /          { proxy_pass http://loma_dashboard; }

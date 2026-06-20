@@ -9,6 +9,12 @@ echo "Deploying $(git rev-parse --short HEAD)"
 
 docker compose up -d --build
 
+# The nginx reverse-proxy config is bind-mounted, so `up` may not reload it on a
+# config-only change. Reload it explicitly (no-op if nginx was just recreated).
+if docker compose exec -T nginx nginx -t >/dev/null 2>&1; then
+  docker compose exec -T nginx nginx -s reload || true
+fi
+
 # Liveness through the nginx proxy (:80): the dashboard ("/") and the backend
 # (a webhook path, which nginx routes straight to the backend) must both respond.
 # Any non-000 code proves the path is routed and the upstream is up. We probe a
