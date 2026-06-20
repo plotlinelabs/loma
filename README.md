@@ -1,8 +1,9 @@
 <div align="center">
 
-<img src="https://www.lomahq.com/loma-logo.svg" alt="Loma" width="72" height="72" />
-
-# Loma
+<h1>
+  <img src="https://www.lomahq.com/loma-logo.svg" alt="" height="40" align="center" />
+  &nbsp;Loma
+</h1>
 
 **An AI Agents Factory for your whole team.**
 
