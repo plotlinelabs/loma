@@ -5,32 +5,40 @@ dashboard and routes traffic over the internal Docker network, so the backend (`
 dashboard (`3001`) containers are bound to `127.0.0.1` only and never need to be exposed.
 
 ```
-client ──▶ :80 nginx ──┬─ /api/auth/*          ─▶ dashboard (NextAuth)
-                       ├─ /api/*               ─▶ backend  (API, OAuth cb, chat SSE, terminal WS)
-                       ├─ /webhooks/* , /webhook ─▶ backend  (third-party webhooks)
-                       └─ everything else      ─▶ dashboard (UI)
+client ──▶ nginx ──┬─ /api/auth/* , /api/signup ─▶ dashboard (NextAuth, signup)
+                   ├─ /api/*                    ─▶ backend  (auth_request injects X-User-Email)
+                   ├─ /webhooks/* , /webhook    ─▶ backend  (third-party webhooks, HMAC)
+                   └─ everything else           ─▶ dashboard (UI)
 ```
 
-## Phase 1 — HTTP on an IP (default)
+Identity: Next.js drops middleware-injected headers through its rewrites, so for every `/api/*`
+call nginx makes an `auth_request` to the dashboard's `/api/whoami` (which reads the NextAuth
+session) and injects a **trusted** `X-User-Email` before proxying to the backend. Any
+client-sent `X-User-Email` is overwritten, so it can't be spoofed.
 
-Active config: `conf.d/loma.conf` (listens on `:80`, `server_name _`).
+## HTTP on an IP (default)
 
-Open inbound **80** in your firewall / cloud security group and **close 3000/3001**. Set, in
-the relevant env files:
+Active config: `conf.d/loma.conf` (listens on `:80`, `server_name _`). Works locally and on a
+bare IP — no domain needed.
+
+Open inbound **80** in your firewall / security group (and don't expose 3000/3001). Set:
 
 - `.env`: `PUBLIC_BASE_URL=http://<your-ip>`
 - `dashboard/.env`: `AUTH_URL=http://<your-ip>`
 
 Then `docker compose up -d` and browse to `http://<your-ip>`.
 
-## Phase 2 — Domain + HTTPS on :443
+## HTTPS on :443 (a few steps)
 
-Prereqs: a DNS A record pointing your domain at the server, and inbound **443** open.
+HTTPS is opt-in via the committed `docker-compose.tls.yml` overlay, which renders
+`templates/loma-tls.conf.template` for your domain (from `${LOMA_DOMAIN}`). The repo default
+stays HTTP, so nothing changes until you set the env vars below.
 
-1. **Serve the ACME challenge over HTTP.** The active `loma.conf` already serves
-   `/.well-known/acme-challenge/` from `/var/www/certbot`, so just make sure the stack is up.
+Prereqs: a DNS **A record** for your domain → the server's (ideally static / Elastic) IP, and
+inbound **443** open.
 
-2. **Obtain the certificate** (webroot challenge — no downtime):
+1. **Get the certificate** while the default HTTP stack is running (it already serves the ACME
+   challenge on :80, no downtime):
 
    ```bash
    docker compose run --rm certbot certonly \
@@ -39,29 +47,44 @@ Prereqs: a DNS A record pointing your domain at the server, and inbound **443** 
      --email you@example.com --agree-tos --no-eff-email
    ```
 
-   The cert lands in `deploy/nginx/certbot/conf/live/your.domain.com/` (mounted into nginx at
-   `/etc/letsencrypt`).
+   The cert lands in `deploy/nginx/certbot/conf/live/your.domain.com/`.
 
-3. **Switch nginx to HTTPS:**
-   - In `docker-compose.yml`, add `"443:443"` to the `nginx` service `ports`.
-   - Copy `conf.d/loma-ssl.conf.example` → `conf.d/loma.conf`, replacing `YOUR_DOMAIN` with
-     your domain (this replaces the HTTP-only server with the redirect + TLS server).
-   - `docker compose up -d` (recreates nginx with the new port + config).
+2. **Enable HTTPS** — in `.env`:
 
-4. **Update the app's external URL** (and re-register OAuth redirect URIs with the providers):
-   - `.env`: `PUBLIC_BASE_URL=https://your.domain.com`,
-     `GOOGLE_OAUTH_REDIRECT_URI=https://your.domain.com/api/oauth/google/callback`,
-     `SLACK_OAUTH_REDIRECT_URI=https://your.domain.com/api/oauth/slack/callback`
-   - `dashboard/.env`: `AUTH_URL=https://your.domain.com`
-   - Recreate so the values are picked up: `docker compose up -d --force-recreate loma-backend loma-dashboard`.
+   ```
+   LOMA_DOMAIN=your.domain.com
+   COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+   PUBLIC_BASE_URL=https://your.domain.com
+   ```
 
-   nginx forwards `X-Forwarded-Proto: https`, so backend-built webhook URLs become `https://…`
-   automatically.
+   and in `dashboard/.env`: `AUTH_URL=https://your.domain.com`.
 
-5. **Auto-renew.** Run a periodic renewal that reloads nginx on success — e.g. a host cron:
+   *(Only if you use Google/Slack OAuth login: also set `GOOGLE_OAUTH_REDIRECT_URI` /
+   `SLACK_OAUTH_REDIRECT_URI` to `https://your.domain.com/...` and re-register them with the
+   provider. The default local-credentials login needs no OAuth config.)*
+
+3. **Apply:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+   nginx now renders the TLS template, serves `:443`, and redirects `:80 → :443`. The
+   `auth_request` identity flow and chat/terminal streaming work exactly as on HTTP.
+   `X-Forwarded-Proto: https` is set, so backend-built webhook URLs become `https://…`.
+
+4. **Auto-renew** — a host cron that renews and reloads nginx:
 
    ```cron
    0 3 * * * cd /home/ubuntu/loma && docker compose run --rm certbot renew --webroot -w /var/www/certbot && docker compose exec nginx nginx -s reload
    ```
 
-   (Let's Encrypt certs last 90 days; renewal is a no-op until ~30 days before expiry.)
+   (Let's Encrypt certs last 90 days; `renew` is a no-op until ~30 days before expiry.)
+
+### Notes
+
+- `LOMA_DOMAIN` and `COMPOSE_FILE` live in your **untracked** `.env`, and certs in the untracked
+  `deploy/nginx/certbot/conf` volume, so HTTPS survives a `git pull` / CI redeploy that runs
+  `git reset --hard` — the committed repo stays generic/HTTP-by-default.
+- If you change `templates/loma-tls.conf.template` itself, recreate nginx so it re-renders:
+  `docker compose up -d --force-recreate nginx`.

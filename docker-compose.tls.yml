@@ -1,0 +1,25 @@
+# HTTPS overlay — enable with COMPOSE_FILE in your .env:
+#
+#   LOMA_DOMAIN=your.domain
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+#
+# Then obtain a cert and `docker compose up -d`. See deploy/nginx/README.md.
+# Without these env vars the base docker-compose.yml runs HTTP-only on :80.
+#
+# `!override` replaces the base nginx ports/volumes so the nginx image renders
+# deploy/nginx/templates/loma-tls.conf.template into conf.d at startup (the base's
+# read-only conf.d bind mount is dropped). NGINX_ENVSUBST_FILTER limits envsubst
+# to LOMA_* vars so nginx's own $variables are left intact.
+
+services:
+  nginx:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes: !override
+      - ./deploy/nginx/templates:/etc/nginx/templates:ro
+      - ./deploy/nginx/certbot/www:/var/www/certbot:ro
+      - ./deploy/nginx/certbot/conf:/etc/letsencrypt:ro
+    environment:
+      LOMA_DOMAIN: ${LOMA_DOMAIN:?set LOMA_DOMAIN in your .env to enable HTTPS}
+      NGINX_ENVSUBST_FILTER: "LOMA_"

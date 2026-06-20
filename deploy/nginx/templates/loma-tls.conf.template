@@ -1,11 +1,11 @@
-# Loma reverse proxy — HTTPS variant (Phase 2).
+# Loma reverse proxy — HTTPS (rendered by the nginx image's envsubst from
+# ${LOMA_DOMAIN}). Enabled via the docker-compose.tls.yml overlay; see
+# ../README.md. Mirrors conf.d/loma.conf exactly, plus TLS termination and an
+# HTTP→HTTPS redirect. Identity is resolved with an auth_request to the
+# dashboard's /api/whoami, so roles work the same as on plain HTTP.
 #
-# To enable HTTPS:
-#   1. Obtain a cert (see ../README.md), then
-#   2. replace YOUR_DOMAIN below with your domain,
-#   3. rename this file to loma.conf (replacing the HTTP-only one),
-#   4. add "443:443" to the nginx service ports in docker-compose.yml,
-#   5. `docker compose up -d` (or `docker compose exec nginx nginx -s reload`).
+# Only ${LOMA_DOMAIN} is substituted (NGINX_ENVSUBST_FILTER=LOMA_); nginx's own
+# $host / $http_upgrade / etc. are left intact.
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -18,31 +18,26 @@ upstream loma_dashboard { server loma-dashboard:3001; }
 # Port 80: serve the ACME challenge, redirect everything else to HTTPS.
 server {
     listen 80;
-    server_name YOUR_DOMAIN;
+    server_name ${LOMA_DOMAIN};
 
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-    location / {
-        return 301 https://$host$request_uri;
-    }
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
 }
 
 server {
     listen 443 ssl;
     http2 on;
-    server_name YOUR_DOMAIN;
+    server_name ${LOMA_DOMAIN};
 
-    ssl_certificate     /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/${LOMA_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${LOMA_DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     client_max_body_size 110m;
 
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
 
+    # Shared upstream proxy settings (inherited by the locations below).
     proxy_http_version 1.1;
     proxy_set_header Host              $host;
     proxy_set_header X-Real-IP         $remote_addr;
@@ -54,22 +49,30 @@ server {
     proxy_read_timeout 3600s;
     proxy_buffering off;
 
-    # Identity for /api via an auth_request to the dashboard. See loma.conf.
+    # Internal identity subrequest: ask the dashboard who owns this session.
     location = /_whoami {
         internal;
         proxy_pass http://loma_dashboard/api/whoami;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
     }
+
+    # NextAuth and self-signup are served by the dashboard (no identity needed).
     location /api/auth/  { proxy_pass http://loma_dashboard; }
     location /api/signup { proxy_pass http://loma_dashboard; }
+
+    # All other /api/* → backend, with a trusted X-User-Email from the auth_request.
     location /api/ {
         auth_request /_whoami;
         auth_request_set $auth_email $upstream_http_x_auth_email;
-        proxy_set_header X-User-Email $auth_email;
+        proxy_set_header X-User-Email $auth_email;   # overwrites any client value
         proxy_pass http://loma_backend;
     }
+
+    # Third-party webhooks (HMAC-authenticated) → backend.
     location /webhooks/ { proxy_pass http://loma_backend; }
     location = /webhook { proxy_pass http://loma_backend; }
-    location /          { proxy_pass http://loma_dashboard; }
+
+    # Dashboard UI and everything else.
+    location / { proxy_pass http://loma_dashboard; }
 }
