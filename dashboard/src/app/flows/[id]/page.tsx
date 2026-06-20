@@ -477,7 +477,7 @@ export default function FlowDetailPage() {
     if (!flow) return;
     try {
       await triggerFlow(flow.flow_id);
-      alert(`Flow "${flow.name}" triggered. Check the target channel for results.`);
+      alert(`Flow "${flow.name}" triggered. Check the execution history for results.`);
     } catch (e) {
       console.error("Failed to trigger flow:", e);
     }
@@ -769,12 +769,6 @@ export default function FlowDetailPage() {
                 <div className="flex justify-between">
                   <span className="text-gray-500">Timezone</span>
                   <span className="text-gray-900">{flow.timezone}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Channel</span>
-                  <span className="text-gray-900">
-                    {flow.channel_name || flow.channel_id}
-                  </span>
                 </div>
               </>
             )}

@@ -84,38 +84,6 @@ async def _stream_response(client, channel, thread_ts, react_ts, agent_stream):
     )
 
 
-async def _maybe_update_flow_memory(db, conversation, prompt):
-    """If this conversation belongs to a flow, update its memory.
-
-    Called after the agent finishes processing a reply in a flow output
-    thread.  Uses a lightweight Haiku call to merge the feedback into
-    the flow's rolling memory_state.
-    """
-    flow_id = (conversation.get("metadata") or {}).get("flow_id")
-    if not flow_id:
-        return
-
-    logger.info("[MEMORY] Reply in flow thread detected (flow_id=%s), updating memory", flow_id)
-
-    try:
-        # Build a minimal feedback transcript from the conversation messages
-        messages = conversation.get("messages", [])
-        feedback_parts = []
-        for msg in messages[-10:]:  # last 10 messages to keep context bounded
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            feedback_parts.append(f"{role}: {content[:1000]}")
-
-        # Include the current user reply as the latest feedback
-        feedback_parts.append(f"user: {prompt[:1000]}")
-        feedback_conversation = "\n".join(feedback_parts)
-
-        from scheduler.memory import update_flow_memory
-        await update_flow_memory(db, flow_id, feedback_conversation)
-    except Exception:
-        logger.exception("[MEMORY] Failed to update flow memory for flow %s", flow_id)
-
-
 async def _handle_agent_request(
     client, channel, thread_ts, event_ts, prompt, context, files, source, user_id,
 ):
@@ -202,15 +170,6 @@ async def _handle_agent_request(
             asyncio.create_task(ingest_dashboard_chat(
                 observer.conversation_id, prompt, user_email or "",
             ))
-
-        # --- Post-feedback memory update for scheduled task threads ---
-        # If this reply was in a thread belonging to a scheduled task,
-        # fire-and-forget a memory update so the next task run benefits
-        # from the user's feedback.
-        if existing_convo and db is not None:
-            asyncio.create_task(
-                _maybe_update_flow_memory(db, existing_convo, prompt)
-            )
 
     except Exception as e:
         logger.exception("Error in agent request")
