@@ -545,6 +545,8 @@ export default function FlowDetailPage() {
   }
 
   const isWebhook = flow.trigger_type === "webhook";
+  const isSlack = flow.trigger_type === "slack";
+  const isScheduled = (flow.trigger_type || "scheduled") === "scheduled";
   const webhookUrl = `${window.location.origin}/webhook?flowId=${flow.flow_id}`;
 
   return (
@@ -658,7 +660,7 @@ export default function FlowDetailPage() {
               {flow.status === "active" ? "Pause" : "Resume"}
             </button>
           )}
-          {flow.status === "active" && !isWebhook && (
+          {flow.status === "active" && isScheduled && (
             <button
               onClick={handleRunNow}
               className="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
@@ -732,7 +734,7 @@ export default function FlowDetailPage() {
             <div className="flex justify-between">
               <span className="text-gray-500">Trigger</span>
               <span className="text-gray-900 font-medium">
-                {isWebhook ? "Webhook" : "Scheduled"}
+                {isWebhook ? "Webhook" : isSlack ? "Slack" : "Scheduled"}
               </span>
             </div>
             {isWebhook ? (
@@ -749,6 +751,23 @@ export default function FlowDetailPage() {
                     </code>
                   </div>
                 )}
+              </>
+            ) : isSlack ? (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Channel</span>
+                  <span className="text-gray-900">{flow.channel_name || flow.channel_id}</span>
+                </div>
+                {flow.slack_config?.allow_bot_messages && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Bot messages</span>
+                    <span className="text-gray-900">Enabled</span>
+                  </div>
+                )}
+                <p className="text-xs text-gray-400 pt-1">
+                  Responds to new top-level messages in this channel and replies in-thread.
+                  @mention the bot to reply inside a thread.
+                </p>
               </>
             ) : (
               <>
@@ -801,7 +820,7 @@ export default function FlowDetailPage() {
               <span className="text-gray-500">Last run</span>
               <ClientTimestamp iso={flow.last_run_at} variant="full" className="text-gray-900" />
             </div>
-            {!isWebhook && (
+            {isScheduled && (
               <div className="flex justify-between">
                 <span className="text-gray-500">Next run</span>
                 {flow.status === "active" ? (
