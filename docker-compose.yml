@@ -21,6 +21,11 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      args:
+        # Login UI: "local" (default), "google", or "local,google". Build-time
+        # (NEXT_PUBLIC_*); set NEXT_PUBLIC_AUTH_PROVIDER in the project .env and
+        # rebuild. The runtime AUTH_PROVIDER lives in dashboard/.env.
+        NEXT_PUBLIC_AUTH_PROVIDER: ${NEXT_PUBLIC_AUTH_PROVIDER:-local}
     env_file: ./dashboard/.env
     environment:
       BACKEND_URL: http://loma-backend:3000

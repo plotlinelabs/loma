@@ -175,12 +175,44 @@ export const { handlers } = NextAuth({
       if (account?.provider !== "google") {
         return true;
       }
-      const email = (user.email ?? "").toLowerCase();
+      const email = normalizeEmail(user.email);
       const configuredDomains = await readAllowedEmailDomains();
-      if (configuredDomains.length === 0) {
-        return true;
+
+      // Domain gate: when ALLOWED_EMAIL_DOMAINS is set, only matching emails may sign in.
+      if (
+        configuredDomains.length > 0 &&
+        !configuredDomains.some((domain) => email.endsWith(`@${domain}`))
+      ) {
+        return false;
       }
-      return configuredDomains.some((domain) => email.endsWith(`@${domain}`));
+
+      // Auto-provision allowed-domain Google users as ACTIVE — the domain restriction is
+      // the gate, so no separate admin approval is needed. The first user ever becomes
+      // admin, so a fresh google-only deployment can bootstrap without the local setup
+      // token. Existing records are left untouched (so roles set in the admin page stick).
+      // With no domain restriction (open Google) we do NOT auto-activate — the backend's
+      // pending/admin-approval flow still applies.
+      if (configuredDomains.length > 0 && email) {
+        const users = await getUsersCollection();
+        const existing = await users.findOne({ email });
+        if (!existing) {
+          const count = await users.countDocuments({});
+          const now = new Date();
+          await users.insertOne({
+            email,
+            name: user.name || email.split("@")[0] || email,
+            avatar: null,
+            system_role: count === 0 ? "admin" : "chatter",
+            status: "active",
+            tool_assignments: {},
+            theme_preference: "system",
+            claude_pool_enabled: true,
+            created_at: now,
+            updated_at: now,
+          });
+        }
+      }
+      return true;
     },
     jwt({ token, user }) {
       if (user?.email) {
