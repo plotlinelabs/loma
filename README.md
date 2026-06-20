@@ -1,379 +1,125 @@
+<div align="center">
+
 # Loma
 
-**Loma is an AI agent factory for companies.** It gives a team a self-hosted Slack agent, a dashboard for chat and observability, local-first user management, and an integration framework for connecting company tools.
+**Self-hosted AI agents for your whole team.**
 
-This repository is the clean OSS codebase. Company-specific knowledge, prompts, playbooks, credentials, and deployment details should live in your database, environment variables, or private configuration exports - not in source code.
+One agent — in Slack and a dashboard — that knows your tools, runs on open models *or* your pooled Claude subscriptions, automates work on schedules and webhooks, and shares a team-wide skill library that gets better over time.
 
-## What ships in v0.1
+[Website](https://www.lomahq.com) · [Docs](https://www.lomahq.com/docs) · [Quickstart](#quickstart) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-- Slack Socket Mode bot for app mentions and DMs
-- Thread context and Slack file download support
-- Dashboard chat and conversation history
-- Local email/password dashboard login through NextAuth
-- Optional Google OAuth dashboard login for teams with a configured domain
-- First-user-becomes-admin provisioning
-- User, team, and role management
-- MongoDB-backed conversations, prompt settings, flows, users, and integrations
-- MongoDB-backed agent skills with dashboard editing and local disk asset storage
-- Optional integration registry for tools such as GitHub, Linear, HubSpot, Google, Slack, Sentry, and databases
-- OpenCode as the default agent runtime, with optional Claude Agent SDK fallback
-- Feature flags so optional providers do not block startup
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/plotlinelabs/loma/actions/workflows/ci.yml/badge.svg)](https://github.com/plotlinelabs/loma/actions/workflows/ci.yml)
 
-## Architecture
+</div>
+
+---
+
+## Why Loma
+
+Most teams pay for AI per seat and per token, wire up the same context by hand in every tool, and lose every useful prompt the moment the chat ends. Loma is the opposite: one agent your whole company shares, on infrastructure you own.
+
+- 🪙 **Pool your team's Claude Code subscriptions.** Connect existing Claude accounts into a round-robin pool so everyone's agent usage draws from subscriptions you already pay for — subsidizing token cost instead of buying per-seat API access.
+- 🧠 **Run on open models via OpenCode.** The default runtime is [OpenCode](https://opencode.ai), so you get open-source models like DeepSeek V4 and GLM with no per-token bill — and you can switch models per conversation.
+- ⚡ **Automate with webhook & scheduled flows.** Turn any agent task into a routine: run it on a cron schedule, or fire it from a webhook out of your CI/CD, support tool, or any system in your org.
+- 📚 **Set up skills once, the whole team uses them.** Write a playbook once, store it in the database, and every teammate *and* every automation uses it instantly — versioned, and able to improve itself from feedback.
+
+Plus: reachable from **Slack and a web dashboard**, connects to **your existing stack** (databases, issue trackers, CRM, docs, observability), logs **every run, token, and cost**, and is fully **self-hostable** with env-driven config you can edit from the dashboard.
+
+## What you can do
+
+Loma runs the same agent across ad-hoc questions and standing automations. A few patterns teams use it for:
+
+| Trigger | What Loma does |
+| --- | --- |
+| **Ask, anytime** (dashboard or Slack) | Answers questions live against your systems — "what's the ID of X?", "who requested this?", validate a config, debug an issue — without you opening five tabs. |
+| **A support ticket arrives** (webhook) | Investigates the ticket against your data and docs, then drafts a customer reply or posts an internal note. |
+| **A bug or feature request lands in Slack** | Triages it, files or sizes a ticket, and links the relevant context. |
+| **Every morning** (schedule) | Posts the reports your team reads before standup — on-call & bug summaries, support digests, experiment/A-B results, adoption dashboards — pulled from across your tools. |
+| **A PR merges or a deploy ships** (webhook) | Posts changelogs and release notes, sends deploy notifications, opens docs-update PRs. |
+| **On a recurring sweep** (schedule) | Sizes open tickets, runs token/health checks, drives crash-fix or cleanup passes. |
+| **Continuously** (schedule) | Mines PR feedback, support tickets, and call transcripts to update skills — so the agent keeps getting better. |
+
+## How it works
 
 ```text
-Slack workspace ── Socket Mode ── Python backend (:3000) ── MongoDB
-                                      │
-                                      ├── Agent runtime + Loma skill tools + optional MCP tools
-                                      ├── Local skill assets (LOMA_SKILL_ASSET_DIR)
-                                      │
-Dashboard (:3001) ── Auth.js login ───┘
+   Slack  ─────────────┐                        ┌── Agent runtime ── OpenCode (open models)
+   (DM / mention)      │                        │                 └─ Claude account pool
+                       ▼                        │
+                Backend (:3000) ────────────────┼── Skills (DB) + your connected tools (MCP)
+                       ▲          MongoDB        │
+   Dashboard (:3001) ──┘   (conversations,       └── Flows: schedules + webhooks
+   (chat, flows,           skills, flows,
+    skills, config)        users, usage)
 ```
 
-## Prerequisites
+- **Backend** — Python (aiohttp + Slack Bolt). Runs the agent, serves the API, receives webhooks.
+- **Dashboard** — Next.js. Chat, conversation history, skills, flows, integrations, config, users/roles, usage.
+- **Storage** — MongoDB for everything stateful; skill assets on local disk (`LOMA_SKILL_ASSET_DIR`).
+- **Runtime** — OpenCode by default; optionally pool Claude Code accounts. Switchable per conversation.
 
-- Python 3.10+
-- Node.js 20+
-- MongoDB database
-- Slack workspace where you can create an app
-- OpenCode API key for the default agent runtime
-- Optional Google OAuth client for dashboard login
-- Optional Anthropic API key or Claude dashboard accounts if you want Claude Agent SDK fallback
+## Quickstart
 
-## Fresh EC2 Quickstart
-
-Use this path to test a brand-new self-hosted install on Ubuntu 24.04 LTS or Ubuntu 26.04 LTS. Temporarily allow inbound TCP `22` and `3001` in the instance security group while testing. Open `3000` only if you need external webhooks or direct backend debugging.
-
-1. SSH into the instance:
-
-```bash
-ssh -i your-key.pem ubuntu@<ec2-public-ip>
-```
-
-2. Install Docker Engine and Docker Compose plugin:
-
-```bash
-sudo apt update
-sudo apt install -y ca-certificates curl git
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo usermod -aG docker ubuntu
-```
-
-Log out and SSH back in so Docker group permissions apply.
-
-3. Clone Loma:
+The fastest way to try Loma is Docker Compose. You need a MongoDB connection string, a Slack app (Socket Mode), and an OpenCode API key.
 
 ```bash
 git clone https://github.com/plotlinelabs/loma.git
 cd loma
-```
 
-4. Create the backend environment file:
+cp .env.example .env                 # backend config
+cp dashboard/.env.example dashboard/.env   # dashboard config
+# edit both — see the env keys in the docs
 
-```bash
-cp .env.example .env
-nano .env
-```
-
-Minimum values for an EC2 smoke test:
-
-```text
-PUBLIC_BASE_URL=http://<ec2-public-ip>:3001
-LOMA_SETUP_TOKEN=<random-first-admin-token>
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-OPENCODE_API_KEY=opencode-...
-AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
-OBSERVABILITY_MONGODB_URI=mongodb+srv://...
-OBSERVABILITY_DB_NAME=loma_observability
-LOMA_SKILL_ASSET_DIR=/var/lib/loma/skill-assets
-WEBHOOK_PORT=3000
-ENV=PROD
-```
-
-5. Create the dashboard environment file:
-
-```bash
-cd dashboard
-cp .env.example .env
-nano .env
-cd ..
-```
-
-Minimum values:
-
-```text
-AUTH_SECRET=<random-long-secret>
-AUTH_PROVIDER=local
-NEXT_PUBLIC_AUTH_PROVIDER=local
-LOMA_SETUP_TOKEN=<same-random-first-admin-token>
-OBSERVABILITY_MONGODB_URI=mongodb+srv://...
-OBSERVABILITY_DB_NAME=loma_observability
-AUTH_URL=http://<ec2-public-ip>:3001
-BACKEND_URL=http://loma-backend:3000
-NEXT_PUBLIC_API_URL=
-```
-
-Generate secrets on the instance with:
-
-```bash
-openssl rand -base64 32
-```
-
-6. Configure Slack:
-
-- Create a Slack app at <https://api.slack.com/apps>.
-- Enable Socket Mode.
-- Create an app-level token with `connections:write` and set it as `SLACK_APP_TOKEN`.
-- Add the bot scopes listed in the Slack setup section below.
-- Subscribe to `app_mention` and `message.im` bot events.
-- Install the app and set the bot token as `SLACK_BOT_TOKEN`.
-
-7. Start Loma:
-
-```bash
 docker compose up --build
 ```
 
-8. Smoke test:
+Then open `http://localhost:3001`, create the first admin with your `LOMA_SETUP_TOKEN`, and send a message in chat.
 
-- Open `http://<ec2-public-ip>:3001`.
-- Create the first admin with your email, a password, and `LOMA_SETUP_TOKEN`.
-- Send a message in dashboard chat.
-- Create a skill from the Skills page, then ask the agent to use or update it.
-- Mention the Slack bot in a channel where it has been invited.
-- DM the Slack bot.
-- Confirm conversation history appears in the dashboard.
+**Full setup** — fresh EC2/GCP install, Slack app scopes, auth, MongoDB, OpenCode, and the complete environment reference — is in the **[documentation](https://www.lomahq.com/docs)**.
 
-Useful debugging commands:
+## Configuration & integrations
 
-```bash
-docker compose ps
-docker compose logs -f loma-backend
-docker compose logs -f loma-dashboard
-```
+- **Config** is env-driven and editable from the dashboard's Environment page — no rebuilds to change keys.
+- **Optional by default:** missing provider credentials never block startup, and feature flags (`LOMA_ENABLE_SCHEDULER`, `LOMA_ENABLE_WEBHOOKS`, `LOMA_ENABLE_METRICS`) gate optional subsystems.
+- **Integrations** connect from the dashboard: databases (MongoDB, ClickHouse, BigQuery, Athena), issue trackers (Linear, GitHub), support (Pylon), CRM (HubSpot, Apollo), knowledge (Notion, GitBook, Google Workspace), and observability (Sentry, PostHog), among others.
 
-If OpenCode fails, check backend logs for missing `OPENCODE_API_KEY`, `opencode binary not found`, or `OpenCode server did not become ready`. The backend Docker image installs the `opencode` CLI automatically, so most first-run issues are missing credentials or blocked network access.
+See the [integrations guide](https://www.lomahq.com/docs) for per-provider setup.
 
-## Local backend setup
+## Documentation
 
-```bash
-git clone https://github.com/plotlinelabs/loma.git
-cd loma
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-# edit .env
-python app.py
-```
+Full guides live at **[lomahq.com/docs](https://www.lomahq.com/docs)**:
 
-The backend listens on `WEBHOOK_PORT`, default `3000`.
+- Getting started — Quickstart, fresh EC2/GCP install, local development
+- Configuration — environment reference, feature flags, in-dashboard config
+- Agent runtime — OpenCode, Claude account pooling, model selection
+- Skills — authoring, importing, assets, versioning
+- Flows & automations — scheduled routines and webhook triggers
+- Integrations — connecting your tools
+- Slack app, authentication, deployment & networking, security
 
-## Skills and company knowledge
-
-Skills are company playbooks the agent can search, read, and update through Loma-managed tools. They are not loaded from `.claude/skills` and Loma does not create a runtime skills directory.
-
-- Text skill files such as `SKILL.md`, `.md`, `.py`, `.json`, `.xml`, `.yaml`, `.txt`, and `.csv` are stored inline in MongoDB.
-- Non-text assets such as PDFs, images, spreadsheets, screenshots, and archives are stored under `LOMA_SKILL_ASSET_DIR`.
-- MongoDB stores asset metadata, version history, and local file references.
-- The dashboard Skills page supports creating skills, editing text files, uploading assets, previewing browser-supported PDFs/images, and viewing history.
-- Back up both MongoDB and `LOMA_SKILL_ASSET_DIR`.
-
-To import existing file-based skills into the database:
-
-```bash
-python3 scripts/import_skills.py --source /path/to/.claude/skills --actor admin@example.com
-```
-
-The import stores text files in MongoDB and copies non-text files into `LOMA_SKILL_ASSET_DIR`.
-
-## Local dashboard setup
-
-```bash
-cd dashboard
-npm install
-cp .env.example .env
-# edit .env
-npm run dev
-```
-
-Open `http://localhost:3001`. The first local user created with `LOMA_SETUP_TOKEN` is automatically provisioned as `admin`.
-
-## Slack app setup
-
-1. Create a Slack app at <https://api.slack.com/apps>.
-2. Enable Socket Mode and create an app-level token with `connections:write`; set it as `SLACK_APP_TOKEN`.
-3. Add bot token scopes:
-   - `app_mentions:read`
-   - `chat:write`
-   - `channels:history`
-   - `channels:read`
-   - `groups:history`
-   - `im:history`
-   - `im:read`
-   - `im:write`
-   - `files:read`
-   - `reactions:read`
-   - `reactions:write`
-   - `users:read`
-   - `users:read.email`
-4. Subscribe to bot events:
-   - `app_mention`
-   - `message.im`
-5. Install the app to your workspace and set the bot token as `SLACK_BOT_TOKEN`.
-6. Invite Loma to any channels where it should respond to mentions.
-
-Channel-wide automations are disabled in this first OSS release. They will become dashboard-managed company workflows in a later release.
-
-If DMs do not receive a response, first confirm `message.im` is subscribed and
-the bot token has `im:write`. Slack only applies new OAuth scopes after you
-reinstall the app to the workspace; updating the scope list without reinstalling
-leaves the running token under-scoped.
-
-## Dashboard auth setup
-
-Loma defaults to local email/password auth so a fresh EC2 or GCP VM can run on a public IP without DNS. The first admin account is created from the login page by entering:
-
-- email
-- password with at least 8 characters
-- `LOMA_SETUP_TOKEN`
-
-Set these in `dashboard/.env`:
+## Project layout
 
 ```text
-AUTH_SECRET=...
-AUTH_PROVIDER=local
-NEXT_PUBLIC_AUTH_PROVIDER=local
-LOMA_SETUP_TOKEN=...
-OBSERVABILITY_MONGODB_URI=mongodb+srv://user:pass@cluster.example.com/loma
-OBSERVABILITY_DB_NAME=loma_observability
-AUTH_URL=http://localhost:3001
+app.py            Backend entrypoint (aiohttp + Slack Bolt)
+agent/            Agent runtime: OpenCode + Claude account pool
+api/              HTTP API (chat, skills, flows, env, governance, ...)
+scheduler/        Scheduled & webhook flow execution
+webhooks/         Inbound webhook handlers
+integrations/     Connectable-tool registry
+tools/            CLI tools the agent can call (skills + integrations)
+observability/    Conversation/usage logging to MongoDB
+slack_app/        Slack event handling
+dashboard/        Next.js dashboard
 ```
 
-Use the same MongoDB database as the backend so the dashboard-created admin is visible to the Python API.
+## Contributing
 
-## Optional Google OAuth setup
-
-Create an OAuth client in Google Cloud Console. For local development, add:
-
-```text
-http://localhost:3001/api/auth/callback/google
-```
-
-Set these in `dashboard/.env`:
-
-```text
-AUTH_SECRET=...
-AUTH_PROVIDER=google
-NEXT_PUBLIC_AUTH_PROVIDER=google
-AUTH_GOOGLE_ID=...
-AUTH_GOOGLE_SECRET=...
-AUTH_URL=http://localhost:3001
-```
-
-In production, set `AUTH_URL` to your dashboard URL and add the matching callback URL in Google Cloud Console.
-
-Google OAuth requires a valid top-level domain for production redirect URIs. For raw IP self-hosted testing, keep `AUTH_PROVIDER=local`.
-
-## MongoDB setup
-
-Create a MongoDB database and set:
-
-```text
-OBSERVABILITY_MONGODB_URI=mongodb+srv://user:pass@cluster.example.com/loma
-OBSERVABILITY_DB_NAME=loma_observability
-```
-
-If you use skills with PDFs, images, spreadsheets, or other assets, also set and back up:
-
-```text
-LOMA_SKILL_ASSET_DIR=/var/lib/loma/skill-assets
-```
-
-Loma creates indexes on startup.
-
-## OpenCode setup
-
-Loma uses OpenCode by default. The backend Docker image installs the `opencode` CLI with OpenCode's official install script. Local non-Docker installs can use the same script or `npm install -g opencode-ai`.
-
-Create an OpenCode API key, set `OPENCODE_API_KEY`, and keep the default model unless you want to override it:
-
-```text
-OPENCODE_API_KEY=opencode-...
-AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
-```
-
-OpenCode starts an app-managed local server on `127.0.0.1:4097` by default. Override with `OPENCODE_HOST`, `OPENCODE_PORT`, or `OPENCODE_SERVER_URL` if you manage OpenCode separately.
-
-To use Claude Agent SDK instead, set `AGENT_DEFAULT_MODEL=anthropic/<model>` and configure `ANTHROPIC_API_KEY` or dashboard Claude accounts.
-
-## Required backend environment
-
-See `.env.example` for a complete starter. Minimum useful setup:
-
-```text
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-OPENCODE_API_KEY=opencode-...
-AGENT_DEFAULT_MODEL=opencode-go/deepseek-v4-flash
-OBSERVABILITY_MONGODB_URI=mongodb+srv://...
-WEBHOOK_PORT=3000
-ENV=PROD
-APP_NAME=Loma
-PUBLIC_BASE_URL=http://localhost:3001
-```
-
-## Feature flags
-
-Optional subsystems are off unless configured:
-
-```text
-LOMA_ENABLE_SCHEDULER=false
-LOMA_ENABLE_WEBHOOKS=true
-LOMA_ENABLE_METRICS=false
-```
-
-Missing optional provider credentials should not prevent the backend from booting.
-
-## Production starter
-
-A minimal Docker Compose setup is included:
-
-```bash
-docker compose up --build
-```
-
-For EC2/GCP, run the backend behind a process manager and the dashboard behind your reverse proxy. Use HTTPS for the dashboard URL when you add domain-based OAuth.
-
-## Team onboarding
-
-- First local setup-token login becomes `admin`.
-- Admins can manage users, teams, and roles in the dashboard.
-- Roles are: `admin`, `maintainer`, `operator`, `analyst`, and `chatter`.
-
-## Optional integrations
-
-The integration registry is included, but each provider must be configured before use. Providers should fail with clear setup errors instead of blocking startup.
-
-## Roadmap
-
-Next major workstream: richer workflow automation and optional external asset storage backends for multi-server deployments.
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). This repository is the clean OSS codebase — company-specific knowledge, prompts, playbooks, and credentials belong in your database and environment, never in source.
 
 ## Security
 
-Never commit `.env`, credentials, private company prompts, customer data, or internal playbooks. See `SECURITY.md`.
+Never commit `.env`, credentials, private prompts, or customer data. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## License
+
+[Apache-2.0](LICENSE).
