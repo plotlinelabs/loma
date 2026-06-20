@@ -19,6 +19,8 @@ import {
   fetchIntegrations,
   connectIntegration,
   disconnectIntegration,
+  addCustomConnector,
+  removeCustomConnector,
   getWebhookUrl,
   type Integration,
 } from "../../../lib/integration-api";
@@ -303,8 +305,15 @@ export default function IntegrationsPage() {
   const [webhookUrls, setWebhookUrls] = useState<Record<string, string>>({});
 
   // Role check — only maintainers+ can see org integrations
-  const { hasRole } = useUser();
+  const { hasRole, isAdmin } = useUser();
   const canManageOrgIntegrations = hasRole("maintainer");
+
+  // Custom MCP connector modal state (admin only)
+  const [showCustomModal, setShowCustomModal] = useState(false);
+  const [customForm, setCustomForm] = useState({ name: "", url: "", token: "", authHeader: "" });
+  const [customAdvanced, setCustomAdvanced] = useState(false);
+  const [addingCustom, setAddingCustom] = useState(false);
+  const [removingCustom, setRemovingCustom] = useState<string | null>(null);
 
   // Claude Code integration state
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
@@ -501,6 +510,42 @@ export default function IntegrationsPage() {
     await loadConnections();
   };
 
+  const handleAddCustomConnector = async () => {
+    if (!customForm.name.trim() || !customForm.url.trim()) return;
+    setAddingCustom(true);
+    setError(null);
+    try {
+      await addCustomConnector({
+        name: customForm.name.trim(),
+        url: customForm.url.trim(),
+        token: customForm.token.trim() || undefined,
+        authHeader: customForm.authHeader.trim() || undefined,
+      });
+      setShowCustomModal(false);
+      setCustomForm({ name: "", url: "", token: "", authHeader: "" });
+      setCustomAdvanced(false);
+      await loadConnections();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add connector");
+    } finally {
+      setAddingCustom(false);
+    }
+  };
+
+  const handleRemoveCustomConnector = async (provider: string, displayName: string) => {
+    if (!confirm(`Remove ${displayName}? Its MCP tools will no longer be available to any user.`)) return;
+    setRemovingCustom(provider);
+    setError(null);
+    try {
+      await removeCustomConnector(provider);
+      await loadConnections();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : `Failed to remove ${displayName}`);
+    } finally {
+      setRemovingCustom(null);
+    }
+  };
+
   const copyWebhookUrl = (url: string) => {
     navigator.clipboard.writeText(url);
   };
@@ -531,9 +576,10 @@ export default function IntegrationsPage() {
   const isSlackConnected = slackConn?.status === "connected";
   const isSlackExpired = slackConn?.status === "expired";
 
-  // Split org integrations into user-managed and system-managed
-  const userManagedIntegrations = orgIntegrations.filter((i) => i.status !== "system_managed");
-  const systemManagedIntegrations = orgIntegrations.filter((i) => i.status === "system_managed");
+  // Split org integrations into user-managed, system-managed, and custom connectors
+  const userManagedIntegrations = orgIntegrations.filter((i) => !i.is_custom && i.status !== "system_managed");
+  const systemManagedIntegrations = orgIntegrations.filter((i) => !i.is_custom && i.status === "system_managed");
+  const customConnectors = orgIntegrations.filter((i) => i.is_custom);
 
   return (
     <div className="space-y-6 animate-fade-in-up">
@@ -558,6 +604,106 @@ export default function IntegrationsPage() {
           onClose={() => setConnectModalTarget(null)}
           onConnected={handleOrgConnected}
         />
+      )}
+
+      {/* Add Custom Connector Modal — admin only */}
+      {showCustomModal && isAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-surface rounded-2xl border border-gray-200 w-full max-w-lg p-6 shadow-xl">
+            <div className="flex items-start justify-between mb-1">
+              <h2 className="text-lg font-semibold text-gray-900">Add custom connector</h2>
+              <button
+                onClick={() => setShowCustomModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <p className="text-sm text-gray-500 mb-5">
+              Connect the agent to any remote MCP server. Its tools become available to every user.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Name</label>
+                <input
+                  type="text"
+                  value={customForm.name}
+                  onChange={(e) => setCustomForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="Acme MCP"
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Remote MCP server URL</label>
+                <input
+                  type="url"
+                  value={customForm.url}
+                  onChange={(e) => setCustomForm((f) => ({ ...f, url: e.target.value }))}
+                  placeholder="https://mcp.example.com/mcp"
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setCustomAdvanced((v) => !v)}
+                className="text-xs font-medium text-gray-500 hover:text-gray-700"
+              >
+                {customAdvanced ? "▾" : "▸"} Advanced settings
+              </button>
+              {customAdvanced && (
+                <div className="space-y-4 pl-1">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Access token (optional)</label>
+                    <input
+                      type="password"
+                      value={customForm.token}
+                      onChange={(e) => setCustomForm((f) => ({ ...f, token: e.target.value }))}
+                      placeholder="Sent as the auth header value"
+                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Auth header name (optional)</label>
+                    <input
+                      type="text"
+                      value={customForm.authHeader}
+                      onChange={(e) => setCustomForm((f) => ({ ...f, authHeader: e.target.value }))}
+                      placeholder="Authorization"
+                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                    <p className="text-[11px] text-gray-400 mt-1">
+                      Defaults to <code>Authorization</code>. The token is sent as this header&apos;s value.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                Only add MCP servers you trust — their tools run for every user&apos;s agent. Interactive-OAuth
+                servers are not supported; use token/header auth.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => setShowCustomModal(false)}
+                className="text-sm px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddCustomConnector}
+                disabled={addingCustom || !customForm.name.trim() || !customForm.url.trim()}
+                className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {addingCustom ? "Adding..." : "Add"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {loading ? (
@@ -760,6 +906,86 @@ export default function IntegrationsPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Custom MCP Connectors — admin only */}
+          {isAdmin && (
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                    Custom Connectors
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Add any remote MCP server — its tools become available to every user
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowCustomModal(true)}
+                  className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shrink-0"
+                >
+                  Add custom connector
+                </button>
+              </div>
+
+              {customConnectors.length === 0 ? (
+                <div className="bg-surface rounded-xl border border-dashed border-gray-200 p-6 text-center">
+                  <p className="text-sm text-gray-400">
+                    No custom connectors yet. Add a remote MCP server to extend the agent.
+                  </p>
+                </div>
+              ) : (
+                customConnectors.map((integ) => (
+                  <div
+                    key={integ.provider}
+                    className="bg-surface rounded-xl border border-gray-200 overflow-hidden"
+                  >
+                    <div className="p-6">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
+                            <span className="text-lg font-bold text-gray-400">
+                              {integ.display_name[0]}
+                            </span>
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-3">
+                              <h2 className="text-base font-semibold text-gray-900">
+                                {integ.display_name}
+                              </h2>
+                              <StatusBadge status="connected" />
+                            </div>
+                            <p className="text-sm text-gray-500 mt-0.5 font-mono break-all">
+                              {integ.url}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
+                          disabled={removingCustom === integ.provider}
+                          className="text-sm px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
+                        >
+                          {removingCustom === integ.provider ? "Removing..." : "Remove"}
+                        </button>
+                      </div>
+                      <div className="mt-5 pt-5 border-t border-gray-100 flex flex-wrap items-center gap-2">
+                        <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
+                          MCP tools active (mcp__{integ.provider})
+                        </span>
+                        <span className="text-xs px-2.5 py-1 rounded-full bg-gray-50 text-gray-500 border border-gray-100">
+                          {integ.has_token ? "Token auth" : "No auth"}
+                        </span>
+                        {integ.connected_by && (
+                          <span className="text-xs text-gray-400">
+                            Added {formatDate(integ.connected_at)} by {integ.connected_by}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
 

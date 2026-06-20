@@ -125,6 +125,23 @@ async def merge_db_integrations(config: dict) -> dict:
         mcp_servers = config.get("mcp_servers", {})
         async for integration in db.integrations.find({"status": "active"}):
             provider = integration["provider"]
+
+            # Custom connectors carry their own inline remote MCP config (no
+            # catalog entry). Added by admins from the Integrations page.
+            if integration.get("is_custom"):
+                try:
+                    cfg = {"type": "http", "url": integration["mcp_url"]}
+                    if integration.get("api_key_encrypted"):
+                        header = integration.get("auth_header") or "Authorization"
+                        cfg["headers"] = {
+                            header: decrypt_token(integration["api_key_encrypted"]),
+                        }
+                    mcp_servers[provider] = cfg
+                    logger.info("Loaded custom MCP connector '%s' from DB", provider)
+                except Exception:
+                    logger.exception("Failed to load custom MCP connector %s", provider)
+                continue
+
             catalog_entry = PROVIDER_CATALOG.get(provider)
             if not catalog_entry:
                 continue

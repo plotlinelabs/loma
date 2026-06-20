@@ -7,16 +7,28 @@ in MongoDB and trigger MCP pool reload when integrations change.
 
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
 from aiohttp import web
 
+from api.auth_helpers import require_admin, get_user_email
 from api.oauth_helpers import encrypt_token, decrypt_token
 from integrations.registry import PROVIDER_CATALOG, list_providers, get_provider
 from observability.db import get_db
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify(name: str) -> str:
+    """Derive a stable MCP server key from a connector name.
+
+    Lowercased, non-alphanumerics collapsed to underscores. The slug becomes
+    the MCP server name, so the agent exposes its tools as ``mcp__<slug>``.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+    return slug
 
 
 async def _list_integrations(request: web.Request) -> web.Response:
@@ -59,6 +71,27 @@ async def _list_integrations(request: web.Request) -> web.Response:
         if provider in connected:
             item.update(connected[provider])
         result.append(item)
+
+    # Append admin-added custom MCP connectors (not in the static catalog).
+    if db is not None:
+        async for doc in db.integrations.find({"is_custom": True, "status": "active"}):
+            result.append({
+                "provider": doc["provider"],
+                "display_name": doc.get("display_name", doc["provider"]),
+                "description": "Custom MCP server",
+                "auth_type": "custom",
+                "auth_label": "Access token",
+                "auth_help_url": "",
+                "has_webhook": False,
+                "webhook_secret_label": None,
+                "extra_fields": [],
+                "status": "connected",
+                "is_custom": True,
+                "url": doc.get("mcp_url", ""),
+                "has_token": bool(doc.get("api_key_encrypted")),
+                "connected_by": doc.get("connected_by"),
+                "connected_at": doc.get("connected_at").isoformat() if doc.get("connected_at") else None,
+            })
 
     return web.json_response(result)
 
@@ -136,6 +169,85 @@ async def _disconnect_integration(request: web.Request) -> web.Response:
     return web.json_response({"status": "disconnected", "provider": provider})
 
 
+async def _add_custom_connector(request: web.Request) -> web.Response:
+    """POST /api/integrations/custom — register a custom remote MCP server.
+
+    Admin-only. The connector's tools become available to every user's agent.
+    """
+    require_admin(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Database not available"}, status=503)
+
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    url = (body.get("url") or "").strip()
+    token = (body.get("token") or "").strip()
+    auth_header = (body.get("auth_header") or "Authorization").strip() or "Authorization"
+
+    if not name or not url:
+        return web.json_response({"error": "name and url are required"}, status=400)
+    if not re.match(r"^https?://", url):
+        return web.json_response({"error": "url must start with http:// or https://"}, status=400)
+
+    slug = _slugify(name)
+    if not slug:
+        return web.json_response(
+            {"error": "name must contain letters or numbers"}, status=400,
+        )
+    if slug in PROVIDER_CATALOG:
+        return web.json_response(
+            {"error": f"'{slug}' collides with a built-in integration; choose another name"},
+            status=409,
+        )
+    existing = await db.integrations.find_one({"provider": slug})
+    if existing is not None:
+        return web.json_response(
+            {"error": f"A connector named '{slug}' already exists"}, status=409,
+        )
+
+    user_email = get_user_email(request) or "unknown"
+    now = datetime.now(timezone.utc)
+    doc = {
+        "integration_id": str(uuid.uuid4()),
+        "provider": slug,
+        "is_custom": True,
+        "status": "active",
+        "display_name": name,
+        "mcp_url": url,
+        "auth_header": auth_header,
+        "api_key_encrypted": encrypt_token(token) if token else None,
+        "connected_by": user_email,
+        "connected_at": now,
+        "updated_at": now,
+    }
+    await db.integrations.insert_one(doc)
+    logger.info("[INTEGRATIONS] Added custom MCP connector '%s' (by %s)", slug, user_email)
+
+    await _reload_pool()
+
+    return web.json_response({"status": "connected", "provider": slug}, status=201)
+
+
+async def _remove_custom_connector(request: web.Request) -> web.Response:
+    """DELETE /api/integrations/custom/{provider} — remove a custom MCP connector."""
+    require_admin(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Database not available"}, status=503)
+
+    provider = request.match_info["provider"]
+    result = await db.integrations.delete_one({"provider": provider, "is_custom": True})
+    if result.deleted_count == 0:
+        return web.json_response({"error": "Custom connector not found"}, status=404)
+
+    logger.info("[INTEGRATIONS] Removed custom MCP connector '%s'", provider)
+
+    await _reload_pool()
+
+    return web.json_response({"status": "disconnected", "provider": provider})
+
+
 async def _get_webhook_url(request: web.Request) -> web.Response:
     """GET /api/integrations/{provider}/webhook-url — return the webhook URL."""
     provider = request.match_info["provider"]
@@ -182,5 +294,7 @@ def setup_integration_routes(app: web.Application):
     """Register integration API routes."""
     app.router.add_get("/api/integrations", _list_integrations)
     app.router.add_post("/api/integrations/connect", _connect_integration)
+    app.router.add_post("/api/integrations/custom", _add_custom_connector)
+    app.router.add_delete("/api/integrations/custom/{provider}", _remove_custom_connector)
     app.router.add_delete("/api/integrations/{provider}", _disconnect_integration)
     app.router.add_get("/api/integrations/{provider}/webhook-url", _get_webhook_url)
