@@ -1,7 +1,7 @@
 # PR Preview Deployments
 
-> **For upstream maintainers only.** Previews are an *optional* workflow for the
-> Plotline deployment. Self-hosting Loma needs none of this — a normal
+> **For upstream maintainers only.** Previews are an *optional* workflow for a
+> project's canonical deployment. Self-hosting Loma needs none of this — a normal
 > `docker compose up` / `scripts/deploy.sh` is unaffected (the only shared change
 > is env-driven host ports that default to today's values).
 
@@ -36,8 +36,8 @@ that stack's loopback nginx port.
 ## Access control
 
 `*.preview.<domain>` sits behind **Cloudflare Access** (Google SSO, restricted to
-`@plotline.so`). A leaked URL is useless to anyone outside the org, so the URL
-never needs to be secret.
+your organization's email domain). A leaked URL is useless to anyone outside the
+org, so the URL never needs to be secret.
 
 ## Gating (who can trigger)
 
@@ -74,8 +74,8 @@ so they run with two guards to avoid disturbing production:
 
 **Cloudflare**
 - Wildcard DNS `*.preview.<domain>` (proxied) → preview EC2.
-- Cloudflare Access app over `*.preview.<domain>`: allow only `@plotline.so`
-  (Google IdP). Origin TLS = Full (strict).
+- Cloudflare Access app over `*.preview.<domain>`: allow only your org's email
+  domain (Google IdP). Origin TLS = Full (strict).
 
 **GitHub**
 - Secrets: `PREVIEW_SSH_HOST`, `PREVIEW_SSH_USER`, `PREVIEW_SSH_KEY`,

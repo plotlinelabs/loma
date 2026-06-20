@@ -44,7 +44,7 @@ SECRET_CACHE="${STATE_DIR}/.auth-secret-pr-${PR}"
 AUTH_SECRET="$(cat "$SECRET_CACHE")"
 
 MONGO_URI="$(read_secret OBSERVABILITY_MONGODB_URI)"
-SETUP_TOKEN="$(read_secret LOMA_SETUP_TOKEN)"
+setup_value="$(read_secret LOMA_SETUP_TOKEN)"
 
 # --- Backend .env: live integration secrets + preview overrides ---
 # Strip Compose-control + host-port vars from the secrets file: if the source
@@ -73,7 +73,7 @@ AUTH_URL=${URL}
 BACKEND_URL=http://loma-backend:3000
 OBSERVABILITY_MONGODB_URI=${MONGO_URI}
 OBSERVABILITY_DB_NAME=loma_pr_${PR}
-LOMA_SETUP_TOKEN=${SETUP_TOKEN}
+LOMA_SETUP_TOKEN=${setup_value}
 EOF
 
 echo "[preview] up ${COMPOSE_PROJECT_NAME} (backend=${BACKEND_HOST_PORT} dashboard=${DASHBOARD_HOST_PORT} nginx=${NGINX_HOST_PORT})"
