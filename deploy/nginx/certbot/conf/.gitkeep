@@ -1,0 +1,1 @@
+# Keeps the Let's Encrypt config/cert dir in git (populated by certbot in Phase 2).

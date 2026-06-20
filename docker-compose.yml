@@ -4,8 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile
     env_file: .env
+    # Loopback only — reached externally through the nginx proxy, not directly.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - loma-skill-assets:/var/lib/loma/skill-assets
       # Mount the real .env so the dashboard Environment admin (/api/env) can read & edit it.
@@ -23,11 +24,37 @@ services:
     env_file: ./dashboard/.env
     environment:
       BACKEND_URL: http://loma-backend:3000
+    # Loopback only — reached externally through the nginx proxy, not directly.
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     depends_on:
       - loma-backend
     restart: unless-stopped
+
+  # Single external entrypoint. Serves the dashboard on :80 and routes /api +
+  # webhooks to the backend over the internal network, so :3000/:3001 need not
+  # be exposed. For HTTPS on :443 see deploy/nginx/README.md.
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./deploy/nginx/certbot/www:/var/www/certbot:ro
+      - ./deploy/nginx/certbot/conf:/etc/letsencrypt:ro
+    depends_on:
+      - loma-backend
+      - loma-dashboard
+    restart: unless-stopped
+
+  # Phase 2 (HTTPS): obtain/renew Let's Encrypt certs via the webroot challenge.
+  # Disabled by default (only runs with `--profile certbot`). See deploy/nginx/README.md.
+  certbot:
+    image: certbot/certbot
+    profiles: ["certbot"]
+    volumes:
+      - ./deploy/nginx/certbot/conf:/etc/letsencrypt
+      - ./deploy/nginx/certbot/www:/var/www/certbot
 
 volumes:
   loma-skill-assets:
