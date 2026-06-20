@@ -55,17 +55,17 @@ function getMongoClient(): Promise<MongoClient> {
   return mongoClientPromise;
 }
 
-async function getUsersCollection() {
+export async function getUsersCollection() {
   const client = await getMongoClient();
   const dbName = process.env.OBSERVABILITY_DB_NAME || "loma_observability";
   return client.db(dbName).collection("users");
 }
 
-function normalizeEmail(value: unknown): string {
+export function normalizeEmail(value: unknown): string {
   return String(value || "").trim().toLowerCase();
 }
 
-function hashPassword(password: string): LocalAuth {
+export function hashPassword(password: string): LocalAuth {
   const salt = randomBytes(16).toString("base64url");
   const passwordHash = scryptSync(password, salt, 64).toString("base64url");
   return {
@@ -128,6 +128,7 @@ async function authorizeLocal(credentials: Partial<Record<string, unknown>> | un
     name: email.split("@")[0] || email,
     avatar: null,
     system_role: "admin",
+    status: "active",
     tool_assignments: [],
     theme_preference: "system",
     claude_pool_enabled: true,

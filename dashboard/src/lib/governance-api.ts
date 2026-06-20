@@ -13,6 +13,7 @@ export interface User {
   name: string;
   avatar: string;
   system_role: SystemRole;
+  status?: "active" | "pending" | "rejected";
   tool_assignments: Record<string, ToolAssignment>;
   theme_preference?: "light" | "dark" | "system";
   pinned_conversations?: Array<{ conversation_id: string; pinned_at: string }>;
@@ -86,7 +87,7 @@ export async function fetchUser(email: string): Promise<{ user: User; teams: Tea
 
 export async function updateUser(
   email: string,
-  updates: Partial<Pick<User, "system_role" | "tool_assignments" | "name" | "claude_pool_enabled">>,
+  updates: Partial<Pick<User, "system_role" | "tool_assignments" | "name" | "claude_pool_enabled" | "status">>,
 ): Promise<User> {
   const res = await fetch(`${API_BASE}/api/governance/users/${encodeURIComponent(email)}`, {
     method: "PATCH",

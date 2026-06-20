@@ -71,17 +71,24 @@ async def auth_middleware(request, handler):
 
         # Look up user from DB to get system role
         db = get_db()
-        if db is not None:
-            user = await db.users.find_one({"email": user_email})
-            request["user"] = user
-            if using_preview_fallback:
-                request["system_role"] = _DEFAULT_ROLE
-            else:
-                request["system_role"] = (
-                    user.get("system_role", _DEFAULT_ROLE) if user else _DEFAULT_ROLE
-                )
-        else:
-            request["user"] = None
+        user = await db.users.find_one({"email": user_email}) if db is not None else None
+        request["user"] = user
+        if using_preview_fallback or db is None:
             request["system_role"] = _DEFAULT_ROLE
+            request["user_status"] = "active"
+        else:
+            request["system_role"] = (
+                user.get("system_role", _DEFAULT_ROLE) if user else _DEFAULT_ROLE
+            )
+            # Legacy users (no status field) are treated as active.
+            request["user_status"] = user.get("status", "active") if user else "active"
+
+        # Gate users awaiting admin approval: they may only read their own profile
+        # (/api/governance/me, so the dashboard can show the pending screen). Every
+        # other API call is denied until an admin approves them.
+        if request.get("user_status") == "pending" and request.path != "/api/governance/me":
+            return web.json_response(
+                {"error": "Account pending admin approval"}, status=403,
+            )
 
     return await handler(request)

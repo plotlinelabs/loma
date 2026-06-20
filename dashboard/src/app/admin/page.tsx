@@ -639,6 +639,9 @@ export default function AdminPage() {
                   <th className="py-3 px-2 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-wider min-w-[100px]">
                     Role
                   </th>
+                  <th className="py-3 px-2 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-wider min-w-[160px]">
+                    Status
+                  </th>
                   <th className="py-3 px-2 text-center min-w-[80px]">
                     <div className="inline-flex flex-col items-center gap-1">
                       <div className="w-6 h-6 rounded-md flex items-center justify-center bg-amber-50">
@@ -720,6 +723,48 @@ export default function AdminPage() {
                         <option value="analyst">Analyst</option>
                         <option value="chatter">Chatter</option>
                       </select>
+                    </td>
+                    {/* Approval status */}
+                    <td className="py-3 px-2 text-center">
+                      {(user.status ?? "active") === "pending" ? (
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium">Pending</span>
+                          <button
+                            onClick={async () => {
+                              const prev = user.status ?? "active";
+                              setUsers((us) => us.map((u) => (u.email === user.email ? { ...u, status: "active" } : u)));
+                              try {
+                                await updateUser(user.email, { status: "active" });
+                              } catch (err) {
+                                console.error("Failed to approve user:", err);
+                                setUsers((us) => us.map((u) => (u.email === user.email ? { ...u, status: prev } : u)));
+                              }
+                            }}
+                            className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-600 text-white font-medium hover:bg-emerald-700 transition-colors"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const prev = user.status ?? "active";
+                              setUsers((us) => us.map((u) => (u.email === user.email ? { ...u, status: "rejected" } : u)));
+                              try {
+                                await updateUser(user.email, { status: "rejected" });
+                              } catch (err) {
+                                console.error("Failed to reject user:", err);
+                                setUsers((us) => us.map((u) => (u.email === user.email ? { ...u, status: prev } : u)));
+                              }
+                            }}
+                            className="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium hover:bg-red-100 transition-colors"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ) : (user.status ?? "active") === "rejected" ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-500 font-medium">Rejected</span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-medium">Active</span>
+                      )}
                     </td>
                     {/* Claude connection + pool toggle */}
                     <td className="py-3 px-2 text-center">

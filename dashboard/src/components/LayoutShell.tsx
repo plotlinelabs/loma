@@ -2,12 +2,15 @@
 
 import { useState, useCallback, Suspense } from "react";
 import { usePathname } from "next/navigation";
+import { signOut } from "next-auth/react";
 import Sidebar from "./Sidebar";
 import CrosscutIcon from "./CrosscutIcon";
+import { useUser } from "../lib/UserContext";
 
 export default function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isLogin = pathname === "/login";
+  const { user, loading } = useUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const toggleSidebar = useCallback(() => setSidebarOpen((prev) => !prev), []);
@@ -15,6 +18,30 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
 
   if (isLogin) {
     return <>{children}</>;
+  }
+
+  // Users awaiting admin approval can't access the app yet.
+  if (!loading && user?.status === "pending") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="bg-surface border border-gray-200 rounded-2xl p-8 max-w-sm w-full text-center shadow-sm">
+          <div className="mb-4 flex justify-center">
+            <CrosscutIcon size={36} />
+          </div>
+          <h1 className="text-xl font-semibold text-gray-900 mb-2">Awaiting approval</h1>
+          <p className="text-sm text-gray-500 mb-6">
+            Your account is pending admin approval. You&apos;ll get access once an admin
+            approves you.
+          </p>
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="w-full rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
