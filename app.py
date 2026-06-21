@@ -38,6 +38,7 @@ from api.claude_auth_routes import setup_claude_auth_routes
 from api.file_routes import setup_file_routes
 from api.integration_routes import setup_integration_routes
 from api.prompt_settings_routes import setup_prompt_settings_routes
+from api.dev_environment_routes import setup_dev_environment_routes
 from recovery import start_recovery_loop
 from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
@@ -124,6 +125,7 @@ async def main():
     setup_file_routes(webhook_app)
     setup_integration_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
+    setup_dev_environment_routes(webhook_app)
     runner = web.AppRunner(webhook_app)
     await runner.setup()
     port = int(os.environ.get("WEBHOOK_PORT", "3000"))
