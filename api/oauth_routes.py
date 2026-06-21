@@ -30,6 +30,29 @@ logger = logging.getLogger(__name__)
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 
 
+def _external_base_url(request: web.Request) -> str:
+    """Return the public origin used for provider callbacks."""
+    configured = (
+        os.environ.get("APP_BASE_URL", "").strip()
+        or os.environ.get("PUBLIC_BASE_URL", "").strip()
+    )
+    if configured:
+        return configured.rstrip("/")
+
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    host = request.headers.get("X-Forwarded-Host", request.host)
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def _oauth_redirect_uri(request: web.Request, provider: str) -> str:
+    """Return the exact redirect URI to send to OAuth providers."""
+    env_key = f"{provider.upper()}_OAUTH_REDIRECT_URI"
+    configured = os.environ.get(env_key, "").strip()
+    if configured:
+        return configured
+    return f"{_external_base_url(request)}/api/oauth/{provider}/callback"
+
+
 def _serialize(doc):
     """Make a MongoDB document JSON-serializable."""
     if doc is None:
@@ -67,11 +90,11 @@ async def handle_google_authorize(request: web.Request) -> web.Response:
         return web.json_response({"error": "User not authenticated"}, status=401)
 
     client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
-    redirect_uri = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "")
+    redirect_uri = _oauth_redirect_uri(request, "google")
 
-    if not client_id or not redirect_uri:
+    if not client_id:
         return web.json_response(
-            {"error": "Google OAuth not configured (missing client ID or redirect URI)"},
+            {"error": "Google OAuth not configured (missing client ID)"},
             status=503,
         )
 
@@ -121,7 +144,10 @@ async def handle_google_callback(request: web.Request) -> web.Response:
     # Exchange code for tokens
     client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
     client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
-    redirect_uri = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "")
+    redirect_uri = _oauth_redirect_uri(request, "google")
+
+    if not client_id or not client_secret:
+        return _callback_error("Google OAuth is not configured")
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -246,11 +272,11 @@ async def handle_slack_authorize(request: web.Request) -> web.Response:
         return web.json_response({"error": "User not authenticated"}, status=401)
 
     client_id = os.environ.get("SLACK_OAUTH_CLIENT_ID", "")
-    redirect_uri = os.environ.get("SLACK_OAUTH_REDIRECT_URI", "")
+    redirect_uri = _oauth_redirect_uri(request, "slack")
 
-    if not client_id or not redirect_uri:
+    if not client_id:
         return web.json_response(
-            {"error": "Slack OAuth not configured (missing client ID or redirect URI)"},
+            {"error": "Slack OAuth not configured (missing client ID)"},
             status=503,
         )
 
@@ -298,7 +324,10 @@ async def handle_slack_callback(request: web.Request) -> web.Response:
     # Exchange code for tokens
     client_id = os.environ.get("SLACK_OAUTH_CLIENT_ID", "")
     client_secret = os.environ.get("SLACK_OAUTH_CLIENT_SECRET", "")
-    redirect_uri = os.environ.get("SLACK_OAUTH_REDIRECT_URI", "")
+    redirect_uri = _oauth_redirect_uri(request, "slack")
+
+    if not client_id or not client_secret:
+        return _callback_error("Slack OAuth is not configured", provider="slack")
 
     try:
         async with aiohttp.ClientSession() as session:

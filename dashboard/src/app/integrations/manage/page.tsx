@@ -402,14 +402,18 @@ export default function IntegrationsPage() {
       const h = 600;
       const left = window.screenX + (window.outerWidth - w) / 2;
       const top = window.screenY + (window.outerHeight - h) / 2;
-      window.open(
+      const popup = window.open(
         url,
         "google-oauth",
         `width=${w},height=${h},left=${left},top=${top},popup=yes`,
       );
+      if (!popup) {
+        setConnecting(false);
+        setError("Popup blocked. Allow popups for this site and try again.");
+      }
     } catch (e) {
       setConnecting(false);
-      setError("Failed to start OAuth flow");
+      setError(e instanceof Error ? e.message : "Failed to start OAuth flow");
     }
   };
 
@@ -423,7 +427,7 @@ export default function IntegrationsPage() {
       await disconnectGoogle();
       await loadConnections();
     } catch (e) {
-      setError("Failed to disconnect");
+      setError(e instanceof Error ? e.message : "Failed to disconnect");
     } finally {
       setDisconnecting(false);
     }
@@ -438,14 +442,18 @@ export default function IntegrationsPage() {
       const h = 700;
       const left = window.screenX + (window.outerWidth - w) / 2;
       const top = window.screenY + (window.outerHeight - h) / 2;
-      window.open(
+      const popup = window.open(
         url,
         "slack-oauth",
         `width=${w},height=${h},left=${left},top=${top},popup=yes`,
       );
+      if (!popup) {
+        setConnectingSlack(false);
+        setError("Popup blocked. Allow popups for this site and try again.");
+      }
     } catch (e) {
       setConnectingSlack(false);
-      setError("Failed to start Slack OAuth flow");
+      setError(e instanceof Error ? e.message : "Failed to start Slack OAuth flow");
     }
   };
 
@@ -459,7 +467,7 @@ export default function IntegrationsPage() {
       await disconnectSlack();
       await loadConnections();
     } catch (e) {
-      setError("Failed to disconnect Slack");
+      setError(e instanceof Error ? e.message : "Failed to disconnect Slack");
     } finally {
       setDisconnectingSlack(false);
     }
