@@ -146,6 +146,18 @@ def verify_oauth_state(state: str, max_age: int = 600) -> str | None:
 # ── Token storage ─────────────────────────────────────────────────────────
 
 
+async def _ensure_tool_assignments_mapping(db, user_email: str) -> None:
+    """Normalize legacy user rows before nested tool assignment updates."""
+    user = await db.users.find_one({"email": user_email}, {"tool_assignments": 1})
+    if user is None:
+        return
+    if not isinstance(user.get("tool_assignments", {}), dict):
+        await db.users.update_one(
+            {"email": user_email},
+            {"$set": {"tool_assignments": {}}},
+        )
+
+
 async def store_google_tokens(
     db,
     user_email: str,
@@ -176,6 +188,7 @@ async def store_google_tokens(
     )
 
     # Update user's tool_assignments status
+    await _ensure_tool_assignments_mapping(db, user_email)
     await db.users.update_one(
         {"email": user_email},
         {"$set": {
@@ -277,6 +290,7 @@ async def revoke_google_tokens(db, user_email: str) -> bool:
 
     # Update user status
     now = datetime.now(timezone.utc)
+    await _ensure_tool_assignments_mapping(db, user_email)
     await db.users.update_one(
         {"email": user_email},
         {"$set": {
@@ -319,6 +333,7 @@ async def _refresh_google_token(refresh_token: str) -> dict | None:
 async def _mark_expired(db, user_email: str) -> None:
     """Mark a user's Google OAuth status as expired."""
     now = datetime.now(timezone.utc)
+    await _ensure_tool_assignments_mapping(db, user_email)
     await db.users.update_one(
         {"email": user_email},
         {"$set": {
@@ -362,6 +377,7 @@ async def store_slack_tokens(
     )
 
     # Update user's tool_assignments status
+    await _ensure_tool_assignments_mapping(db, user_email)
     await db.users.update_one(
         {"email": user_email},
         {"$set": {
@@ -402,6 +418,7 @@ async def revoke_slack_tokens(db, user_email: str) -> bool:
 
     # Update user status
     now = datetime.now(timezone.utc)
+    await _ensure_tool_assignments_mapping(db, user_email)
     await db.users.update_one(
         {"email": user_email},
         {"$set": {
