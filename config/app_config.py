@@ -20,6 +20,9 @@ LOMA_SKILL_ASSET_DIR = os.environ.get("LOMA_SKILL_ASSET_DIR", "/var/lib/loma/ski
 
 LOMA_ENABLE_SCHEDULER = env_flag("LOMA_ENABLE_SCHEDULER", default=False)
 LOMA_ENABLE_WEBHOOKS = env_flag("LOMA_ENABLE_WEBHOOKS", default=True)
+# Seed generic starter skills on first run, only when the skills collection is
+# empty. Existing deployments are never touched; disable with =false.
+LOMA_SEED_SKILLS = env_flag("LOMA_SEED_SKILLS", default=True)
 LOMA_ENABLE_METRICS = env_flag("LOMA_ENABLE_METRICS", default=False)
 # Slack Socket Mode consumer. Defaults to on so existing deployments are
 # unchanged; preview/ephemeral stacks set this to false (or omit SLACK_APP_TOKEN)

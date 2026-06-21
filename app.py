@@ -24,7 +24,8 @@ from webhooks.pylon import setup_pylon_webhook_routes
 from webhooks.hubspot import setup_hubspot_webhook_routes
 from webhooks.github import setup_github_webhook_routes
 from webhooks.incoming import setup_incoming_webhook_routes
-from observability.db import init_observability
+from observability.db import init_observability, get_db
+from api.skill_seed import seed_default_skills
 from api.routes import setup_api_routes
 from api.auth_middleware import auth_middleware
 from api.governance_routes import setup_governance_routes
@@ -67,6 +68,8 @@ async def log_404_middleware(request, handler):
 async def main():
     # Initialize observability MongoDB
     await init_observability()
+    # First-run only: seed generic starter skills into an empty deployment.
+    await seed_default_skills(get_db())
     await refresh_prompt_settings_from_db()
     await refresh_loma_skill_index_from_db()
 
