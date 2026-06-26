@@ -55,6 +55,11 @@ server {
         proxy_pass http://loma_dashboard/api/whoami;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
+        # auth_request is a plain HTTP subrequest, even when the original request
+        # is a WebSocket upgrade. Do not forward hop-by-hop upgrade headers to
+        # NextAuth's /api/whoami endpoint.
+        proxy_set_header Upgrade "";
+        proxy_set_header Connection "";
     }
 
     # NextAuth and self-signup are served by the dashboard (no identity needed).
