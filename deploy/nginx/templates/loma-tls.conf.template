@@ -70,6 +70,16 @@ server {
     location /api/ {
         auth_request /_whoami;
         auth_request_set $auth_email $upstream_http_x_auth_email;
+        # This location sets X-User-Email, so nginx will not inherit the
+        # proxy_set_header directives from the server block. Repeat the common
+        # headers here, including WebSocket upgrade headers for /api/terminal/ws.
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
         proxy_set_header X-User-Email $auth_email;   # overwrites any client value
         proxy_pass http://loma_backend;
     }

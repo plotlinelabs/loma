@@ -9,8 +9,14 @@ echo "Deploying $(git rev-parse --short HEAD)"
 
 docker compose up -d --build
 
-# The nginx reverse-proxy config is bind-mounted, so `up` may not reload it on a
-# config-only change. Reload it explicitly (no-op if nginx was just recreated).
+# The nginx reverse-proxy config is bind-mounted. In TLS mode the nginx image
+# renders /etc/nginx/templates/*.template into /etc/nginx/conf.d/ at container
+# start, so a reload is not enough for template-only changes. Force-recreate the
+# proxy after the stack is up; this is quick and preserves backend/dashboard.
+docker compose up -d --force-recreate --no-deps nginx
+
+# Reload after validation as a cheap safety net for plain bind-mounted config
+# changes and to fail loudly before the health check if the config is invalid.
 if docker compose exec -T nginx nginx -t >/dev/null 2>&1; then
   docker compose exec -T nginx nginx -s reload || true
 fi
