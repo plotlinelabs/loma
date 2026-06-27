@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { basePath, fetchSkills } from "../../lib/api";
-import type { Skill } from "../../lib/api";
+import { useEffect, useState, useMemo, useCallback, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { basePath, fetchSkills, fetchSkill } from "../../lib/api";
+import type { Skill, SkillDetailResponse, SkillFile } from "../../lib/api";
+import SkillTreeSidebar from "./components/SkillTreeSidebar";
+import SkillDetailPane from "./components/SkillDetailPane";
 
 function chatUrl(prompt: string): string {
   return `${basePath}/chat?prompt=${encodeURIComponent(prompt)}`;
@@ -23,105 +25,165 @@ function buildCreateSkillPrompt(): string {
   ].join("\n");
 }
 
-function formatUpdated(value?: string): string {
-  if (!value) return "-";
-  return new Date(value).toLocaleString();
-}
+function SkillsPageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-export default function SkillsPage() {
+  const selectedSkillSlug = searchParams.get("skill");
+  const selectedFilePath = searchParams.get("file");
+
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [skillDetail, setSkillDetail] = useState<SkillDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const createPromptUrl = useMemo(() => chatUrl(buildCreateSkillPrompt()), []);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(
+    new Set(["workspace", "personal", "system"])
+  );
+  const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    setLoading(true);
+  const createUrl = useMemo(() => chatUrl(buildCreateSkillPrompt()), []);
+
+  const skillFiles: Record<string, SkillFile[]> = useMemo(() => {
+    const map: Record<string, SkillFile[]> = {};
+    for (const skill of skills) {
+      const slug = skill.slug || skill.name;
+      map[slug] = skill.file_details || [];
+    }
+    return map;
+  }, [skills]);
+
+  const loadSkills = useCallback(() => {
     fetchSkills()
       .then((data) => setSkills(data.skills))
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load skills"))
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    setLoading(true);
+    loadSkills();
+  }, [loadSkills]);
+
+  useEffect(() => {
+    if (!selectedSkillSlug) {
+      setSkillDetail(null);
+      return;
+    }
+    setDetailLoading(true);
+    fetchSkill(selectedSkillSlug)
+      .then(setSkillDetail)
+      .catch(() => setSkillDetail(null))
+      .finally(() => setDetailLoading(false));
+  }, [selectedSkillSlug]);
+
+  // Auto-expand the section and skill tree when a skill is selected via URL
+  useEffect(() => {
+    if (selectedSkillSlug) {
+      const skill = skills.find((s) => (s.slug || s.name) === selectedSkillSlug);
+      if (skill?.scope) {
+        setExpandedSections((prev) => new Set([...prev, skill.scope!]));
+      }
+      setExpandedSkills((prev) => new Set([...prev, selectedSkillSlug]));
+    }
+  }, [selectedSkillSlug, skills]);
+
+  function updateUrl(skill: string | null, file?: string | null) {
+    const params = new URLSearchParams();
+    if (skill) params.set("skill", skill);
+    if (file) params.set("file", file);
+    const qs = params.toString();
+    router.replace(`/skills${qs ? `?${qs}` : ""}`, { scroll: false });
+  }
+
+  function handleSelectSkill(slug: string, filePath?: string) {
+    updateUrl(slug, filePath || null);
+  }
+
+  function handleToggleSection(section: string) {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      return next;
+    });
+  }
+
+  function handleToggleSkill(slug: string) {
+    setExpandedSkills((prev) => {
+      const next = new Set(prev);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  }
+
+  function handleNavigate(level: "root" | "skill") {
+    if (level === "root") {
+      updateUrl(null);
+    } else if (level === "skill") {
+      updateUrl(selectedSkillSlug, null);
+    }
+  }
+
+  function handleSkillUpdated() {
+    if (selectedSkillSlug) {
+      fetchSkill(selectedSkillSlug)
+        .then(setSkillDetail)
+        .catch(() => {});
+    }
+    loadSkills();
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-full">
+        <div className="w-[280px] flex-shrink-0 border-r border-gray-200 bg-gray-50/50 animate-pulse" />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-sm text-gray-400">Loading skills...</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-5 animate-fade-in-up">
-      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
-        <div>
-          <h1 className="text-lg md:text-xl font-semibold text-gray-900">Skills</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Company playbooks and supporting files the agent can search, read, and update through chat.
-          </p>
-        </div>
-        <Link
-          href={createPromptUrl}
-          className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg bg-brand-500 text-gray-950 hover:bg-brand-400 transition-colors"
-        >
-          Create Skill in Chat
-        </Link>
-      </div>
-
-      {error && (
-        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-          {error}
-        </div>
-      )}
-
-      <div className="bg-surface border border-gray-200 rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50/50">
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Skill</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Description</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Tags</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Files</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Updated</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {loading ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">Loading skills...</td>
-              </tr>
-            ) : skills.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">
-                  No skills yet. Create one in chat to make company knowledge available to the agent.
-                </td>
-              </tr>
-            ) : (
-              skills.map((skill) => {
-                const slug = skill.slug || skill.name;
-                const files = skill.file_details || [];
-                const assetCount = files.filter((file) => file.kind === "local_asset").length;
-                const textCount = files.filter((file) => file.kind === "inline_text").length;
-                return (
-                  <tr key={slug} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-5 py-4 align-top">
-                      <Link href={`/skills/${slug}`} className="text-sm font-semibold text-gray-900 hover:text-brand-700">
-                        {skill.name || slug}
-                      </Link>
-                      <div className="text-xs text-gray-400 font-mono mt-1">{slug}</div>
-                    </td>
-                    <td className="px-5 py-4 align-top text-sm text-gray-500 max-w-xl">{skill.description || "-"}</td>
-                    <td className="px-5 py-4 align-top">
-                      {skill.tags?.length ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {skill.tags.map((tag) => (
-                            <span key={tag} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-md">{tag}</span>
-                          ))}
-                        </div>
-                      ) : <span className="text-xs text-gray-400">-</span>}
-                    </td>
-                    <td className="px-5 py-4 align-top text-xs text-gray-500">
-                      {textCount} text · {assetCount} asset{assetCount === 1 ? "" : "s"}
-                    </td>
-                    <td className="px-5 py-4 align-top text-xs text-gray-400">{formatUpdated(skill.updated_at)}</td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+    <div className="flex h-full">
+      <SkillTreeSidebar
+        skills={skills}
+        selectedSkillSlug={selectedSkillSlug}
+        selectedFilePath={selectedFilePath}
+        expandedSections={expandedSections}
+        expandedSkills={expandedSkills}
+        skillFiles={skillFiles}
+        onSelectSkill={handleSelectSkill}
+        onToggleSection={handleToggleSection}
+        onToggleSkill={handleToggleSkill}
+        createUrl={createUrl}
+      />
+      <SkillDetailPane
+        skill={skillDetail}
+        selectedFilePath={selectedFilePath}
+        loading={detailLoading}
+        createUrl={createUrl}
+        onNavigate={handleNavigate}
+        onSkillUpdated={handleSkillUpdated}
+      />
     </div>
+  );
+}
+
+export default function SkillsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full">
+          <div className="w-[280px] flex-shrink-0 border-r border-gray-200 bg-gray-50/50 animate-pulse" />
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-sm text-gray-400">Loading skills...</div>
+          </div>
+        </div>
+      }
+    >
+      <SkillsPageInner />
+    </Suspense>
   );
 }

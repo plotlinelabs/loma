@@ -68,7 +68,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
       </div>
 
       <main className="ml-0 md:ml-[260px] h-screen pt-14 md:pt-0 flex flex-col">
-        <div className="px-4 md:px-6 lg:px-8 py-4 md:py-6 flex-1 w-full">{children}</div>
+        <div className={pathname.startsWith("/skills") ? "flex-1 w-full h-full overflow-hidden" : "px-4 md:px-6 lg:px-8 py-4 md:py-6 flex-1 w-full"}>{children}</div>
       </main>
     </>
   );

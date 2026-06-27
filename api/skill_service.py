@@ -180,7 +180,8 @@ def _skill_metadata_from_files(slug: str, files: list[dict[str, Any]]) -> dict[s
         tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
     if not isinstance(tags, list):
         tags = []
-    return {"name": name, "description": description, "tags": [str(t) for t in tags]}
+    scope = frontmatter.get("scope") or ""
+    return {"name": name, "description": description, "tags": [str(t) for t in tags], "scope": scope}
 
 
 def format_skill_dump_markdown(skill: dict[str, Any]) -> str:
@@ -225,6 +226,7 @@ def format_skill_dump_markdown(skill: dict[str, Any]) -> str:
 async def ensure_skill_indexes(db) -> None:
     await db.skills.create_index("slug", unique=True)
     await db.skills.create_index("enabled")
+    await db.skills.create_index("scope")
     await db.skills.create_index([("updated_at", -1)])
     await db.skill_files.create_index([("skill_slug", 1), ("path", 1)], unique=True)
     await db.skill_files.create_index("content_hash")
@@ -247,6 +249,7 @@ async def get_skill(db, slug: str) -> dict[str, Any]:
         raise SkillError("Skill not found", status=404)
     files = await _load_files(db, slug)
     skill_doc = serialize_doc(skill) or {}
+    skill_doc["scope"] = skill_doc.get("scope") or ("system" if skill_doc.get("created_by") in ("system", "import") else "personal")
     skill_doc["files"] = files
     skill_md = next((f for f in files if f["path"] == "SKILL.md"), None)
     skill_doc["content"] = skill_md.get("content", "") if skill_md else ""
@@ -280,6 +283,7 @@ async def list_skills(db) -> list[dict[str, Any]]:
         doc["file_details"] = files
         doc["has_extra_files"] = bool(doc["files"])
         doc["name"] = doc.get("name") or doc["slug"]
+        doc["scope"] = doc.get("scope") or ("system" if doc.get("created_by") in ("system", "import") else "personal")
     return docs
 
 
@@ -355,14 +359,20 @@ async def upsert_skill(
     slug = slugify(slug)
     validate_skill_package(files)
     metadata = _skill_metadata_from_files(slug, files)
+    scope = metadata.pop("scope", "") or ""
+    if not scope:
+        scope = "system" if actor in ("system", "import") else "personal"
     timestamp = now_utc()
     existing = await db.skills.find_one({"slug": slug})
+    if existing and existing.get("scope"):
+        scope = existing["scope"]
     await db.skills.update_one(
         {"slug": slug},
         {
             "$set": {
                 **metadata,
                 "slug": slug,
+                "scope": scope,
                 "enabled": True,
                 "updated_at": timestamp,
                 "updated_by": actor,
