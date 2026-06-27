@@ -234,6 +234,8 @@ export interface Skill {
   files: string[];
   file_details?: SkillFile[];
   updated_at?: string;
+  created_by?: string;
+  scope?: "system" | "personal" | "workspace";
 }
 
 export interface SkillFile {
@@ -255,6 +257,8 @@ export interface SkillDetailResponse {
   files: SkillFile[];
   assets?: SkillFile[];
   updated_at?: string;
+  created_by?: string;
+  scope?: "system" | "personal" | "workspace";
 }
 
 export async function fetchSkills(): Promise<{ skills: Skill[] }> {
