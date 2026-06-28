@@ -83,7 +83,7 @@ def extract_thread_id(flow: dict, payload: dict) -> str | None:
             return str(value)
 
     # 2. Auto-detect for known webhook sources
-    for path in ("data.issue_id", "issue.id", "issue_id", "data.id"):
+    for path in ("data.issue_id", "issue.id", "issue_id", "data.issueId", "data.id"):
         value = _resolve_jsonpath(payload, path)
         if value is not None:
             return str(value)
