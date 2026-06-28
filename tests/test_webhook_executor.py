@@ -127,6 +127,24 @@ class TestExtractThreadId:
         payload = {"data": {"issue_id": "specific", "id": "generic"}}
         assert extract_thread_id(flow, payload) == "specific"
 
+    def test_autodetect_data_issue_id_camelcase(self):
+        """camelCase data.issueId is auto-detected."""
+        flow = {}
+        payload = {"data": {"issueId": "camel-123"}}
+        assert extract_thread_id(flow, payload) == "camel-123"
+
+    def test_priority_data_issueId_over_data_id(self):
+        """data.issueId should take precedence over data.id."""
+        flow = {}
+        payload = {"data": {"issueId": "specific", "id": "generic"}}
+        assert extract_thread_id(flow, payload) == "specific"
+
+    def test_priority_snake_case_over_data_issueId(self):
+        """Existing snake_case data.issue_id still beats camelCase data.issueId."""
+        flow = {}
+        payload = {"data": {"issue_id": "snake", "issueId": "camel"}}
+        assert extract_thread_id(flow, payload) == "snake"
+
 
 # ---------------------------------------------------------------------------
 # _build_conversation_context
