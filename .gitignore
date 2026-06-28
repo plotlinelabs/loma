@@ -23,3 +23,8 @@ private/
 .mcp.json
 .idea/
 .pytest_cache/
+
+# rca_agent.py generated caches / run artifacts (regenerated via --rebuild-index)
+rca_index.json
+rca_examples.json
+rca_runlog.jsonl
