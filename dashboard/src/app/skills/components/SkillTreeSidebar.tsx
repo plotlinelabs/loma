@@ -65,7 +65,7 @@ export default function SkillTreeSidebar({
     <div className="w-[280px] flex-shrink-0 border-r border-border bg-muted/30 flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <h2 className="text-[13px] font-heading font-semibold text-foreground">Skills</h2>
+        <h2 className="text-[13px] font-semibold text-foreground">Skills</h2>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon-xs">
