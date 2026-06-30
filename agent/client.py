@@ -18,6 +18,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeSDKClient,
     ResultMessage,
+    StreamEvent,
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
@@ -916,7 +917,25 @@ async def stream_agent(
         try:
             await client.query(full_prompt)
 
+            streamed_in_turn = False
+            streamed_first_chunk = False
+
             async for message in client.receive_response():
+                if isinstance(message, StreamEvent) and include_steps:
+                    evt = message.event
+                    if evt.get("type") == "content_block_delta":
+                        delta = evt.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            chunk = delta.get("text", "")
+                            if chunk:
+                                if not streamed_first_chunk:
+                                    yield {"type": "text", "text": chunk}
+                                    streamed_first_chunk = True
+                                else:
+                                    yield {"type": "text", "text": chunk, "append": True}
+                                streamed_in_turn = True
+                    continue
+
                 if isinstance(message, AssistantMessage):
                     # Check for rate limit / billing errors before processing
                     if message.error in ("rate_limit", "billing_error", "authentication_error"):
@@ -946,6 +965,10 @@ async def stream_agent(
                     if include_steps:
                         yield {"type": "turn", "turn_number": turn_count}
 
+                    text_already_streamed = streamed_in_turn
+                    streamed_in_turn = False
+                    streamed_first_chunk = False
+
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             text = block.text.strip()
@@ -961,11 +984,9 @@ async def stream_agent(
                                 if include_steps and source == "dashboard":
                                     detected = _detect_artifacts(text)
                                     if detected:
-                                        # Yield the text first (frontend will show it as a message)
-                                        yield text
-                                        # Then yield each artifact event
+                                        if not text_already_streamed:
+                                            yield text
                                         for art in detected:
-                                            # Skip if we already emitted this artifact (same content hash)
                                             if art["artifact_id"] in emitted_artifact_ids:
                                                 logger.info("[ARTIFACT SKIP] id=%s already emitted", art["artifact_id"])
                                                 continue
@@ -998,7 +1019,8 @@ async def stream_agent(
                                 if include_steps and source == "dashboard":
                                     file_paths = _detect_file_paths(text)
                                     if file_paths:
-                                        yield text  # yield text first
+                                        if not text_already_streamed:
+                                            yield text
                                         for fpath in file_paths:
                                             if fpath in emitted_file_paths:
                                                 continue
@@ -1023,7 +1045,8 @@ async def stream_agent(
                                                 logger.warning("[FILE] Failed to register %s: %s", fpath, fe)
                                         continue  # skip the plain yield below
 
-                                yield text
+                                if not text_already_streamed:
+                                    yield text
                         elif isinstance(block, ToolUseBlock):
                             logger.info("[TOOL CALL] %s (id: %s)", block.name, block.id)
                             logger.info("[TOOL INPUT] %s", _truncate_json(block.input))

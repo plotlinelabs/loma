@@ -349,6 +349,7 @@ class ClientPool:
             setting_sources=["project"],
             cwd=str(Path(__file__).parent.parent),
             max_buffer_size=10 * 1024 * 1024,
+            include_partial_messages=True,
         )
 
     async def _create_client(self, account: dict, model_override: str | None = None) -> ClaudeSDKClient:
