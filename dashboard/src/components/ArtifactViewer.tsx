@@ -236,7 +236,7 @@ function MermaidRenderer({ content }: { content: string }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-white rounded-b-lg">
-        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+        <div className="flex items-center gap-2 text-muted-foreground text-[13px]">
           <RiLoader4Line size={16} className="animate-spin" />
           Rendering diagram...
         </div>
@@ -409,7 +409,7 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-white rounded-b-lg">
-        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+        <div className="flex items-center gap-2 text-muted-foreground text-[13px]">
           <RiLoader4Line size={16} className="animate-spin" />
           Converting document...
         </div>
@@ -448,7 +448,7 @@ function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
       </div>
       <div className="text-center">
         <h3 className="text-lg font-medium text-foreground mb-1">{title}</h3>
-        <p className="text-sm text-muted-foreground">PowerPoint files cannot be previewed in the browser.</p>
+        <p className="text-[13px] text-muted-foreground">PowerPoint files cannot be previewed in the browser.</p>
       </div>
       <Button asChild variant="default" className="bg-accent-200 hover:bg-accent-300 text-accent-on">
         <a href={fileUrl} download>
@@ -471,7 +471,7 @@ function FileDownloadRenderer({ fileUrl, title, fileSize }: { fileUrl: string; t
       <div className="text-center">
         <h3 className="text-lg font-medium text-foreground mb-1">{title}</h3>
         {fileSize != null && (
-          <p className="text-sm text-muted-foreground">{formatFileSize(fileSize)}</p>
+          <p className="text-[13px] text-muted-foreground">{formatFileSize(fileSize)}</p>
         )}
       </div>
       <Button asChild variant="default" className="bg-accent-200 hover:bg-accent-300 text-accent-on">
@@ -589,7 +589,7 @@ export default function ArtifactViewer({
             {getLanguageLabel(artifact.language)}
           </Badge>
           {/* Title */}
-          <span className="text-sm font-medium text-foreground truncate" title={artifact.title}>
+          <span className="text-[13px] font-medium text-foreground truncate" title={artifact.title}>
             {artifact.title}
           </span>
           {/* File size badge (for file artifacts) */}

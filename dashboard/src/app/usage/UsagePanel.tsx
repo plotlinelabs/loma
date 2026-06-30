@@ -68,7 +68,7 @@ function UsageBucketCard({ bucket, showReset = true }: { bucket: UsageBucket; sh
     <Card>
       <CardContent>
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-medium text-muted-foreground">{bucket.label}</h3>
+          <h3 className="text-[13px] font-medium text-muted-foreground">{bucket.label}</h3>
           {isLimited && (
             <Badge variant="destructive">
               Rate Limited
@@ -80,7 +80,7 @@ function UsageBucketCard({ bucket, showReset = true }: { bucket: UsageBucket; sh
           <span className={`text-3xl font-bold ${utilizationColor(bucket.utilization)}`}>
             {remaining}%
           </span>
-          <span className="text-sm text-muted-foreground mb-1">remaining</span>
+          <span className="text-[13px] text-muted-foreground mb-1">remaining</span>
         </div>
 
         <div className={`w-full h-2.5 rounded-full ${barBgColor(bucket.utilization)}`}>
@@ -143,9 +143,9 @@ function AuthStatusCard({
         <CardContent>
           <div className="flex items-center gap-2 mb-2">
             <div className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
-            <h3 className="text-sm font-medium text-amber-700">Not Logged In</h3>
+            <h3 className="text-[13px] font-medium text-amber-700">Not Logged In</h3>
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-[13px] text-muted-foreground">
             Run <code className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">claude auth login</code> in the terminal below to authenticate.
           </p>
         </CardContent>
@@ -160,7 +160,7 @@ function AuthStatusCard({
           <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
             <div>
-              <h3 className="text-sm font-medium text-foreground">
+              <h3 className="text-[13px] font-medium text-foreground">
                 {auth.email || "Authenticated"}
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -283,8 +283,8 @@ export default function UsagePanel() {
       {stats && (
         <Card>
           <CardContent>
-            <h3 className="text-sm font-medium text-muted-foreground mb-2">Details</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+            <h3 className="text-[13px] font-medium text-muted-foreground mb-2">Details</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[13px]">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Session Reset</span>
                 <span className="text-foreground">{formatResetDate(stats.session.reset)}</span>

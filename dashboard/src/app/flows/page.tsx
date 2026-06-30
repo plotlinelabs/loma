@@ -208,7 +208,7 @@ export default function FlowsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Flows</h1>
-            <p className="text-sm text-muted-foreground mt-1">Pre-defined steps that run on a schedule</p>
+            <p className="text-[13px] text-muted-foreground mt-1">Pre-defined steps that run on a schedule</p>
           </div>
         </div>
         <div className="space-y-2"><SkeletonCard /><SkeletonCard /><SkeletonCard /></div>
@@ -221,7 +221,7 @@ export default function FlowsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Flows</h1>
-          <p className="text-sm text-muted-foreground mt-1">Pre-defined steps that run on a schedule</p>
+          <p className="text-[13px] text-muted-foreground mt-1">Pre-defined steps that run on a schedule</p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-card border border-border rounded-lg p-0.5">
@@ -347,7 +347,7 @@ export default function FlowsPage() {
               <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 md:gap-2.5 mb-1 flex-wrap">
-                    <Link href={`/flows/${flow.flow_id}`} className="text-sm md:text-base font-semibold text-foreground hover:text-brand-700 transition-colors truncate">
+                    <Link href={`/flows/${flow.flow_id}`} className="text-[13px] md:text-base font-semibold text-foreground hover:text-brand-700 transition-colors truncate">
                       {flow.name}
                     </Link>
                     {statusBadge(flow.status)}
@@ -359,7 +359,7 @@ export default function FlowsPage() {
                     )}
                     {(flow.labels || []).map((label) => <LabelPill key={label} label={label} small />)}
                   </div>
-                  <div className="flex flex-wrap items-center gap-x-3 md:gap-x-4 gap-y-1 text-xs md:text-sm text-muted-foreground mt-1">
+                  <div className="flex flex-wrap items-center gap-x-3 md:gap-x-4 gap-y-1 text-xs md:text-[13px] text-muted-foreground mt-1">
                     {flow.trigger_type === "webhook" ? (
                       <Badge variant="outline" className="rounded-md bg-violet-50 text-violet-700 border-violet-200">
                         <RiLinksLine size={14} />

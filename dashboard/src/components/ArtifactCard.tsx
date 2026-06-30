@@ -138,7 +138,7 @@ export default function ArtifactCard({ artifact, isActive, onClick }: ArtifactCa
 
       {/* Info */}
       <div className="flex flex-col min-w-0 flex-1">
-        <span className={cn("text-sm font-medium truncate", isActive ? "text-foreground" : "text-foreground/80")}>
+        <span className={cn("text-[13px] font-medium truncate", isActive ? "text-foreground" : "text-foreground/80")}>
           {artifact.title}
         </span>
         <span className="text-[11px] text-muted-foreground flex items-center gap-1.5">

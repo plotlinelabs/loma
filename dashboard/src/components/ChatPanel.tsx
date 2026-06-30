@@ -614,7 +614,7 @@ function FileAttachmentCard({ file }: { file: FileAttachment }) {
         )}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-800 truncate group-hover:text-gray-900">
+        <p className="text-[13px] font-medium text-gray-800 truncate group-hover:text-gray-900">
           {file.name}
         </p>
         <p className="text-xs text-muted-foreground">
@@ -1325,7 +1325,7 @@ export default function ChatPanel({
             </div>
             <CommandList>
               <ScrollArea className="max-h-64">
-                <CommandEmpty className="px-3 py-6 text-center text-sm text-muted-foreground">
+                <CommandEmpty className="px-3 py-6 text-center text-[13px] text-muted-foreground">
                   No models match that search.
                 </CommandEmpty>
 
@@ -1428,7 +1428,7 @@ export default function ChatPanel({
       {/* Drag overlay */}
       {isDragOver && (
         <div className="absolute inset-0 bg-brand-50/80 border-2 border-dashed border-brand-400 rounded-xl z-50 flex items-center justify-center">
-          <div className="text-brand-600 font-medium text-sm flex items-center gap-2">
+          <div className="text-brand-600 font-medium text-[13px] flex items-center gap-2">
             <RiUploadLine size={20} />
             Drop files here
           </div>
@@ -1573,7 +1573,7 @@ export default function ChatPanel({
                 if (item.role === "clarify") {
                   return (
                     <div key={i} className="flex justify-start animate-message-in">
-                      <div className="w-full text-sm leading-relaxed break-words">
+                      <div className="w-full text-[13px] leading-relaxed break-words">
                         <div className="flex items-center gap-1.5 mb-1">
                           <CrosscutIcon size={14} />
                           <span className="text-xs text-muted-foreground font-medium">Loma</span>
@@ -1599,7 +1599,7 @@ export default function ChatPanel({
                 if (item.role === "user") {
                   return (
                     <div key={i} className="flex justify-end animate-message-in">
-                      <div className="bg-muted rounded-xl px-3 py-2 max-w-[75%] text-sm leading-relaxed break-words whitespace-pre-wrap">
+                      <div className="bg-muted rounded-xl px-3 py-2 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap">
                         {item.content || <TypingIndicator />}
                         {item.fileNames && item.fileNames.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -1635,7 +1635,7 @@ export default function ChatPanel({
                 // Assistant message — editorial style, no bubble
                 return (
                   <div key={i} className="flex justify-start animate-message-in">
-                    <div className="w-full text-sm leading-relaxed break-words">
+                    <div className="w-full text-[13px] leading-relaxed break-words">
                       <div className="flex items-center gap-1.5 mb-1">
                         <CrosscutIcon size={14} />
                         <span className="text-xs text-muted-foreground font-medium">Loma</span>
@@ -1697,7 +1697,7 @@ export default function ChatPanel({
               {/* Recovery polling indicator */}
               {isRecovering && (
                 <div className="flex justify-start animate-message-in">
-                  <div className="text-sm">
+                  <div className="text-[13px]">
                     <span className="flex items-center gap-2 text-muted-foreground">
                       <RiLoader4Line size={14} className="animate-spin text-brand-500" />
                       Still working on your request...
@@ -1745,7 +1745,7 @@ export default function ChatPanel({
                   placeholder={isStreaming ? "Agent is working... press Esc or Stop to interrupt" : "Ask the agent something..."}
                   disabled={isStreaming}
                   rows={1}
-                  className="flex-1 bg-transparent px-2 py-3 text-sm text-foreground placeholder-muted-foreground focus:outline-none disabled:opacity-50 resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className="flex-1 bg-transparent px-2 py-3 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none disabled:opacity-50 resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "160px" }}
                 />
                 {isStreaming ? (
@@ -1977,7 +1977,7 @@ function ClarifyingQuestions({
 
         return (
           <div key={qIndex}>
-            <p className="text-sm font-medium text-foreground mb-2">{q.question}</p>
+            <p className="text-[13px] font-medium text-foreground mb-2">{q.question}</p>
             <div className="flex flex-wrap gap-2 mb-2">
               {q.options.map((opt) => {
                 const isSelected = selected.has(opt.label);

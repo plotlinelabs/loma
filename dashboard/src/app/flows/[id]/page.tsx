@@ -143,7 +143,7 @@ function FlowModelSelector({
     <div className="bg-card rounded-xl border border-border p-3 space-y-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm font-heading font-semibold text-foreground">Agent Model</h2>
+          <h2 className="text-[13px] font-heading font-semibold text-foreground">Agent Model</h2>
         </div>
         <Badge variant="outline" className="gap-1.5">
           <span className={cn("h-1.5 w-1.5 rounded-full", effectiveModel.startsWith("anthropic/") ? "bg-violet-500" : "bg-emerald-500")} />
@@ -547,7 +547,7 @@ export default function FlowDetailPage() {
             )}
           </div>
           {flow.description && (
-            <p className="text-sm text-muted-foreground mt-1">{flow.description}</p>
+            <p className="text-[13px] text-muted-foreground mt-1">{flow.description}</p>
           )}
           {/* Label pills */}
           {(flow.labels || []).length > 0 && (
@@ -624,9 +624,9 @@ export default function FlowDetailPage() {
       {/* Webhook URL */}
       {isWebhook && (
         <div className="bg-card rounded-xl border border-border p-3 space-y-2">
-          <h2 className="text-sm font-heading font-semibold text-foreground">Webhook URL</h2>
+          <h2 className="text-[13px] font-heading font-semibold text-foreground">Webhook URL</h2>
           <div className="flex items-center gap-2">
-            <code className="flex-1 text-sm bg-muted/50 rounded-lg px-3 py-2 text-foreground/80 break-all">
+            <code className="flex-1 text-[13px] bg-muted/50 rounded-lg px-3 py-2 text-foreground/80 break-all">
               {webhookUrl}
             </code>
             <Button
@@ -650,7 +650,7 @@ export default function FlowDetailPage() {
               )}
             </Button>
           </div>
-          <div className="text-sm text-muted-foreground">
+          <div className="text-[13px] text-muted-foreground">
             Auth: <span className="font-medium text-foreground">{flow.webhook_config?.auth_method || "none"}</span>
           </div>
         </div>
@@ -669,8 +669,8 @@ export default function FlowDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
         {/* Schedule & Channel */}
         <div className="bg-card rounded-xl border border-border p-3 space-y-2">
-          <h2 className="text-sm font-heading font-semibold text-foreground">Details</h2>
-          <div className="space-y-2 text-sm">
+          <h2 className="text-[13px] font-heading font-semibold text-foreground">Details</h2>
+          <div className="space-y-2 text-[13px]">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Trigger</span>
               <span className="text-foreground font-medium">
@@ -750,8 +750,8 @@ export default function FlowDetailPage() {
 
         {/* Run stats */}
         <div className="bg-card rounded-xl border border-border p-3 space-y-2">
-          <h2 className="text-sm font-heading font-semibold text-foreground">Run Stats</h2>
-          <div className="space-y-2 text-sm">
+          <h2 className="text-[13px] font-heading font-semibold text-foreground">Run Stats</h2>
+          <div className="space-y-2 text-[13px]">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Total runs</span>
               <span className="text-foreground font-medium">{flow.run_count}</span>
@@ -784,10 +784,10 @@ export default function FlowDetailPage() {
 
       {/* Prompt */}
       <div className="bg-card rounded-xl border border-border p-3">
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">
+        <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">
           {isWebhook ? "Prompt Template" : "Agent Prompt"}
         </h2>
-        <pre className="text-sm text-foreground/80 whitespace-pre-wrap bg-muted/50 rounded-lg p-3 max-h-96 overflow-y-auto">
+        <pre className="text-[13px] text-foreground/80 whitespace-pre-wrap bg-muted/50 rounded-lg p-3 max-h-96 overflow-y-auto">
           {isWebhook ? (flow.prompt_template || flow.prompt) : flow.prompt}
         </pre>
       </div>
@@ -796,7 +796,7 @@ export default function FlowDetailPage() {
       {isWebhook && (
         <div className="bg-card rounded-xl border border-border p-3">
           <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-heading font-semibold text-foreground">Webhook Logs</h2>
+            <h2 className="text-[13px] font-heading font-semibold text-foreground">Webhook Logs</h2>
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -816,7 +816,7 @@ export default function FlowDetailPage() {
             </div>
           </div>
           {webhookLogs.length === 0 ? (
-            <div className="text-sm text-muted-foreground py-4 text-center">
+            <div className="text-[13px] text-muted-foreground py-4 text-center">
               No webhook requests received yet.
             </div>
           ) : (
@@ -895,7 +895,7 @@ export default function FlowDetailPage() {
       {/* Execution history */}
       <div className="bg-card rounded-xl border border-border p-3">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-heading font-semibold text-foreground">
+          <h2 className="text-[13px] font-heading font-semibold text-foreground">
             Execution History
           </h2>
           <Button
@@ -909,7 +909,7 @@ export default function FlowDetailPage() {
           </Button>
         </div>
         {runs.length === 0 ? (
-          <div className="text-sm text-muted-foreground py-4 text-center">
+          <div className="text-[13px] text-muted-foreground py-4 text-center">
             No executions yet.
           </div>
         ) : (
@@ -931,7 +931,7 @@ export default function FlowDetailPage() {
                           : "bg-blue-400"
                     )}
                   />
-                  <ClientTimestamp iso={run.started_at} variant="full" className="text-sm text-foreground/80" />
+                  <ClientTimestamp iso={run.started_at} variant="full" className="text-[13px] text-foreground/80" />
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>{run.status}</span>

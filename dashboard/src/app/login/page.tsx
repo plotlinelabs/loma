@@ -110,7 +110,7 @@ function LoginContent() {
           <h1 className="text-xl font-heading font-semibold text-foreground mb-1 text-center">
             Loma Agent
           </h1>
-          <p className="text-sm text-muted-foreground mb-2 text-center">
+          <p className="text-[13px] text-muted-foreground mb-2 text-center">
             Sign in to your company workspace.
           </p>
 
@@ -170,7 +170,7 @@ function LoginContent() {
                   className="text-xs"
                 />
               </div>
-              <p className="text-center text-sm text-muted-foreground">
+              <p className="text-center text-[13px] text-muted-foreground">
                 Need an account?{" "}
                 <Button
                   type="button"
@@ -230,7 +230,7 @@ function LoginContent() {
               >
                 {isSubmitting ? "Creating account..." : "Create account"}
               </Button>
-              <p className="text-center text-sm text-muted-foreground">
+              <p className="text-center text-[13px] text-muted-foreground">
                 Have an account?{" "}
                 <Button
                   type="button"

@@ -78,7 +78,7 @@ function ToolCallCard({
 export default function TurnViewer({ turns }: TurnViewerProps) {
   if (!turns.length) {
     return (
-      <p className="text-muted-foreground text-sm italic">No turns recorded.</p>
+      <p className="text-muted-foreground text-[13px] italic">No turns recorded.</p>
     );
   }
 
@@ -112,7 +112,7 @@ export default function TurnViewer({ turns }: TurnViewerProps) {
             {turn.text_blocks?.map((block, i) => (
               <div
                 key={i}
-                className="mb-2 text-sm text-foreground/70 whitespace-pre-wrap leading-relaxed"
+                className="mb-2 text-[13px] text-foreground/70 whitespace-pre-wrap leading-relaxed"
               >
                 {block.text}
               </div>

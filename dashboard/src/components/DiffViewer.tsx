@@ -61,7 +61,7 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
       <div className="flex items-center justify-center py-6 text-muted-foreground">
         <div className="text-center">
           <RiCheckLine size={32} className="mx-auto mb-2 text-muted-foreground/60" />
-          <p className="text-sm font-medium">No differences</p>
+          <p className="text-[13px] font-medium">No differences</p>
           <p className="text-xs mt-0.5">These versions are identical.</p>
         </div>
       </div>

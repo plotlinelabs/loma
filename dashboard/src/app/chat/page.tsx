@@ -136,7 +136,7 @@ function ChatPageContent() {
       <div className="h-[calc(100vh-1.5rem)] flex flex-col -mx-3 lg:-mx-4 -my-3">
         <div className="px-3 lg:px-4 py-4 border-b border-border bg-card">
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
-          <p className="text-sm text-muted-foreground">{flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}</p>
+          <p className="text-[13px] text-muted-foreground">{flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}</p>
         </div>
         <div className="flex-1 flex items-center justify-center bg-muted/30">
           <div className="flex items-center gap-2 text-muted-foreground">
@@ -289,7 +289,7 @@ function ChatPageContent() {
                 </Tooltip>
                 {showDeleteConfirm && (
                   <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 w-56 animate-fade-in">
-                    <p className="text-sm font-medium text-foreground mb-1">Delete this chat?</p>
+                    <p className="text-[13px] font-medium text-foreground mb-1">Delete this chat?</p>
                     <p className="text-xs text-muted-foreground mb-2">This cannot be undone.</p>
                     <div className="flex items-center gap-1.5">
                       <Button

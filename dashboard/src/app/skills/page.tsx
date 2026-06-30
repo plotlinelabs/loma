@@ -54,7 +54,7 @@ export default function SkillsPage() {
       <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3">
         <div>
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Skills</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-[13px] text-muted-foreground mt-1">
             Company playbooks and supporting files the agent can search, read, and update through chat.
           </p>
         </div>
@@ -110,12 +110,12 @@ export default function SkillsPage() {
                 return (
                   <TableRow key={slug}>
                     <TableCell className="align-top overflow-hidden">
-                      <Link href={`/skills/${slug}`} className="text-sm font-semibold text-foreground hover:text-brand-700 truncate block">
+                      <Link href={`/skills/${slug}`} className="text-[13px] font-semibold text-foreground hover:text-brand-700 truncate block">
                         {skill.name || slug}
                       </Link>
                       <div className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{slug}</div>
                     </TableCell>
-                    <TableCell className="align-top text-sm text-muted-foreground overflow-hidden"><span className="line-clamp-2">{skill.description || "-"}</span></TableCell>
+                    <TableCell className="align-top text-[13px] text-muted-foreground overflow-hidden"><span className="line-clamp-2">{skill.description || "-"}</span></TableCell>
                     <TableCell className="align-top overflow-hidden">
                       {skill.tags?.length ? (
                         <div className="flex flex-wrap gap-1 overflow-hidden max-h-[3rem]">

@@ -381,7 +381,7 @@ export default function Sidebar({
                   prefetch
                   onClick={onClose}
                   className={cn(
-                    "flex items-center rounded-lg text-[12px] font-medium transition-all duration-150",
+                    "flex items-center rounded-lg text-xs font-medium transition-all duration-150",
                     collapsed
                       ? "justify-center px-0 py-1.5 mx-auto w-10"
                       : "px-2 py-1 gap-2",
@@ -420,7 +420,7 @@ export default function Sidebar({
                     href={`/conversations?project=${p.project_id}`}
                     prefetch
                     onClick={onClose}
-                    className="group flex items-center gap-1 px-2 py-1 text-[12px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
+                    className="group flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
                   >
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
                     <span className="truncate flex-1 min-w-0">{p.name}</span>
@@ -448,7 +448,7 @@ export default function Sidebar({
                     <div
                       key={c.conversation_id}
                       className={cn(
-                        "group flex items-center gap-1 px-2 py-1 text-[12px] rounded-lg transition-all duration-150",
+                        "group flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-all duration-150",
                         isConvoActive
                           ? "text-brand-700 bg-brand-100/80 font-medium"
                           : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -504,7 +504,7 @@ export default function Sidebar({
                       <div
                         key={c.conversation_id}
                         className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-[12px] rounded-lg transition-all duration-150",
+                          "group flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-all duration-150",
                           isConvoActive
                             ? "text-brand-700 bg-brand-100/80 font-medium"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -623,7 +623,7 @@ export default function Sidebar({
                         {!collapsed && (
                           <>
                             <div className="min-w-0 flex-1 text-left">
-                              <div className="text-[12px] font-medium text-foreground truncate">
+                              <div className="text-xs font-medium text-foreground truncate">
                                 {session.user.name || session.user.email?.split("@")[0]}
                               </div>
                               <div className="text-[10px] text-muted-foreground truncate">

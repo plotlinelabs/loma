@@ -47,7 +47,7 @@ function ExpandedLogRow({ log }: { log: WebhookLog }) {
   return (
     <TableRow>
       <TableCell colSpan={7} className="bg-muted/50">
-        <div className="space-y-2 text-sm">
+        <div className="space-y-2 text-[13px]">
           {/* Headers */}
           <div>
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
@@ -196,7 +196,7 @@ function WebhookLogsContent() {
         <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">
           Webhook Logs
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <p className="text-[13px] text-muted-foreground mt-1">
           Incoming webhook requests across all flows
         </p>
       </div>
@@ -410,7 +410,7 @@ export default function WebhookLogsPage() {
         <div className="space-y-2">
           <div>
             <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Webhook Logs</h1>
-            <p className="text-sm text-muted-foreground mt-1">Incoming webhook requests across all flows</p>
+            <p className="text-[13px] text-muted-foreground mt-1">Incoming webhook requests across all flows</p>
           </div>
           <div className="flex items-center justify-center py-16">
             <RiLoader4Line size={32} className="animate-spin text-muted-foreground" />

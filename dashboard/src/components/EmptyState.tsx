@@ -22,7 +22,7 @@ export function EmptyState({
   return (
     <div className={cn("flex flex-col items-center justify-center py-8 text-center", className)}>
       <Icon size={32} className="text-muted-foreground/50 mb-3" />
-      <p className="text-sm font-medium text-muted-foreground">{title}</p>
+      <p className="text-[13px] font-medium text-muted-foreground">{title}</p>
       {description && (
         <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">{description}</p>
       )}

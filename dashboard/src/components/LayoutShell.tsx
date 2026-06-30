@@ -46,7 +46,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
             <CrosscutIcon size={36} />
           </div>
           <h1 className="text-xl font-heading font-semibold text-foreground mb-2">Awaiting approval</h1>
-          <p className="text-sm text-muted-foreground mb-3">
+          <p className="text-[13px] text-muted-foreground mb-3">
             Your account is pending admin approval. You&apos;ll get access once an admin
             approves you.
           </p>
@@ -86,7 +86,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         </Button>
         <div className="ml-3 flex items-center gap-2">
           <CrosscutIcon size={20} />
-          <span className="font-[family-name:var(--font-logo)] text-sm font-black tracking-[0.5px] text-foreground">Loma</span>
+          <span className="font-[family-name:var(--font-logo)] text-[13px] font-black tracking-[0.5px] text-foreground">Loma</span>
         </div>
       </div>
 

@@ -144,7 +144,7 @@ export default function TeamDetailPage() {
       {/* Members */}
       <div className="bg-card rounded-xl border border-border p-2 md:p-3">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-heading font-semibold text-foreground">Members</h2>
+          <h2 className="text-[13px] font-heading font-semibold text-foreground">Members</h2>
           <Button variant="ghost" size="xs" className="text-brand-600 hover:text-brand-700">
             <RiAddLine size={14} />
             Add Member
@@ -155,12 +155,12 @@ export default function TeamDetailPage() {
           {members.map((user) => (
             <div key={user.email} className="flex items-center gap-2 py-3 first:pt-0 last:pb-0">
               <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
-                <span className="text-sm font-medium text-brand-700">{user.avatar}</span>
+                <span className="text-[13px] font-medium text-brand-700">{user.avatar}</span>
               </div>
               <div className="flex-1 min-w-0">
                 <Link
                   href={`/admin/${encodeURIComponent(user.email)}`}
-                  className="text-sm font-medium text-foreground hover:text-brand-600 transition-colors"
+                  className="text-[13px] font-medium text-foreground hover:text-brand-600 transition-colors"
                 >
                   {user.name}
                 </Link>
@@ -180,7 +180,7 @@ export default function TeamDetailPage() {
 
       {/* Tool Defaults — Loma-managed */}
       <div className="bg-card rounded-xl border border-border p-2 md:p-3">
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Tool Defaults — Loma-managed</h2>
+        <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Tool Defaults — Loma-managed</h2>
         <p className="text-xs text-muted-foreground mb-2">
           Default roles assigned to all team members. Individual users can override these.
         </p>
@@ -218,7 +218,7 @@ export default function TeamDetailPage() {
                           </span>
                         )}
                       </div>
-                      <span className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">
+                      <span className="text-[13px] font-medium text-foreground group-hover:text-brand-600 transition-colors">
                         {meta.displayName}
                       </span>
                     </Link>
@@ -226,7 +226,7 @@ export default function TeamDetailPage() {
                   <TableCell className="pr-4">
                     {defaultRole ? (
                       <Select defaultValue={defaultRole}>
-                        <SelectTrigger className="text-sm h-7 w-auto">
+                        <SelectTrigger className="text-[13px] h-7 w-auto">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -241,7 +241,7 @@ export default function TeamDetailPage() {
                     )}
                   </TableCell>
                   <TableCell className="pr-4">
-                    <span className="text-sm text-muted-foreground">{team.members.length}</span>
+                    <span className="text-[13px] text-muted-foreground">{team.members.length}</span>
                   </TableCell>
                   <TableCell className="text-right">
                     {defaultRole && (
@@ -263,7 +263,7 @@ export default function TeamDetailPage() {
 
       {/* Tool Defaults — OAuth */}
       <div className="bg-card rounded-xl border border-border p-2 md:p-3">
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Tool Defaults — OAuth</h2>
+        <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Tool Defaults — OAuth</h2>
         <p className="text-xs text-muted-foreground mb-2">
           Whether team members are required to connect their accounts via OAuth.
         </p>
@@ -304,7 +304,7 @@ export default function TeamDetailPage() {
                           </span>
                         )}
                       </div>
-                      <span className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">
+                      <span className="text-[13px] font-medium text-foreground group-hover:text-brand-600 transition-colors">
                         {meta.displayName}
                       </span>
                     </Link>
@@ -321,7 +321,7 @@ export default function TeamDetailPage() {
                     )}
                   </TableCell>
                   <TableCell className="pr-4">
-                    <span className={`text-sm font-medium ${
+                    <span className={`text-[13px] font-medium ${
                       connectedCount === team.members.length ? "text-emerald-600" : "text-muted-foreground"
                     }`}>
                       {connectedCount}/{team.members.length}

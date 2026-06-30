@@ -113,7 +113,7 @@ export default function UserDetailPage() {
           </div>
           <div className="flex-1">
             <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{user.name}</h1>
-            <p className="text-sm text-muted-foreground">{user.email}</p>
+            <p className="text-[13px] text-muted-foreground">{user.email}</p>
 
             {/* Team badges */}
             {userTeams.length > 0 && (
@@ -178,7 +178,7 @@ export default function UserDetailPage() {
                     {Logo ? (
                       <Logo className="w-5 h-5" />
                     ) : (
-                      <span className="text-sm font-bold" style={{ color: meta.color }}>
+                      <span className="text-[13px] font-bold" style={{ color: meta.color }}>
                         {meta.displayName.charAt(0)}
                       </span>
                     )}
@@ -187,7 +187,7 @@ export default function UserDetailPage() {
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">
+                      <span className="text-[13px] font-medium text-foreground group-hover:text-brand-600 transition-colors">
                         {meta.displayName}
                       </span>
                     </div>

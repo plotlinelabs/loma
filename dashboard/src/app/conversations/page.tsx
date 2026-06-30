@@ -202,7 +202,7 @@ export default function ConversationsPage() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Conversations</h1>
-          <p className="text-sm text-muted-foreground mt-1">Browse and manage all agent conversations</p>
+          <p className="text-[13px] text-muted-foreground mt-1">Browse and manage all agent conversations</p>
         </div>
         {isAdmin && (
           <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
@@ -243,7 +243,7 @@ export default function ConversationsPage() {
             placeholder="Search conversations..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 text-sm bg-muted/50 border-border focus-visible:ring-accent-200 focus-visible:border-accent-200"
+            className="w-full pl-10 pr-4 py-2 text-[13px] bg-muted/50 border-border focus-visible:ring-accent-200 focus-visible:border-accent-200"
           />
         </div>
       </div>
@@ -256,7 +256,7 @@ export default function ConversationsPage() {
               value={sourceFilter || "__all__"}
               onValueChange={(val) => { setSourceFilter(val === "__all__" ? "" : val); setPage(1); }}
             >
-              <SelectTrigger className="bg-card border-border text-sm text-foreground">
+              <SelectTrigger className="bg-card border-border text-[13px] text-foreground">
                 <SelectValue placeholder="All Sources" />
               </SelectTrigger>
               <SelectContent>
@@ -271,7 +271,7 @@ export default function ConversationsPage() {
               value={categoryFilter || "__all__"}
               onValueChange={(val) => { setCategoryFilter(val === "__all__" ? "" : val); setPage(1); }}
             >
-              <SelectTrigger className="bg-card border-border text-sm text-foreground">
+              <SelectTrigger className="bg-card border-border text-[13px] text-foreground">
                 <SelectValue placeholder="All Categories" />
               </SelectTrigger>
               <SelectContent>
@@ -287,7 +287,7 @@ export default function ConversationsPage() {
                 value={personFilter || "__all__"}
                 onValueChange={(val) => { setPersonFilter(val === "__all__" ? "" : val); setPage(1); }}
               >
-                <SelectTrigger className="bg-card border-border text-sm text-foreground">
+                <SelectTrigger className="bg-card border-border text-[13px] text-foreground">
                   <SelectValue placeholder="All Persons" />
                 </SelectTrigger>
                 <SelectContent>
@@ -302,7 +302,7 @@ export default function ConversationsPage() {
               value={topicFilter || "__all__"}
               onValueChange={(val) => { setTopicFilter(val === "__all__" ? "" : val); setPage(1); }}
             >
-              <SelectTrigger className="bg-card border-border text-sm text-foreground">
+              <SelectTrigger className="bg-card border-border text-[13px] text-foreground">
                 <SelectValue placeholder="All Topics" />
               </SelectTrigger>
               <SelectContent>
@@ -535,7 +535,7 @@ export default function ConversationsPage() {
                     />
                   </div>
                 </div>
-                <div className="text-sm font-medium text-foreground truncate">
+                <div className="text-[13px] font-medium text-foreground truncate">
                   {c.title || c.prompt?.slice(0, 60) + (c.prompt?.length > 60 ? "..." : "")}
                 </div>
                 {c.title && (
@@ -571,7 +571,7 @@ export default function ConversationsPage() {
           >
             Previous
           </Button>
-          <span className="px-3 py-1.5 text-sm text-muted-foreground">
+          <span className="px-3 py-1.5 text-[13px] text-muted-foreground">
             Page {page} of {totalPages}
           </span>
           <Button

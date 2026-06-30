@@ -256,7 +256,7 @@ function DetailPanel({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: colors.fill }} />
-              <h2 className="text-sm font-heading font-bold truncate" style={{ color: colors.text }}>{node.title}</h2>
+              <h2 className="text-[13px] font-heading font-bold truncate" style={{ color: colors.text }}>{node.title}</h2>
             </div>
             {node.node_id && (
               <span className="text-[10px] font-mono text-muted-foreground">#{node.node_id}</span>
@@ -545,14 +545,14 @@ export default function PageIndexPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-sm text-muted-foreground">Loading page index...</div>
+        <div className="text-[13px] text-muted-foreground">Loading page index...</div>
       </div>
     );
   }
 
   if (!data || !layout) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-full text-muted-foreground text-[13px]">
         Failed to load. Ensure <code className="bg-muted px-1.5 py-0.5 rounded mx-1">page-index.json</code> exists.
       </div>
     );
@@ -566,7 +566,7 @@ export default function PageIndexPage() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-background flex-shrink-0">
         <div className="flex items-center gap-4">
           <div>
-            <h1 className="text-sm font-heading font-semibold text-foreground">Page Index</h1>
+            <h1 className="text-[13px] font-heading font-semibold text-foreground">Page Index</h1>
             <p className="text-[11px] text-muted-foreground">{data.doc_description}</p>
           </div>
           <div className="flex items-center gap-3 ml-4">
@@ -575,7 +575,7 @@ export default function PageIndexPage() {
               { label: "Categories", value: data.structure.length },
             ].map((s) => (
               <div key={s.label} className="flex items-center gap-1.5">
-                <span className="text-sm font-bold text-foreground">{s.value}</span>
+                <span className="text-[13px] font-bold text-foreground">{s.value}</span>
                 <span className="text-[10px] text-muted-foreground">{s.label}</span>
               </div>
             ))}

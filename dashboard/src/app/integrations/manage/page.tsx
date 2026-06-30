@@ -579,7 +579,7 @@ export default function IntegrationsPage() {
       {/* Header */}
       <div>
         <h1 className="text-xl font-heading font-semibold text-foreground">Integrations</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <p className="text-[13px] text-muted-foreground mt-1">
           Connect tools and personal accounts to let Loma work across your stack
         </p>
       </div>
@@ -690,7 +690,7 @@ export default function IntegrationsPage() {
       {loading ? (
         <Card>
           <CardContent className="p-6 text-center">
-            <div className="animate-pulse text-muted-foreground text-sm">Loading integrations...</div>
+            <div className="animate-pulse text-muted-foreground text-[13px]">Loading integrations...</div>
           </CardContent>
         </Card>
       ) : (
@@ -721,7 +721,7 @@ export default function IntegrationsPage() {
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <h2 className="text-sm font-semibold text-foreground truncate">
+                          <h2 className="text-[13px] font-semibold text-foreground truncate">
                             {integ.display_name}
                           </h2>
                           <p className="text-xs text-muted-foreground line-clamp-1">
@@ -804,7 +804,7 @@ export default function IntegrationsPage() {
                       {!isOrgConnected && (
                         <>
                           <Separator className="my-5" />
-                          <p className="text-sm text-muted-foreground">
+                          <p className="text-[13px] text-muted-foreground">
                             Connect your {integ.display_name} account to enable MCP tools
                             {integ.has_webhook ? ", webhook event ingestion, and agent capabilities" : " and agent capabilities"}.
                           </p>
@@ -828,7 +828,7 @@ export default function IntegrationsPage() {
             ) : (
               <Card className="border-dashed">
                 <CardContent className="p-3 text-center">
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-[13px] text-muted-foreground">
                     No org integrations available.
                   </p>
                 </CardContent>
@@ -854,7 +854,7 @@ export default function IntegrationsPage() {
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <h2 className="text-sm font-semibold text-foreground truncate">
+                          <h2 className="text-[13px] font-semibold text-foreground truncate">
                             {integ.display_name}
                           </h2>
                           <p className="text-xs text-muted-foreground line-clamp-1">
@@ -878,7 +878,7 @@ export default function IntegrationsPage() {
             ) : (
               <Card className="border-dashed">
                 <CardContent className="p-3 text-center">
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-[13px] text-muted-foreground">
                     No system-managed integrations configured.
                   </p>
                 </CardContent>
@@ -900,7 +900,7 @@ export default function IntegrationsPage() {
               {customConnectors.length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="p-3 text-center">
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-[13px] text-muted-foreground">
                       No custom connectors yet.{isAdmin ? " Add a remote MCP server to extend the agent." : ""}
                     </p>
                   </CardContent>
@@ -918,12 +918,12 @@ export default function IntegrationsPage() {
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
-                              <h2 className="text-sm font-semibold text-foreground">
+                              <h2 className="text-[13px] font-semibold text-foreground">
                                 {integ.display_name}
                               </h2>
                               <StatusBadge status="connected" />
                             </div>
-                            <p className="text-sm text-muted-foreground mt-0.5 font-mono break-all">
+                            <p className="text-[13px] text-muted-foreground mt-0.5 font-mono break-all">
                               {integ.url}
                             </p>
                           </div>
@@ -974,7 +974,7 @@ export default function IntegrationsPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h2 className="text-sm font-semibold text-foreground">
+                          <h2 className="text-[13px] font-semibold text-foreground">
                             Google
                           </h2>
                           <StatusBadge status={googleConn?.status || "not_connected"} />
@@ -1046,7 +1046,7 @@ export default function IntegrationsPage() {
                   {!isConnected && !isExpired && (
                     <>
                       <Separator className="my-5" />
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-[13px] text-muted-foreground">
                         Connect your Google account to let Loma access Gmail, Drive, Calendar,
                         Sheets, Docs, and Slides on your behalf. Your tokens are encrypted and stored securely.
                       </p>
@@ -1075,7 +1075,7 @@ export default function IntegrationsPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h2 className="text-sm font-semibold text-foreground">
+                          <h2 className="text-[13px] font-semibold text-foreground">
                             Slack
                           </h2>
                           <StatusBadge status={slackConn?.status || "not_connected"} />
@@ -1147,7 +1147,7 @@ export default function IntegrationsPage() {
                   {!isSlackConnected && !isSlackExpired && (
                     <>
                       <Separator className="my-5" />
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-[13px] text-muted-foreground">
                         Connect your Slack account to let Loma read channels, search messages, view unreads,
                         and send messages as you. Your token is encrypted and stored securely.
                       </p>
@@ -1176,7 +1176,7 @@ export default function IntegrationsPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h2 className="text-sm font-semibold text-foreground">
+                          <h2 className="text-[13px] font-semibold text-foreground">
                             Claude Code
                           </h2>
                           <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
@@ -1214,7 +1214,7 @@ export default function IntegrationsPage() {
                   {claudeAuth?.connected && (
                     <>
                       <Separator className="my-5" />
-                      <div className="flex items-center gap-3 text-sm">
+                      <div className="flex items-center gap-3 text-[13px]">
                         {claudeAuth.email && (
                           <div>
                             <span className="text-muted-foreground">Account: </span>
@@ -1238,7 +1238,7 @@ export default function IntegrationsPage() {
                     <>
                       <Separator className="my-5" />
                       <div className="flex items-center justify-between mb-2">
-                        <p className="text-sm text-muted-foreground">
+                        <p className="text-[13px] text-muted-foreground">
                           Complete the OAuth flow in the terminal below:
                         </p>
                         <Button variant="link" size="xs" onClick={handleClaudeTerminalDone}>
@@ -1255,7 +1255,7 @@ export default function IntegrationsPage() {
                   {!claudeAuth?.connected && !showClaudeTerminal && (
                     <>
                       <Separator className="my-5" />
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-[13px] text-muted-foreground">
                         Connect your Claude Code subscription (Pro, Max, or Teams) to join the shared
                         round-robin pool. All connected accounts are used to process tasks across the team.
                       </p>
@@ -1281,8 +1281,8 @@ export default function IntegrationsPage() {
       {/* Info section */}
       <Card className="bg-muted/50">
         <CardContent>
-          <h3 className="text-sm font-medium text-foreground mb-2">How it works</h3>
-          <ul className="text-sm text-muted-foreground space-y-1.5">
+          <h3 className="text-[13px] font-medium text-foreground mb-2">How it works</h3>
+          <ul className="text-[13px] text-muted-foreground space-y-1.5">
             <li>Org integrations are shared across the team — connect with an API key</li>
             <li>System-managed integrations are configured on the server — no setup needed</li>
             <li>Personal integrations are scoped to your account only</li>

@@ -21,7 +21,7 @@ export default function Nav() {
           {status === "authenticated" && (
             <div className="flex items-center gap-3">
               {session?.user?.email && (
-                <span className="text-sm text-muted-foreground">
+                <span className="text-[13px] text-muted-foreground">
                   {session.user.email}
                 </span>
               )}

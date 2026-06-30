@@ -131,11 +131,11 @@ export default function SkillDetailPage() {
   }, [skill]);
 
   if (loading) {
-    return <div className="py-20 text-center text-sm text-muted-foreground">Loading skill...</div>;
+    return <div className="py-20 text-center text-[13px] text-muted-foreground">Loading skill...</div>;
   }
 
   if (!skill) {
-    return <div className="py-20 text-center text-sm text-destructive">{error || "Skill not found"}</div>;
+    return <div className="py-20 text-center text-[13px] text-destructive">{error || "Skill not found"}</div>;
   }
 
   const slug = skillSlug(skill, name);
@@ -159,7 +159,7 @@ export default function SkillDetailPage() {
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
         <div>
           <h1 className="text-xl font-heading font-semibold text-foreground">{skill.name || slug}</h1>
-          <p className="text-sm text-muted-foreground mt-1">{skill.description || "No description yet."}</p>
+          <p className="text-[13px] text-muted-foreground mt-1">{skill.description || "No description yet."}</p>
           <div className="flex flex-wrap gap-1.5 mt-2">
             <Badge variant="secondary" className="font-mono">{slug}</Badge>
             {skill.tags?.map((tag) => (
@@ -185,7 +185,7 @@ export default function SkillDetailPage() {
           <Card>
             <CardContent>
               <div className="flex items-center justify-between gap-2 mb-2">
-                <h2 className="text-sm font-heading font-semibold text-foreground">SKILL.md</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground">SKILL.md</h2>
                 <Button variant="link" size="xs" asChild>
                   <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, files.find((file) => file.path === "SKILL.md") || { path: "SKILL.md", kind: "inline_text" }))}>
                     Edit file in chat
@@ -203,7 +203,7 @@ export default function SkillDetailPage() {
                 <CardContent>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <div>
-                      <h2 className="text-sm font-heading font-semibold text-foreground font-mono">{file.path}</h2>
+                      <h2 className="text-[13px] font-heading font-semibold text-foreground font-mono">{file.path}</h2>
                       <p className="text-xs text-muted-foreground mt-1">{file.content_type || "text"} · {formatBytes(file.size_bytes)}</p>
                     </div>
                     <Button variant="link" size="xs" asChild>
@@ -221,13 +221,13 @@ export default function SkillDetailPage() {
           {assetFiles.length > 0 && (
             <Card>
               <CardContent>
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Assets</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Assets</h2>
                 <div className="space-y-4">
                   {assetFiles.map((file) => (
                     <div key={file.path} className="border border-border rounded-lg p-3 space-y-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <h3 className="text-sm font-semibold text-foreground font-mono truncate">{file.path}</h3>
+                          <h3 className="text-[13px] font-semibold text-foreground font-mono truncate">{file.path}</h3>
                           <p className="text-xs text-muted-foreground mt-1">{file.content_type || "asset"} · {formatBytes(file.size_bytes)}</p>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
@@ -261,7 +261,7 @@ export default function SkillDetailPage() {
         <aside className="space-y-3">
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Package</h2>
+              <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Package</h2>
               <div className="space-y-2">
                 {files.map((file) => (
                   <div key={file.path} className="flex items-center justify-between gap-2 text-xs">
@@ -275,7 +275,7 @@ export default function SkillDetailPage() {
 
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">History</h2>
+              <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">History</h2>
               {history.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No versions yet.</p>
               ) : (

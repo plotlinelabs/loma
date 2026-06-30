@@ -229,7 +229,7 @@ export default function ConversationDetailPage() {
         </div>
 
         {/* Metadata grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-[13px]">
           <div className="bg-muted/50 rounded-lg p-3">
             <span className="text-muted-foreground text-xs font-medium">Started</span>
             <div className="text-foreground/80 mt-0.5">
@@ -272,7 +272,7 @@ export default function ConversationDetailPage() {
         {conversation.savings && (
           <div className="mt-2 pt-4 border-t border-border/50">
             <span className="text-xs text-muted-foreground font-medium">Savings Estimate</span>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm mt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-[13px] mt-2">
               <div className="bg-emerald-50 rounded-lg p-3">
                 <span className="text-emerald-600 text-xs font-medium">Human Cost</span>
                 <div className="text-emerald-800 mt-0.5 font-semibold tabular-nums">
@@ -331,7 +331,7 @@ export default function ConversationDetailPage() {
         {conversation.confidence?.reasoning && (
           <div className="mt-2 pt-4 border-t border-border/50">
             <span className="text-xs text-muted-foreground font-medium">Confidence Reasoning</span>
-            <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+            <p className="text-[13px] text-muted-foreground mt-1 leading-relaxed">
               {conversation.confidence.reasoning}
             </p>
           </div>
@@ -341,7 +341,7 @@ export default function ConversationDetailPage() {
         {conversation.error && (
           <div className="mt-2 pt-4 border-t border-border/50">
             <span className="text-xs text-red-500 font-medium">Error</span>
-            <pre className="text-sm text-red-600 mt-1 bg-red-50 p-3 rounded-lg overflow-x-auto border border-red-100">
+            <pre className="text-[13px] text-red-600 mt-1 bg-red-50 p-3 rounded-lg overflow-x-auto border border-red-100">
               {conversation.error}
             </pre>
           </div>
@@ -351,7 +351,7 @@ export default function ConversationDetailPage() {
       {/* Messages — chronological order (oldest first, like a chat) */}
       {conversation.messages?.length ? (
         <div className="space-y-2">
-          <h2 className="text-sm font-heading font-semibold text-foreground">
+          <h2 className="text-[13px] font-heading font-semibold text-foreground">
             Messages ({conversation.messages.length})
           </h2>
           {[...conversation.messages]
@@ -387,10 +387,10 @@ export default function ConversationDetailPage() {
               {msg.role === "assistant" ? (
                 <MarkdownContent
                   content={msg.content}
-                  className="text-sm text-foreground/80 leading-relaxed"
+                  className="text-[13px] text-foreground/80 leading-relaxed"
                 />
               ) : (
-                <div className="text-sm text-foreground/80 whitespace-pre-wrap leading-relaxed">
+                <div className="text-[13px] text-foreground/80 whitespace-pre-wrap leading-relaxed">
                   {msg.content}
                 </div>
               )}
@@ -401,19 +401,19 @@ export default function ConversationDetailPage() {
         <>
           {/* Fallback for old conversations without messages array */}
           <div className="bg-card border border-border rounded-xl p-3">
-            <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Full Prompt</h2>
-            <pre className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed bg-muted/50 p-3 rounded-lg border border-border/50">
+            <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Full Prompt</h2>
+            <pre className="text-[13px] text-muted-foreground whitespace-pre-wrap leading-relaxed bg-muted/50 p-3 rounded-lg border border-border/50">
               {conversation.prompt}
             </pre>
           </div>
           {conversation.final_response && (
             <div className="bg-card border border-border rounded-xl p-3">
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">
+              <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">
                 Final Response
               </h2>
               <MarkdownContent
                 content={conversation.final_response}
-                className="text-sm text-muted-foreground leading-relaxed"
+                className="text-[13px] text-muted-foreground leading-relaxed"
               />
             </div>
           )}
@@ -422,7 +422,7 @@ export default function ConversationDetailPage() {
 
       {/* Turns — reverse chronological (latest first for progress tracking) */}
       <div>
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">
+        <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">
           Agent Turns ({turns.length})
         </h2>
         <TurnViewer turns={turns} />

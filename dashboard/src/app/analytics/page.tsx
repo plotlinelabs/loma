@@ -137,7 +137,7 @@ export default function AnalyticsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Analytics</h1>
-            <p className="text-sm text-muted-foreground mt-1">Loading analytics data...</p>
+            <p className="text-[13px] text-muted-foreground mt-1">Loading analytics data...</p>
           </div>
           <div className="flex gap-2">
             {[7, 30, 90].map((d) => <Skeleton key={d} className="h-8 w-10 rounded-lg" />)}
@@ -160,7 +160,7 @@ export default function AnalyticsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Analytics</h1>
-          <p className="text-sm text-muted-foreground mt-1">Track conversations, API usage, spending, and savings vs. human labor</p>
+          <p className="text-[13px] text-muted-foreground mt-1">Track conversations, API usage, spending, and savings vs. human labor</p>
         </div>
         <div className="flex gap-2">
           {[7, 30, 90].map((d) => (
@@ -212,9 +212,9 @@ export default function AnalyticsPage() {
                 <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 p-2 hover-lift">
                   <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2">
                     <div>
-                      <div className="text-sm font-medium text-emerald-700 mb-1">Total Savings</div>
+                      <div className="text-[13px] font-medium text-emerald-700 mb-1">Total Savings</div>
                       <div className="text-3xl md:text-4xl font-bold text-emerald-800 tabular-nums">${costData.total_savings_usd.toFixed(2)}</div>
-                      <div className="text-sm text-emerald-600 mt-1">{costData.savings_percentage}% saved vs. human labor</div>
+                      <div className="text-[13px] text-emerald-600 mt-1">{costData.savings_percentage}% saved vs. human labor</div>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <div className="text-center sm:text-center">
@@ -250,7 +250,7 @@ export default function AnalyticsPage() {
               </div>
 
               <Card className="p-2 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily Cost: Human vs API</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily Cost: Human vs API</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -271,7 +271,7 @@ export default function AnalyticsPage() {
               </Card>
 
               <Card className="p-2 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily API Cost Breakdown (USD)</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily API Cost Breakdown (USD)</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -292,7 +292,7 @@ export default function AnalyticsPage() {
               </Card>
 
               <Card className="p-2 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily Token Usage</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily Token Usage</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -313,7 +313,7 @@ export default function AnalyticsPage() {
               </Card>
 
               <Card className="p-2 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Conversations per Day</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Conversations per Day</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -440,7 +440,7 @@ function ConversationStatCard({ label, value, icon, iconColor }: { label: string
       <div className={cn("w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
         <div className="text-[11px] text-muted-foreground font-medium">{label}</div>
-        <div className="text-sm font-semibold text-foreground">{value}</div>
+        <div className="text-[13px] font-semibold text-foreground">{value}</div>
       </div>
     </Card>
   );
@@ -452,7 +452,7 @@ function CostStatCard({ label, value, icon, iconColor }: { label: string; value:
       <div className={cn("w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
         <div className="text-[11px] text-muted-foreground font-medium">{label}</div>
-        <div className="text-sm font-semibold text-foreground tabular-nums">{value}</div>
+        <div className="text-[13px] font-semibold text-foreground tabular-nums">{value}</div>
       </div>
     </Card>
   );

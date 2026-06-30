@@ -46,10 +46,10 @@ function RoleRow({ role }: { role: { name: string; description: string } }) {
   return (
     <TableRow>
       <TableCell>
-        <span className="text-sm font-medium text-foreground">{role.name}</span>
+        <span className="text-[13px] font-medium text-foreground">{role.name}</span>
       </TableCell>
       <TableCell>
-        <span className="text-sm text-muted-foreground">{role.description}</span>
+        <span className="text-[13px] text-muted-foreground">{role.description}</span>
       </TableCell>
       <TableCell className="text-right">
         <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Remove</Button>
@@ -181,7 +181,7 @@ export default function ToolDetailPage() {
       {/* Auth Mode Toggle */}
       <Card>
         <CardContent>
-          <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Authentication Mode</h2>
+          <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Authentication Mode</h2>
           <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted">
             <Button
               variant={authMode === "loma-managed" ? "secondary" : "ghost"}
@@ -216,7 +216,7 @@ export default function ToolDetailPage() {
           <Card>
             <CardContent>
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-heading font-semibold text-foreground">Roles</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground">Roles</h2>
                 <Button variant="ghost" size="xs" className="text-brand-600 hover:text-brand-700">
                   <RiAddLine size={14} />
                   Add Role
@@ -240,7 +240,7 @@ export default function ToolDetailPage() {
                 </Table>
               ) : (
                 <div className="text-center py-6">
-                  <p className="text-sm text-muted-foreground">No roles defined yet</p>
+                  <p className="text-[13px] text-muted-foreground">No roles defined yet</p>
                   <p className="text-xs text-muted-foreground/60 mt-1">Add a role to start managing access</p>
                 </div>
               )}
@@ -253,7 +253,7 @@ export default function ToolDetailPage() {
             return teamsWithDefaults.length > 0 ? (
               <Card>
                 <CardContent>
-                  <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Team Assignments</h2>
+                  <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Team Assignments</h2>
                   <Table>
                     <TableHeader>
                       <TableRow className="border-b border-border">
@@ -276,7 +276,7 @@ export default function ToolDetailPage() {
                                   {team.name.charAt(0)}
                                 </span>
                               </div>
-                              <span className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">
+                              <span className="text-[13px] font-medium text-foreground group-hover:text-brand-600 transition-colors">
                                 {team.name}
                               </span>
                             </Link>
@@ -320,7 +320,7 @@ export default function ToolDetailPage() {
           {/* User Assignments */}
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">User Assignments</h2>
+              <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">User Assignments</h2>
 
               {toolUsers.length > 0 ? (
                 <Table>
@@ -345,7 +345,7 @@ export default function ToolDetailPage() {
                                 <span className="text-xs font-medium text-brand-700">{avatar}</span>
                               </div>
                               <div>
-                                <div className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">{name}</div>
+                                <div className="text-[13px] font-medium text-foreground group-hover:text-brand-600 transition-colors">{name}</div>
                                 <div className="text-xs text-muted-foreground">{email}</div>
                               </div>
                             </Link>
@@ -353,7 +353,7 @@ export default function ToolDetailPage() {
                           <TableCell>
                             {effective.role ? (
                               <Select defaultValue={effective.role}>
-                                <SelectTrigger className="text-sm">
+                                <SelectTrigger className="text-[13px]">
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -363,7 +363,7 @@ export default function ToolDetailPage() {
                                 </SelectContent>
                               </Select>
                             ) : (
-                              <span className="text-sm text-muted-foreground">No role</span>
+                              <span className="text-[13px] text-muted-foreground">No role</span>
                             )}
                           </TableCell>
                           <TableCell>
@@ -381,7 +381,7 @@ export default function ToolDetailPage() {
                             )}
                           </TableCell>
                           <TableCell>
-                            <span className="text-sm text-muted-foreground">
+                            <span className="text-[13px] text-muted-foreground">
                               {assignment?.last_used ? formatRelativeTime(assignment.last_used) : "Never"}
                             </span>
                           </TableCell>
@@ -395,7 +395,7 @@ export default function ToolDetailPage() {
                 </Table>
               ) : (
                 <div className="text-center py-6">
-                  <p className="text-sm text-muted-foreground">No users assigned</p>
+                  <p className="text-[13px] text-muted-foreground">No users assigned</p>
                 </div>
               )}
             </CardContent>
@@ -410,7 +410,7 @@ export default function ToolDetailPage() {
           <Card>
             <CardContent>
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-heading font-semibold text-foreground">OAuth Configuration</h2>
+                <h2 className="text-[13px] font-heading font-semibold text-foreground">OAuth Configuration</h2>
                 <Badge className={`text-[10px] ${
                   config.oauth.configured
                     ? "bg-emerald-50 text-emerald-600"
@@ -456,7 +456,7 @@ export default function ToolDetailPage() {
           {/* Connected Users */}
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Connected Users</h2>
+              <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Connected Users</h2>
 
               {toolUsers.length > 0 ? (
                 <Table>
@@ -477,7 +477,7 @@ export default function ToolDetailPage() {
                               <span className="text-xs font-medium text-brand-700">{avatar}</span>
                             </div>
                             <div>
-                              <div className="text-sm font-medium text-foreground">{name}</div>
+                              <div className="text-[13px] font-medium text-foreground">{name}</div>
                               <div className="text-xs text-muted-foreground">{email}</div>
                             </div>
                           </div>
@@ -486,7 +486,7 @@ export default function ToolDetailPage() {
                           <StatusBadge status={assignment?.oauth_status ?? null} />
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm text-muted-foreground">
+                          <span className="text-[13px] text-muted-foreground">
                             {assignment?.last_used ? formatRelativeTime(assignment.last_used) : "Never"}
                           </span>
                         </TableCell>
@@ -501,7 +501,7 @@ export default function ToolDetailPage() {
                 </Table>
               ) : (
                 <div className="text-center py-6">
-                  <p className="text-sm text-muted-foreground">No users have connected yet</p>
+                  <p className="text-[13px] text-muted-foreground">No users have connected yet</p>
                 </div>
               )}
             </CardContent>

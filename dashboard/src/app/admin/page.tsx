@@ -466,7 +466,7 @@ export default function AdminPage() {
         <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">
           {tab === "environment" ? "Environment Variables" : tab === "settings" ? "Settings" : tab === "usage" ? "Usage & Authentication" : "Users & Permissions"}
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <p className="text-[13px] text-muted-foreground mt-1">
           {tab === "environment"
             ? "Manage .env configuration for the running service."
             : tab === "settings"
@@ -502,7 +502,7 @@ export default function AdminPage() {
               <RiShieldCheckLine className="text-indigo-500" size={16} />
             </div>
             <div>
-              <span className="text-sm font-medium text-foreground">Role Permissions</span>
+              <span className="text-[13px] font-medium text-foreground">Role Permissions</span>
               <div className="flex items-center gap-1.5 mt-0.5">
                 {(["admin", "maintainer", "operator", "analyst", "chatter"] as const).map((role) => {
                   const m = ROLE_META[role];
@@ -552,7 +552,7 @@ export default function AdminPage() {
                 <TableBody>
                   {ROLE_PERMISSIONS.map((row) => (
                     <TableRow key={row.permission} className="border-b border-muted/50 last:border-0">
-                      <TableCell className="text-[12px] text-muted-foreground">{row.permission}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{row.permission}</TableCell>
                       {(["admin", "maintainer", "operator", "analyst", "chatter"] as const).map((role) => (
                         <TableCell key={role} className="text-center">
                           {row[role] ? (
@@ -667,10 +667,10 @@ export default function AdminPage() {
                     <TableCell className="sticky left-0 bg-card z-10">
                       <Link href={`/admin/${encodeURIComponent(user.email)}`} className="flex items-center gap-2.5 group">
                         <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
-                          <span className="text-sm font-medium text-brand-700">{user.avatar}</span>
+                          <span className="text-[13px] font-medium text-brand-700">{user.avatar}</span>
                         </div>
                         <div>
-                          <div className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">
+                          <div className="text-[13px] font-medium text-foreground group-hover:text-brand-600 transition-colors">
                             {user.name}
                           </div>
                           <div className="text-xs text-muted-foreground">{user.email}</div>
@@ -872,7 +872,7 @@ export default function AdminPage() {
                     {/* Team info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-semibold text-foreground group-hover:text-brand-600 transition-colors">
+                        <h3 className="text-[13px] font-semibold text-foreground group-hover:text-brand-600 transition-colors">
                           {team.name}
                         </h3>
                         <Badge variant="secondary" className="text-[10px] bg-gray-100 text-muted-foreground">
@@ -1010,7 +1010,7 @@ export default function AdminPage() {
           <Card className="overflow-hidden">
             <CardHeader className="px-4 py-3 border-b border-border flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-sm">AI Providers</CardTitle>
+                <CardTitle className="text-[13px]">AI Providers</CardTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">Manage model-provider keys used by Dashboard Chat.</p>
               </div>
               <Badge variant="secondary" className="text-[11px] bg-gray-100 text-muted-foreground">
@@ -1027,7 +1027,7 @@ export default function AdminPage() {
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <div className="flex items-center gap-2">
-                            <h3 className="text-sm font-semibold text-foreground">{provider.name}</h3>
+                            <h3 className="text-[13px] font-semibold text-foreground">{provider.name}</h3>
                             <Badge variant="secondary" className={cn("text-[10px]", connected ? "bg-emerald-50 text-emerald-600" : "bg-gray-100 text-muted-foreground")}>
                               {connected ? "Connected" : "Not connected"}
                             </Badge>
@@ -1070,7 +1070,7 @@ export default function AdminPage() {
                 })}
                 <div className="p-3 space-y-2">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-foreground">Claude</h3>
+                    <h3 className="text-[13px] font-semibold text-foreground">Claude</h3>
                     <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-600">
                       Agent SDK
                     </Badge>
@@ -1426,7 +1426,7 @@ export default function AdminPage() {
           {envTab === "audit" && (
             <Card className="overflow-hidden">
               {envAuditLog.length === 0 ? (
-                <div className="px-4 py-6 text-center text-sm text-muted-foreground">No audit log entries yet.</div>
+                <div className="px-4 py-6 text-center text-[13px] text-muted-foreground">No audit log entries yet.</div>
               ) : (
                 <div className="divide-y divide-border">
                   {envAuditLog.map((entry, idx) => {
@@ -1449,7 +1449,7 @@ export default function AdminPage() {
                             <Badge variant="secondary" className={cn("text-[10px]", entry.action === "update" ? "bg-blue-50 text-blue-600" : "bg-violet-50 text-violet-600")}>
                               {entry.action === "update" ? "Update" : "Reveal"}
                             </Badge>
-                            <span className="text-sm text-foreground truncate">{entry.user_email}</span>
+                            <span className="text-[13px] text-foreground truncate">{entry.user_email}</span>
                             {entry.action === "update" && entry.changes && (
                               <span className="text-xs text-muted-foreground">
                                 {entry.changes.length} change{entry.changes.length !== 1 ? "s" : ""}
@@ -1539,7 +1539,7 @@ export default function AdminPage() {
           <Card className="overflow-hidden">
             <CardHeader className="px-5 py-4 border-b border-border flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <CardTitle className="text-sm">Allowed Email Domain</CardTitle>
+                <CardTitle className="text-[13px]">Allowed Email Domain</CardTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">Only users with these email domains can sign in to Loma.</p>
               </div>
               <div className="flex items-center gap-2">
@@ -1604,7 +1604,7 @@ export default function AdminPage() {
 
           <Card className="overflow-hidden">
             <CardHeader className="px-5 py-4 border-b border-border">
-              <CardTitle className="text-sm">Core Prompt</CardTitle>
+              <CardTitle className="text-[13px]">Core Prompt</CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">
                 These sections are stored in MongoDB and loaded into Loma&apos;s base system prompt.
               </p>
@@ -1624,7 +1624,7 @@ export default function AdminPage() {
                       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                         <div>
                           <div className="flex items-center gap-2">
-                            <h3 className="text-sm font-semibold text-foreground">{setting.title}</h3>
+                            <h3 className="text-[13px] font-semibold text-foreground">{setting.title}</h3>
                             {changed ? (
                               <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-700">Modified</Badge>
                             ) : setting.content ? (
@@ -1695,7 +1695,7 @@ export default function AdminPage() {
         <>
           <UsagePanel />
           <div className="mt-6">
-            <h3 className="text-sm font-medium text-muted-foreground mb-2">Server Terminal</h3>
+            <h3 className="text-[13px] font-medium text-muted-foreground mb-2">Server Terminal</h3>
             <WebTerminal />
           </div>
         </>
@@ -1707,7 +1707,7 @@ export default function AdminPage() {
     <Dialog open={showDiff} onOpenChange={setShowDiff}>
       <DialogContent className="max-w-lg" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle className="text-sm">Review Changes</DialogTitle>
+          <DialogTitle className="text-[13px]">Review Changes</DialogTitle>
           <DialogDescription className="text-xs">The following changes will be applied to the .env file.</DialogDescription>
         </DialogHeader>
         <div className="overflow-y-auto max-h-[50vh] space-y-2">
