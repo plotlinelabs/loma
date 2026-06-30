@@ -32,7 +32,7 @@ function buildCreateSkillPrompt(): string {
 
 function formatUpdated(value?: string): string {
   if (!value) return "-";
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export default function SkillsPage() {
@@ -72,14 +72,14 @@ export default function SkillsPage() {
       )}
 
       <div className="bg-card border border-border rounded-xl overflow-hidden overflow-x-auto">
-        <Table className="table-fixed">
+        <Table className="table-fixed min-w-[760px]">
           <TableHeader>
             <TableRow className="border-b border-border bg-muted/50">
-              <TableHead className="w-[130px]">Skill</TableHead>
+              <TableHead className="w-[140px]">Skill</TableHead>
               <TableHead>Description</TableHead>
-              <TableHead className="w-[100px]">Tags</TableHead>
-              <TableHead className="w-[70px]">Files</TableHead>
-              <TableHead className="w-[90px]">Updated</TableHead>
+              <TableHead className="w-[110px]">Tags</TableHead>
+              <TableHead className="w-[120px]">Files</TableHead>
+              <TableHead className="w-[110px]">Updated</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

@@ -1283,17 +1283,17 @@ export default function ChatPanel({
             title={title}
             className={
               isActiveComposer
-                ? "group inline-flex h-8 max-w-full items-center gap-2 rounded-full border border-gray-200 bg-white px-2.5 text-left text-gray-600 shadow-[0_1px_0_rgba(10,10,10,0.03)] transition-colors hover:border-gray-300 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-accent-200 disabled:cursor-not-allowed disabled:opacity-55 dark:border-gray-300 dark:bg-gray-100 dark:text-gray-700 dark:hover:bg-gray-200"
-                : "group inline-flex h-10 max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-white/90 px-2.5 text-left text-gray-700 shadow-[0_1px_0_rgba(10,10,10,0.04)] transition-all hover:border-gray-300 hover:bg-white focus:outline-none focus:ring-2 focus:ring-accent-200 disabled:cursor-not-allowed disabled:opacity-55 dark:border-gray-300 dark:bg-gray-100 dark:text-gray-800 dark:hover:bg-gray-200 dark:focus:ring-accent-300/40"
+                ? "group inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-55"
+                : "group inline-flex h-10 max-w-full items-center gap-2 rounded-xl border border-border bg-card px-2.5 text-left text-foreground transition-all hover:bg-muted focus:outline-none focus:ring-2 focus:ring-accent-200 disabled:cursor-not-allowed disabled:opacity-55"
             }
           >
             {isActiveComposer ? (
               <>
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
                 <span className="min-w-0 truncate text-xs font-medium">
-                  <span className="text-gray-400 dark:text-gray-500">{providerDisplay}</span>
-                  <span className="mx-1 text-gray-300">/</span>
-                  <span className="font-semibold text-gray-800 dark:text-gray-900">{modelLabel}</span>
+                  <span className="text-muted-foreground">{providerDisplay}</span>
+                  <span className="mx-1 text-muted-foreground/40">/</span>
+                  <span className="font-semibold text-foreground">{modelLabel}</span>
                 </span>
               </>
             ) : (
