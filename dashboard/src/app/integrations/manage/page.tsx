@@ -34,6 +34,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RiCloseLine, RiFileCopyLine, RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
 
 const WebTerminal = dynamic(() => import("../../../components/WebTerminal"), { ssr: false });
@@ -693,38 +694,36 @@ export default function IntegrationsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-4">
-          {/* Org Integrations -- maintainer+ only */}
-          {canManageOrgIntegrations && userManagedIntegrations.length > 0 && (
-            <div>
-              <div className="mb-2">
-                <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
-                  Org Integrations
-                </h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Shared across the team — connect with an API key
-                </p>
-              </div>
+        <Tabs defaultValue="org">
+          <TabsList>
+            <TabsTrigger value="org">Org</TabsTrigger>
+            <TabsTrigger value="system">System</TabsTrigger>
+            <TabsTrigger value="custom">Custom</TabsTrigger>
+            <TabsTrigger value="personal">Personal</TabsTrigger>
+          </TabsList>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {/* Org Integrations */}
+          <TabsContent value="org">
+            {canManageOrgIntegrations && userManagedIntegrations.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {userManagedIntegrations.map((integ) => {
                 const isOrgConnected = integ.status === "connected";
                 const Logo = PROVIDER_LOGOS[integ.provider];
                 return (
                   <Card key={integ.provider}>
                     <CardContent>
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
                             {Logo ? <Logo /> : (
                               <span className="text-lg font-bold text-muted-foreground">
                                 {integ.display_name[0]}
                               </span>
                             )}
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <h2 className="text-sm font-heading font-semibold text-foreground">
+                              <h2 className="text-sm font-heading font-semibold text-foreground truncate">
                                 {integ.display_name}
                               </h2>
                               <StatusBadge status={integ.status} />
@@ -735,11 +734,12 @@ export default function IntegrationsPage() {
                           </div>
                         </div>
 
-                        <div>
+                        <div className="shrink-0">
                           {isOrgConnected ? (
                             <Button
                               variant="destructive"
                               size="sm"
+                              className="whitespace-nowrap"
                               onClick={() => handleDisconnectOrg(integ.provider, integ.display_name)}
                               disabled={disconnectingOrg === integ.provider}
                             >
@@ -748,6 +748,7 @@ export default function IntegrationsPage() {
                           ) : (
                             <Button
                               size="sm"
+                              className="whitespace-nowrap"
                               onClick={() => setConnectModalTarget(integ)}
                             >
                               Connect
@@ -831,22 +832,21 @@ export default function IntegrationsPage() {
                 );
               })}
               </div>
-            </div>
-          )}
+            ) : (
+              <Card className="border-dashed">
+                <CardContent className="p-3 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    No org integrations available.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
 
           {/* System-Managed Integrations */}
-          {canManageOrgIntegrations && systemManagedIntegrations.length > 0 && (
-            <div>
-              <div className="mb-2">
-                <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
-                  System-Managed Integrations
-                </h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Configured via server environment — no manual setup needed
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          <TabsContent value="system">
+            {canManageOrgIntegrations && systemManagedIntegrations.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {systemManagedIntegrations.map((integ) => {
                 const Logo = PROVIDER_LOGOS[integ.provider];
                 return (
@@ -889,31 +889,33 @@ export default function IntegrationsPage() {
                 );
               })}
               </div>
-            </div>
-          )}
-
-          {/* Custom MCP Connectors -- admin only */}
-          {isAdmin && (
-            <div className="space-y-2">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
-                    Custom Connectors
-                  </h2>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Add any remote MCP server — its tools become available to every user
+            ) : (
+              <Card className="border-dashed">
+                <CardContent className="p-3 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    No system-managed integrations configured.
                   </p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          {/* Custom MCP Connectors */}
+          <TabsContent value="custom">
+            <div className="space-y-2">
+              {isAdmin && (
+                <div className="flex justify-end">
+                  <Button size="sm" onClick={() => setShowCustomModal(true)}>
+                    Add custom connector
+                  </Button>
                 </div>
-                <Button size="sm" onClick={() => setShowCustomModal(true)}>
-                  Add custom connector
-                </Button>
-              </div>
+              )}
 
               {customConnectors.length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="p-3 text-center">
                     <p className="text-sm text-muted-foreground">
-                      No custom connectors yet. Add a remote MCP server to extend the agent.
+                      No custom connectors yet.{isAdmin ? " Add a remote MCP server to extend the agent." : ""}
                     </p>
                   </CardContent>
                 </Card>
@@ -940,14 +942,17 @@ export default function IntegrationsPage() {
                             </p>
                           </div>
                         </div>
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
-                          disabled={removingCustom === integ.provider}
-                        >
-                          {removingCustom === integ.provider ? "Removing..." : "Remove"}
-                        </Button>
+                        {isAdmin && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="shrink-0 whitespace-nowrap"
+                            onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
+                            disabled={removingCustom === integ.provider}
+                          >
+                            {removingCustom === integ.provider ? "Removing..." : "Remove"}
+                          </Button>
+                        )}
                       </div>
                       <Separator className="my-5" />
                       <div className="flex flex-wrap items-center gap-2">
@@ -968,327 +973,323 @@ export default function IntegrationsPage() {
                 ))
               )}
             </div>
-          )}
+          </TabsContent>
 
           {/* Personal Integrations */}
-          <div className="space-y-2">
-            {canManageOrgIntegrations && orgIntegrations.length > 0 && (
-              <div>
-                <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
-                  Personal Integrations
-                </h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Scoped to your account — Loma acts on your behalf
-                </p>
-              </div>
-            )}
-
-          {/* Google Integration Card */}
-          <Card>
-            <CardContent>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                    <GoogleLogo />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-heading font-semibold text-foreground">
-                        Google
-                      </h2>
-                      <StatusBadge status={googleConn?.status || "not_connected"} />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                      Gmail, Drive, Calendar, Sheets, Docs, Slides
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  {isConnected ? (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleDisconnect}
-                      disabled={disconnecting}
-                    >
-                      {disconnecting ? "Disconnecting..." : "Disconnect"}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      onClick={handleConnect}
-                      disabled={connecting}
-                    >
-                      {connecting ? "Connecting..." : isExpired ? "Reconnect" : "Connect Google"}
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {isConnected && googleConn && (
-                <>
-                  <Separator className="my-5" />
-                  {googleConn.connected_at && (
-                    <p className="text-xs text-muted-foreground mb-2">
-                      Connected {formatDate(googleConn.connected_at)}
-                    </p>
-                  )}
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                      Permissions granted
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {(googleConn.scopes || []).map((scope) => (
-                        <Badge
-                          key={scope}
-                          variant="outline"
-                        >
-                          {formatScope(scope)}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {isExpired && (
-                <Alert className="mt-2 bg-amber-50 border-amber-100">
-                  <AlertDescription className="text-amber-700">
-                    Your Google connection has expired. Please reconnect to restore access.
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {!isConnected && !isExpired && (
-                <>
-                  <Separator className="my-5" />
-                  <p className="text-sm text-muted-foreground">
-                    Connect your Google account to let Loma access Gmail, Drive, Calendar,
-                    Sheets, Docs, and Slides on your behalf. Your tokens are encrypted and stored securely.
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {["Read emails", "Compose & send emails", "Read & write Drive", "Calendar", "Sheets", "Read & edit Docs", "Read & edit Slides"].map((perm) => (
-                      <Badge
-                        key={perm}
-                        className="bg-blue-50 text-blue-600 border-transparent"
-                      >
-                        {perm}
-                      </Badge>
-                    ))}
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Slack Integration Card */}
-          <Card>
-            <CardContent>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                    <SlackLogo />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-heading font-semibold text-foreground">
-                        Slack
-                      </h2>
-                      <StatusBadge status={slackConn?.status || "not_connected"} />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                      Read, search, and send messages as you
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  {isSlackConnected ? (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleDisconnectSlack}
-                      disabled={disconnectingSlack}
-                    >
-                      {disconnectingSlack ? "Disconnecting..." : "Disconnect"}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      onClick={handleConnectSlack}
-                      disabled={connectingSlack}
-                    >
-                      {connectingSlack ? "Connecting..." : isSlackExpired ? "Reconnect" : "Connect Slack"}
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {isSlackConnected && slackConn && (
-                <>
-                  <Separator className="my-5" />
-                  {slackConn.connected_at && (
-                    <p className="text-xs text-muted-foreground mb-2">
-                      Connected {formatDate(slackConn.connected_at)}
-                    </p>
-                  )}
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                      Permissions granted
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {(slackConn.scopes || []).map((scope) => (
-                        <Badge
-                          key={scope}
-                          variant="outline"
-                        >
-                          {formatScope(scope)}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {isSlackExpired && (
-                <Alert className="mt-2 bg-amber-50 border-amber-100">
-                  <AlertDescription className="text-amber-700">
-                    Your Slack connection has expired. Please reconnect to restore access.
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {!isSlackConnected && !isSlackExpired && (
-                <>
-                  <Separator className="my-5" />
-                  <p className="text-sm text-muted-foreground">
-                    Connect your Slack account to let Loma read channels, search messages, view unreads,
-                    and send messages as you. Your token is encrypted and stored securely.
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {["Read channels", "Read DMs", "Send messages as you", "Search messages", "View unreads"].map((perm) => (
-                      <Badge
-                        key={perm}
-                        className="bg-purple-50 text-purple-600 border-transparent"
-                      >
-                        {perm}
-                      </Badge>
-                    ))}
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Claude Code Integration Card */}
-          <Card>
-            <CardContent>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                    <ClaudeLogo />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-heading font-semibold text-foreground">
-                        Claude Code
-                      </h2>
-                      <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                      Your account joins the shared round-robin pool
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  {claudeAuth?.connected ? (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleDisconnectClaude}
-                      disabled={disconnectingClaude}
-                    >
-                      {disconnectingClaude ? "Disconnecting..." : "Disconnect"}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      className="bg-amber-600 text-white hover:bg-amber-700"
-                      onClick={handleConnectClaude}
-                      disabled={showClaudeTerminal}
-                    >
-                      {showClaudeTerminal ? "Logging in..." : "Login with Claude"}
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {claudeAuth?.connected && (
-                <>
-                  <Separator className="my-5" />
-                  <div className="flex items-center gap-3 text-sm">
-                    {claudeAuth.email && (
-                      <div>
-                        <span className="text-muted-foreground">Account: </span>
-                        <span className="text-foreground">{claudeAuth.email}</span>
+          <TabsContent value="personal">
+            <div className="space-y-2">
+              {/* Google Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <GoogleLogo />
                       </div>
-                    )}
-                    {claudeAuth.authMethod && (
                       <div>
-                        <span className="text-muted-foreground">Auth: </span>
-                        <span className="text-foreground">{claudeAuth.authMethod}</span>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-sm font-heading font-semibold text-foreground">
+                            Google
+                          </h2>
+                          <StatusBadge status={googleConn?.status || "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Gmail, Drive, Calendar, Sheets, Docs, Slides
+                        </p>
                       </div>
-                    )}
-                    <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
-                      In round-robin pool
-                    </Badge>
-                  </div>
-                </>
-              )}
+                    </div>
 
-              {showClaudeTerminal && (
-                <>
-                  <Separator className="my-5" />
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-muted-foreground">
-                      Complete the OAuth flow in the terminal below:
-                    </p>
-                    <Button variant="link" size="xs" onClick={handleClaudeTerminalDone}>
-                      Done
-                    </Button>
+                    <div className="shrink-0">
+                      {isConnected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnect}
+                          disabled={disconnecting}
+                        >
+                          {disconnecting ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleConnect}
+                          disabled={connecting}
+                        >
+                          {connecting ? "Connecting..." : isExpired ? "Reconnect" : "Connect Google"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  <WebTerminal
-                    autoCommand={claudeAutoCommand}
-                    tokenEndpoint="/api/terminal/token"
-                  />
-                </>
-              )}
 
-              {!claudeAuth?.connected && !showClaudeTerminal && (
-                <>
-                  <Separator className="my-5" />
-                  <p className="text-sm text-muted-foreground">
-                    Connect your Claude Code subscription (Pro, Max, or Teams) to join the shared
-                    round-robin pool. All connected accounts are used to process tasks across the team.
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {["Shared pool", "Round-robin usage", "Rate limit rotation"].map((perm) => (
-                      <Badge
-                        key={perm}
-                        className="bg-amber-50 text-amber-600 border-transparent"
-                      >
-                        {perm}
-                      </Badge>
-                    ))}
+                  {isConnected && googleConn && (
+                    <>
+                      <Separator className="my-5" />
+                      {googleConn.connected_at && (
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Connected {formatDate(googleConn.connected_at)}
+                        </p>
+                      )}
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                          Permissions granted
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {(googleConn.scopes || []).map((scope) => (
+                            <Badge
+                              key={scope}
+                              variant="outline"
+                            >
+                              {formatScope(scope)}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {isExpired && (
+                    <Alert className="mt-2 bg-amber-50 border-amber-100">
+                      <AlertDescription className="text-amber-700">
+                        Your Google connection has expired. Please reconnect to restore access.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!isConnected && !isExpired && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-sm text-muted-foreground">
+                        Connect your Google account to let Loma access Gmail, Drive, Calendar,
+                        Sheets, Docs, and Slides on your behalf. Your tokens are encrypted and stored securely.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Read emails", "Compose & send emails", "Read & write Drive", "Calendar", "Sheets", "Read & edit Docs", "Read & edit Slides"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-blue-50 text-blue-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Slack Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <SlackLogo />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-sm font-heading font-semibold text-foreground">
+                            Slack
+                          </h2>
+                          <StatusBadge status={slackConn?.status || "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Read, search, and send messages as you
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {isSlackConnected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnectSlack}
+                          disabled={disconnectingSlack}
+                        >
+                          {disconnectingSlack ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleConnectSlack}
+                          disabled={connectingSlack}
+                        >
+                          {connectingSlack ? "Connecting..." : isSlackExpired ? "Reconnect" : "Connect Slack"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-          </div>
-        </div>
+
+                  {isSlackConnected && slackConn && (
+                    <>
+                      <Separator className="my-5" />
+                      {slackConn.connected_at && (
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Connected {formatDate(slackConn.connected_at)}
+                        </p>
+                      )}
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                          Permissions granted
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {(slackConn.scopes || []).map((scope) => (
+                            <Badge
+                              key={scope}
+                              variant="outline"
+                            >
+                              {formatScope(scope)}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {isSlackExpired && (
+                    <Alert className="mt-2 bg-amber-50 border-amber-100">
+                      <AlertDescription className="text-amber-700">
+                        Your Slack connection has expired. Please reconnect to restore access.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!isSlackConnected && !isSlackExpired && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-sm text-muted-foreground">
+                        Connect your Slack account to let Loma read channels, search messages, view unreads,
+                        and send messages as you. Your token is encrypted and stored securely.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Read channels", "Read DMs", "Send messages as you", "Search messages", "View unreads"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-purple-50 text-purple-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Claude Code Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <ClaudeLogo />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-sm font-heading font-semibold text-foreground">
+                            Claude Code
+                          </h2>
+                          <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Your account joins the shared round-robin pool
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {claudeAuth?.connected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnectClaude}
+                          disabled={disconnectingClaude}
+                        >
+                          {disconnectingClaude ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="bg-amber-600 text-white hover:bg-amber-700 whitespace-nowrap"
+                          onClick={handleConnectClaude}
+                          disabled={showClaudeTerminal}
+                        >
+                          {showClaudeTerminal ? "Logging in..." : "Login with Claude"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {claudeAuth?.connected && (
+                    <>
+                      <Separator className="my-5" />
+                      <div className="flex items-center gap-3 text-sm">
+                        {claudeAuth.email && (
+                          <div>
+                            <span className="text-muted-foreground">Account: </span>
+                            <span className="text-foreground">{claudeAuth.email}</span>
+                          </div>
+                        )}
+                        {claudeAuth.authMethod && (
+                          <div>
+                            <span className="text-muted-foreground">Auth: </span>
+                            <span className="text-foreground">{claudeAuth.authMethod}</span>
+                          </div>
+                        )}
+                        <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
+                          In round-robin pool
+                        </Badge>
+                      </div>
+                    </>
+                  )}
+
+                  {showClaudeTerminal && (
+                    <>
+                      <Separator className="my-5" />
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm text-muted-foreground">
+                          Complete the OAuth flow in the terminal below:
+                        </p>
+                        <Button variant="link" size="xs" onClick={handleClaudeTerminalDone}>
+                          Done
+                        </Button>
+                      </div>
+                      <WebTerminal
+                        autoCommand={claudeAutoCommand}
+                        tokenEndpoint="/api/terminal/token"
+                      />
+                    </>
+                  )}
+
+                  {!claudeAuth?.connected && !showClaudeTerminal && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-sm text-muted-foreground">
+                        Connect your Claude Code subscription (Pro, Max, or Teams) to join the shared
+                        round-robin pool. All connected accounts are used to process tasks across the team.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Shared pool", "Round-robin usage", "Rate limit rotation"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-amber-50 text-amber-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        </Tabs>
       )}
 
       {/* Info section */}
