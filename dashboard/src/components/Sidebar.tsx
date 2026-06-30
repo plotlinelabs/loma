@@ -18,6 +18,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import {
   RiChat1Line,
   RiGridLine,
@@ -74,6 +75,9 @@ const navigation: NavItem[] = [
     minRole: "analyst",
     icon: <RiDownloadLine size={16} />,
   },
+];
+
+const userMenuNav: NavItem[] = [
   {
     name: "Analytics",
     href: "/analytics",
@@ -81,7 +85,7 @@ const navigation: NavItem[] = [
     icon: <RiBarChartBoxLine size={16} />,
   },
   {
-    name: "Manage Integrations",
+    name: "Integrations",
     href: "/integrations/manage",
     minRole: "maintainer",
     icon: <RiSettings3Line size={16} />,
@@ -161,15 +165,15 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
   }
 
   return (
-    <div className="px-2.5 py-1">
+    <div className="px-2.5 py-1 overflow-hidden">
       <Button
         variant="ghost"
         onClick={() => setExpanded(!expanded)}
-        className="w-full text-left group space-y-1.5 h-auto px-0 rounded-none"
+        className="w-full text-left group space-y-1.5 h-auto px-0 rounded-none overflow-hidden"
       >
         <div className="flex items-center gap-2">
           <span className={cn("w-2 h-2 rounded-full flex-shrink-0", statusColor)} />
-          <span className="text-[11px] text-muted-foreground flex-1">
+          <span className="text-[11px] text-muted-foreground flex-1 truncate">
             {accountCount === 0
               ? "Claude · no accounts"
               : poolStatus.queue_depth > 0
@@ -187,7 +191,7 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
         {opencode && (
           <div className="flex items-center gap-2">
             <span className={cn("w-2 h-2 rounded-full flex-shrink-0", opencodeColor)} />
-            <span className="text-[11px] text-muted-foreground flex-1">
+            <span className="text-[11px] text-muted-foreground flex-1 truncate">
               {opencode.enabled
                 ? `OpenCode · ${opencode.total_available}/${opencode.pool_size} warm${opencode.total_warming ? ` · ${opencode.total_warming} warming` : ""}`
                 : "OpenCode · warm pool off"}
@@ -599,40 +603,56 @@ export default function Sidebar({
               )}
             </div>
 
-            {/* User section */}
+            {/* User section with dropdown */}
             {status === "authenticated" && session?.user && (
               <>
                 <Separator />
                 <div className={cn("px-2.5 py-2", collapsed && "flex justify-center")}>
-                  {collapsed ? (
-                    <Avatar size="sm" className="w-8 h-8">
-                      <AvatarFallback className="bg-brand-100 text-brand-700 text-sm font-medium">
-                        {session.user.email?.charAt(0).toUpperCase() || "U"}
-                      </AvatarFallback>
-                    </Avatar>
-                  ) : (
-                    <div className="flex items-center gap-2 px-1">
-                      <Avatar size="sm" className="w-8 h-8">
-                        <AvatarFallback className="bg-brand-100 text-brand-700 text-sm font-medium">
-                          {session.user.email?.charAt(0).toUpperCase() || "U"}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[12px] font-medium text-foreground truncate">
-                          {session.user.name || session.user.email?.split("@")[0]}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            onClick={() => signOut({ callbackUrl: "/login" })}
-                            className="text-[11px] text-muted-foreground hover:text-red-500 transition-colors h-auto p-0"
-                          >
-                            Sign out
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button className={cn(
+                        "flex items-center w-full rounded-lg transition-colors hover:bg-muted",
+                        collapsed ? "justify-center p-1" : "gap-2 px-1 py-1"
+                      )}>
+                        <Avatar size="sm" className="w-7 h-7 shrink-0">
+                          <AvatarFallback className="bg-brand-100 text-brand-700 text-xs font-medium">
+                            {session.user.email?.charAt(0).toUpperCase() || "U"}
+                          </AvatarFallback>
+                        </Avatar>
+                        {!collapsed && (
+                          <div className="min-w-0 flex-1 text-left">
+                            <div className="text-[12px] font-medium text-foreground truncate">
+                              {session.user.name || session.user.email?.split("@")[0]}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground truncate">
+                              {session.user.email}
+                            </div>
+                          </div>
+                        )}
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="top" align="start" className="w-[200px]">
+                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground truncate">
+                        {session.user.email}
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {userMenuNav.filter((item) => !item.minRole || hasRole(item.minRole)).map((item) => (
+                        <DropdownMenuItem key={item.href} asChild>
+                          <Link href={item.href} onClick={onClose} className="flex items-center gap-2 text-[13px]">
+                            {item.icon}
+                            {item.name}
+                          </Link>
+                        </DropdownMenuItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => signOut({ callbackUrl: "/login" })}
+                        className="text-red-600 focus:text-red-600 text-[13px]"
+                      >
+                        Sign out
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </>
             )}
