@@ -120,6 +120,8 @@ export default function SkillTreeSidebar({
                         const isSelected = selectedSkillSlug === slug;
                         const isSkillExpanded = expandedSkills.has(slug);
                         const files = skillFiles[slug] || skill.file_details || [];
+                        const extraFiles = files.filter((f) => f.path !== "SKILL.md");
+                        const hasExtraFiles = extraFiles.length > 0;
 
                         return (
                           <div key={slug}>
@@ -131,30 +133,34 @@ export default function SkillTreeSidebar({
                                   : "text-foreground/80 hover:bg-muted"
                               )}
                             >
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onToggleSkill(slug);
-                                }}
-                                className="p-0.5 flex-shrink-0"
-                              >
-                                <RiArrowRightSLine
-                                  size={14}
-                                  className={cn(
-                                    "text-muted-foreground transition-transform duration-150",
-                                    isSkillExpanded && "rotate-90"
-                                  )}
-                                />
-                              </button>
+                              {hasExtraFiles ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleSkill(slug);
+                                  }}
+                                  className="p-0.5 flex-shrink-0"
+                                >
+                                  <RiArrowRightSLine
+                                    size={14}
+                                    className={cn(
+                                      "text-muted-foreground transition-transform duration-150",
+                                      isSkillExpanded && "rotate-90"
+                                    )}
+                                  />
+                                </button>
+                              ) : (
+                                <span className="w-[18px] flex-shrink-0" />
+                              )}
                               <button
                                 onClick={() => onSelectSkill(slug)}
-                                className="flex-1 text-left text-[13px] font-medium truncate"
+                                className="flex-1 text-left text-[13px] truncate"
                               >
                                 {skill.name || slug}
                               </button>
                             </div>
 
-                            {isSkillExpanded && (
+                            {hasExtraFiles && isSkillExpanded && (
                               <div className="ml-6">
                                 {files.map((file) => {
                                   const isFileSelected = isSelected && selectedFilePath === file.path;
