@@ -141,23 +141,6 @@ export default function SkillDetailPane({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full">
-      {/* Title bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
-        <h2 className="text-[13px] font-medium text-foreground truncate">
-          {skill.name || slug}
-          {selectedFilePath && selectedFilePath !== "SKILL.md" && (
-            <span className="text-muted-foreground font-normal"> / {selectedFilePath}</span>
-          )}
-        </h2>
-        <div className="flex items-center gap-1">
-          {activeTab === "editor" && (
-            <Button variant="ghost" size="icon-xs" onClick={handleDownload} title="Download">
-              <RiDownloadLine size={16} />
-            </Button>
-          )}
-        </div>
-      </div>
-
       {/* Content area */}
       {isAssetFile ? (
         <ScrollArea className="flex-1 px-6 py-5">
@@ -194,11 +177,14 @@ export default function SkillDetailPane({
         </ScrollArea>
       ) : (
         <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col min-h-0">
-          <div className="px-5 border-b border-border flex-shrink-0">
+          <div className="flex items-center justify-between px-5 flex-shrink-0">
             <TabsList variant="line">
               <TabsTrigger value="viewer">Viewer</TabsTrigger>
               <TabsTrigger value="editor">Editor</TabsTrigger>
             </TabsList>
+            <Button variant="ghost" size="icon-xs" onClick={handleDownload} title="Download">
+              <RiDownloadLine size={16} />
+            </Button>
           </div>
 
           <TabsContent value="viewer" className="flex-1 overflow-y-auto px-6 py-5 m-0">
