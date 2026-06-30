@@ -110,7 +110,8 @@ export default function SkillDetailPane({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filePath;
+    const downloadName = filePath === "SKILL.md" ? `${skill?.name || slug}.md` : filePath;
+    a.download = downloadName;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -241,9 +242,8 @@ export default function SkillDetailPane({
       )}
 
       {/* Chat input bar */}
-      <div className="border-t border-border px-5 py-3 flex-shrink-0">
+      <div className="px-5 py-3 flex-shrink-0">
         <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
-          <span className="text-[10px] text-muted-foreground mr-1 flex-shrink-0">{filePath}</span>
           <Input
             type="text"
             value={chatInput}
