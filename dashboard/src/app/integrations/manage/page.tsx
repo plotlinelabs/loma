@@ -712,49 +712,42 @@ export default function IntegrationsPage() {
                 return (
                   <Card key={integ.provider}>
                     <CardContent>
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
-                            {Logo ? <Logo /> : (
-                              <span className="text-lg font-bold text-muted-foreground">
-                                {integ.display_name[0]}
-                              </span>
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-sm font-heading font-semibold text-foreground truncate">
-                                {integ.display_name}
-                              </h2>
-                              <StatusBadge status={integ.status} />
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                              {integ.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="shrink-0">
-                          {isOrgConnected ? (
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              className="whitespace-nowrap"
-                              onClick={() => handleDisconnectOrg(integ.provider, integ.display_name)}
-                              disabled={disconnectingOrg === integ.provider}
-                            >
-                              {disconnectingOrg === integ.provider ? "Disconnecting..." : "Disconnect"}
-                            </Button>
-                          ) : (
-                            <Button
-                              size="sm"
-                              className="whitespace-nowrap"
-                              onClick={() => setConnectModalTarget(integ)}
-                            >
-                              Connect
-                            </Button>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                          {Logo ? <Logo /> : (
+                            <span className="text-lg font-bold text-muted-foreground">
+                              {integ.display_name[0]}
+                            </span>
                           )}
                         </div>
+                        <div className="min-w-0 flex-1">
+                          <h2 className="text-sm font-heading font-semibold text-foreground truncate">
+                            {integ.display_name}
+                          </h2>
+                          <p className="text-xs text-muted-foreground line-clamp-1">
+                            {integ.description}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-2">
+                        <StatusBadge status={integ.status} />
+                        {isOrgConnected ? (
+                          <Button
+                            variant="destructive"
+                            size="xs"
+                            onClick={() => handleDisconnectOrg(integ.provider, integ.display_name)}
+                            disabled={disconnectingOrg === integ.provider}
+                          >
+                            {disconnectingOrg === integ.provider ? "..." : "Disconnect"}
+                          </Button>
+                        ) : (
+                          <Button
+                            size="xs"
+                            onClick={() => setConnectModalTarget(integ)}
+                          >
+                            Connect
+                          </Button>
+                        )}
                       </div>
 
                       {isOrgConnected && (
@@ -852,36 +845,29 @@ export default function IntegrationsPage() {
                 return (
                   <Card key={integ.provider}>
                     <CardContent>
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                            {Logo ? <Logo /> : (
-                              <span className="text-lg font-bold text-muted-foreground">
-                                {integ.display_name[0]}
-                              </span>
-                            )}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-sm font-heading font-semibold text-foreground">
-                                {integ.display_name}
-                              </h2>
-                              <StatusBadge status="system_managed" />
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                              {integ.description}
-                            </p>
-                          </div>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                          {Logo ? <Logo /> : (
+                            <span className="text-lg font-bold text-muted-foreground">
+                              {integ.display_name[0]}
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h2 className="text-sm font-heading font-semibold text-foreground truncate">
+                            {integ.display_name}
+                          </h2>
+                          <p className="text-xs text-muted-foreground line-clamp-1">
+                            {integ.description}
+                          </p>
                         </div>
                       </div>
-
-                      <Separator className="my-5" />
-                      <div className="flex flex-wrap gap-2">
-                        <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
-                          MCP tools active
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100">
+                          MCP tools
                         </Badge>
-                        <Badge className="bg-blue-50 text-blue-600 border-blue-100">
-                          Configured via server environment
+                        <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-600 border-blue-100">
+                          Server configured
                         </Badge>
                       </div>
                     </CardContent>
