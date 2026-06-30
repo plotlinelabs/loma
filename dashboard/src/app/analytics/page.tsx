@@ -46,11 +46,13 @@ function formatHours(minutes: number): string {
 
 function SkeletonStatCard() {
   return (
-    <Card className="p-2 flex items-center gap-2">
-      <Skeleton className="w-7 h-7 rounded-md" />
-      <div>
-        <Skeleton className="h-3 w-24 mb-2" />
-        <Skeleton className="h-7 w-16" />
+    <Card className="p-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Skeleton className="h-6 w-6 rounded-md shrink-0" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+        <Skeleton className="h-4 w-10 shrink-0" />
       </div>
     </Card>
   );
@@ -58,9 +60,9 @@ function SkeletonStatCard() {
 
 function SkeletonChartCard() {
   return (
-    <Card className="p-2 md:p-3">
+    <Card className="p-2">
       <Skeleton className="h-4 w-40 mb-2" />
-      <Skeleton className="h-72 w-full rounded-lg" />
+      <Skeleton className="h-56 w-full rounded-lg" />
     </Card>
   );
 }
@@ -143,14 +145,16 @@ export default function AnalyticsPage() {
             {[7, 30, 90].map((d) => <Skeleton key={d} className="h-8 w-10 rounded-lg" />)}
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
           <SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard />
         </div>
-        <Skeleton className="h-32 w-full rounded-xl" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <Skeleton className="h-16 w-full rounded-xl" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
           <SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard />
         </div>
-        <SkeletonChartCard /><SkeletonChartCard />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+          <SkeletonChartCard /><SkeletonChartCard />
+        </div>
       </div>
     );
   }
@@ -192,7 +196,7 @@ export default function AnalyticsPage() {
           ) : (
             <>
               {stats && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
                   <ConversationStatCard label="Total Conversations" value={stats.total_conversations}
                     icon={<RiChat1Line size={16} />}
                     iconColor="text-brand-600 bg-brand-50" />
@@ -210,31 +214,30 @@ export default function AnalyticsPage() {
 
               {costData.total_estimated_human_cost_usd > 0 && (
                 <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 p-2 hover-lift">
-                  <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2">
-                    <div>
-                      <div className="text-[13px] font-medium text-emerald-700 mb-1">Total Savings</div>
-                      <div className="text-3xl md:text-4xl font-bold text-emerald-800 tabular-nums">${costData.total_savings_usd.toFixed(2)}</div>
-                      <div className="text-[13px] text-emerald-600 mt-1">{costData.savings_percentage}% saved vs. human labor</div>
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl md:text-3xl font-bold text-emerald-800 tabular-nums">${costData.total_savings_usd.toFixed(2)}</span>
+                      <span className="text-xs font-medium text-emerald-700">saved · {costData.savings_percentage}% vs. human labor</span>
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="text-center sm:text-center">
-                        <div className="text-xs text-emerald-600 font-medium">Human Cost</div>
-                        <div className="text-base font-semibold text-emerald-800 tabular-nums">${costData.total_estimated_human_cost_usd.toFixed(2)}</div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[11px] text-emerald-600 font-medium">Human</span>
+                        <span className="text-sm font-semibold text-emerald-800 tabular-nums">${costData.total_estimated_human_cost_usd.toFixed(2)}</span>
                       </div>
-                      <div className="text-center sm:text-center">
-                        <div className="text-xs text-emerald-600 font-medium">API Cost</div>
-                        <div className="text-base font-semibold text-emerald-800 tabular-nums">${costData.total_cost_usd.toFixed(2)}</div>
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[11px] text-emerald-600 font-medium">API</span>
+                        <span className="text-sm font-semibold text-emerald-800 tabular-nums">${costData.total_cost_usd.toFixed(2)}</span>
                       </div>
-                      <div className="text-center sm:text-center">
-                        <div className="text-xs text-emerald-600 font-medium">Time Saved</div>
-                        <div className="text-base font-semibold text-emerald-800">{formatHours(costData.total_estimated_human_minutes)}</div>
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[11px] text-emerald-600 font-medium">Time</span>
+                        <span className="text-sm font-semibold text-emerald-800">{formatHours(costData.total_estimated_human_minutes)}</span>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
                 <CostStatCard label="Total Spend" value={`$${costData.total_cost_usd.toFixed(2)}`}
                   icon={<RiMoneyDollarCircleLine size={16} />}
                   iconColor="text-brand-600 bg-brand-50" />
@@ -249,87 +252,89 @@ export default function AnalyticsPage() {
                   iconColor="text-amber-600 bg-amber-50" />
               </div>
 
-              <Card className="p-2 hover-lift">
-                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily Cost: Human vs API</h2>
-                {costData.daily.length === 0 ? (
-                  <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
-                ) : (
-                  <div className="h-56 md:h-72">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={costData.daily}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${Number(v).toFixed(0)}`} />
-                        <Tooltip formatter={(value?: number, name?: string) => [`$${(value ?? 0).toFixed(2)}`, name ?? ""]} />
-                        <Legend />
-                        <Bar dataKey="estimated_human_cost_usd" name="Est. Human Cost" fill="var(--chart-1)" radius={[4, 4, 0, 0]} opacity={0.7} />
-                        <Bar dataKey="total_cost_usd" name="API Cost" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </Card>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                <Card className="p-2 hover-lift">
+                  <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily Cost: Human vs API</h2>
+                  {costData.daily.length === 0 ? (
+                    <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
+                  ) : (
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={costData.daily}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
+                          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${Number(v).toFixed(0)}`} />
+                          <Tooltip formatter={(value?: number, name?: string) => [`$${(value ?? 0).toFixed(2)}`, name ?? ""]} />
+                          <Legend />
+                          <Bar dataKey="estimated_human_cost_usd" name="Est. Human Cost" fill="var(--chart-1)" radius={[4, 4, 0, 0]} opacity={0.7} />
+                          <Bar dataKey="total_cost_usd" name="API Cost" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </Card>
 
-              <Card className="p-2 hover-lift">
-                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily API Cost Breakdown (USD)</h2>
-                {costData.daily.length === 0 ? (
-                  <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
-                ) : (
-                  <div className="h-56 md:h-72">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={costData.daily}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${Number(v).toFixed(2)}`} />
-                        <Tooltip formatter={(value) => `$${Number(value).toFixed(4)}`} />
-                        <Legend />
-                        <Bar dataKey="agent_cost_usd" name="Agent" fill="var(--chart-2)" stackId="cost" />
-                        <Bar dataKey="confidence_cost_usd" name="Confidence" fill="var(--chart-1)" stackId="cost" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </Card>
+                <Card className="p-2 hover-lift">
+                  <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily API Cost Breakdown (USD)</h2>
+                  {costData.daily.length === 0 ? (
+                    <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
+                  ) : (
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={costData.daily}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
+                          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${Number(v).toFixed(2)}`} />
+                          <Tooltip formatter={(value) => `$${Number(value).toFixed(4)}`} />
+                          <Legend />
+                          <Bar dataKey="agent_cost_usd" name="Agent" fill="var(--chart-2)" stackId="cost" />
+                          <Bar dataKey="confidence_cost_usd" name="Confidence" fill="var(--chart-1)" stackId="cost" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </Card>
 
-              <Card className="p-2 hover-lift">
-                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily Token Usage</h2>
-                {costData.daily.length === 0 ? (
-                  <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
-                ) : (
-                  <div className="h-56 md:h-72">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={costData.daily}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => { const n = Number(v); return n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n); }} />
-                        <Tooltip formatter={(value) => formatNumber(Number(value))} />
-                        <Legend />
-                        <Area type="monotone" dataKey="input_tokens" name="Input Tokens" stroke="var(--chart-3)" fill="var(--chart-3)" fillOpacity={0.15} />
-                        <Area type="monotone" dataKey="output_tokens" name="Output Tokens" stroke="var(--chart-4)" fill="var(--chart-4)" fillOpacity={0.15} />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </Card>
+                <Card className="p-2 hover-lift">
+                  <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Daily Token Usage</h2>
+                  {costData.daily.length === 0 ? (
+                    <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
+                  ) : (
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={costData.daily}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
+                          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => { const n = Number(v); return n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n); }} />
+                          <Tooltip formatter={(value) => formatNumber(Number(value))} />
+                          <Legend />
+                          <Area type="monotone" dataKey="input_tokens" name="Input Tokens" stroke="var(--chart-3)" fill="var(--chart-3)" fillOpacity={0.15} />
+                          <Area type="monotone" dataKey="output_tokens" name="Output Tokens" stroke="var(--chart-4)" fill="var(--chart-4)" fillOpacity={0.15} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </Card>
 
-              <Card className="p-2 hover-lift">
-                <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Conversations per Day</h2>
-                {costData.daily.length === 0 ? (
-                  <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
-                ) : (
-                  <div className="h-40 md:h-48">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={costData.daily}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
-                        <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                        <Tooltip />
-                        <Bar dataKey="conversations" name="Conversations" fill="var(--chart-5)" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </Card>
+                <Card className="p-2 hover-lift">
+                  <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Conversations per Day</h2>
+                  {costData.daily.length === 0 ? (
+                    <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
+                  ) : (
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={costData.daily}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
+                          <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                          <Tooltip />
+                          <Bar dataKey="conversations" name="Conversations" fill="var(--chart-5)" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </Card>
+              </div>
             </>
           )}
         </>
@@ -436,11 +441,13 @@ export default function AnalyticsPage() {
 
 function ConversationStatCard({ label, value, icon, iconColor }: { label: string; value: number; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-2 flex items-center gap-2 hover-lift">
-      <div className={cn("w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
-      <div>
-        <div className="text-[11px] text-muted-foreground font-medium">{label}</div>
-        <div className="text-[13px] font-semibold text-foreground">{value}</div>
+    <Card className="p-2 hover-lift">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md", iconColor)}>{icon}</span>
+          <span className="text-xs text-muted-foreground truncate">{label}</span>
+        </div>
+        <span className="text-base font-semibold text-foreground tabular-nums shrink-0">{value}</span>
       </div>
     </Card>
   );
@@ -448,11 +455,13 @@ function ConversationStatCard({ label, value, icon, iconColor }: { label: string
 
 function CostStatCard({ label, value, icon, iconColor }: { label: string; value: string; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-2 flex items-center gap-2 hover-lift">
-      <div className={cn("w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
-      <div>
-        <div className="text-[11px] text-muted-foreground font-medium">{label}</div>
-        <div className="text-[13px] font-semibold text-foreground tabular-nums">{value}</div>
+    <Card className="p-2 hover-lift">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md", iconColor)}>{icon}</span>
+          <span className="text-xs text-muted-foreground truncate">{label}</span>
+        </div>
+        <span className="text-base font-semibold text-foreground tabular-nums shrink-0">{value}</span>
       </div>
     </Card>
   );

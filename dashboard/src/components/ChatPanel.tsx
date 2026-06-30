@@ -1467,7 +1467,7 @@ export default function ChatPanel({
             >
               {renderPendingFiles()}
 
-              <div className="relative flex flex-col bg-card border border-gray-200 rounded-2xl shadow-sm focus-within:shadow-md focus-within:border-gray-300 transition-all">
+              <div className="relative flex flex-col bg-card border border-border rounded-2xl shadow-sm focus-within:border-gray-300 transition-colors">
                 <Textarea
                   ref={inputRef}
                   value={input}
@@ -1711,7 +1711,7 @@ export default function ChatPanel({
             >
               {renderPendingFiles()}
 
-              <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:ring-2 focus-within:ring-brand-500 focus-within:border-brand-500 transition-shadow">
+              <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">
                 <Textarea
                   ref={inputRef}
                   value={input}
