@@ -446,6 +446,23 @@ async def delete_skill_file(db, *, slug: str, path: str, actor: str, source: str
     return await get_skill(db, slug)
 
 
+async def update_skill_scope(db, *, slug: str, scope: str, actor: str) -> dict[str, Any]:
+    slug = slugify(slug)
+    if scope not in ("personal", "workspace"):
+        raise SkillError("Scope must be 'personal' or 'workspace'")
+    skill = await db.skills.find_one({"slug": slug, "enabled": {"$ne": False}})
+    if not skill:
+        raise SkillError("Skill not found", status=404)
+    if skill.get("scope") == "system" or skill.get("created_by") in ("system", "import"):
+        raise SkillError("Cannot change scope of system skills", status=403)
+    await db.skills.update_one(
+        {"slug": slug},
+        {"$set": {"scope": scope, "updated_at": now_utc(), "updated_by": actor}},
+    )
+    await _record_version(db, slug, actor, "dashboard", f"Changed scope to {scope}")
+    return await get_skill(db, slug)
+
+
 async def delete_skill(db, *, slug: str, actor: str, source: str = "dashboard") -> None:
     slug = slugify(slug)
     result = await db.skills.update_one(

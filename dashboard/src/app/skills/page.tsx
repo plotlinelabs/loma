@@ -179,14 +179,6 @@ function SkillsPageInner() {
     });
   }
 
-  function handleNavigate(level: "root" | "skill") {
-    if (level === "root") {
-      updateUrl(null);
-    } else if (level === "skill") {
-      updateUrl(selectedSkillSlug, null);
-    }
-  }
-
   function handleSkillUpdated() {
     if (selectedSkillSlug) {
       fetchSkill(selectedSkillSlug)
@@ -226,6 +218,7 @@ function SkillsPageInner() {
         onToggleSkill={handleToggleSkill}
         createUrl={createUrl}
         width={sidebarWidth}
+        onSkillsChanged={handleSkillUpdated}
       />
       <PanelResizer onResize={handleResize} onDoubleClick={handleResetSplit} />
       <SkillDetailPane
@@ -233,7 +226,6 @@ function SkillsPageInner() {
         selectedFilePath={selectedFilePath}
         loading={detailLoading}
         createUrl={createUrl}
-        onNavigate={handleNavigate}
         onSkillUpdated={handleSkillUpdated}
       />
     </div>

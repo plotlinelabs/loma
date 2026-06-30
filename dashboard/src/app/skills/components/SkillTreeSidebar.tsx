@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { Skill, SkillFile } from "../../../lib/api";
+import { updateSkillScope } from "../../../lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -9,6 +10,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -18,6 +20,9 @@ import {
   RiGlobalLine,
   RiInformationLine,
   RiFileLine,
+  RiGroupLine,
+  RiUserLine,
+  RiMoreLine,
 } from "@remixicon/react";
 
 type ScopeKey = "workspace" | "personal" | "system";
@@ -39,6 +44,8 @@ export default function SkillTreeSidebar({
   onToggleSection,
   onToggleSkill,
   createUrl,
+  width,
+  onSkillsChanged,
 }: {
   skills: Skill[];
   selectedSkillSlug: string | null;
@@ -51,6 +58,7 @@ export default function SkillTreeSidebar({
   onToggleSkill: (slug: string) => void;
   createUrl: string;
   width?: number;
+  onSkillsChanged?: () => void;
 }) {
   const grouped: Record<ScopeKey, Skill[]> = { workspace: [], personal: [], system: [] };
   for (const skill of skills) {
@@ -59,6 +67,15 @@ export default function SkillTreeSidebar({
       grouped[scope as ScopeKey].push(skill);
     } else {
       grouped.personal.push(skill);
+    }
+  }
+
+  async function handleMoveScope(slug: string, newScope: "personal" | "workspace") {
+    try {
+      await updateSkillScope(slug, newScope);
+      onSkillsChanged?.();
+    } catch {
+      // silent
     }
   }
 
@@ -77,7 +94,7 @@ export default function SkillTreeSidebar({
             <DropdownMenuItem asChild>
               <Link href={createUrl}>
                 <RiChat1Line size={16} className="text-muted-foreground" />
-                Create skill in chat
+                Create new skill
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
@@ -123,12 +140,13 @@ export default function SkillTreeSidebar({
                         const files = skillFiles[slug] || skill.file_details || [];
                         const extraFiles = files.filter((f) => f.path !== "SKILL.md");
                         const hasExtraFiles = extraFiles.length > 0;
+                        const isMovable = key !== "system";
 
                         return (
                           <div key={slug}>
                             <div
                               className={cn(
-                                "flex items-center gap-1 px-3 py-1.5 rounded-md mx-1 cursor-pointer transition-colors",
+                                "group flex items-center gap-1 px-3 py-1.5 rounded-md mx-1 cursor-pointer transition-colors",
                                 isSelected && !selectedFilePath
                                   ? "bg-accent text-accent-foreground"
                                   : "text-foreground/80 hover:bg-muted"
@@ -159,6 +177,31 @@ export default function SkillTreeSidebar({
                               >
                                 {skill.name || slug}
                               </button>
+                              {isMovable && (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="p-0.5 rounded flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                    >
+                                      <RiMoreLine size={14} />
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" className="min-w-[160px]">
+                                    {key === "personal" ? (
+                                      <DropdownMenuItem onClick={() => handleMoveScope(slug, "workspace")}>
+                                        <RiGroupLine size={14} className="text-muted-foreground" />
+                                        Move to Workspace
+                                      </DropdownMenuItem>
+                                    ) : (
+                                      <DropdownMenuItem onClick={() => handleMoveScope(slug, "personal")}>
+                                        <RiUserLine size={14} className="text-muted-foreground" />
+                                        Move to Personal
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
                             </div>
 
                             {hasExtraFiles && isSkillExpanded && (

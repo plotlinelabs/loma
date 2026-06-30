@@ -12,14 +12,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Breadcrumb,
-  BreadcrumbList,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
 import { RiDownloadLine, RiSendPlaneLine } from "@remixicon/react";
 import SkillEmptyState from "./SkillEmptyState";
 
@@ -59,14 +51,12 @@ export default function SkillDetailPane({
   selectedFilePath,
   loading,
   createUrl,
-  onNavigate,
   onSkillUpdated,
 }: {
   skill: SkillDetailResponse | null;
   selectedFilePath: string | null;
   loading: boolean;
   createUrl: string;
-  onNavigate: (level: "root" | "skill") => void;
   onSkillUpdated: () => void;
 }) {
   const [editorContent, setEditorContent] = useState("");
@@ -148,39 +138,17 @@ export default function SkillDetailPane({
   }
 
   const slug = skill.slug || skill.name;
-  const scopeLabel = (skill.scope || "personal").charAt(0).toUpperCase() + (skill.scope || "personal").slice(1);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full">
-      {/* Breadcrumb + actions */}
+      {/* Title bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem>
-              <BreadcrumbLink className="cursor-pointer" onClick={() => onNavigate("root")}>
-                Skills
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
-              <span className="text-muted-foreground">{scopeLabel}</span>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
-              <BreadcrumbLink className="cursor-pointer" onClick={() => onNavigate("skill")}>
-                {skill.name || slug}
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            {selectedFilePath && (
-              <>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{selectedFilePath}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-          </BreadcrumbList>
-        </Breadcrumb>
+        <h2 className="text-[13px] font-medium text-foreground truncate">
+          {skill.name || slug}
+          {selectedFilePath && selectedFilePath !== "SKILL.md" && (
+            <span className="text-muted-foreground font-normal"> / {selectedFilePath}</span>
+          )}
+        </h2>
         <div className="flex items-center gap-1">
           {activeTab === "editor" && (
             <Button variant="ghost" size="icon-xs" onClick={handleDownload} title="Download">

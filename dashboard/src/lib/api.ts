@@ -312,6 +312,19 @@ export async function updateSkillFile(name: string, path: string, content: strin
   return res.json();
 }
 
+export async function updateSkillScope(name: string, scope: "personal" | "workspace"): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/scope`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to update skill scope: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteSkillFile(name: string, path: string): Promise<SkillDetailResponse> {
   const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/files`, {
     method: "DELETE",

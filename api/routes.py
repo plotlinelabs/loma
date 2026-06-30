@@ -1159,6 +1159,25 @@ async def handle_delete_skill_file(request: web.Request) -> web.Response:
         return _skill_error_response(exc)
 
 
+async def handle_update_skill_scope(request: web.Request) -> web.Response:
+    """PUT /api/skills/{name}/scope — change skill scope (personal/workspace)."""
+    require_maintainer_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        body = await request.json()
+        skill = await skill_service.update_skill_scope(
+            db,
+            slug=request.match_info["name"],
+            scope=body.get("scope", ""),
+            actor=get_user_email(request),
+        )
+        return web.json_response(skill)
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
 async def handle_delete_skill(request: web.Request) -> web.Response:
     require_maintainer_or_above(request)
     db = get_db()
@@ -1663,6 +1682,7 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/skills/{name}/diff", handle_get_skill_diff)
     app.router.add_put("/api/skills/{name}", handle_update_skill)
     app.router.add_delete("/api/skills/{name}", handle_delete_skill)
+    app.router.add_put("/api/skills/{name}/scope", handle_update_skill_scope)
     app.router.add_put("/api/skills/{name}/files", handle_update_skill_file)
     app.router.add_delete("/api/skills/{name}/files", handle_delete_skill_file)
     app.router.add_post("/api/skills/{name}/assets", handle_upload_skill_asset)
