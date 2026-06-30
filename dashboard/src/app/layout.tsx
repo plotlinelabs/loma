@@ -1,23 +1,17 @@
 import type { Metadata } from "next";
-import { Figtree, JetBrains_Mono, Outfit, Red_Hat_Display } from "next/font/google";
+import { JetBrains_Mono, Red_Hat_Display, Roboto, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 import Providers from "../components/Providers";
 import LayoutShell from "../components/LayoutShell";
+import { cn } from "@/lib/utils";
 
-const figtree = Figtree({
-  variable: "--font-figtree",
-  subsets: ["latin"],
-});
+const instrumentSerifHeading = Instrument_Serif({subsets:['latin'],weight:['400'],variable:'--font-heading'});
+
+const roboto = Roboto({subsets:['latin'],variable:'--font-sans'});
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains",
   subsets: ["latin"],
-});
-
-const outfit = Outfit({
-  variable: "--font-outfit",
-  subsets: ["latin"],
-  weight: ["600", "700", "800"],
 });
 
 const redHatDisplay = Red_Hat_Display({
@@ -40,7 +34,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning className={cn("font-sans", roboto.variable, instrumentSerifHeading.variable, jetbrainsMono.variable, redHatDisplay.variable)}>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -49,7 +43,7 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${figtree.variable} ${jetbrainsMono.variable} ${outfit.variable} ${redHatDisplay.variable} antialiased bg-gray-50 text-gray-900 min-h-screen font-[family-name:var(--font-figtree)]`}
+        className="antialiased min-h-screen"
       >
         <Providers>
           <LayoutShell>{children}</LayoutShell>
