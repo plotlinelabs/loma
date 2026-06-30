@@ -2,31 +2,6 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
-import {
-  RiArrowDownSLine,
-  RiCheckLine,
-  RiPencilLine,
-  RiLockLine,
-  RiRefreshLine,
-  RiFileCopyLine,
-  RiLoader4Line,
-  RiPriceTag3Line,
-} from "@remixicon/react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { cn } from "@/lib/utils";
-import { statusColors } from "@/lib/status-colors";
 import {
   fetchFlow,
   fetchFlowRuns,
@@ -91,10 +66,17 @@ function getLabelColor(label: string) {
 }
 
 function statusBadge(status: string) {
+  const styles: Record<string, string> = {
+    active: "bg-green-50 text-green-700 border-green-200",
+    paused: "bg-yellow-50 text-yellow-700 border-yellow-200",
+    completed: "bg-gray-50 text-gray-500 border-gray-200",
+  };
   return (
-    <Badge variant="outline" className={statusColors[status] || statusColors.completed}>
+    <span
+      className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium border ${styles[status] || styles.completed}`}
+    >
       {status}
-    </Badge>
+    </span>
   );
 }
 
@@ -137,61 +119,57 @@ function FlowModelSelector({
     .sort((a, b) => (favoriteModelRank(a) ?? 99) - (favoriteModelRank(b) ?? 99));
   const remainingModels = models.filter((model) => !isFavoriteModel(model));
 
-  // Build a flat list of items for the Select — radix select doesn't support optgroups natively
-  // but we can use SelectGroup + SelectLabel
   return (
-    <div className="bg-card rounded-xl border border-border p-3 space-y-3">
+    <div className="bg-surface rounded-xl border border-gray-200 p-5 space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-heading font-semibold text-foreground">Agent Model</h2>
+          <h2 className="text-sm font-semibold text-gray-900">Agent Model</h2>
         </div>
-        <Badge variant="outline" className="gap-1.5">
-          <span className={cn("h-1.5 w-1.5 rounded-full", effectiveModel.startsWith("anthropic/") ? "bg-violet-500" : "bg-emerald-500")} />
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600">
+          <span className={`h-1.5 w-1.5 rounded-full ${effectiveModel.startsWith("anthropic/") ? "bg-violet-500" : "bg-emerald-500"}`} />
           {runtimeLabel(effectiveModel)}
-        </Badge>
+        </span>
       </div>
 
-      <Select
-        value={effectiveModel}
-        disabled={loading || saving || models.length === 0}
-        onValueChange={onChange}
-      >
-        <SelectTrigger className="w-full">
-          <SelectValue placeholder={loading ? "Loading models..." : "Select a model"} />
-        </SelectTrigger>
-        <SelectContent>
-          {hasUnknownStoredModel && (
-            <SelectItem value={fallbackModel}>{fallbackModel}</SelectItem>
-          )}
+      <label className="block">
+        <span className="sr-only">Flow model</span>
+        <select
+          value={effectiveModel}
+          disabled={loading || saving || models.length === 0}
+          onChange={(event) => onChange(event.target.value)}
+          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 shadow-sm transition-colors focus:border-accent-200 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
+        >
+          {loading && <option value={effectiveModel}>Loading models...</option>}
           {!loading && models.length === 0 && !fallbackModel && (
-            <SelectItem value="">Claude default</SelectItem>
+            <option value="">Claude default</option>
+          )}
+          {hasUnknownStoredModel && (
+            <option value={fallbackModel}>{fallbackModel}</option>
           )}
           {recommendedModels.length > 0 && (
-            <SelectGroup>
-              <SelectLabel>Favorites</SelectLabel>
+            <optgroup label="Favorites">
               {recommendedModels.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
+                <option key={model.id} value={model.id}>
                   {model.label} ({runtimeLabel(model.id)})
-                </SelectItem>
+                </option>
               ))}
-            </SelectGroup>
+            </optgroup>
           )}
           {remainingModels.length > 0 && (
-            <SelectGroup>
-              <SelectLabel>All models</SelectLabel>
+            <optgroup label="All models">
               {remainingModels.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
+                <option key={model.id} value={model.id}>
                   {model.label} ({runtimeLabel(model.id)})
-                </SelectItem>
+                </option>
               ))}
-            </SelectGroup>
+            </optgroup>
           )}
-        </SelectContent>
-      </Select>
+        </select>
+      </label>
 
-      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+      <div className="flex items-center justify-between gap-3 text-xs text-gray-500">
         <span className="truncate">
-          Using <span className="font-medium text-foreground">{modelShortLabel(selected, effectiveModel)}</span>
+          Using <span className="font-medium text-gray-700">{modelShortLabel(selected, effectiveModel)}</span>
         </span>
         {saving && <span className="text-brand-600">Saving...</span>}
       </div>
@@ -255,30 +233,55 @@ function LabelSelector({
 
   return (
     <div className="relative" ref={dropdownRef}>
-      <Button
-        variant="outline"
+      <button
         onClick={() => setOpen(!open)}
-        className="gap-1.5"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
       >
-        <RiPriceTag3Line size={16} />
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={1.5}
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9.568 3H5.25A2.25 2.25 0 0 0 3 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 0 0 5.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 0 0 9.568 3Z"
+          />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M6 6h.008v.008H6V6Z"
+          />
+        </svg>
         Labels
         {flowLabels.length > 0 && (
-          <Badge variant="secondary" className="text-xs ml-0.5">
+          <span className="bg-gray-100 text-gray-600 text-xs px-1.5 py-0.5 rounded-full">
             {flowLabels.length}
-          </Badge>
+          </span>
         )}
-        <RiArrowDownSLine size={14} className={cn("transition-transform", open && "rotate-180")} />
-      </Button>
+        <svg
+          className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={2}
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+      </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-64 bg-card border border-border rounded-xl shadow-lg z-20 overflow-hidden">
+        <div className="absolute top-full left-0 mt-1 w-64 bg-surface border border-gray-200 rounded-xl shadow-lg z-20 overflow-hidden">
           {/* Create new label */}
-          <form onSubmit={handleCreateLabel} className="p-2 border-b border-border/50">
-            <Input
+          <form onSubmit={handleCreateLabel} className="p-2 border-b border-gray-100">
+            <input
               type="text"
               value={newLabel}
               onChange={(e) => setNewLabel(e.target.value)}
               placeholder="Create new label..."
+              className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-200 focus:border-accent-200"
               autoFocus
             />
           </form>
@@ -286,7 +289,7 @@ function LabelSelector({
           {/* Existing labels */}
           <div className="max-h-48 overflow-y-auto p-1">
             {combinedLabels.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground text-center">
+              <div className="px-3 py-2 text-xs text-gray-400 text-center">
                 No labels yet. Type above to create one.
               </div>
             ) : (
@@ -294,28 +297,40 @@ function LabelSelector({
                 const isSelected = flowLabels.includes(label);
                 const color = getLabelColor(label);
                 return (
-                  <Button
+                  <button
                     key={label}
-                    variant="ghost"
                     onClick={() => toggleLabel(label)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 h-auto justify-start"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg hover:bg-gray-50 transition-colors"
                   >
                     <span
-                      className={cn(
-                        "w-4 h-4 rounded border flex items-center justify-center flex-shrink-0",
+                      className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
                         isSelected
                           ? `${color.bg} ${color.border}`
-                          : "border-muted-foreground/30"
-                      )}
+                          : "border-gray-300"
+                      }`}
                     >
                       {isSelected && (
-                        <RiCheckLine size={12} className={color.text} />
+                        <svg
+                          className={`w-3 h-3 ${color.text}`}
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          strokeWidth={3}
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="m4.5 12.75 6 6 9-13.5"
+                          />
+                        </svg>
                       )}
                     </span>
-                    <Badge variant="outline" className={`${color.bg} ${color.text} ${color.border}`}>
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${color.bg} ${color.text} ${color.border}`}
+                    >
                       {label}
-                    </Badge>
-                  </Button>
+                    </span>
+                  </button>
                 );
               })
             )}
@@ -497,8 +512,26 @@ export default function FlowDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="flex items-center gap-2 text-muted-foreground">
-          <RiLoader4Line size={16} className="animate-spin text-brand-600" />
+        <div className="flex items-center gap-2 text-gray-400">
+          <svg
+            className="animate-spin w-4 h-4 text-brand-600"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
+          </svg>
           Loading flow...
         </div>
       </div>
@@ -507,7 +540,7 @@ export default function FlowDetailPage() {
 
   if (!flow) {
     return (
-      <div className="text-muted-foreground text-center py-20">Flow not found.</div>
+      <div className="text-gray-400 text-center py-20">Flow not found.</div>
     );
   }
 
@@ -517,37 +550,47 @@ export default function FlowDetailPage() {
   const webhookUrl = `${window.location.origin}/webhook?flowId=${flow.flow_id}`;
 
   return (
-    <div className="space-y-3">
-      {/* Breadcrumb */}
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink href={`${basePath}/flows`}>Flows</BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage>{flow.name}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
+    <div className="space-y-6">
+      {/* Back link */}
+      <a
+        href={`${basePath}/flows`}
+        className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+      >
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={1.5}
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M15.75 19.5 8.25 12l7.5-7.5"
+          />
+        </svg>
+        Back to Flows
+      </a>
 
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-2xl font-heading font-semibold text-foreground">
+            <h1 className="text-2xl font-semibold text-gray-900">
               {flow.name}
             </h1>
             {statusBadge(flow.status)}
             {flow.visibility === "private" && (
-              <Badge variant="outline" className="gap-1">
-                <RiLockLine size={14} />
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                </svg>
                 Private
-              </Badge>
+              </span>
             )}
           </div>
           {flow.description && (
-            <p className="text-sm text-muted-foreground mt-1">{flow.description}</p>
+            <p className="text-sm text-gray-500 mt-1">{flow.description}</p>
           )}
           {/* Label pills */}
           {(flow.labels || []).length > 0 && (
@@ -555,13 +598,12 @@ export default function FlowDetailPage() {
               {flow.labels.map((label) => {
                 const color = getLabelColor(label);
                 return (
-                  <Badge
+                  <span
                     key={label}
-                    variant="outline"
-                    className={`${color.bg} ${color.text} ${color.border}`}
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${color.bg} ${color.text} ${color.border}`}
                   >
                     {label}
-                  </Badge>
+                  </span>
                 );
               })}
             </div>
@@ -573,8 +615,7 @@ export default function FlowDetailPage() {
             allLabels={allLabels}
             onUpdate={handleUpdateLabels}
           />
-          <Button
-            variant="outline"
+          <button
             onClick={async () => {
               const newVis = flow.visibility === "private" ? "shared" : "private";
               try {
@@ -584,74 +625,93 @@ export default function FlowDetailPage() {
                 console.error("Failed to update visibility:", e);
               }
             }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
             title={flow.visibility === "private" ? "Make shared (visible to all)" : "Make private (only you and admins)"}
           >
-            <RiLockLine size={16} />
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+            </svg>
             {flow.visibility === "private" ? "Private" : "Shared"}
-          </Button>
-          <Button asChild className="bg-accent-200 hover:bg-accent-300 text-accent-on">
-            <a href={`${basePath}/chat?flow=${flow.flow_id}`}>
-              <RiPencilLine size={16} />
-              Edit in Chat
-            </a>
-          </Button>
+          </button>
+          <a
+            href={`${basePath}/chat?flow=${flow.flow_id}`}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-accent-200 text-accent-on text-sm font-medium rounded-lg hover:bg-accent-300 transition-colors"
+          >
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10"
+              />
+            </svg>
+            Edit in Chat
+          </a>
           {flow.status !== "completed" && (
-            <Button
-              variant="outline"
+            <button
               onClick={handlePauseResume}
+              className="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
             >
               {flow.status === "active" ? "Pause" : "Resume"}
-            </Button>
+            </button>
           )}
           {flow.status === "active" && isScheduled && (
-            <Button
-              variant="outline"
+            <button
               onClick={handleRunNow}
+              className="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
             >
               Run Now
-            </Button>
+            </button>
           )}
-          <Button
-            variant="outline"
+          <button
             onClick={handleDelete}
-            className="border-red-200 text-red-600 hover:bg-red-50"
+            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
           >
             Delete
-          </Button>
+          </button>
         </div>
       </div>
 
       {/* Webhook URL */}
       {isWebhook && (
-        <div className="bg-card rounded-xl border border-border p-3 space-y-3">
-          <h2 className="text-sm font-heading font-semibold text-foreground">Webhook URL</h2>
+        <div className="bg-surface rounded-xl border border-gray-200 p-5 space-y-3">
+          <h2 className="text-sm font-semibold text-gray-900">Webhook URL</h2>
           <div className="flex items-center gap-2">
-            <code className="flex-1 text-sm bg-muted/50 rounded-lg px-3 py-2 text-foreground/80 break-all">
+            <code className="flex-1 text-sm bg-gray-50 rounded-lg px-3 py-2 text-gray-700 break-all">
               {webhookUrl}
             </code>
-            <Button
-              variant="outline"
+            <button
               onClick={() => {
                 navigator.clipboard.writeText(webhookUrl);
                 setWebhookUrlCopied(true);
                 setTimeout(() => setWebhookUrlCopied(false), 2000);
               }}
+              className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
             >
               {webhookUrlCopied ? (
                 <>
-                  <RiCheckLine size={16} className="text-green-600" />
+                  <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                  </svg>
                   Copied
                 </>
               ) : (
                 <>
-                  <RiFileCopyLine size={16} />
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" />
+                  </svg>
                   Copy
                 </>
               )}
-            </Button>
+            </button>
           </div>
-          <div className="text-sm text-muted-foreground">
-            Auth: <span className="font-medium text-foreground">{flow.webhook_config?.auth_method || "none"}</span>
+          <div className="text-sm text-gray-500">
+            Auth: <span className="font-medium text-gray-700">{flow.webhook_config?.auth_method || "none"}</span>
           </div>
         </div>
       )}
@@ -666,27 +726,27 @@ export default function FlowDetailPage() {
       />
 
       {/* Flow info grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Schedule & Channel */}
-        <div className="bg-card rounded-xl border border-border p-3 space-y-3">
-          <h2 className="text-sm font-heading font-semibold text-foreground">Details</h2>
+        <div className="bg-surface rounded-xl border border-gray-200 p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-gray-900">Details</h2>
           <div className="space-y-3 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Trigger</span>
-              <span className="text-foreground font-medium">
+              <span className="text-gray-500">Trigger</span>
+              <span className="text-gray-900 font-medium">
                 {isWebhook ? "Webhook" : isSlack ? "Slack" : "Scheduled"}
               </span>
             </div>
             {isWebhook ? (
               <>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Auth method</span>
-                  <span className="text-foreground">{flow.webhook_config?.auth_method || "none"}</span>
+                  <span className="text-gray-500">Auth method</span>
+                  <span className="text-gray-900">{flow.webhook_config?.auth_method || "none"}</span>
                 </div>
                 {flow.webhook_config?.auth_method === "hmac_sha256" && flow.webhook_config?.signature_header && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Signature header</span>
-                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded text-foreground/80">
+                    <span className="text-gray-500">Signature header</span>
+                    <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-700">
                       {flow.webhook_config.signature_header}
                     </code>
                   </div>
@@ -695,16 +755,16 @@ export default function FlowDetailPage() {
             ) : isSlack ? (
               <>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Channel</span>
-                  <span className="text-foreground">{flow.channel_name || flow.channel_id}</span>
+                  <span className="text-gray-500">Channel</span>
+                  <span className="text-gray-900">{flow.channel_name || flow.channel_id}</span>
                 </div>
                 {flow.slack_config?.allow_bot_messages && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Bot messages</span>
-                    <span className="text-foreground">Enabled</span>
+                    <span className="text-gray-500">Bot messages</span>
+                    <span className="text-gray-900">Enabled</span>
                   </div>
                 )}
-                <p className="text-xs text-muted-foreground pt-1">
+                <p className="text-xs text-gray-400 pt-1">
                   Responds to new top-level messages in this channel and replies in-thread.
                   @mention the bot to reply inside a thread.
                 </p>
@@ -712,67 +772,67 @@ export default function FlowDetailPage() {
             ) : (
               <>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Schedule</span>
-                  <span className="text-foreground font-medium">
+                  <span className="text-gray-500">Schedule</span>
+                  <span className="text-gray-900 font-medium">
                     {flow.frequency || flow.cron || "One-time"}
                   </span>
                 </div>
                 {flow.cron && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Cron</span>
-                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded text-foreground/80">
+                    <span className="text-gray-500">Cron</span>
+                    <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-700">
                       {flow.cron}
                     </code>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Timezone</span>
-                  <span className="text-foreground">{flow.timezone}</span>
+                  <span className="text-gray-500">Timezone</span>
+                  <span className="text-gray-900">{flow.timezone}</span>
                 </div>
               </>
             )}
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Created</span>
-              <ClientTimestamp iso={flow.created_at} variant="full" className="text-foreground" />
+              <span className="text-gray-500">Created</span>
+              <ClientTimestamp iso={flow.created_at} variant="full" className="text-gray-900" />
             </div>
             {flow.created_by?.user_name && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Created by</span>
-                <span className="text-foreground">{flow.created_by.user_name}</span>
+                <span className="text-gray-500">Created by</span>
+                <span className="text-gray-900">{flow.created_by.user_name}</span>
               </div>
             )}
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Visibility</span>
-                <span className="text-foreground capitalize">{flow.visibility || "shared"}</span>
+                <span className="text-gray-500">Visibility</span>
+                <span className="text-gray-900 capitalize">{flow.visibility || "shared"}</span>
               </div>
           </div>
         </div>
 
         {/* Run stats */}
-        <div className="bg-card rounded-xl border border-border p-3 space-y-3">
-          <h2 className="text-sm font-heading font-semibold text-foreground">Run Stats</h2>
+        <div className="bg-surface rounded-xl border border-gray-200 p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-gray-900">Run Stats</h2>
           <div className="space-y-3 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Total runs</span>
-              <span className="text-foreground font-medium">{flow.run_count}</span>
+              <span className="text-gray-500">Total runs</span>
+              <span className="text-gray-900 font-medium">{flow.run_count}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Last run</span>
-              <ClientTimestamp iso={flow.last_run_at} variant="full" className="text-foreground" />
+              <span className="text-gray-500">Last run</span>
+              <ClientTimestamp iso={flow.last_run_at} variant="full" className="text-gray-900" />
             </div>
             {isScheduled && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Next run</span>
+                <span className="text-gray-500">Next run</span>
                 {flow.status === "active" ? (
                   <ClientTimestamp iso={flow.next_run_at} variant="full" className="text-brand-600 font-medium" />
                 ) : (
-                  <span className="text-foreground">{"—"}</span>
+                  <span className="text-gray-900">{"\u2014"}</span>
                 )}
               </div>
             )}
             {flow.last_error && (
               <div>
-                <span className="text-muted-foreground block mb-1">Last error</span>
+                <span className="text-gray-500 block mb-1">Last error</span>
                 <div className="text-xs text-red-600 bg-red-50 rounded px-2 py-1">
                   {flow.last_error}
                 </div>
@@ -783,30 +843,31 @@ export default function FlowDetailPage() {
       </div>
 
       {/* Prompt */}
-      <div className="bg-card rounded-xl border border-border p-3">
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-3">
+      <div className="bg-surface rounded-xl border border-gray-200 p-5">
+        <h2 className="text-sm font-semibold text-gray-900 mb-3">
           {isWebhook ? "Prompt Template" : "Agent Prompt"}
         </h2>
-        <pre className="text-sm text-foreground/80 whitespace-pre-wrap bg-muted/50 rounded-lg p-4 max-h-96 overflow-y-auto">
+        <pre className="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto">
           {isWebhook ? (flow.prompt_template || flow.prompt) : flow.prompt}
         </pre>
       </div>
 
       {/* Webhook Logs (webhook flows only) */}
       {isWebhook && (
-        <div className="bg-card rounded-xl border border-border p-3">
+        <div className="bg-surface rounded-xl border border-gray-200 p-5">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-heading font-semibold text-foreground">Webhook Logs</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Webhook Logs</h2>
             <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="icon-xs"
+              <button
                 onClick={handleRefreshLogs}
                 disabled={refreshingLogs}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors disabled:opacity-50"
                 title="Refresh logs"
               >
-                <RiRefreshLine size={14} className={cn(refreshingLogs && "animate-spin")} />
-              </Button>
+                <svg className={`w-3.5 h-3.5 ${refreshingLogs ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182M21.015 4.356v4.992" />
+                </svg>
+              </button>
               <a
                 href={`${basePath}/webhook-logs?flowId=${flow.flow_id}`}
                 className="text-xs text-brand-600 hover:text-brand-700 transition-colors"
@@ -816,100 +877,99 @@ export default function FlowDetailPage() {
             </div>
           </div>
           {webhookLogs.length === 0 ? (
-            <div className="text-sm text-muted-foreground py-4 text-center">
+            <div className="text-sm text-gray-400 py-4 text-center">
               No webhook requests received yet.
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Received</TableHead>
-                  <TableHead>Auth</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Conversation</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {webhookLogs.slice(0, 20).map((log) => (
-                  <TableRow key={log.log_id}>
-                    <TableCell className="pr-3">
-                      <ClientTimestamp iso={log.received_at} variant="full" className="text-foreground/80" />
-                    </TableCell>
-                    <TableCell className="pr-3">
-                      <Badge
-                        variant="secondary"
-                        className={cn(
-                          "text-xs",
-                          log.auth_result === "success"
-                            ? "bg-green-50 text-green-700"
-                            : log.auth_result === "failed"
-                              ? "bg-red-50 text-red-700"
-                              : "bg-muted text-muted-foreground"
-                        )}
-                      >
-                        {log.auth_result}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="pr-3">
-                      <Badge
-                        variant="secondary"
-                        className={cn(
-                          "text-xs",
-                          log.execution_status === "completed"
-                            ? "bg-green-50 text-green-700"
-                            : log.execution_status === "error"
-                              ? "bg-red-50 text-red-700"
-                              : log.execution_status === "running"
-                                ? "bg-blue-50 text-blue-700"
-                                : "bg-muted text-muted-foreground"
-                        )}
-                      >
-                        {log.execution_status}
-                      </Badge>
-                      {log.error && (
-                        <span className="ml-1 text-xs text-red-500" title={log.error}>
-                          {log.error.slice(0, 40)}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {log.conversation_id ? (
-                        <a
-                          href={`${basePath}/conversations/${log.conversation_id}`}
-                          className="text-brand-600 hover:text-brand-700 text-xs underline"
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b border-gray-100">
+                    <th className="pb-2 font-medium">Received</th>
+                    <th className="pb-2 font-medium">Auth</th>
+                    <th className="pb-2 font-medium">Status</th>
+                    <th className="pb-2 font-medium">Conversation</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {webhookLogs.slice(0, 20).map((log) => (
+                    <tr key={log.log_id} className="hover:bg-gray-50">
+                      <td className="py-2 pr-3">
+                        <ClientTimestamp iso={log.received_at} variant="full" className="text-gray-700" />
+                      </td>
+                      <td className="py-2 pr-3">
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                            log.auth_result === "success"
+                              ? "bg-green-50 text-green-700"
+                              : log.auth_result === "failed"
+                                ? "bg-red-50 text-red-700"
+                                : "bg-gray-50 text-gray-500"
+                          }`}
                         >
-                          View
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">{"—"}</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                          {log.auth_result}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-3">
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                            log.execution_status === "completed"
+                              ? "bg-green-50 text-green-700"
+                              : log.execution_status === "error"
+                                ? "bg-red-50 text-red-700"
+                                : log.execution_status === "running"
+                                  ? "bg-blue-50 text-blue-700"
+                                  : "bg-gray-50 text-gray-500"
+                          }`}
+                        >
+                          {log.execution_status}
+                        </span>
+                        {log.error && (
+                          <span className="ml-1 text-xs text-red-500" title={log.error}>
+                            {log.error.slice(0, 40)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2">
+                        {log.conversation_id ? (
+                          <a
+                            href={`${basePath}/conversations/${log.conversation_id}`}
+                            className="text-brand-600 hover:text-brand-700 text-xs underline"
+                          >
+                            View
+                          </a>
+                        ) : (
+                          <span className="text-gray-400 text-xs">{"\u2014"}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
 
       {/* Execution history */}
-      <div className="bg-card rounded-xl border border-border p-3">
+      <div className="bg-surface rounded-xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-heading font-semibold text-foreground">
+          <h2 className="text-sm font-semibold text-gray-900">
             Execution History
           </h2>
-          <Button
-            variant="ghost"
-            size="icon-xs"
+          <button
             onClick={handleRefreshRuns}
             disabled={refreshingRuns}
+            className="p-1 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors disabled:opacity-50"
             title="Refresh runs"
           >
-            <RiRefreshLine size={14} className={cn(refreshingRuns && "animate-spin")} />
-          </Button>
+            <svg className={`w-3.5 h-3.5 ${refreshingRuns ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182M21.015 4.356v4.992" />
+            </svg>
+          </button>
         </div>
         {runs.length === 0 ? (
-          <div className="text-sm text-muted-foreground py-4 text-center">
+          <div className="text-sm text-gray-400 py-4 text-center">
             No executions yet.
           </div>
         ) : (
@@ -918,22 +978,21 @@ export default function FlowDetailPage() {
               <a
                 key={run.conversation_id}
                 href={`${basePath}/conversations/${run.conversation_id}`}
-                className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 transition-colors border border-border/50"
+                className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-100"
               >
                 <div className="flex items-center gap-3">
                   <span
-                    className={cn(
-                      "w-2 h-2 rounded-full flex-shrink-0",
+                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
                       run.status === "completed"
                         ? "bg-green-400"
                         : run.status === "error"
                           ? "bg-red-400"
                           : "bg-blue-400"
-                    )}
+                    }`}
                   />
-                  <ClientTimestamp iso={run.started_at} variant="full" className="text-sm text-foreground/80" />
+                  <ClientTimestamp iso={run.started_at} variant="full" className="text-sm text-gray-700" />
                 </div>
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <div className="flex items-center gap-3 text-xs text-gray-500">
                   <span>{run.status}</span>
                   {run.duration_ms && (
                     <span>{(run.duration_ms / 1000).toFixed(1)}s</span>

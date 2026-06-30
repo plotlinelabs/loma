@@ -3,11 +3,6 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
-import { RiLoader4Line } from "@remixicon/react";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { getToolMeta, CATEGORIES } from "../../mcp/tool-meta";
 import { TOOL_LOGOS } from "../../mcp/tool-logos";
 import {
@@ -51,7 +46,7 @@ export default function UserDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RiLoader4Line size={32} className="animate-spin text-muted-foreground" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
       </div>
     );
   }
@@ -59,19 +54,14 @@ export default function UserDetailPage() {
   if (notFound || !user) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem>
-              <BreadcrumbLink href="/admin">Admin</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
-              <BreadcrumbPage>User not found</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-        <div className="bg-card rounded-xl border border-border p-8 text-center">
-          <p className="text-muted-foreground">User not found</p>
+        <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+          </svg>
+          Back to Users
+        </Link>
+        <div className="bg-surface rounded-xl border border-gray-200 p-12 text-center">
+          <p className="text-gray-500">User not found</p>
         </div>
       </div>
     );
@@ -92,28 +82,23 @@ export default function UserDetailPage() {
 
   return (
     <div className="space-y-5 animate-fade-in-up">
-      {/* Breadcrumb */}
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink href="/admin">Admin</BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage>{user.name}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
+      {/* Back link */}
+      <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+        </svg>
+        Back to Users
+      </Link>
 
       {/* User Header */}
-      <div className="bg-card rounded-xl border border-border p-3 md:p-4">
+      <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
             <span className="text-xl font-semibold text-brand-700">{user.avatar}</span>
           </div>
           <div className="flex-1">
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">{user.name}</h1>
-            <p className="text-sm text-muted-foreground">{user.email}</p>
+            <h1 className="text-lg md:text-xl font-semibold text-gray-900">{user.name}</h1>
+            <p className="text-sm text-gray-500">{user.email}</p>
 
             {/* Team badges */}
             {userTeams.length > 0 && (
@@ -133,12 +118,12 @@ export default function UserDetailPage() {
           </div>
           <div className="ml-auto flex gap-3">
             <div className="text-center">
-              <div className="text-xl font-semibold text-foreground">{toolsWithAccess}</div>
-              <div className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Tools</div>
+              <div className="text-xl font-semibold text-gray-900">{toolsWithAccess}</div>
+              <div className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">Tools</div>
             </div>
             <div className="text-center">
-              <div className="text-xl font-semibold text-foreground">{userTeams.length}</div>
-              <div className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Teams</div>
+              <div className="text-xl font-semibold text-gray-900">{userTeams.length}</div>
+              <div className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">Teams</div>
             </div>
           </div>
         </div>
@@ -147,7 +132,7 @@ export default function UserDetailPage() {
       {/* Tool Cards Grid */}
       {CATEGORIES.map((cat) => (
         <div key={cat.name}>
-          <h2 className="text-[11px] font-heading font-bold uppercase tracking-wider text-muted-foreground mb-3 ml-1">{cat.name}</h2>
+          <h2 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-3 ml-1">{cat.name}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 stagger-children">
             {cat.keys.map((toolKey) => {
               const meta = getToolMeta(toolKey);
@@ -166,8 +151,8 @@ export default function UserDetailPage() {
                 <Link
                   key={toolKey}
                   href={`/mcp/${toolKey}`}
-                  className={`bg-card rounded-xl border p-4 flex items-start gap-3 transition-all duration-200 hover-lift group ${
-                    hasAccess ? "border-border" : "border-border/50 opacity-60"
+                  className={`bg-surface rounded-xl border p-4 flex items-start gap-3 transition-all duration-200 hover-lift group ${
+                    hasAccess ? "border-gray-200" : "border-gray-100 opacity-60"
                   }`}
                 >
                   {/* Tool icon */}
@@ -187,20 +172,20 @@ export default function UserDetailPage() {
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">
+                      <span className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors">
                         {meta.displayName}
                       </span>
                     </div>
 
                     {/* Auth mode badge */}
                     <div className="flex items-center gap-1.5 mt-1">
-                      <Badge variant="secondary" className={`text-[9px] px-1.5 py-px ${
+                      <span className={`text-[9px] px-1.5 py-px rounded-full font-medium ${
                         isManaged
                           ? "bg-violet-50 text-violet-500"
                           : "bg-blue-50 text-blue-500"
                       }`}>
                         {isManaged ? "Loma-managed" : "OAuth"}
-                      </Badge>
+                      </span>
                     </div>
 
                     {/* Permission level with provenance */}
@@ -208,35 +193,28 @@ export default function UserDetailPage() {
                       {isManaged ? (
                         effective?.role ? (
                           <div className="flex flex-col gap-0.5">
-                            <Select
+                            <select
                               defaultValue={effective.role}
-                              onValueChange={() => {}}
+                              onClick={(e) => e.preventDefault()}
+                              className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-surface text-gray-700 focus:outline-none focus:ring-2 focus:ring-accent-200 relative z-10"
                             >
-                              <SelectTrigger
-                                className="text-xs h-7 w-auto"
-                                onClick={(e) => e.preventDefault()}
-                              >
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {toolConfig?.roles.map((r) => (
-                                  <SelectItem key={r.name} value={r.name}>{r.name}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                              {toolConfig?.roles.map((r) => (
+                                <option key={r.name} value={r.name}>{r.name}</option>
+                              ))}
+                            </select>
                             {effective.source !== "direct" && effective.source !== "none" && (
-                              <span className="text-[9px] text-muted-foreground">
+                              <span className="text-[9px] text-gray-400">
                                 via {effective.source}
                               </span>
                             )}
                             {effective.source === "direct" && (
-                              <span className="text-[9px] text-muted-foreground">
+                              <span className="text-[9px] text-gray-400">
                                 direct assignment
                               </span>
                             )}
                           </div>
                         ) : (
-                          <span className="text-xs text-muted-foreground">No role assigned</span>
+                          <span className="text-xs text-gray-400">No role assigned</span>
                         )
                       ) : (
                         <span className={`text-xs font-medium ${
@@ -244,7 +222,7 @@ export default function UserDetailPage() {
                             ? "text-emerald-600"
                             : assignment?.oauth_status === "expired"
                             ? "text-amber-600"
-                            : "text-muted-foreground"
+                            : "text-gray-400"
                         }`}>
                           {assignment?.oauth_status === "connected"
                             ? "Connected"
@@ -257,7 +235,7 @@ export default function UserDetailPage() {
 
                     {/* Last activity */}
                     {assignment?.last_used && (
-                      <div className="text-[10px] text-muted-foreground mt-1">
+                      <div className="text-[10px] text-gray-400 mt-1">
                         Last used {formatRelativeTime(assignment.last_used)}
                       </div>
                     )}
@@ -266,24 +244,20 @@ export default function UserDetailPage() {
                   {/* Action indicator */}
                   <div className="flex-shrink-0 mt-1">
                     {isManaged && effective?.role && (
-                      <Button
-                        variant="ghost"
-                        size="xs"
+                      <button
                         onClick={(e) => { e.preventDefault(); }}
-                        className="text-[10px] text-muted-foreground hover:text-red-500 relative z-10"
+                        className="text-[10px] text-gray-400 hover:text-red-500 transition-colors relative z-10"
                       >
                         Revoke
-                      </Button>
+                      </button>
                     )}
                     {!isManaged && assignment?.oauth_status === "connected" && (
-                      <Button
-                        variant="ghost"
-                        size="xs"
+                      <button
                         onClick={(e) => { e.preventDefault(); }}
-                        className="text-[10px] text-muted-foreground hover:text-red-500 relative z-10"
+                        className="text-[10px] text-gray-400 hover:text-red-500 transition-colors relative z-10"
                       >
                         Revoke
-                      </Button>
+                      </button>
                     )}
                   </div>
                 </Link>
