@@ -49,7 +49,7 @@ function PanelResizer({
 
   return (
     <div
-      className="w-1 hover:w-1.5 bg-border hover:bg-accent-300 cursor-col-resize flex-shrink-0 transition-all duration-100 relative group"
+      className="w-1 hover:w-1.5 bg-gray-200 hover:bg-accent-300 cursor-col-resize flex-shrink-0 transition-all duration-100 relative group"
       onMouseDown={handleMouseDown}
       onDoubleClick={onDoubleClick}
       title="Drag to resize. Double-click to reset."
@@ -59,9 +59,9 @@ function PanelResizer({
       {/* Visual grip dots */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
         <div className="flex flex-col gap-1">
-          <div className="w-1 h-1 rounded-full bg-muted-foreground" />
-          <div className="w-1 h-1 rounded-full bg-muted-foreground" />
-          <div className="w-1 h-1 rounded-full bg-muted-foreground" />
+          <div className="w-1 h-1 rounded-full bg-gray-400" />
+          <div className="w-1 h-1 rounded-full bg-gray-400" />
+          <div className="w-1 h-1 rounded-full bg-gray-400" />
         </div>
       </div>
     </div>
@@ -135,7 +135,7 @@ export default function ChatWithArtifacts({
     <div ref={containerRef} className="flex-1 overflow-hidden flex">
       {/* Chat panel (left) */}
       <div
-        className="overflow-hidden bg-muted/30 flex-shrink-0"
+        className="overflow-hidden bg-gray-50 flex-shrink-0"
         style={{
           width: showArtifactPanel ? `${chatPanelPercent}%` : "100%",
           transition: showArtifactPanel ? "none" : "width 0.3s ease-out",

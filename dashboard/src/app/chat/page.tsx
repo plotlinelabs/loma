@@ -2,18 +2,6 @@
 
 import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, Suspense } from "react";
-import {
-  RiPencilLine,
-  RiDeleteBinLine,
-  RiLoader4Line,
-  RiPushpinFill,
-  RiPushpinLine,
-} from "@remixicon/react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { ChatItem } from "../../components/ChatPanel";
 import type { Artifact } from "../../components/ArtifactViewer";
 import { rebuildItemsFromConversation } from "../../components/ChatPanel";
@@ -42,7 +30,6 @@ function ChatPageContent() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleValue, setTitleValue] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // Track the active conversation ID — starts from URL param but also updates
   // when a fresh chat creates a new conversation (via onConversationCreated callback)
@@ -85,7 +72,6 @@ function ChatPageContent() {
         setPromptPreview(`Editing: ${flow.name}`);
       } catch (e) {
         console.error("Failed to load flow for editing:", e);
-        setError("Failed to load flow");
       } finally {
         setLoading(false);
       }
@@ -113,7 +99,6 @@ function ChatPageContent() {
         );
       } catch (e) {
         console.error("Failed to load conversation for continuation:", e);
-        setError("Failed to load conversation");
       } finally {
         setLoading(false);
       }
@@ -133,14 +118,17 @@ function ChatPageContent() {
 
   if (loading) {
     return (
-      <div className="h-[calc(100vh-3rem)] flex flex-col -mx-4 lg:-mx-6 -my-6">
-        <div className="px-4 lg:px-6 py-4 border-b border-border bg-card">
-          <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
-          <p className="text-sm text-muted-foreground">{flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}</p>
+      <div className="h-[calc(100vh-3rem)] flex flex-col -mx-6 lg:-mx-8 -my-6">
+        <div className="px-6 lg:px-8 py-4 border-b border-gray-200 bg-surface">
+          <h1 className="text-lg font-semibold text-gray-900">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
+          <p className="text-sm text-gray-500">{flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}</p>
         </div>
-        <div className="flex-1 flex items-center justify-center bg-muted/30">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <RiLoader4Line size={16} className="animate-spin text-brand-600" />
+        <div className="flex-1 flex items-center justify-center bg-gray-50">
+          <div className="flex items-center gap-2 text-gray-400">
+            <svg className="animate-spin w-4 h-4 text-brand-600" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
             {flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}
           </div>
         </div>
@@ -149,14 +137,14 @@ function ChatPageContent() {
   }
 
   return (
-    <div className="h-[calc(100vh-3rem)] flex flex-col -mx-4 lg:-mx-6 -my-6">
+    <div className="h-[calc(100vh-3rem)] flex flex-col -mx-6 lg:-mx-8 -my-6">
       {/* Header with title and action buttons */}
-      <div className="px-4 lg:px-6 py-3 border-b border-border bg-card flex-shrink-0">
+      <div className="px-6 lg:px-8 py-3 border-b border-gray-200 bg-surface flex-shrink-0">
         <div className="flex items-center gap-3">
           {/* Title area */}
           <div className="min-w-0 flex-1">
             {activeConversationId && editingTitle ? (
-              <Input
+              <input
                 type="text"
                 value={titleValue}
                 onChange={(e) => setTitleValue(e.target.value)}
@@ -177,15 +165,12 @@ function ChatPageContent() {
                 }}
                 autoFocus
                 maxLength={200}
-                className="text-base font-semibold text-foreground w-full max-w-md"
+                className="text-base font-semibold text-gray-900 bg-gray-50 border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-300 w-full max-w-md"
               />
             ) : (
               <div className="flex items-center gap-2 min-w-0">
                 <h1
-                  className={cn(
-                    "text-base font-heading font-semibold text-foreground truncate",
-                    activeConversationId && "cursor-pointer hover:text-brand-600 transition-colors"
-                  )}
+                  className={`text-base font-semibold text-gray-900 truncate ${activeConversationId ? "cursor-pointer hover:text-brand-600 transition-colors" : ""}`}
                   onClick={() => {
                     if (activeConversationId) {
                       setTitleValue(conversationTitle || promptPreview || "");
@@ -197,22 +182,18 @@ function ChatPageContent() {
                   {headerTitle}
                 </h1>
                 {activeConversationId && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => {
-                          setTitleValue(conversationTitle || promptPreview || "");
-                          setEditingTitle(true);
-                        }}
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <RiPencilLine size={14} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Rename chat</TooltipContent>
-                  </Tooltip>
+                  <button
+                    onClick={() => {
+                      setTitleValue(conversationTitle || promptPreview || "");
+                      setEditingTitle(true);
+                    }}
+                    className="flex-shrink-0 p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                    title="Rename chat"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125" />
+                    </svg>
+                  </button>
                 )}
               </div>
             )}
@@ -222,27 +203,25 @@ function ChatPageContent() {
           {activeConversationId && (
             <div className="flex items-center gap-1 flex-shrink-0">
               {/* Pin / Unpin */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => togglePin(activeConversationId)}
-                    className={cn(
-                      isPinned(activeConversationId)
-                        ? "text-amber-500 hover:text-amber-600 hover:bg-amber-50"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                    )}
-                  >
-                    {isPinned(activeConversationId) ? (
-                      <RiPushpinFill size={16} />
-                    ) : (
-                      <RiPushpinLine size={16} />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{isPinned(activeConversationId) ? "Unpin chat" : "Pin chat"}</TooltipContent>
-              </Tooltip>
+              <button
+                onClick={() => togglePin(activeConversationId)}
+                className={`p-2 rounded-lg transition-colors ${
+                  isPinned(activeConversationId)
+                    ? "text-amber-500 hover:text-amber-600 hover:bg-amber-50"
+                    : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                }`}
+                title={isPinned(activeConversationId) ? "Unpin chat" : "Pin chat"}
+              >
+                {isPinned(activeConversationId) ? (
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 4h6v5l2.5 2.5H13v5.5l-1 2-1-2V11.5H6.5L9 9V4z" />
+                  </svg>
+                )}
+              </button>
 
               {/* More actions (project, etc.) */}
               <ChatContextMenu
@@ -269,48 +248,40 @@ function ChatPageContent() {
                   setProjectId(null);
                 }}
                 onCreateProject={async (name) => { await addProject(name); }}
-                triggerClassName="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                triggerClassName="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
               />
 
               {/* Delete */}
               <div className="relative">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setShowDeleteConfirm(true)}
-                      className="text-muted-foreground hover:text-red-500 hover:bg-red-50"
-                    >
-                      <RiDeleteBinLine size={16} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Delete chat</TooltipContent>
-                </Tooltip>
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  title="Delete chat"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                  </svg>
+                </button>
                 {showDeleteConfirm && (
-                  <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 w-56 animate-fade-in">
-                    <p className="text-sm font-medium text-foreground mb-1">Delete this chat?</p>
-                    <p className="text-xs text-muted-foreground mb-3">This cannot be undone.</p>
+                  <div className="absolute right-0 top-full mt-1 z-50 bg-surface border border-gray-200 rounded-lg shadow-lg p-3 w-56 animate-fade-in">
+                    <p className="text-sm font-medium text-gray-900 mb-1">Delete this chat?</p>
+                    <p className="text-xs text-gray-500 mb-3">This cannot be undone.</p>
                     <div className="flex items-center gap-1.5">
-                      <Button
-                        variant="destructive"
-                        size="sm"
+                      <button
                         onClick={async () => {
                           await removeConversation(activeConversationId);
                           router.push(`${basePath}/`);
                         }}
-                        className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                        className="flex-1 px-2.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors"
                       >
                         Delete
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
+                      </button>
+                      <button
                         onClick={() => setShowDeleteConfirm(false)}
-                        className="flex-1"
+                        className="flex-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
                       >
                         Cancel
-                      </Button>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -319,12 +290,6 @@ function ChatPageContent() {
           )}
         </div>
       </div>
-
-      {error && (
-        <div className="px-4 lg:px-6 py-2">
-          <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>
-        </div>
-      )}
 
       {/* Split pane content area — uses shared ChatWithArtifacts wrapper */}
       <ChatWithArtifacts
@@ -344,13 +309,12 @@ export default function ChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="h-[calc(100vh-3rem)] flex flex-col -mx-4 lg:-mx-6 -my-6">
-          <div className="px-4 lg:px-6 py-4 border-b border-border bg-card">
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Chat</h1>
+        <div className="h-[calc(100vh-3rem)] flex flex-col -mx-6 lg:-mx-8 -my-6">
+          <div className="px-6 lg:px-8 py-4 border-b border-gray-200 bg-surface">
+            <h1 className="text-lg font-semibold text-gray-900">Chat</h1>
+            <p className="text-sm text-gray-500">Loading...</p>
           </div>
-          <div className="flex-1 bg-muted/30 flex items-center justify-center">
-            <RiLoader4Line size={32} className="animate-spin text-muted-foreground" />
-          </div>
+          <div className="flex-1 bg-gray-50" />
         </div>
       }
     >
