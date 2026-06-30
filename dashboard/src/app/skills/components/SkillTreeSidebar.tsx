@@ -97,11 +97,9 @@ export default function SkillTreeSidebar({
                 New
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href={createUrl}>
-                <RiGlobalLine size={16} className="text-muted-foreground" />
-                Explore
-              </Link>
+            <DropdownMenuItem disabled>
+              <RiGlobalLine size={16} className="text-muted-foreground" />
+              Explore
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

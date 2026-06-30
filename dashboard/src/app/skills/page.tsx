@@ -61,22 +61,10 @@ function PanelResizer({ onResize, onDoubleClick }: { onResize: (delta: number) =
   );
 }
 
-function chatUrl(prompt: string): string {
-  return `${basePath}/chat?prompt=${encodeURIComponent(prompt)}`;
-}
-
-function buildCreateSkillPrompt(): string {
-  return [
-    "I want to create a new Loma skill.",
-    "",
-    "Please help me design the skill first, then create it using `python3 tools/loma_skills.py create` only after I confirm the slug, description, and SKILL.md content.",
-    "",
-    "Ask me for:",
-    "- skill slug",
-    "- when the agent should use it",
-    "- required steps or playbook content",
-    "- supporting files or assets, if any",
-  ].join("\n");
+function buildCreateSkillUrl(): string {
+  const prompt = "I want to create a new Loma skill. Help me design it, then create it using `python3 tools/loma_skills.py create` after I confirm.";
+  const params = new URLSearchParams({ prompt, autoSend: "true" });
+  return `${basePath}/chat?${params.toString()}`;
 }
 
 function SkillsPageInner() {
@@ -104,7 +92,7 @@ function SkillsPageInner() {
     setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
   }, []);
 
-  const createUrl = useMemo(() => chatUrl(buildCreateSkillPrompt()), []);
+  const createUrl = useMemo(() => buildCreateSkillUrl(), []);
 
   const skillFiles: Record<string, SkillFile[]> = useMemo(() => {
     const map: Record<string, SkillFile[]> = {};
