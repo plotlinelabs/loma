@@ -17,6 +17,12 @@ services:
       # Persist connected Claude Code accounts (CLAUDE_USERS_DIR) across container
       # recreation — otherwise `claude login` creds are lost on every rebuild/redeploy.
       - loma-claude-users:/opt/claude-users
+      # Host dev-secret store for closed-loop dev (run-plotline-services-local skill).
+      # The plotline-services env files + login.env live here on the EC2 host. Mounted
+      # READ-ONLY at the SAME path inside the container so the skill's /home/ubuntu/secrets
+      # references resolve unchanged. Path is env-overridable; on boxes without the dir
+      # (CI/preview), compose creates an empty dir and the skill simply finds nothing.
+      - ${LOMA_SECRETS_DIR:-/home/ubuntu/secrets}:/home/ubuntu/secrets:ro
     restart: unless-stopped
 
   loma-dashboard:
