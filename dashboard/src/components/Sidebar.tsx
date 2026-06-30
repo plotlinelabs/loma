@@ -328,9 +328,9 @@ export default function Sidebar({
   const sidebarContent = (
     <>
       {/* Logo + collapse toggle + close button */}
-      <div className={cn("flex items-center justify-between", collapsed ? "px-2 pt-3 pb-2" : "px-3 pt-3 pb-2")}>
-        <Link href="/" prefetch onClick={onClose} className="flex items-center gap-2">
-          <CrosscutIcon size={20} />
+      <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-3 pt-3 pb-2")}>
+        <Link href="/" prefetch onClick={onClose} className={cn("flex items-center gap-2", collapsed && "justify-center")}>
+          <CrosscutIcon size={collapsed ? 22 : 20} />
           {!collapsed && (
             <span className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
               Loma
@@ -345,7 +345,7 @@ export default function Sidebar({
             className="hidden md:flex text-muted-foreground hover:text-foreground"
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            {collapsed ? <RiMenuUnfoldLine size={16} /> : <RiMenuFoldLine size={16} />}
+            {collapsed ? <RiMenuUnfoldLine size={14} /> : <RiMenuFoldLine size={14} />}
           </Button>
           <Button
             variant="ghost"

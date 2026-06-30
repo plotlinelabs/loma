@@ -75,11 +75,11 @@ export default function SkillsPage() {
         <Table className="table-fixed">
           <TableHeader>
             <TableRow className="border-b border-border bg-muted/50">
-              <TableHead className="w-[160px]">Skill</TableHead>
+              <TableHead className="w-[130px]">Skill</TableHead>
               <TableHead>Description</TableHead>
-              <TableHead className="w-[120px]">Tags</TableHead>
-              <TableHead className="w-[80px]">Files</TableHead>
-              <TableHead className="w-[100px]">Updated</TableHead>
+              <TableHead className="w-[100px]">Tags</TableHead>
+              <TableHead className="w-[70px]">Files</TableHead>
+              <TableHead className="w-[90px]">Updated</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
