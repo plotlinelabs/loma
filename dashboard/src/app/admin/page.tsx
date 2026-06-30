@@ -460,7 +460,7 @@ export default function AdminPage() {
 
   return (
     <>
-    <div className="space-y-3 animate-fade-in-up">
+    <div className="space-y-2 animate-fade-in-up">
       {/* Header — changes based on active tab */}
       <div>
         <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">
@@ -517,7 +517,7 @@ export default function AdminPage() {
           </div>
           <RiArrowDownSLine
             className={cn("text-muted-foreground transition-transform duration-200", showRoles && "rotate-180")}
-            size={20}
+            size={16}
           />
         </Button>
 
@@ -574,31 +574,31 @@ export default function AdminPage() {
       {/* Summary cards — only for users/teams tabs */}
       {(tab === "users" || tab === "teams") && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 stagger-children">
-          <Card className="p-3 flex items-start gap-2 hover-lift">
-            <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-              <RiTeamLine className="text-blue-500" size={20} />
+          <Card className="p-2 flex items-start gap-2 hover-lift">
+            <div className="w-7 h-7 rounded-md bg-blue-50 flex items-center justify-center flex-shrink-0">
+              <RiTeamLine className="text-blue-500" size={16} />
             </div>
             <div>
               <div className="text-xs text-muted-foreground font-medium">Total Users</div>
-              <div className="text-xl font-semibold text-foreground mt-0.5">{users.length}</div>
+              <div className="text-base font-semibold text-foreground">{users.length}</div>
             </div>
           </Card>
-          <Card className="p-3 flex items-start gap-2 hover-lift">
-            <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0">
-              <RiTeamLine className="text-emerald-500" size={20} />
+          <Card className="p-2 flex items-start gap-2 hover-lift">
+            <div className="w-7 h-7 rounded-md bg-emerald-50 flex items-center justify-center flex-shrink-0">
+              <RiTeamLine className="text-emerald-500" size={16} />
             </div>
             <div>
               <div className="text-xs text-muted-foreground font-medium">Teams</div>
-              <div className="text-xl font-semibold text-foreground mt-0.5">{teams.length}</div>
+              <div className="text-base font-semibold text-foreground">{teams.length}</div>
             </div>
           </Card>
-          <Card className="p-3 flex items-start gap-2 hover-lift">
-            <div className="w-10 h-10 rounded-lg bg-violet-50 flex items-center justify-center flex-shrink-0">
-              <RiShieldCheckLine className="text-violet-500" size={20} />
+          <Card className="p-2 flex items-start gap-2 hover-lift">
+            <div className="w-7 h-7 rounded-md bg-violet-50 flex items-center justify-center flex-shrink-0">
+              <RiShieldCheckLine className="text-violet-500" size={16} />
             </div>
             <div>
               <div className="text-xs text-muted-foreground font-medium">OAuth-enabled</div>
-              <div className="text-xl font-semibold text-foreground mt-0.5">
+              <div className="text-base font-semibold text-foreground">
                 {ALL_TOOLS.filter((t) => getToolMeta(t).supportsOAuth).length}
               </div>
             </div>
@@ -857,7 +857,7 @@ export default function AdminPage() {
                 href={`/admin/teams/${team.team_id}`}
                 className="block"
               >
-                <Card className="p-3 hover-lift transition-all duration-200 group">
+                <Card className="p-2 hover-lift transition-all duration-200 group">
                   <div className="flex items-start gap-3">
                     {/* Team avatar */}
                     <div
@@ -959,7 +959,7 @@ export default function AdminPage() {
                     </div>
 
                     {/* Arrow */}
-                    <RiArrowRightSLine className="text-muted-foreground/50 group-hover:text-muted-foreground transition-colors flex-shrink-0 mt-1" size={20} />
+                    <RiArrowRightSLine className="text-muted-foreground/50 group-hover:text-muted-foreground transition-colors flex-shrink-0 mt-1" size={16} />
                   </div>
                 </Card>
               </Link>
@@ -970,7 +970,7 @@ export default function AdminPage() {
 
       {/* ── Environment tab ── */}
       {tab === "environment" && (
-        <div className="space-y-4">
+        <div className="space-y-2">
           {/* Alerts */}
           {envError && (
             <Alert variant="destructive" className="bg-red-50 border-red-200 text-red-700">
@@ -1091,31 +1091,31 @@ export default function AdminPage() {
 
           {/* Summary stats */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <Card className="p-3 flex items-start gap-2">
-              <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-                <RiInformationLine className="text-blue-500" size={20} />
+            <Card className="p-2 flex items-start gap-2">
+              <div className="w-7 h-7 rounded-md bg-blue-50 flex items-center justify-center flex-shrink-0">
+                <RiInformationLine className="text-blue-500" size={16} />
               </div>
               <div>
                 <div className="text-xs text-muted-foreground font-medium">Total Variables</div>
-                <div className="text-xl font-semibold text-foreground mt-0.5">{envVars.length}</div>
+                <div className="text-base font-semibold text-foreground">{envVars.length}</div>
               </div>
             </Card>
-            <Card className="p-3 flex items-start gap-2">
-              <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
-                <RiLockLine className="text-amber-500" size={20} />
+            <Card className="p-2 flex items-start gap-2">
+              <div className="w-7 h-7 rounded-md bg-amber-50 flex items-center justify-center flex-shrink-0">
+                <RiLockLine className="text-amber-500" size={16} />
               </div>
               <div>
                 <div className="text-xs text-muted-foreground font-medium">Sensitive</div>
-                <div className="text-xl font-semibold text-foreground mt-0.5">{envVars.filter((v) => v.is_sensitive).length}</div>
+                <div className="text-base font-semibold text-foreground">{envVars.filter((v) => v.is_sensitive).length}</div>
               </div>
             </Card>
-            <Card className="p-3 flex items-start gap-2">
-              <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
-                <RiShieldCheckLine className="text-muted-foreground" size={20} />
+            <Card className="p-2 flex items-start gap-2">
+              <div className="w-7 h-7 rounded-md bg-gray-100 flex items-center justify-center flex-shrink-0">
+                <RiShieldCheckLine className="text-muted-foreground" size={16} />
               </div>
               <div>
                 <div className="text-xs text-muted-foreground font-medium">Read-only</div>
-                <div className="text-xl font-semibold text-foreground mt-0.5">{envVars.filter((v) => v.is_readonly).length}</div>
+                <div className="text-base font-semibold text-foreground">{envVars.filter((v) => v.is_readonly).length}</div>
               </div>
             </Card>
           </div>
@@ -1501,7 +1501,7 @@ export default function AdminPage() {
 
       {/* ── Settings tab ── */}
       {tab === "settings" && (
-        <div className="space-y-4">
+        <div className="space-y-2">
           {envError && (
             <Alert variant="destructive" className="bg-red-50 border-red-200 text-red-700">
               <RiInformationLine size={16} className="flex-shrink-0" />
