@@ -133,7 +133,7 @@ function ChatPageContent() {
 
   if (loading) {
     return (
-      <div className="h-[calc(100vh-1.5rem)] flex flex-col -mx-3 lg:-mx-4 -my-3">
+      <div className="flex-1 min-h-0 flex flex-col">
         <div className="px-3 lg:px-4 py-4 border-b border-border bg-card">
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
           <p className="text-[13px] text-muted-foreground">{flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}</p>
@@ -149,7 +149,7 @@ function ChatPageContent() {
   }
 
   return (
-    <div className="h-[calc(100vh-1.5rem)] flex flex-col -mx-3 lg:-mx-4 -my-3">
+    <div className="flex-1 min-h-0 flex flex-col">
       {/* Header with title and action buttons */}
       <div className="px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -344,7 +344,7 @@ export default function ChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="h-[calc(100vh-1.5rem)] flex flex-col -mx-3 lg:-mx-4 -my-3">
+        <div className="flex-1 min-h-0 flex flex-col">
           <div className="px-3 lg:px-4 py-4 border-b border-border bg-card">
             <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Chat</h1>
           </div>

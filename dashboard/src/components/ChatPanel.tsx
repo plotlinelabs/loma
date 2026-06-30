@@ -1480,38 +1480,37 @@ export default function ChatPanel({
                   className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
                 />
-                <div className="flex items-center justify-between px-3 pb-3">
-                  <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-center justify-between gap-2 px-3 pb-3">
+                  <div className="flex min-w-0 items-center">
+                    {renderModelPicker(true)}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={isStreaming}
                       title="Attach files"
-                      className="text-muted-foreground hover:text-foreground flex-shrink-0"
+                      className="text-muted-foreground hover:text-foreground"
                     >
-                      <RiAttachmentLine size={20} />
+                      <RiAttachmentLine size={16} />
                     </Button>
-                    {renderModelPicker(true)}
+                    <Button
+                      type="submit"
+                      disabled={isStreaming || (!input.trim() && pendingFiles.length === 0)}
+                      className="bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
+                      size="icon-sm"
+                    >
+                      {isStreaming ? (
+                        <RiLoader4Line size={16} className="animate-spin" />
+                      ) : (
+                        <RiSendPlaneLine size={16} />
+                      )}
+                    </Button>
                   </div>
-                  <Button
-                    type="submit"
-                    disabled={isStreaming || (!input.trim() && pendingFiles.length === 0)}
-                    className="bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on p-2.5 rounded-xl press-scale flex-shrink-0"
-                    size="icon"
-                  >
-                    {isStreaming ? (
-                      <RiLoader4Line size={20} className="animate-spin" />
-                    ) : (
-                      <RiSendPlaneLine size={20} />
-                    )}
-                  </Button>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-2 text-center hidden md:block">
-                Press Enter to send, Shift+Enter for new line. Drag & drop, paste, or click the clip to attach files.
-              </p>
             </form>
           </div>
         </div>
@@ -1569,12 +1568,9 @@ export default function ChatPanel({
 
                 if (item.role === "clarify") {
                   return (
-                    <div key={i} className="flex justify-start animate-message-in">
-                      <div className="w-full text-[13px] leading-relaxed break-words">
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <CrosscutIcon size={14} />
-                          <span className="text-xs text-muted-foreground font-medium">Loma</span>
-                        </div>
+                    <div key={i} className="flex justify-start animate-message-in gap-2">
+                      <CrosscutIcon size={16} className="shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex-1 text-[13px] leading-relaxed break-words">
                         {item.content && (
                           <div className="mb-3">
                             <MarkdownContent content={item.content} />
@@ -1631,15 +1627,9 @@ export default function ChatPanel({
 
                 // Assistant message — editorial style, no bubble
                 return (
-                  <div key={i} className="flex justify-start animate-message-in">
-                    <div className="w-full text-[13px] leading-relaxed break-words">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <CrosscutIcon size={14} />
-                        <span className="text-xs text-muted-foreground font-medium">Loma</span>
-                        {typeof item.responseTimeSeconds === "number" && (
-                          <span className="ml-auto text-[10px] text-muted-foreground/60">{formatResponseTime(item.responseTimeSeconds)}</span>
-                        )}
-                      </div>
+                  <div key={i} className="flex justify-start animate-message-in gap-2">
+                    <CrosscutIcon size={16} className="shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1 text-[13px] leading-relaxed break-words">
                       {item.content ? (
                         <MarkdownContent content={item.content} />
                       ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (
@@ -1673,6 +1663,9 @@ export default function ChatPanel({
                         </div>
                       )}
                     </div>
+                    {typeof item.responseTimeSeconds === "number" && (
+                      <span className="shrink-0 text-[10px] text-muted-foreground/60 mt-0.5">{formatResponseTime(item.responseTimeSeconds)}</span>
+                    )}
                   </div>
                 );
               })}
@@ -1718,21 +1711,7 @@ export default function ChatPanel({
             >
               {renderPendingFiles()}
 
-              <div className="relative flex items-end bg-muted border border-border rounded-2xl focus-within:ring-2 focus-within:ring-brand-500 focus-within:border-brand-500 transition-shadow">
-                <div className="flex items-center gap-1.5 ml-1 flex-shrink-0">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isStreaming}
-                    title="Attach files"
-                    className="text-muted-foreground hover:text-foreground flex-shrink-0"
-                  >
-                    <RiAttachmentLine size={16} />
-                  </Button>
-                </div>
-
+              <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:ring-2 focus-within:ring-brand-500 focus-within:border-brand-500 transition-shadow">
                 <Textarea
                   ref={inputRef}
                   value={input}
@@ -1742,38 +1721,48 @@ export default function ChatPanel({
                   placeholder={isStreaming ? "Agent is working... press Esc or Stop to interrupt" : "Ask the agent something..."}
                   disabled={isStreaming}
                   rows={1}
-                  className="flex-1 bg-transparent px-2 py-3 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none disabled:opacity-50 resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none disabled:opacity-50 resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "160px" }}
                 />
-                {isStreaming ? (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="icon"
-                    onClick={handleStop}
-                    className="m-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl press-scale flex-shrink-0"
-                    title="Stop agent (Esc)"
-                  >
-                    <RiStopLine size={16} />
-                  </Button>
-                ) : (
-                  <Button
-                    type="submit"
-                    size="icon"
-                    disabled={!input.trim() && pendingFiles.length === 0}
-                    className="m-1.5 bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on rounded-xl press-scale flex-shrink-0"
-                  >
-                    <RiSendPlaneLine size={16} />
-                  </Button>
-                )}
-              </div>
-              <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div className="flex min-w-0 justify-center md:justify-start">
-                  {renderModelPicker(true)}
+                <div className="flex items-center justify-between gap-2 px-2 pb-2">
+                  <div className="flex min-w-0 items-center">
+                    {renderModelPicker(true)}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isStreaming}
+                      title="Attach files"
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <RiAttachmentLine size={16} />
+                    </Button>
+                    {isStreaming ? (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon-sm"
+                        onClick={handleStop}
+                        className="bg-red-500 hover:bg-red-600 text-white rounded-lg press-scale"
+                        title="Stop agent (Esc)"
+                      >
+                        <RiStopLine size={16} />
+                      </Button>
+                    ) : (
+                      <Button
+                        type="submit"
+                        size="icon-sm"
+                        disabled={!input.trim() && pendingFiles.length === 0}
+                        className="bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
+                      >
+                        <RiSendPlaneLine size={16} />
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground text-center md:text-right hidden md:block">
-                  Press Enter to send, Shift+Enter for new line. {isStreaming ? "Press Esc to stop the agent." : "Drag & drop, paste, or click the clip to attach files."}
-                </p>
               </div>
             </form>
           </div>
