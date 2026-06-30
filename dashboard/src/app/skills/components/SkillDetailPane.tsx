@@ -16,7 +16,7 @@ import { RiDownloadLine, RiSendPlaneLine } from "@remixicon/react";
 import SkillEmptyState from "./SkillEmptyState";
 
 const PROSE_CLASSES =
-  "prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/80 prose-a:text-primary prose-strong:text-foreground prose-code:text-primary prose-code:bg-primary/5 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-pre:bg-muted prose-pre:border prose-pre:border-border prose-li:text-foreground/80";
+  "prose max-w-none text-[13px] leading-relaxed prose-headings:text-foreground prose-headings:text-[13px] prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1.5 prose-h1:text-sm prose-h2:text-[13px] prose-p:text-foreground/80 prose-p:my-1.5 prose-a:text-primary prose-strong:text-foreground prose-code:text-primary prose-code:bg-primary/5 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-pre:bg-muted prose-pre:border prose-pre:border-border prose-pre:my-2 prose-li:text-foreground/80 prose-li:my-0.5 prose-ul:my-1.5 prose-ol:my-1.5";
 
 function stripFrontmatter(content: string): string {
   if (!content.startsWith("---")) return content;
@@ -188,12 +188,12 @@ export default function SkillDetailPane({
             </Button>
           </div>
 
-          <TabsContent value="viewer" className="flex-1 overflow-y-auto px-6 py-5 m-0">
+          <TabsContent value="viewer" className="flex-1 overflow-y-auto px-5 py-4 m-0">
             {isMarkdown && Object.keys(frontmatter).length > 0 && (
-              <div className="mb-6 space-y-2">
+              <div className="mb-4 space-y-1">
                 {Object.entries(frontmatter).map(([key, value]) => (
                   <div key={key} className="flex gap-3">
-                    <span className="text-xs text-muted-foreground min-w-[80px] pt-0.5">{key}</span>
+                    <span className="text-xs text-muted-foreground min-w-[72px]">{key}</span>
                     <span className="text-[13px] text-foreground">{value}</span>
                   </div>
                 ))}
@@ -210,7 +210,7 @@ export default function SkillDetailPane({
             )}
           </TabsContent>
 
-          <TabsContent value="editor" className="flex-1 overflow-y-auto px-6 py-5 m-0">
+          <TabsContent value="editor" className="flex-1 overflow-y-auto px-5 py-4 m-0">
             <div className="space-y-3">
               {!isSystemSkill && (
                 <div className="flex justify-end">
