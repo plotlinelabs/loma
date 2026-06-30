@@ -695,7 +695,11 @@ async def stream_agent(
             f"When using personal tools (gmail, google_drive, google_calendar, "
             f"google_sheets, google_slides, google_docs_personal, slack_user), you MUST pass "
             f"`--user-email {user_email} --auth-token {auth_token}`. "
-            f"Never use a different user's email with --user-email."
+            f"Never use a different user's email with --user-email.\n"
+            f"IMPORTANT: Always use the personal CLI tools (e.g. `python3 tools/google_drive.py`, "
+            f"`python3 tools/gmail.py`) instead of any MCP equivalents (e.g. mcp__claude_ai_Google_Drive__*, "
+            f"mcp__claude_ai_Gmail__*). The CLI tools use the user's own authenticated credentials and are "
+            f"more reliable. Do NOT fall back to MCP Google Drive or Gmail tools."
         )
 
     if conversation_context:
