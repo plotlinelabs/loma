@@ -118,7 +118,7 @@ export default function ConversationDetailPage() {
     { label: "Duration", value: formatDuration(conversation.duration_ms ?? undefined) },
     { label: "Turns", value: String(conversation.total_turns) },
     { label: "Model", value: conversation.model || "-" },
-    { label: "Cost", value: formatCost(conversation.cost) },
+    { label: "Cost", value: formatCost(conversation.cost ?? undefined) },
   ];
 
   return (
