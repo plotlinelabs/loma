@@ -130,6 +130,10 @@ async def merge_db_integrations(config: dict) -> dict:
             # Custom connectors carry their own inline remote MCP config (no
             # catalog entry). Added by admins from the Integrations page.
             if integration.get("is_custom"):
+                # OAuth connectors are handled per-user at stream_agent() time
+                if integration.get("auth_mode") == "oauth":
+                    logger.info("Skipping OAuth custom connector '%s' from shared pool config", provider)
+                    continue
                 try:
                     cfg = {"type": "http", "url": integration["mcp_url"]}
                     if integration.get("api_key_encrypted"):
@@ -165,6 +169,41 @@ async def merge_db_integrations(config: dict) -> dict:
         logger.exception("Failed to load integrations from DB — using config.yaml only")
 
     return config
+
+
+async def build_user_mcp_overrides(user_email: str) -> dict:
+    """Build per-user MCP server config for OAuth-requiring custom connectors.
+
+    Returns a dict of MCP server configs keyed by provider slug.
+    Only includes connectors where the user has a valid token.
+    """
+    try:
+        from observability.db import get_db
+        from api.oauth_helpers import get_valid_custom_mcp_token
+
+        db = get_db()
+        if db is None:
+            return {}
+
+        overrides = {}
+        async for integration in db.integrations.find({
+            "is_custom": True, "status": "active", "auth_mode": "oauth",
+        }):
+            provider = integration["provider"]
+            token = await get_valid_custom_mcp_token(user_email, provider, db=db)
+            if token:
+                header = integration.get("auth_header") or "Authorization"
+                overrides[provider] = {
+                    "type": "http",
+                    "url": integration["mcp_url"],
+                    "headers": {header: f"Bearer {token}"},
+                }
+                logger.info("Built per-user MCP config for %s / %s", user_email, provider)
+
+        return overrides
+    except Exception:
+        logger.exception("Failed to build user MCP overrides for %s", user_email)
+        return {}
 
 
 def _resolve_mcp_template(template: dict, api_key: str, extra_fields: dict | None = None) -> dict:
@@ -808,6 +847,11 @@ async def stream_agent(
     selected_model = selected_model or _default_agent_model()
     selected_claude_model = _normalize_claude_model(selected_model)
 
+    # Build per-user MCP overrides for OAuth-requiring custom connectors
+    user_mcp_overrides: dict = {}
+    if user_email:
+        user_mcp_overrides = await build_user_mcp_overrides(user_email)
+
     # OpenCode is the default runtime for OSS installs. Claude family selections
     # stay on the Claude Agent SDK runtime when explicitly selected/configured.
     if selected_model and not selected_claude_model:
@@ -820,6 +864,8 @@ async def stream_agent(
                 observer=observer,
                 include_steps=include_steps,
                 source=source,
+                user_email=user_email,
+                user_mcp_overrides=user_mcp_overrides,
             ):
                 yield event
         except Exception as e:
@@ -846,26 +892,63 @@ async def stream_agent(
     client = None
     account_email: str | None = None
 
-    try:
-        client = await pool.acquire(model=selected_claude_model)
-        account = getattr(client, '_pool_account', {})
-        account_email = account.get('email')
-        active_claude_model = getattr(client, "_pool_model", None) or selected_claude_model
-        logger.info("Client acquired (account=%s, model=%s), sending query...", account_email, active_claude_model)
-    except Exception as e:
-        logger.error("pool.acquire() failed: %s", e)
-        if observer:
-            await observer.record_error(f"Client initialization failed: {e}")
-        status = pool.status()
-        if not status["accounts"]:
-            yield "No Claude accounts are connected. Ask a team member to log in via Integrations."
-        else:
-            yield (
-                "I'm temporarily unable to start a new session \u2014 all agent slots are in use "
-                f"({status['in_use']}/{status['pool_size']} busy, {status['queue_depth']} queued). "
-                "Please try again in a minute or two."
+    if user_mcp_overrides and selected_claude_model:
+        # Per-user MCP overrides: create an ephemeral client with merged config
+        account = pool._next_account()
+        if account is None:
+            yield "No Claude accounts are currently available."
+            return
+        try:
+            options = pool._build_options(model_override=selected_claude_model)
+            merged_mcp = dict(options.mcp_servers or {})
+            merged_mcp.update(user_mcp_overrides)
+            options.mcp_servers = merged_mcp
+            allowed_tools = list(options.allowed_tools or [])
+            for server_name in user_mcp_overrides:
+                tool_name = f"mcp__{server_name}"
+                if tool_name not in allowed_tools:
+                    allowed_tools.append(tool_name)
+            options.allowed_tools = allowed_tools
+            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
+            client = ClaudeSDKClient(options=options)
+            await asyncio.wait_for(client.connect(), timeout=90)
+            client._pool_account = account
+            client._pool_model = options.model
+            client._pool_ephemeral = True
+            pool._in_use += 1
+            account_email = account.get("email")
+            logger.info(
+                "Created per-user MCP client (account=%s, user=%s, extra_servers=%s)",
+                account_email, user_email, list(user_mcp_overrides.keys()),
             )
-        return
+        except Exception as e:
+            logger.error("Failed to create per-user MCP client: %s", e)
+            if client is not None:
+                await pool.safe_disconnect(client)
+            client = None
+            user_mcp_overrides = {}
+
+    if client is None:
+        try:
+            client = await pool.acquire(model=selected_claude_model)
+            account = getattr(client, '_pool_account', {})
+            account_email = account.get('email')
+            active_claude_model = getattr(client, "_pool_model", None) or selected_claude_model
+            logger.info("Client acquired (account=%s, model=%s), sending query...", account_email, active_claude_model)
+        except Exception as e:
+            logger.error("pool.acquire() failed: %s", e)
+            if observer:
+                await observer.record_error(f"Client initialization failed: {e}")
+            status = pool.status()
+            if not status["accounts"]:
+                yield "No Claude accounts are connected. Ask a team member to log in via Integrations."
+            else:
+                yield (
+                    "I'm temporarily unable to start a new session \u2014 all agent slots are in use "
+                    f"({status['in_use']}/{status['pool_size']} busy, {status['queue_depth']} queued). "
+                    "Please try again in a minute or two."
+                )
+            return
 
     # Record which account is processing this conversation
     if observer and account_email:

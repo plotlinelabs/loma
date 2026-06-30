@@ -7,6 +7,8 @@ import {
   disconnectGoogle,
   getSlackAuthorizeUrl,
   disconnectSlack,
+  getCustomMcpAuthorizeUrl,
+  disconnectCustomMcp,
   type OAuthConnection,
 } from "../../../lib/oauth-api";
 import {
@@ -22,7 +24,9 @@ import {
   addCustomConnector,
   removeCustomConnector,
   getWebhookUrl,
+  probeCustomConnector,
   type Integration,
+  type ProbeResult,
 } from "../../../lib/integration-api";
 import dynamic from "next/dynamic";
 import { useUser } from "../../../lib/UserContext";
@@ -303,10 +307,18 @@ export default function IntegrationsPage() {
   const canManageOrgIntegrations = hasRole("maintainer");
 
   const [showCustomModal, setShowCustomModal] = useState(false);
-  const [customForm, setCustomForm] = useState({ name: "", url: "", token: "", authHeader: "" });
+  const [customForm, setCustomForm] = useState({
+    name: "", url: "", token: "", authHeader: "",
+    authMode: "" as "" | "none" | "static" | "oauth",
+    oauthAuthUrl: "", oauthTokenUrl: "", oauthRegUrl: "",
+    oauthClientId: "", oauthClientSecret: "", oauthScopes: "",
+  });
   const [customAdvanced, setCustomAdvanced] = useState(false);
   const [addingCustom, setAddingCustom] = useState(false);
   const [removingCustom, setRemovingCustom] = useState<string | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
+  const [connectingCustomOAuth, setConnectingCustomOAuth] = useState<string | null>(null);
 
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
   const [showClaudeTerminal, setShowClaudeTerminal] = useState(false);
@@ -367,12 +379,16 @@ export default function IntegrationsPage() {
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (event.data?.type === "oauth-complete") {
-        if (event.data.provider === "slack") setConnectingSlack(false);
-        else setConnecting(false);
+        const prov = event.data.provider;
+        if (prov === "slack") setConnectingSlack(false);
+        else if (prov === "google") setConnecting(false);
+        else setConnectingCustomOAuth(null);
         loadConnections();
       } else if (event.data?.type === "oauth-error") {
-        if (event.data.provider === "slack") setConnectingSlack(false);
-        else setConnecting(false);
+        const prov = event.data.provider;
+        if (prov === "slack") setConnectingSlack(false);
+        else if (prov === "google") setConnecting(false);
+        else setConnectingCustomOAuth(null);
         setError(event.data.error || "OAuth failed");
       }
     }
@@ -505,25 +521,106 @@ export default function IntegrationsPage() {
     await loadConnections();
   };
 
+  const handleProbeUrl = async () => {
+    const url = customForm.url.trim();
+    if (!url) return;
+    setProbing(true);
+    setProbeResult(null);
+    setError(null);
+    try {
+      const result = await probeCustomConnector(url);
+      setProbeResult(result);
+      if (result.requires_oauth && result.oauth_metadata) {
+        setCustomForm((f) => ({
+          ...f,
+          authMode: "oauth",
+          oauthAuthUrl: result.oauth_metadata?.authorization_endpoint || "",
+          oauthTokenUrl: result.oauth_metadata?.token_endpoint || "",
+          oauthRegUrl: result.oauth_metadata?.registration_endpoint || "",
+          oauthScopes: (result.oauth_metadata?.scopes_supported || []).join(" "),
+        }));
+        setCustomAdvanced(true);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to probe URL");
+    } finally {
+      setProbing(false);
+    }
+  };
+
   const handleAddCustomConnector = async () => {
     if (!customForm.name.trim() || !customForm.url.trim()) return;
     setAddingCustom(true);
     setError(null);
     try {
-      await addCustomConnector({
+      const authMode = customForm.authMode || (customForm.token.trim() ? "static" : "none");
+      const result = await addCustomConnector({
         name: customForm.name.trim(),
         url: customForm.url.trim(),
         token: customForm.token.trim() || undefined,
         authHeader: customForm.authHeader.trim() || undefined,
+        authMode,
+        oauthConfig: authMode === "oauth" ? {
+          authorization_endpoint: customForm.oauthAuthUrl.trim(),
+          token_endpoint: customForm.oauthTokenUrl.trim(),
+          registration_endpoint: customForm.oauthRegUrl.trim() || undefined,
+          client_id: customForm.oauthClientId.trim() || undefined,
+          client_secret: customForm.oauthClientSecret.trim() || undefined,
+          scopes: customForm.oauthScopes.trim() ? customForm.oauthScopes.trim().split(/\s+/) : undefined,
+        } : undefined,
       });
       setShowCustomModal(false);
-      setCustomForm({ name: "", url: "", token: "", authHeader: "" });
+      setCustomForm({
+        name: "", url: "", token: "", authHeader: "",
+        authMode: "", oauthAuthUrl: "", oauthTokenUrl: "", oauthRegUrl: "",
+        oauthClientId: "", oauthClientSecret: "", oauthScopes: "",
+      });
       setCustomAdvanced(false);
+      setProbeResult(null);
       await loadConnections();
+
+      // If OAuth, open the auth popup immediately for the admin
+      if (result.auth_mode === "oauth" && result.provider) {
+        handleConnectCustomOAuth(result.provider);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add connector");
     } finally {
       setAddingCustom(false);
+    }
+  };
+
+  const handleConnectCustomOAuth = async (provider: string) => {
+    setError(null);
+    setConnectingCustomOAuth(provider);
+    try {
+      const url = await getCustomMcpAuthorizeUrl(provider);
+      const w = 500, h = 600;
+      const left = window.screenX + (window.outerWidth - w) / 2;
+      const top = window.screenY + (window.outerHeight - h) / 2;
+      const popup = window.open(
+        url,
+        `custom-mcp-oauth-${provider}`,
+        `width=${w},height=${h},left=${left},top=${top},popup=yes`,
+      );
+      if (!popup) {
+        setError("Popup blocked. Please allow popups and try again.");
+        setConnectingCustomOAuth(null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start OAuth flow");
+      setConnectingCustomOAuth(null);
+    }
+  };
+
+  const handleDisconnectCustomOAuth = async (provider: string, displayName: string) => {
+    if (!confirm(`Disconnect your ${displayName} account?`)) return;
+    setError(null);
+    try {
+      await disconnectCustomMcp(provider);
+      await loadConnections();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to disconnect");
     }
   };
 
@@ -622,12 +719,44 @@ export default function IntegrationsPage() {
             </div>
             <div>
               <Label className="mb-1">Remote MCP server URL</Label>
-              <Input
-                type="url"
-                value={customForm.url}
-                onChange={(e) => setCustomForm((f) => ({ ...f, url: e.target.value }))}
-                placeholder="https://mcp.example.com/mcp"
-              />
+              <div className="flex gap-2">
+                <Input
+                  type="url"
+                  value={customForm.url}
+                  onChange={(e) => {
+                    setCustomForm((f) => ({ ...f, url: e.target.value }));
+                    setProbeResult(null);
+                  }}
+                  placeholder="https://mcp.example.com/mcp"
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleProbeUrl}
+                  disabled={probing || !customForm.url.trim()}
+                >
+                  {probing ? "Checking..." : "Check"}
+                </Button>
+              </div>
+              {probeResult && (
+                <div className="mt-2">
+                  {probeResult.requires_oauth ? (
+                    <Badge className="bg-amber-50 text-amber-600 border-amber-100">
+                      OAuth required — each user authenticates individually
+                    </Badge>
+                  ) : probeResult.reachable ? (
+                    <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
+                      Reachable — no OAuth required
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary">
+                      Could not reach server
+                    </Badge>
+                  )}
+                </div>
+              )}
             </div>
 
             <Button
@@ -641,34 +770,96 @@ export default function IntegrationsPage() {
             </Button>
             {customAdvanced && (
               <div className="space-y-4 pl-1">
-                <div>
-                  <Label className="mb-1">Access token (optional)</Label>
-                  <Input
-                    type="password"
-                    value={customForm.token}
-                    onChange={(e) => setCustomForm((f) => ({ ...f, token: e.target.value }))}
-                    placeholder="Sent as the auth header value"
-                  />
-                </div>
-                <div>
-                  <Label className="mb-1">Auth header name (optional)</Label>
-                  <Input
-                    type="text"
-                    value={customForm.authHeader}
-                    onChange={(e) => setCustomForm((f) => ({ ...f, authHeader: e.target.value }))}
-                    placeholder="Authorization"
-                  />
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    Defaults to <code>Authorization</code>. The token is sent as this header&apos;s value.
-                  </p>
-                </div>
+                {customForm.authMode !== "oauth" && (
+                  <>
+                    <div>
+                      <Label className="mb-1">Access token (optional)</Label>
+                      <Input
+                        type="password"
+                        value={customForm.token}
+                        onChange={(e) => setCustomForm((f) => ({ ...f, token: e.target.value }))}
+                        placeholder="Sent as the auth header value"
+                      />
+                    </div>
+                    <div>
+                      <Label className="mb-1">Auth header name (optional)</Label>
+                      <Input
+                        type="text"
+                        value={customForm.authHeader}
+                        onChange={(e) => setCustomForm((f) => ({ ...f, authHeader: e.target.value }))}
+                        placeholder="Authorization"
+                      />
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Defaults to <code>Authorization</code>. The token is sent as this header&apos;s value.
+                      </p>
+                    </div>
+                  </>
+                )}
+                {customForm.authMode === "oauth" && (
+                  <>
+                    <Separator />
+                    <p className="text-xs font-medium text-foreground">OAuth Configuration</p>
+                    {probeResult?.oauth_metadata?.registration_endpoint ? (
+                      <p className="text-[11px] text-emerald-600">
+                        Dynamic client registration supported — client credentials will be obtained automatically.
+                      </p>
+                    ) : (
+                      <>
+                        <div>
+                          <Label className="mb-1">Client ID</Label>
+                          <Input
+                            type="text"
+                            value={customForm.oauthClientId}
+                            onChange={(e) => setCustomForm((f) => ({ ...f, oauthClientId: e.target.value }))}
+                            placeholder="Required if no dynamic registration"
+                          />
+                        </div>
+                        <div>
+                          <Label className="mb-1">Client Secret</Label>
+                          <Input
+                            type="password"
+                            value={customForm.oauthClientSecret}
+                            onChange={(e) => setCustomForm((f) => ({ ...f, oauthClientSecret: e.target.value }))}
+                            placeholder="Optional"
+                          />
+                        </div>
+                      </>
+                    )}
+                    <div>
+                      <Label className="mb-1">Authorization URL</Label>
+                      <Input
+                        type="url"
+                        value={customForm.oauthAuthUrl}
+                        onChange={(e) => setCustomForm((f) => ({ ...f, oauthAuthUrl: e.target.value }))}
+                        placeholder="https://auth.example.com/authorize"
+                      />
+                    </div>
+                    <div>
+                      <Label className="mb-1">Token URL</Label>
+                      <Input
+                        type="url"
+                        value={customForm.oauthTokenUrl}
+                        onChange={(e) => setCustomForm((f) => ({ ...f, oauthTokenUrl: e.target.value }))}
+                        placeholder="https://auth.example.com/token"
+                      />
+                    </div>
+                    <div>
+                      <Label className="mb-1">Scopes (space-separated, optional)</Label>
+                      <Input
+                        type="text"
+                        value={customForm.oauthScopes}
+                        onChange={(e) => setCustomForm((f) => ({ ...f, oauthScopes: e.target.value }))}
+                        placeholder="read write"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
             <Alert>
               <AlertDescription className="text-xs text-amber-600">
-                Only add MCP servers you trust — their tools run for every user&apos;s agent. Interactive-OAuth
-                servers are not supported; use token/header auth.
+                Only add MCP servers you trust — their tools run for every user&apos;s agent.
               </AlertDescription>
             </Alert>
           </div>
@@ -928,26 +1119,61 @@ export default function IntegrationsPage() {
                             </p>
                           </div>
                         </div>
-                        {isAdmin && (
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            className="shrink-0 whitespace-nowrap"
-                            onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
-                            disabled={removingCustom === integ.provider}
-                          >
-                            {removingCustom === integ.provider ? "Removing..." : "Remove"}
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {integ.auth_mode === "oauth" && (
+                            integ.user_oauth_status === "connected" ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="shrink-0 whitespace-nowrap"
+                                onClick={() => handleDisconnectCustomOAuth(integ.provider, integ.display_name)}
+                              >
+                                Disconnect
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                className="shrink-0 whitespace-nowrap"
+                                onClick={() => handleConnectCustomOAuth(integ.provider)}
+                                disabled={connectingCustomOAuth === integ.provider}
+                              >
+                                {connectingCustomOAuth === integ.provider ? "Connecting..." : "Connect"}
+                              </Button>
+                            )
+                          )}
+                          {isAdmin && (
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              className="shrink-0 whitespace-nowrap"
+                              onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
+                              disabled={removingCustom === integ.provider}
+                            >
+                              {removingCustom === integ.provider ? "Removing..." : "Remove"}
+                            </Button>
+                          )}
+                        </div>
                       </div>
                       <Separator className="my-5" />
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
                           MCP tools active (mcp__{integ.provider})
                         </Badge>
-                        <Badge variant="secondary">
-                          {integ.has_token ? "Token auth" : "No auth"}
-                        </Badge>
+                        {integ.auth_mode === "oauth" ? (
+                          integ.user_oauth_status === "connected" ? (
+                            <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
+                              Your auth: Connected
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-amber-50 text-amber-600 border-amber-100">
+                              Login required
+                            </Badge>
+                          )
+                        ) : (
+                          <Badge variant="secondary">
+                            {integ.has_token ? "Token auth" : "No auth"}
+                          </Badge>
+                        )}
                         {integ.connected_by && (
                           <span className="text-xs text-muted-foreground">
                             Added {formatDate(integ.connected_at)} by {integ.connected_by}

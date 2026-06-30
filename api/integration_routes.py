@@ -10,11 +10,13 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
+import aiohttp as _aiohttp
 from aiohttp import web
 
 from api.auth_helpers import require_admin, get_user_email
-from api.oauth_helpers import encrypt_token, decrypt_token
+from api.oauth_helpers import encrypt_token, decrypt_token, register_oauth_client
 from integrations.registry import PROVIDER_CATALOG, list_providers, get_provider
 from observability.db import get_db
 
@@ -74,8 +76,9 @@ async def _list_integrations(request: web.Request) -> web.Response:
 
     # Append admin-added custom MCP connectors (not in the static catalog).
     if db is not None:
+        user_email = get_user_email(request)
         async for doc in db.integrations.find({"is_custom": True, "status": "active"}):
-            result.append({
+            item = {
                 "provider": doc["provider"],
                 "display_name": doc.get("display_name", doc["provider"]),
                 "description": "Custom MCP server",
@@ -89,9 +92,18 @@ async def _list_integrations(request: web.Request) -> web.Response:
                 "is_custom": True,
                 "url": doc.get("mcp_url", ""),
                 "has_token": bool(doc.get("api_key_encrypted")),
+                "auth_mode": doc.get("auth_mode", "none"),
                 "connected_by": doc.get("connected_by"),
                 "connected_at": doc.get("connected_at").isoformat() if doc.get("connected_at") else None,
-            })
+            }
+            if doc.get("auth_mode") == "oauth" and user_email:
+                user_token = await db.oauth_tokens.find_one({
+                    "user_email": user_email,
+                    "provider": doc["provider"],
+                    "provider_type": "custom_mcp",
+                })
+                item["user_oauth_status"] = "connected" if user_token else "not_connected"
+            result.append(item)
 
     return web.json_response(result)
 
@@ -169,10 +181,51 @@ async def _disconnect_integration(request: web.Request) -> web.Response:
     return web.json_response({"status": "disconnected", "provider": provider})
 
 
+async def _probe_custom_connector(request: web.Request) -> web.Response:
+    """POST /api/integrations/custom/probe — check if a URL requires OAuth."""
+    require_admin(request)
+
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    if not url or not re.match(r"^https?://", url):
+        return web.json_response({"error": "Valid URL required"}, status=400)
+
+    result: dict = {"requires_oauth": False, "reachable": False, "oauth_metadata": None}
+
+    async with _aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, timeout=_aiohttp.ClientTimeout(total=10), allow_redirects=True) as resp:
+                result["reachable"] = True
+                if resp.status == 401:
+                    result["requires_oauth"] = True
+        except Exception:
+            pass
+
+    parsed = urlparse(url)
+    well_known_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/oauth-authorization-server"
+
+    async with _aiohttp.ClientSession() as session:
+        try:
+            async with session.get(well_known_url, timeout=_aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    metadata = await resp.json()
+                    result["requires_oauth"] = True
+                    result["oauth_metadata"] = {
+                        "authorization_endpoint": metadata.get("authorization_endpoint"),
+                        "token_endpoint": metadata.get("token_endpoint"),
+                        "registration_endpoint": metadata.get("registration_endpoint"),
+                        "scopes_supported": metadata.get("scopes_supported", []),
+                    }
+        except Exception:
+            pass
+
+    return web.json_response(result)
+
+
 async def _add_custom_connector(request: web.Request) -> web.Response:
     """POST /api/integrations/custom — register a custom remote MCP server.
 
-    Admin-only. The connector's tools become available to every user's agent.
+    Admin-only. Supports static token, per-user OAuth, or no auth.
     """
     require_admin(request)
     db = get_db()
@@ -184,11 +237,16 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
     url = (body.get("url") or "").strip()
     token = (body.get("token") or "").strip()
     auth_header = (body.get("auth_header") or "Authorization").strip() or "Authorization"
+    auth_mode = (body.get("auth_mode") or "").strip()
 
     if not name or not url:
         return web.json_response({"error": "name and url are required"}, status=400)
     if not re.match(r"^https?://", url):
         return web.json_response({"error": "url must start with http:// or https://"}, status=400)
+
+    # Infer auth_mode if not explicitly provided
+    if not auth_mode:
+        auth_mode = "static" if token else "none"
 
     slug = _slugify(name)
     if not slug:
@@ -208,7 +266,7 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
 
     user_email = get_user_email(request) or "unknown"
     now = datetime.now(timezone.utc)
-    doc = {
+    doc: dict = {
         "integration_id": str(uuid.uuid4()),
         "provider": slug,
         "is_custom": True,
@@ -216,17 +274,66 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
         "display_name": name,
         "mcp_url": url,
         "auth_header": auth_header,
-        "api_key_encrypted": encrypt_token(token) if token else None,
+        "auth_mode": auth_mode,
+        "api_key_encrypted": encrypt_token(token) if token and auth_mode == "static" else None,
         "connected_by": user_email,
         "connected_at": now,
         "updated_at": now,
     }
+
+    if auth_mode == "oauth":
+        oauth_config = body.get("oauth_config") or {}
+        if not oauth_config.get("authorization_endpoint") or not oauth_config.get("token_endpoint"):
+            return web.json_response(
+                {"error": "OAuth requires authorization_endpoint and token_endpoint"},
+                status=400,
+            )
+
+        # Dynamic client registration if registration_endpoint provided and no client_id
+        client_id = oauth_config.get("client_id", "")
+        client_secret = oauth_config.get("client_secret", "")
+        token_endpoint_auth_method = oauth_config.get("token_endpoint_auth_method", "client_secret_post")
+
+        if not client_id and oauth_config.get("registration_endpoint"):
+            from api.oauth_routes import _oauth_redirect_uri
+            redirect_uri = f"{os.environ.get('APP_BASE_URL', '').rstrip('/')}/api/oauth/custom-mcp/{slug}/callback"
+            reg_result = await register_oauth_client(
+                registration_endpoint=oauth_config["registration_endpoint"],
+                redirect_uri=redirect_uri,
+            )
+            if reg_result is None:
+                return web.json_response(
+                    {"error": "OAuth dynamic client registration failed. Provide client_id manually."},
+                    status=400,
+                )
+            client_id = reg_result["client_id"]
+            client_secret = reg_result.get("client_secret", "")
+            token_endpoint_auth_method = reg_result.get("token_endpoint_auth_method", "client_secret_post")
+            logger.info("[INTEGRATIONS] Dynamic client registration succeeded for '%s'", slug)
+
+        if not client_id:
+            return web.json_response(
+                {"error": "OAuth requires client_id (or a registration_endpoint for dynamic registration)"},
+                status=400,
+            )
+
+        doc["oauth_config"] = {
+            "authorization_endpoint": oauth_config["authorization_endpoint"],
+            "token_endpoint": oauth_config["token_endpoint"],
+            "registration_endpoint": oauth_config.get("registration_endpoint"),
+            "client_id_encrypted": encrypt_token(client_id),
+            "client_secret_encrypted": encrypt_token(client_secret) if client_secret else None,
+            "scopes": oauth_config.get("scopes", []),
+            "token_endpoint_auth_method": token_endpoint_auth_method,
+        }
+        doc["api_key_encrypted"] = None
+
     await db.integrations.insert_one(doc)
-    logger.info("[INTEGRATIONS] Added custom MCP connector '%s' (by %s)", slug, user_email)
+    logger.info("[INTEGRATIONS] Added custom MCP connector '%s' (auth_mode=%s, by %s)", slug, auth_mode, user_email)
 
     await _reload_pool()
 
-    return web.json_response({"status": "connected", "provider": slug}, status=201)
+    return web.json_response({"status": "connected", "provider": slug, "auth_mode": auth_mode}, status=201)
 
 
 async def _remove_custom_connector(request: web.Request) -> web.Response:
@@ -240,6 +347,16 @@ async def _remove_custom_connector(request: web.Request) -> web.Response:
     result = await db.integrations.delete_one({"provider": provider, "is_custom": True})
     if result.deleted_count == 0:
         return web.json_response({"error": "Custom connector not found"}, status=404)
+
+    # Clean up all per-user OAuth tokens for this connector
+    deleted_tokens = await db.oauth_tokens.delete_many({
+        "provider": provider, "provider_type": "custom_mcp",
+    })
+    if deleted_tokens.deleted_count > 0:
+        logger.info(
+            "[INTEGRATIONS] Cleaned up %d user OAuth tokens for removed connector '%s'",
+            deleted_tokens.deleted_count, provider,
+        )
 
     logger.info("[INTEGRATIONS] Removed custom MCP connector '%s'", provider)
 
@@ -294,6 +411,7 @@ def setup_integration_routes(app: web.Application):
     """Register integration API routes."""
     app.router.add_get("/api/integrations", _list_integrations)
     app.router.add_post("/api/integrations/connect", _connect_integration)
+    app.router.add_post("/api/integrations/custom/probe", _probe_custom_connector)
     app.router.add_post("/api/integrations/custom", _add_custom_connector)
     app.router.add_delete("/api/integrations/custom/{provider}", _remove_custom_connector)
     app.router.add_delete("/api/integrations/{provider}", _disconnect_integration)

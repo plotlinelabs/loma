@@ -64,3 +64,19 @@ export async function disconnectSlack(): Promise<void> {
   });
   if (!res.ok) throw await apiError(res, "Failed to disconnect Slack");
 }
+
+// ── Custom MCP OAuth ─────────────────────────────────────────────────────
+
+export async function getCustomMcpAuthorizeUrl(provider: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/oauth/custom-mcp/${provider}/authorize`);
+  if (!res.ok) throw await apiError(res, "Failed to get authorize URL");
+  const data = await res.json();
+  return data.authorize_url;
+}
+
+export async function disconnectCustomMcp(provider: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/oauth/connections/custom-mcp/${provider}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw await apiError(res, "Failed to disconnect");
+}
