@@ -17,10 +17,6 @@ services:
       # Persist connected Claude Code accounts (CLAUDE_USERS_DIR) across container
       # recreation — otherwise `claude login` creds are lost on every rebuild/redeploy.
       - loma-claude-users:/opt/claude-users
-      # Persistent workspace for cloning & running repos inside the agent (e.g. the
-      # run-plotline-services-local boot loop). Backed by a named volume so a clone
-      # survives container recreation, unlike /tmp's ephemeral overlay. Exposed to
-      # the agent as $LOMA_WORKSPACE_DIR (default /opt/loma-workspace).
       - loma-workspace:/opt/loma-workspace
       - ${LOMA_SECRETS_DIR:-/home/ubuntu/secrets}:/home/ubuntu/secrets:ro
     restart: unless-stopped
