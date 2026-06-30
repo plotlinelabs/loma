@@ -50,6 +50,7 @@ export default function SkillTreeSidebar({
   onToggleSection: (section: string) => void;
   onToggleSkill: (slug: string) => void;
   createUrl: string;
+  width?: number;
 }) {
   const grouped: Record<ScopeKey, Skill[]> = { workspace: [], personal: [], system: [] };
   for (const skill of skills) {
@@ -62,7 +63,7 @@ export default function SkillTreeSidebar({
   }
 
   return (
-    <div className="w-[280px] flex-shrink-0 border-r border-border bg-muted/30 flex flex-col h-full overflow-hidden">
+    <div className="flex-shrink-0 bg-muted/30 flex flex-col h-full overflow-hidden" style={{ width: width ?? 280 }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Skills</h1>
