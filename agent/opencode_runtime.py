@@ -975,6 +975,7 @@ async def run_opencode_agent(
     observer=None,
     include_steps: bool = False,
     source: str = "dashboard",
+    image_files: list[dict] | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     """Run one dashboard chat turn through OpenCode and yield dashboard events."""
     started_at = time.perf_counter()
@@ -1043,10 +1044,21 @@ async def run_opencode_agent(
 
     system_prompt = _opencode_system_prompt()
 
+    parts: list[dict] = [{"type": "text", "text": full_prompt}]
+    if image_files:
+        for img in image_files:
+            parts.append({
+                "type": "file",
+                "mime": img.get("mimetype", "image/png"),
+                "filename": img.get("name"),
+                "url": f"data:{img.get('mimetype', 'image/png')};base64,{img['data']}",
+            })
+        logger.info("[OPENCODE] Attached %d image(s) as file parts", len(image_files))
+
     body = {
         "model": {"providerID": provider_id, "modelID": model_id},
         "system": system_prompt,
-        "parts": [{"type": "text", "text": full_prompt}],
+        "parts": parts,
     }
     logger.info(
         "OpenCode turn prepared model=%s source=%s system_chars=%d prompt_chars=%d mcp_servers=%d catalog=%.3fs session=%.3fs idle_timeout=%ds request_timeout=%ds",

@@ -708,6 +708,7 @@ async def stream_agent(
 
     # Append file contents inline; save images to temp files for the agent to read
     temp_files = []  # track temp files to clean up later
+    image_files: list[dict] = []  # raw image data for OpenCode file parts
     if files:
         for f in files:
             if f["type"] == "text":
@@ -715,8 +716,7 @@ async def stream_agent(
                     f"## Attached File: {f['name']}\n```\n{f['data']}\n```"
                 )
             elif f["type"] == "image":
-                # Save image to a temp file \u2014 the Claude Code CLI can read
-                # images via its built-in Read tool (multimodal support)
+                image_files.append(f)
                 ext = Path(f["name"]).suffix or ".png"
                 tmp = tempfile.NamedTemporaryFile(
                     suffix=ext, prefix="slack_img_", delete=False
@@ -820,6 +820,7 @@ async def stream_agent(
                 observer=observer,
                 include_steps=include_steps,
                 source=source,
+                image_files=image_files or None,
             ):
                 yield event
         except Exception as e:
