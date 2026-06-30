@@ -1324,10 +1324,10 @@ export default function ChatPanel({
         <PopoverContent
           side="top"
           align="start"
-          className="w-[min(88vw,390px)] p-0 overflow-hidden rounded-2xl"
+          className="w-[min(80vw,280px)] p-0 overflow-hidden rounded-xl"
         >
           <Command shouldFilter={false}>
-            <div className="border-b border-gray-100 p-2.5 dark:border-gray-300">
+            <div className="border-b border-border p-1.5">
               <CommandInput
                 value={modelSearch}
                 onValueChange={setModelSearch}
@@ -1335,7 +1335,7 @@ export default function ChatPanel({
               />
             </div>
             <CommandList>
-              <ScrollArea className="max-h-72">
+              <ScrollArea className="max-h-64">
                 <CommandEmpty className="px-3 py-6 text-center text-sm text-muted-foreground">
                   No models match that search.
                 </CommandEmpty>
@@ -1352,41 +1352,15 @@ export default function ChatPanel({
                           onSelect={() => handleModelChange(model.id)}
                           data-checked={isSelected}
                           className={cn(
-                            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2.5",
-                            isSelected
-                              ? "bg-[#1F1D1A] text-white dark:bg-accent-200 dark:text-accent-on"
-                              : "text-gray-700 dark:text-gray-800"
+                            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px]",
+                            isSelected ? "text-foreground font-medium" : "text-muted-foreground"
                           )}
                         >
-                          <span className={cn(
-                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-semibold",
-                            isSelected
-                              ? "bg-white/15 text-white"
-                              : "bg-gray-100 text-gray-500 dark:bg-gray-200 dark:text-gray-600"
-                          )}>
-                            {model.provider_id.slice(0, 2).toUpperCase()}
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-semibold">
-                              {itemModelLabel}
-                            </span>
-                            <span className={cn("block truncate text-xs", isSelected ? "text-white/65 dark:text-[#5C5650]" : "text-gray-400")}>
-                              {model.id}
-                            </span>
-                          </span>
-                          <span className="flex shrink-0 items-center gap-1.5">
-                            {model.supports_reasoning && (
-                              <Badge variant="secondary" className={cn(
-                                "hidden sm:inline-flex text-[10px] px-1.5 py-0.5",
-                                isSelected ? "bg-white/15 text-white/80 dark:bg-[#1F1D1A]/10 dark:text-[#1F1D1A]/75" : "bg-accent-100 text-gray-700 dark:bg-accent-100 dark:text-gray-800"
-                              )}>
-                                reasoning
-                              </Badge>
-                            )}
-                            {isSelected && (
-                              <RiCheckLine size={16} className="text-accent-200 dark:text-[#1F1D1A]" />
-                            )}
-                          </span>
+                          <span className="min-w-0 flex-1 truncate">{itemModelLabel}</span>
+                          {model.supports_reasoning && (
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-500/60" title="reasoning" />
+                          )}
+                          {isSelected && <RiCheckLine size={14} className="shrink-0 text-foreground" />}
                         </CommandItem>
                       );
                     })}
@@ -1404,41 +1378,15 @@ export default function ChatPanel({
                           onSelect={() => handleModelChange(model.id)}
                           data-checked={isSelected}
                           className={cn(
-                            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2.5",
-                            isSelected
-                              ? "bg-[#1F1D1A] text-white dark:bg-accent-200 dark:text-accent-on"
-                              : "text-gray-700 dark:text-gray-800"
+                            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px]",
+                            isSelected ? "text-foreground font-medium" : "text-muted-foreground"
                           )}
                         >
-                          <span className={cn(
-                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-semibold",
-                            isSelected
-                              ? "bg-white/15 text-white"
-                              : "bg-gray-100 text-gray-500 dark:bg-gray-200 dark:text-gray-600"
-                          )}>
-                            {model.provider_id.slice(0, 2).toUpperCase()}
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-semibold">
-                              {itemModelLabel}
-                            </span>
-                            <span className={cn("block truncate text-xs", isSelected ? "text-white/65 dark:text-[#5C5650]" : "text-gray-400")}>
-                              {model.id}
-                            </span>
-                          </span>
-                          <span className="flex shrink-0 items-center gap-1.5">
-                            {model.supports_reasoning && (
-                              <Badge variant="secondary" className={cn(
-                                "hidden sm:inline-flex text-[10px] px-1.5 py-0.5",
-                                isSelected ? "bg-white/15 text-white/80 dark:bg-[#1F1D1A]/10 dark:text-[#1F1D1A]/75" : "bg-accent-100 text-gray-700 dark:bg-accent-100 dark:text-gray-800"
-                              )}>
-                                reasoning
-                              </Badge>
-                            )}
-                            {isSelected && (
-                              <RiCheckLine size={16} className="text-accent-200 dark:text-[#1F1D1A]" />
-                            )}
-                          </span>
+                          <span className="min-w-0 flex-1 truncate">{itemModelLabel}</span>
+                          {model.supports_reasoning && (
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-500/60" title="reasoning" />
+                          )}
+                          {isSelected && <RiCheckLine size={14} className="shrink-0 text-foreground" />}
                         </CommandItem>
                       );
                     })}
@@ -1516,7 +1464,7 @@ export default function ChatPanel({
         /* Empty state */
         <div className="flex flex-col items-center justify-center h-full px-4 md:px-6 animate-fade-in-up">
           <div className="mb-8 text-center">
-            <h2 className="text-xl md:text-3xl font-heading font-semibold text-foreground tracking-tight">
+            <h2 className="text-xl md:text-3xl font-heading font-normal text-foreground tracking-tight">
               What do you need to get done?
             </h2>
             <p className="text-[15px] text-muted-foreground mt-2 max-w-md mx-auto">
