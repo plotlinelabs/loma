@@ -7,6 +7,7 @@ import type { AgentModel, ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Tur
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import type { Artifact } from "./ArtifactViewer";
+import CrosscutIcon from "./CrosscutIcon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,14 +19,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   RiCloseLine,
   RiArrowDownSLine,
-  RiSearchLine,
   RiSendPlaneLine,
   RiLoader4Line,
   RiAttachmentLine,
   RiCheckLine,
   RiUploadLine,
   RiDownloadLine,
-  RiUserLine,
   RiStopLine,
   RiTimeLine,
 } from "@remixicon/react";
@@ -542,7 +541,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4 animate-fade-in cursor-pointer"
+      className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-3 animate-fade-in cursor-pointer"
       onClick={onClose}
     >
       <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
@@ -601,7 +600,7 @@ function FileAttachmentCard({ file }: { file: FileAttachment }) {
       download={file.name}
       target="_blank"
       rel="noopener noreferrer"
-      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all group ${bg}`}
+      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all group ${bg}`}
     >
       <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg flex-shrink-0 ${bg}`}>
         {isImage && file.size < 5 * 1024 * 1024 ? (
@@ -1337,7 +1336,7 @@ export default function ChatPanel({
             </div>
             <CommandList>
               <ScrollArea className="max-h-72">
-                <CommandEmpty className="px-3 py-8 text-center text-sm text-muted-foreground">
+                <CommandEmpty className="px-3 py-6 text-center text-sm text-muted-foreground">
                   No models match that search.
                 </CommandEmpty>
 
@@ -1353,7 +1352,7 @@ export default function ChatPanel({
                           onSelect={() => handleModelChange(model.id)}
                           data-checked={isSelected}
                           className={cn(
-                            "flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5",
+                            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2.5",
                             isSelected
                               ? "bg-[#1F1D1A] text-white dark:bg-accent-200 dark:text-accent-on"
                               : "text-gray-700 dark:text-gray-800"
@@ -1405,7 +1404,7 @@ export default function ChatPanel({
                           onSelect={() => handleModelChange(model.id)}
                           data-checked={isSelected}
                           className={cn(
-                            "flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5",
+                            "flex w-full items-center gap-2 rounded-xl px-2.5 py-2.5",
                             isSelected
                               ? "bg-[#1F1D1A] text-white dark:bg-accent-200 dark:text-accent-on"
                               : "text-gray-700 dark:text-gray-800"
@@ -1576,7 +1575,7 @@ export default function ChatPanel({
                   </Button>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-3 text-center hidden md:block">
+              <p className="text-xs text-muted-foreground mt-2 text-center hidden md:block">
                 Press Enter to send, Shift+Enter for new line. Drag & drop, paste, or click the clip to attach files.
               </p>
             </form>
@@ -1623,8 +1622,8 @@ export default function ChatPanel({
             </div>
           )}
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 md:px-6 py-4">
-            <div className="space-y-4 max-w-3xl mx-auto">
+          <div className="flex-1 overflow-y-auto px-3 py-4">
+            <div className="space-y-3 max-w-3xl mx-auto">
               {items.map((item, i) => {
                 if (item.role === "steps") {
                   return <StepsGroup key={i} steps={item.steps || []} />;
@@ -1637,10 +1636,11 @@ export default function ChatPanel({
                 if (item.role === "clarify") {
                   return (
                     <div key={i} className="flex justify-start animate-message-in">
-                      <div className="w-7 h-7 bg-brand-100 rounded-lg flex items-center justify-center flex-shrink-0 mr-2 md:mr-3 mt-0.5 hidden md:flex">
-                        <span className="text-xs font-bold text-brand-700">G</span>
-                      </div>
-                      <div className="max-w-[90%] md:max-w-[75%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed bg-card border border-border text-foreground rounded-bl-md shadow-sm break-words">
+                      <div className="w-full text-sm leading-relaxed break-words">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <CrosscutIcon size={14} />
+                          <span className="text-xs text-muted-foreground font-medium">Loma</span>
+                        </div>
                         {item.content && (
                           <div className="mb-3">
                             <MarkdownContent content={item.content} />
@@ -1659,35 +1659,59 @@ export default function ChatPanel({
                   );
                 }
 
-                return (
-                  <div
-                    key={i}
-                    className={`flex animate-message-in ${item.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
-                    {item.role === "assistant" && (
-                      <div className="w-7 h-7 bg-brand-100 rounded-lg flex items-center justify-center flex-shrink-0 mr-2 md:mr-3 mt-0.5 hidden md:flex">
-                        <span className="text-xs font-bold text-brand-700">G</span>
+                if (item.role === "user") {
+                  return (
+                    <div key={i} className="flex justify-end animate-message-in">
+                      <div className="bg-muted rounded-xl px-3 py-2 max-w-[75%] text-sm leading-relaxed break-words whitespace-pre-wrap">
+                        {item.content || <TypingIndicator />}
+                        {item.fileNames && item.fileNames.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {item.fileNames.map((name, fi) => {
+                              const fileData = item.files?.find((f) => f.name === name);
+                              if (fileData && fileData.type === "image") {
+                                const src = `data:${fileData.mimetype};base64,${fileData.data}`;
+                                return (
+                                  <button
+                                    key={fi}
+                                    type="button"
+                                    onClick={() => setExpandedImage(src)}
+                                    className="w-16 h-16 rounded-lg overflow-hidden border border-border hover:border-foreground/20 transition-colors flex-shrink-0"
+                                  >
+                                    <img src={src} alt={name} className="w-full h-full object-cover" />
+                                  </button>
+                                );
+                              }
+                              return (
+                                <Badge key={fi} variant="secondary" className="gap-1 px-2 py-0.5 rounded-md">
+                                  <RiAttachmentLine size={12} />
+                                  {name}
+                                </Badge>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    )}
-                    <div
-                      className={cn(
-                        "max-w-[90%] md:max-w-[75%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed break-words",
-                        item.role === "user"
-                          ? "bg-[#1F1D1A] text-[#FDFBF7] rounded-br-md whitespace-pre-wrap"
-                          : "bg-card border border-border text-foreground rounded-bl-md shadow-sm"
-                      )}
-                    >
-                      {item.role === "assistant" && item.content ? (
+                    </div>
+                  );
+                }
+
+                // Assistant message — editorial style, no bubble
+                return (
+                  <div key={i} className="flex justify-start animate-message-in">
+                    <div className="w-full text-sm leading-relaxed break-words">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <CrosscutIcon size={14} />
+                        <span className="text-xs text-muted-foreground font-medium">Loma</span>
+                      </div>
+                      {item.content ? (
                         <MarkdownContent content={item.content} />
-                      ) : item.role === "assistant" && !item.content && (item.artifactIds?.length || item.fileAttachments?.length) ? (
+                      ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (
                         null /* Artifact/file-only message — cards rendered below */
-                      ) : item.content ? (
-                        item.content
                       ) : (
                         <TypingIndicator />
                       )}
                       {/* Inline artifact cards */}
-                      {item.role === "assistant" && item.artifactIds && item.artifactIds.length > 0 && (
+                      {item.artifactIds && item.artifactIds.length > 0 && (
                         <div className={`flex flex-col gap-2 ${item.content ? "mt-3" : ""}`}>
                           {item.artifactIds.map((artId) => {
                             const art = allArtifacts.find((a) => a.id === artId);
@@ -1704,51 +1728,20 @@ export default function ChatPanel({
                         </div>
                       )}
                       {/* Inline file attachment cards */}
-                      {item.role === "assistant" && item.fileAttachments && item.fileAttachments.length > 0 && (
+                      {item.fileAttachments && item.fileAttachments.length > 0 && (
                         <div className={`flex flex-col gap-2 ${item.content || (item.artifactIds && item.artifactIds.length > 0) ? "mt-3" : ""}`}>
                           {item.fileAttachments.map((file) => (
                             <FileAttachmentCard key={file.file_id} file={file} />
                           ))}
                         </div>
                       )}
-                      {item.role === "assistant" && typeof item.responseTimeSeconds === "number" && (
+                      {typeof item.responseTimeSeconds === "number" && (
                         <div className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
                           <RiTimeLine size={12} />
                           <span>{formatResponseTime(item.responseTimeSeconds)}</span>
                         </div>
                       )}
-                      {item.role === "user" && item.fileNames && item.fileNames.length > 0 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {item.fileNames.map((name, fi) => {
-                            const fileData = item.files?.find((f) => f.name === name);
-                            if (fileData && fileData.type === "image") {
-                              const src = `data:${fileData.mimetype};base64,${fileData.data}`;
-                              return (
-                                <button
-                                  key={fi}
-                                  type="button"
-                                  onClick={() => setExpandedImage(src)}
-                                  className="w-16 h-16 rounded-lg overflow-hidden border border-white/20 hover:border-white/40 transition-colors flex-shrink-0"
-                                >
-                                  <img src={src} alt={name} className="w-full h-full object-cover" />
-                                </button>
-                              );
-                            }
-                            return (
-                              <Badge key={fi} variant="secondary" className="bg-brand-500/30 text-brand-100 gap-1 px-2 py-0.5 rounded-md">
-                                <RiAttachmentLine size={12} />
-                                {name}
-                              </Badge>
-                            );
-                          })}
-                        </div>
-                      )}
                     </div>
-                    {item.role === "user" && (
-                      <div className="w-7 h-7 bg-gray-200 rounded-lg flex items-center justify-center flex-shrink-0 ml-2 md:ml-3 mt-0.5 hidden md:flex">
-                        <RiUserLine size={14} className="text-gray-600" />
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -1756,9 +1749,6 @@ export default function ChatPanel({
               {/* Fallback indicator before any events arrive */}
               {isStreaming && !isRecovering && items.length > 0 && items[items.length - 1].role === "user" && (
                 <div className="flex justify-start animate-message-in">
-                  <div className="w-7 h-7 bg-brand-100 rounded-lg flex items-center justify-center flex-shrink-0 mr-2 md:mr-3 mt-0.5 hidden md:flex">
-                    <span className="text-xs font-bold text-brand-700">G</span>
-                  </div>
                   <StatusPill
                     message={
                       accountInfo?.runtime === "opencode"
@@ -1773,10 +1763,7 @@ export default function ChatPanel({
               {/* Recovery polling indicator */}
               {isRecovering && (
                 <div className="flex justify-start animate-message-in">
-                  <div className="w-7 h-7 bg-brand-100 rounded-lg flex items-center justify-center flex-shrink-0 mr-2 md:mr-3 mt-0.5 hidden md:flex">
-                    <span className="text-xs font-bold text-brand-700">G</span>
-                  </div>
-                  <div className="bg-card border border-border text-foreground rounded-2xl rounded-bl-md shadow-sm px-4 py-2.5 text-sm">
+                  <div className="text-sm">
                     <span className="flex items-center gap-2 text-muted-foreground">
                       <RiLoader4Line size={14} className="animate-spin text-brand-500" />
                       Still working on your request...
@@ -1790,7 +1777,7 @@ export default function ChatPanel({
           </div>
 
           {/* Input */}
-          <div className="sticky bottom-0 border-t border-border bg-card px-3 md:px-6 py-3 md:py-4 shrink-0">
+          <div className="sticky bottom-0 border-t border-border bg-muted/30 px-3 py-2.5 shrink-0">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -2153,75 +2140,30 @@ function StatusLine({ message, elapsedSeconds }: { message: string; elapsedSecon
 }
 
 function StepsGroup({ steps }: { steps: Step[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const allDone = steps.every((s) => s.status === "done" || s.status === "error");
-  const hasError = steps.some((s) => s.status === "error");
-  const doneCount = steps.filter((s) => s.status === "done" || s.status === "error").length;
-  const runningStep = steps.find((s) => s.status === "running");
-
   return (
     <div className="flex justify-start animate-message-in">
-      <div className="w-0 md:w-7 flex-shrink-0 mr-0 md:mr-3" />
-      <div className="max-w-[90%] md:max-w-[75%] w-full">
-        <Button
-          variant="ghost"
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors py-1 group h-auto px-1"
-        >
-          {allDone ? (
-            hasError ? (
-              <span className="w-4 h-4 rounded-full bg-red-100 flex items-center justify-center">
-                <RiCloseLine size={10} className="text-red-500" />
-              </span>
-            ) : (
-              <span className="w-4 h-4 rounded-full bg-green-100 flex items-center justify-center">
-                <RiCheckLine size={10} className="text-green-600" />
-              </span>
-            )
-          ) : (
-            <RiLoader4Line size={14} className="animate-spin text-brand-500" />
-          )}
-
-          <span className="font-medium">
-            {allDone
-              ? `Used ${steps.length} tool${steps.length > 1 ? "s" : ""}`
-              : runningStep
-                ? <>Running <span className="text-foreground/70">{formatToolName(runningStep.name || "tool")}</span>{runningStep.input ? <span className="text-muted-foreground font-normal ml-1 truncate max-w-[300px] inline-block align-bottom" title={runningStep.input}>{runningStep.input}</span> : null} ({doneCount}/{steps.length})</>
-                : `Running ${steps.length} tool${steps.length > 1 ? "s" : ""}... (${doneCount}/${steps.length})`}
-          </span>
-
-          <RiArrowDownSLine
-            size={12}
+      <div className="flex flex-wrap gap-1">
+        {steps.map((step, i) => (
+          <span
+            key={i}
             className={cn(
-              "transition-transform duration-200",
-              expanded && "rotate-180"
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-[11px] text-muted-foreground border border-border",
+              step.status === "error" && "border-red-200 text-red-600"
             )}
-          />
-        </Button>
-
-        {expanded && (
-          <div className="mt-1 ml-1 border-l-2 border-border pl-3 space-y-1.5 pb-1 animate-expand">
-            {steps.map((step, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
-                {step.status === "running" ? (
-                  <RiLoader4Line size={12} className="animate-spin text-brand-500 flex-shrink-0" />
-                ) : step.status === "error" ? (
-                  <RiCloseLine size={12} className="text-red-500 flex-shrink-0" />
-                ) : (
-                  <RiCheckLine size={12} className="text-green-500 flex-shrink-0" />
-                )}
-                <span className={cn("font-mono truncate", step.status === "error" ? "text-red-600" : "text-foreground/70")}>
-                  {formatToolName(step.name || "Unknown")}
-                </span>
-                {step.input && (
-                  <span className="text-muted-foreground truncate flex-1 min-w-0" title={step.input}>
-                    {step.input}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+            title={step.input || undefined}
+          >
+            {step.status === "running" ? (
+              <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />
+            ) : step.status === "error" ? (
+              <RiCloseLine size={10} className="text-red-500 flex-shrink-0" />
+            ) : (
+              <RiCheckLine size={10} className="text-green-500 flex-shrink-0" />
+            )}
+            <span className="truncate max-w-[200px]">
+              {formatToolName(step.name || "tool")}
+            </span>
+          </span>
+        ))}
       </div>
     </div>
   );

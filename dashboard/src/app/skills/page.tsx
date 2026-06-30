@@ -50,10 +50,10 @@ export default function SkillsPage() {
   }, []);
 
   return (
-    <div className="space-y-5 animate-fade-in-up">
-      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+    <div className="space-y-3 animate-fade-in-up">
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Skills</h1>
+          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Skills</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Company playbooks and supporting files the agent can search, read, and update through chat.
           </p>
@@ -71,15 +71,15 @@ export default function SkillsPage() {
         </Alert>
       )}
 
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="bg-card border border-border rounded-xl overflow-hidden overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow className="border-b border-border bg-muted/50">
-              <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-5 py-3">Skill</TableHead>
-              <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-5 py-3">Description</TableHead>
-              <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-5 py-3">Tags</TableHead>
-              <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-5 py-3">Files</TableHead>
-              <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-5 py-3">Updated</TableHead>
+              <TableHead className="w-[15%]">Skill</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead className="w-[15%]">Tags</TableHead>
+              <TableHead className="w-[10%]">Files</TableHead>
+              <TableHead className="w-[15%]">Updated</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -87,17 +87,17 @@ export default function SkillsPage() {
               <>
                 {[1, 2, 3].map((i) => (
                   <TableRow key={i}>
-                    <TableCell className="px-5 py-4"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-20 mt-1.5" /></TableCell>
-                    <TableCell className="px-5 py-4"><Skeleton className="h-4 w-48" /></TableCell>
-                    <TableCell className="px-5 py-4"><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
-                    <TableCell className="px-5 py-4"><Skeleton className="h-4 w-24" /></TableCell>
-                    <TableCell className="px-5 py-4"><Skeleton className="h-4 w-28" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-20 mt-1.5" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-48" /></TableCell>
+                    <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-28" /></TableCell>
                   </TableRow>
                 ))}
               </>
             ) : skills.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="px-5 py-6">
+                <TableCell colSpan={5}>
                   <EmptyState icon={RiBookOpenLine} title="No skills yet" description="Skills can be created from the chat interface" />
                 </TableCell>
               </TableRow>
@@ -108,15 +108,15 @@ export default function SkillsPage() {
                 const assetCount = files.filter((file) => file.kind === "local_asset").length;
                 const textCount = files.filter((file) => file.kind === "inline_text").length;
                 return (
-                  <TableRow key={slug} className="hover:bg-muted/50 transition-colors">
-                    <TableCell className="px-5 py-4 align-top">
-                      <Link href={`/skills/${slug}`} className="text-sm font-semibold text-foreground hover:text-brand-700">
+                  <TableRow key={slug}>
+                    <TableCell className="align-top">
+                      <Link href={`/skills/${slug}`} className="text-sm font-semibold text-foreground hover:text-brand-700 truncate block">
                         {skill.name || slug}
                       </Link>
                       <div className="text-xs text-muted-foreground font-mono mt-1">{slug}</div>
                     </TableCell>
-                    <TableCell className="px-5 py-4 align-top text-sm text-muted-foreground max-w-xl">{skill.description || "-"}</TableCell>
-                    <TableCell className="px-5 py-4 align-top">
+                    <TableCell className="align-top text-sm text-muted-foreground max-w-xl"><span className="line-clamp-2">{skill.description || "-"}</span></TableCell>
+                    <TableCell className="align-top">
                       {skill.tags?.length ? (
                         <div className="flex flex-wrap gap-1.5">
                           {skill.tags.map((tag) => (
@@ -127,10 +127,10 @@ export default function SkillsPage() {
                         </div>
                       ) : <span className="text-xs text-muted-foreground">-</span>}
                     </TableCell>
-                    <TableCell className="px-5 py-4 align-top text-xs text-muted-foreground">
+                    <TableCell className="align-top text-xs text-muted-foreground">
                       {textCount} text · {assetCount} asset{assetCount === 1 ? "" : "s"}
                     </TableCell>
-                    <TableCell className="px-5 py-4 align-top text-xs text-muted-foreground">{formatUpdated(skill.updated_at)}</TableCell>
+                    <TableCell className="align-top text-xs text-muted-foreground">{formatUpdated(skill.updated_at)}</TableCell>
                   </TableRow>
                 );
               })

@@ -98,7 +98,7 @@ function renderTextFile(path: string, content: string) {
     );
   }
   return (
-    <pre className="whitespace-pre-wrap text-xs text-muted-foreground leading-relaxed bg-muted rounded-lg p-4 border border-border overflow-x-auto max-h-[520px] overflow-y-auto">
+    <pre className="whitespace-pre-wrap text-xs text-muted-foreground leading-relaxed bg-muted rounded-lg p-3 border border-border overflow-x-auto max-h-[520px] overflow-y-auto">
       {content}
     </pre>
   );
@@ -143,7 +143,7 @@ export default function SkillDetailPage() {
   const assetFiles = files.filter(isAsset);
 
   return (
-    <div className="space-y-5 animate-fade-in-up">
+    <div className="space-y-3 animate-fade-in-up">
       <Breadcrumb>
         <BreadcrumbList>
           <BreadcrumbItem>
@@ -156,11 +156,11 @@ export default function SkillDetailPage() {
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
         <div>
           <h1 className="text-xl font-heading font-semibold text-foreground">{skill.name || slug}</h1>
           <p className="text-sm text-muted-foreground mt-1">{skill.description || "No description yet."}</p>
-          <div className="flex flex-wrap gap-1.5 mt-3">
+          <div className="flex flex-wrap gap-1.5 mt-2">
             <Badge variant="secondary" className="font-mono">{slug}</Badge>
             {skill.tags?.map((tag) => (
               <Badge key={tag} className="bg-brand-50 text-brand-700 border-transparent">{tag}</Badge>
@@ -181,10 +181,10 @@ export default function SkillDetailPage() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-5">
-        <div className="space-y-5 min-w-0">
+        <div className="space-y-3 min-w-0">
           <Card>
             <CardContent>
-              <div className="flex items-center justify-between gap-3 mb-4">
+              <div className="flex items-center justify-between gap-2 mb-2">
                 <h2 className="text-sm font-heading font-semibold text-foreground">SKILL.md</h2>
                 <Button variant="link" size="xs" asChild>
                   <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, files.find((file) => file.path === "SKILL.md") || { path: "SKILL.md", kind: "inline_text" }))}>
@@ -201,7 +201,7 @@ export default function SkillDetailPage() {
             return (
               <Card key={file.path}>
                 <CardContent>
-                  <div className="flex items-center justify-between gap-3 mb-4">
+                  <div className="flex items-center justify-between gap-2 mb-2">
                     <div>
                       <h2 className="text-sm font-heading font-semibold text-foreground font-mono">{file.path}</h2>
                       <p className="text-xs text-muted-foreground mt-1">{file.content_type || "text"} · {formatBytes(file.size_bytes)}</p>
@@ -221,16 +221,16 @@ export default function SkillDetailPage() {
           {assetFiles.length > 0 && (
             <Card>
               <CardContent>
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Assets</h2>
+                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Assets</h2>
                 <div className="space-y-4">
                   {assetFiles.map((file) => (
-                    <div key={file.path} className="border border-border rounded-lg p-4 space-y-3">
-                      <div className="flex items-start justify-between gap-3">
+                    <div key={file.path} className="border border-border rounded-lg p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <h3 className="text-sm font-semibold text-foreground font-mono truncate">{file.path}</h3>
                           <p className="text-xs text-muted-foreground mt-1">{file.content_type || "asset"} · {formatBytes(file.size_bytes)}</p>
                         </div>
-                        <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           <Button variant="ghost" size="xs" asChild>
                             <a href={skillAssetUrl(slug, file.path)} target="_blank" rel="noreferrer">
                               Open
@@ -258,13 +258,13 @@ export default function SkillDetailPage() {
           )}
         </div>
 
-        <aside className="space-y-5">
+        <aside className="space-y-3">
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-3">Package</h2>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Package</h2>
               <div className="space-y-2">
                 {files.map((file) => (
-                  <div key={file.path} className="flex items-center justify-between gap-3 text-xs">
+                  <div key={file.path} className="flex items-center justify-between gap-2 text-xs">
                     <span className="font-mono text-muted-foreground truncate">{file.path}</span>
                     <span className="text-muted-foreground flex-shrink-0">{file.kind === "local_asset" ? "asset" : "text"}</span>
                   </div>
@@ -275,11 +275,11 @@ export default function SkillDetailPage() {
 
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-3">History</h2>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">History</h2>
               {history.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No versions yet.</p>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {history.slice(0, 20).map((commit) => (
                     <div key={commit.sha} className="border-b border-border pb-3 last:border-0">
                       <p className="text-xs font-medium text-foreground">{commit.message}</p>

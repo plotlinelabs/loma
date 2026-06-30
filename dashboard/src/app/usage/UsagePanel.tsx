@@ -67,7 +67,7 @@ function UsageBucketCard({ bucket, showReset = true }: { bucket: UsageBucket; sh
   return (
     <Card>
       <CardContent>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-medium text-muted-foreground">{bucket.label}</h3>
           {isLimited && (
             <Badge variant="destructive">
@@ -76,7 +76,7 @@ function UsageBucketCard({ bucket, showReset = true }: { bucket: UsageBucket; sh
           )}
         </div>
 
-        <div className="flex items-end gap-2 mb-3">
+        <div className="flex items-end gap-2 mb-2">
           <span className={`text-3xl font-bold ${utilizationColor(bucket.utilization)}`}>
             {remaining}%
           </span>
@@ -107,8 +107,8 @@ function SkeletonCard() {
   return (
     <Card>
       <CardContent>
-        <Skeleton className="h-3 w-32 mb-4" />
-        <Skeleton className="h-8 w-20 mb-3" />
+        <Skeleton className="h-3 w-32 mb-2" />
+        <Skeleton className="h-8 w-20 mb-2" />
         <Skeleton className="h-2.5 w-full rounded-full mb-2" />
         <div className="flex justify-between">
           <Skeleton className="h-3 w-16" />
@@ -141,7 +141,7 @@ function AuthStatusCard({
     return (
       <Card className="ring-amber-300">
         <CardContent>
-          <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center gap-2 mb-2">
             <div className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
             <h3 className="text-sm font-medium text-amber-700">Not Logged In</h3>
           </div>
@@ -157,7 +157,7 @@ function AuthStatusCard({
     <Card>
       <CardContent>
         <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
             <div>
               <h3 className="text-sm font-medium text-foreground">
@@ -226,7 +226,7 @@ export default function UsagePanel() {
   return (
     <div className="space-y-4">
       {/* Refresh row */}
-      <div className="flex items-center justify-end gap-3">
+      <div className="flex items-center justify-end gap-2">
         {lastRefresh && (
           <span className="text-xs text-muted-foreground">
             Updated {lastRefresh.toLocaleTimeString()}
@@ -260,21 +260,21 @@ export default function UsagePanel() {
 
       {/* Usage Cards */}
       {loading && !stats ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <SkeletonCard />
           <SkeletonCard />
           <SkeletonCard />
           <SkeletonCard />
         </div>
       ) : stats ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <UsageBucketCard bucket={stats.session} />
           <UsageBucketCard bucket={stats.weekly} />
           <UsageBucketCard bucket={stats.weekly_sonnet} />
           <UsageBucketCard bucket={stats.overage} showReset={stats.overage.utilization > 0} />
         </div>
       ) : auth?.loggedIn === false ? (
-        <div className="text-center py-8 text-muted-foreground">
+        <div className="text-center py-6 text-muted-foreground">
           <p>Login to view usage statistics</p>
         </div>
       ) : null}
@@ -283,8 +283,8 @@ export default function UsagePanel() {
       {stats && (
         <Card>
           <CardContent>
-            <h3 className="text-sm font-medium text-muted-foreground mb-3">Details</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Details</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Session Reset</span>
                 <span className="text-foreground">{formatResetDate(stats.session.reset)}</span>

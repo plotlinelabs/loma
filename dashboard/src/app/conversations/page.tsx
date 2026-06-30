@@ -74,17 +74,17 @@ const topicLabels: Record<string, string> = {
 function SkeletonRow() {
   return (
     <TableRow>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-20" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-48" /><Skeleton className="h-2 w-32 mt-1.5" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-14 rounded-full" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-6 mx-auto" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-10" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-14" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-12" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-10 rounded-full" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-14" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-20" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-48" /><Skeleton className="h-2 w-32 mt-1.5" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-14 rounded-full" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-6 mx-auto" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-10" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-14" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-12" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-10 rounded-full" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-14" /></TableCell>
     </TableRow>
   );
 }
@@ -98,8 +98,8 @@ function MobileSkeletonCard() {
           <Skeleton className="h-5 w-14 rounded-full" />
         </div>
         <Skeleton className="h-4 w-3/4 mb-1" />
-        <Skeleton className="h-3 w-1/2 mb-3" />
-        <div className="flex items-center gap-3">
+        <Skeleton className="h-3 w-1/2 mb-2" />
+        <div className="flex items-center gap-2">
           <Skeleton className="h-3 w-20" />
           <Skeleton className="h-3 w-16" />
           <Skeleton className="h-3 w-12" />
@@ -197,11 +197,11 @@ export default function ConversationsPage() {
   }, [viewMode]);
 
   return (
-    <div className="space-y-3 md:space-y-4 animate-fade-in-up">
+    <div className="space-y-2 animate-fade-in-up">
       {/* Page header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Conversations</h1>
+          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Conversations</h1>
           <p className="text-sm text-muted-foreground mt-1">Browse and manage all agent conversations</p>
         </div>
         {isAdmin && (
@@ -250,7 +250,7 @@ export default function ConversationsPage() {
 
       {/* Filters bar */}
       <div className="bg-card rounded-xl border border-border px-4 py-3">
-        <div className="flex flex-col md:flex-row md:flex-wrap gap-3 md:items-center md:justify-between">
+        <div className="flex flex-col md:flex-row md:flex-wrap gap-2 md:items-center md:justify-between">
           <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-3">
             <Select
               value={sourceFilter || "__all__"}
@@ -320,7 +320,7 @@ export default function ConversationsPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             {hasActiveFilters && (
               <Button
                 variant="ghost"
@@ -350,18 +350,18 @@ export default function ConversationsPage() {
         <Table>
           <TableHeader>
             <TableRow className="border-b border-muted text-left">
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Time</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Source</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Account</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Title</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Topic</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Turns</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Duration</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Cost</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Savings</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Status</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Confidence</TableHead>
-              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider w-10"></TableHead>
+              <TableHead>Time</TableHead>
+              <TableHead>Source</TableHead>
+              <TableHead>Account</TableHead>
+              <TableHead>Title</TableHead>
+              <TableHead>Topic</TableHead>
+              <TableHead>Turns</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Cost</TableHead>
+              <TableHead>Savings</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Confidence</TableHead>
+              <TableHead className="w-10"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody className="divide-y divide-muted/50">
@@ -372,7 +372,7 @@ export default function ConversationsPage() {
               </>
             ) : conversations.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} className="px-4 py-8">
+                <TableCell colSpan={12} className="py-6">
                   {hasActiveFilters ? (
                     <EmptyState
                       icon={RiChat1Line}
@@ -400,18 +400,18 @@ export default function ConversationsPage() {
                     }
                   }}
                 >
-                  <TableCell className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
                     <ClientTimestamp iso={c.started_at} variant="short" />
                   </TableCell>
-                  <TableCell className="px-4 py-3">
+                  <TableCell>
                     <Badge variant="secondary" className={cn("text-xs", sourceStyles[c.source] || "bg-gray-100 text-gray-600")}>
                       {sourceLabels[c.source] || c.source}
                     </Badge>
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-muted-foreground text-xs">
+                  <TableCell className="text-muted-foreground text-xs">
                     {c.claude_account ? c.claude_account : <span className="text-muted-foreground/50">&mdash;</span>}
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-foreground max-w-xs">
+                  <TableCell className="text-foreground max-w-xs">
                     <div className="truncate font-medium" title={c.title || c.prompt?.slice(0, 80)}>
                       {c.title || c.prompt?.slice(0, 60) + (c.prompt?.length > 60 ? "..." : "")}
                     </div>
@@ -421,30 +421,30 @@ export default function ConversationsPage() {
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="px-4 py-3">
+                  <TableCell>
                     {c.topic ? (
                       <Badge variant="secondary" className={cn("text-xs", topicStyles[c.topic] || "bg-gray-100 text-gray-600")}>
                         {topicLabels[c.topic] || c.topic}
                       </Badge>
                     ) : <span className="text-xs text-muted-foreground/50">&mdash;</span>}
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-muted-foreground text-center">{c.total_turns}</TableCell>
-                  <TableCell className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                  <TableCell className="text-muted-foreground text-center">{c.total_turns}</TableCell>
+                  <TableCell className="text-muted-foreground whitespace-nowrap">
                     {c.duration_ms ? (c.duration_ms > 60000 ? `${Math.round(c.duration_ms / 60000)}m` : `${Math.round(c.duration_ms / 1000)}s`) : "-"}
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs tabular-nums">
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-xs tabular-nums">
                     {c.cost?.total_cost_usd != null ? `$${c.cost.total_cost_usd.toFixed(4)}` : "-"}
                   </TableCell>
-                  <TableCell className="px-4 py-3 whitespace-nowrap text-xs tabular-nums">
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     {c.savings?.savings_usd != null ? (
                       <span className="text-emerald-600 font-medium">+${c.savings.savings_usd.toFixed(2)}</span>
                     ) : <span className="text-muted-foreground">-</span>}
                   </TableCell>
-                  <TableCell className="px-4 py-3">
+                  <TableCell>
                     <Badge variant="secondary" className={cn("text-xs", statusStyles[c.status] || "bg-gray-100 text-gray-600")}>{c.status}</Badge>
                   </TableCell>
-                  <TableCell className="px-4 py-3"><ConfidenceBadge confidence={c.confidence} /></TableCell>
-                  <TableCell className="px-4 py-3">
+                  <TableCell><ConfidenceBadge confidence={c.confidence} /></TableCell>
+                  <TableCell>
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       {c.status !== "running" && (
                         <Button variant="ghost" size="xs" asChild className="text-brand-600 hover:bg-brand-50 press-scale">
@@ -481,7 +481,7 @@ export default function ConversationsPage() {
       </div>
 
       {/* Mobile card list */}
-      <div className="mobile-cards space-y-3">
+      <div className="mobile-cards space-y-2">
         {loading ? (
           <>
             <MobileSkeletonCard /><MobileSkeletonCard /><MobileSkeletonCard />
@@ -502,7 +502,7 @@ export default function ConversationsPage() {
           conversations.map((c, idx) => (
             <Card
               key={c.conversation_id}
-              className="p-4 active:bg-muted/50 transition-colors animate-fade-in-up cursor-pointer"
+              className="p-3 active:bg-muted/50 transition-colors animate-fade-in-up cursor-pointer"
               style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
               onClick={(e) => {
                 const url = `/conversations/${c.conversation_id}`;
@@ -548,7 +548,7 @@ export default function ConversationsPage() {
                     {c.prompt?.slice(0, 60)}{c.prompt?.length > 60 ? "..." : ""}
                   </div>
                 )}
-                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                   <ClientTimestamp iso={c.started_at} variant="short" />
                   <span>{c.total_turns} turns</span>
                   {c.cost?.total_cost_usd != null && (

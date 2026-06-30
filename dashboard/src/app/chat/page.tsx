@@ -133,9 +133,9 @@ function ChatPageContent() {
 
   if (loading) {
     return (
-      <div className="h-[calc(100vh-3rem)] flex flex-col -mx-4 lg:-mx-6 -my-6">
-        <div className="px-4 lg:px-6 py-4 border-b border-border bg-card">
-          <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
+      <div className="h-[calc(100vh-3rem)] flex flex-col -mx-3 lg:-mx-4 -my-3">
+        <div className="px-3 lg:px-4 py-4 border-b border-border bg-card">
+          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
           <p className="text-sm text-muted-foreground">{flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}</p>
         </div>
         <div className="flex-1 flex items-center justify-center bg-muted/30">
@@ -149,10 +149,10 @@ function ChatPageContent() {
   }
 
   return (
-    <div className="h-[calc(100vh-3rem)] flex flex-col -mx-4 lg:-mx-6 -my-6">
+    <div className="h-[calc(100vh-3rem)] flex flex-col -mx-3 lg:-mx-4 -my-3">
       {/* Header with title and action buttons */}
-      <div className="px-4 lg:px-6 py-3 border-b border-border bg-card flex-shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
+        <div className="flex items-center gap-2">
           {/* Title area */}
           <div className="min-w-0 flex-1">
             {activeConversationId && editingTitle ? (
@@ -290,7 +290,7 @@ function ChatPageContent() {
                 {showDeleteConfirm && (
                   <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 w-56 animate-fade-in">
                     <p className="text-sm font-medium text-foreground mb-1">Delete this chat?</p>
-                    <p className="text-xs text-muted-foreground mb-3">This cannot be undone.</p>
+                    <p className="text-xs text-muted-foreground mb-2">This cannot be undone.</p>
                     <div className="flex items-center gap-1.5">
                       <Button
                         variant="destructive"
@@ -321,7 +321,7 @@ function ChatPageContent() {
       </div>
 
       {error && (
-        <div className="px-4 lg:px-6 py-2">
+        <div className="px-3 lg:px-4 py-2">
           <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>
         </div>
       )}
@@ -344,9 +344,9 @@ export default function ChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="h-[calc(100vh-3rem)] flex flex-col -mx-4 lg:-mx-6 -my-6">
-          <div className="px-4 lg:px-6 py-4 border-b border-border bg-card">
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Chat</h1>
+        <div className="h-[calc(100vh-3rem)] flex flex-col -mx-3 lg:-mx-4 -my-3">
+          <div className="px-3 lg:px-4 py-4 border-b border-border bg-card">
+            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Chat</h1>
           </div>
           <div className="flex-1 bg-muted/30 flex items-center justify-center">
             <RiLoader4Line size={32} className="animate-spin text-muted-foreground" />

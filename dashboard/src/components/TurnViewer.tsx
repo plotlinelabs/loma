@@ -86,7 +86,7 @@ export default function TurnViewer({ turns }: TurnViewerProps) {
   const reversedTurns = [...turns].reverse();
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {reversedTurns.map((turn) => {
         const resultMap = new Map(
           (turn.tool_results || []).map((r) => [r.tool_use_id, r])
@@ -95,9 +95,9 @@ export default function TurnViewer({ turns }: TurnViewerProps) {
         return (
           <div
             key={`${turn.conversation_id}-${turn.turn_number}`}
-            className="bg-card border border-border rounded-xl p-4"
+            className="bg-card border border-border rounded-xl p-3"
           >
-            <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center gap-2 mb-2">
               <Badge variant="secondary" className="font-mono text-xs bg-brand-50 text-brand-700">
                 Turn {turn.turn_number}
               </Badge>
@@ -112,7 +112,7 @@ export default function TurnViewer({ turns }: TurnViewerProps) {
             {turn.text_blocks?.map((block, i) => (
               <div
                 key={i}
-                className="mb-3 text-sm text-foreground/70 whitespace-pre-wrap leading-relaxed"
+                className="mb-2 text-sm text-foreground/70 whitespace-pre-wrap leading-relaxed"
               >
                 {block.text}
               </div>

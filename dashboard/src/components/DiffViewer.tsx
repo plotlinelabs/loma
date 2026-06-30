@@ -58,7 +58,7 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
 
   if (!diff.trim()) {
     return (
-      <div className="flex items-center justify-center py-8 text-muted-foreground">
+      <div className="flex items-center justify-center py-6 text-muted-foreground">
         <div className="text-center">
           <RiCheckLine size={32} className="mx-auto mb-2 text-muted-foreground/60" />
           <p className="text-sm font-medium">No differences</p>
@@ -81,7 +81,7 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
   return (
     <div>
       {/* Stats bar */}
-      <div className="flex items-center gap-3 mb-3 text-xs">
+      <div className="flex items-center gap-2 mb-2 text-xs">
         <span className="text-green-600 font-semibold">+{stats.add}</span>
         <span className="text-red-500 font-semibold">-{stats.del}</span>
         <div className="flex gap-px flex-1 max-w-[120px]">

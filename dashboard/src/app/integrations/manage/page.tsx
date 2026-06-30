@@ -213,7 +213,7 @@ function ConnectModal({
             </Alert>
           )}
 
-          <div className="space-y-4 mt-4">
+          <div className="space-y-4 mt-2">
             {extraFields.map((field) => (
               <div key={field.key}>
                 <Label className="mb-1">
@@ -574,7 +574,7 @@ export default function IntegrationsPage() {
   const customConnectors = orgIntegrations.filter((i) => i.is_custom);
 
   return (
-    <div className="space-y-3 animate-fade-in-up">
+    <div className="space-y-2 animate-fade-in-up">
       {/* Header */}
       <div>
         <h1 className="text-xl font-heading font-semibold text-foreground">Integrations</h1>
@@ -688,7 +688,7 @@ export default function IntegrationsPage() {
 
       {loading ? (
         <Card>
-          <CardContent className="p-8 text-center">
+          <CardContent className="p-6 text-center">
             <div className="animate-pulse text-muted-foreground text-sm">Loading integrations...</div>
           </CardContent>
         </Card>
@@ -696,8 +696,8 @@ export default function IntegrationsPage() {
         <div className="space-y-4">
           {/* Org Integrations -- maintainer+ only */}
           {canManageOrgIntegrations && userManagedIntegrations.length > 0 && (
-            <div className="space-y-3">
-              <div>
+            <div>
+              <div className="mb-2">
                 <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
                   Org Integrations
                 </h2>
@@ -706,6 +706,7 @@ export default function IntegrationsPage() {
                 </p>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {userManagedIntegrations.map((integ) => {
                 const isOrgConnected = integ.status === "connected";
                 const Logo = PROVIDER_LOGOS[integ.provider];
@@ -713,8 +714,8 @@ export default function IntegrationsPage() {
                   <Card key={integ.provider}>
                     <CardContent>
                       <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
                             {Logo ? <Logo /> : (
                               <span className="text-lg font-bold text-muted-foreground">
                                 {integ.display_name[0]}
@@ -722,13 +723,13 @@ export default function IntegrationsPage() {
                             )}
                           </div>
                           <div>
-                            <div className="flex items-center gap-3">
-                              <h2 className="text-base font-heading font-semibold text-foreground">
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-sm font-heading font-semibold text-foreground">
                                 {integ.display_name}
                               </h2>
                               <StatusBadge status={integ.status} />
                             </div>
-                            <p className="text-sm text-muted-foreground mt-0.5">
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
                               {integ.description}
                             </p>
                           </div>
@@ -758,7 +759,7 @@ export default function IntegrationsPage() {
                       {isOrgConnected && (
                         <>
                           <Separator className="my-5" />
-                          <div className="space-y-3">
+                          <div className="space-y-2">
                             {integ.connected_at && (
                               <p className="text-xs text-muted-foreground">
                                 Connected {formatDate(integ.connected_at)}
@@ -813,7 +814,7 @@ export default function IntegrationsPage() {
                             Connect your {integ.display_name} account to enable MCP tools
                             {integ.has_webhook ? ", webhook event ingestion, and agent capabilities" : " and agent capabilities"}.
                           </p>
-                          <div className="mt-3 flex flex-wrap gap-2">
+                          <div className="mt-2 flex flex-wrap gap-2">
                             {["MCP tools", integ.has_webhook ? "Event ingestion" : null, "Agent skills"].filter(Boolean).map((cap) => (
                               <Badge
                                 key={cap}
@@ -829,13 +830,14 @@ export default function IntegrationsPage() {
                   </Card>
                 );
               })}
+              </div>
             </div>
           )}
 
           {/* System-Managed Integrations */}
           {canManageOrgIntegrations && systemManagedIntegrations.length > 0 && (
-            <div className="space-y-3">
-              <div>
+            <div>
+              <div className="mb-2">
                 <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
                   System-Managed Integrations
                 </h2>
@@ -844,14 +846,15 @@ export default function IntegrationsPage() {
                 </p>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {systemManagedIntegrations.map((integ) => {
                 const Logo = PROVIDER_LOGOS[integ.provider];
                 return (
                   <Card key={integ.provider}>
                     <CardContent>
                       <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
                             {Logo ? <Logo /> : (
                               <span className="text-lg font-bold text-muted-foreground">
                                 {integ.display_name[0]}
@@ -859,13 +862,13 @@ export default function IntegrationsPage() {
                             )}
                           </div>
                           <div>
-                            <div className="flex items-center gap-3">
-                              <h2 className="text-base font-heading font-semibold text-foreground">
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-sm font-heading font-semibold text-foreground">
                                 {integ.display_name}
                               </h2>
                               <StatusBadge status="system_managed" />
                             </div>
-                            <p className="text-sm text-muted-foreground mt-0.5">
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
                               {integ.description}
                             </p>
                           </div>
@@ -885,13 +888,14 @@ export default function IntegrationsPage() {
                   </Card>
                 );
               })}
+              </div>
             </div>
           )}
 
           {/* Custom MCP Connectors -- admin only */}
           {isAdmin && (
-            <div className="space-y-3">
-              <div className="flex items-start justify-between gap-4">
+            <div className="space-y-2">
+              <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
                     Custom Connectors
@@ -907,7 +911,7 @@ export default function IntegrationsPage() {
 
               {customConnectors.length === 0 ? (
                 <Card className="border-dashed">
-                  <CardContent className="p-4 text-center">
+                  <CardContent className="p-3 text-center">
                     <p className="text-sm text-muted-foreground">
                       No custom connectors yet. Add a remote MCP server to extend the agent.
                     </p>
@@ -918,15 +922,15 @@ export default function IntegrationsPage() {
                   <Card key={integ.provider}>
                     <CardContent>
                       <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
                             <span className="text-lg font-bold text-muted-foreground">
                               {integ.display_name[0]}
                             </span>
                           </div>
                           <div>
-                            <div className="flex items-center gap-3">
-                              <h2 className="text-base font-heading font-semibold text-foreground">
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-sm font-heading font-semibold text-foreground">
                                 {integ.display_name}
                               </h2>
                               <StatusBadge status="connected" />
@@ -967,7 +971,7 @@ export default function IntegrationsPage() {
           )}
 
           {/* Personal Integrations */}
-          <div className="space-y-3">
+          <div className="space-y-2">
             {canManageOrgIntegrations && orgIntegrations.length > 0 && (
               <div>
                 <h2 className="text-sm font-heading font-semibold text-foreground uppercase tracking-wide">
@@ -983,18 +987,18 @@ export default function IntegrationsPage() {
           <Card>
             <CardContent>
               <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
                     <GoogleLogo />
                   </div>
                   <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-base font-heading font-semibold text-foreground">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm font-heading font-semibold text-foreground">
                         Google
                       </h2>
                       <StatusBadge status={googleConn?.status || "not_connected"} />
                     </div>
-                    <p className="text-sm text-muted-foreground mt-0.5">
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
                       Gmail, Drive, Calendar, Sheets, Docs, Slides
                     </p>
                   </div>
@@ -1026,7 +1030,7 @@ export default function IntegrationsPage() {
                 <>
                   <Separator className="my-5" />
                   {googleConn.connected_at && (
-                    <p className="text-xs text-muted-foreground mb-3">
+                    <p className="text-xs text-muted-foreground mb-2">
                       Connected {formatDate(googleConn.connected_at)}
                     </p>
                   )}
@@ -1049,7 +1053,7 @@ export default function IntegrationsPage() {
               )}
 
               {isExpired && (
-                <Alert className="mt-4 bg-amber-50 border-amber-100">
+                <Alert className="mt-2 bg-amber-50 border-amber-100">
                   <AlertDescription className="text-amber-700">
                     Your Google connection has expired. Please reconnect to restore access.
                   </AlertDescription>
@@ -1063,7 +1067,7 @@ export default function IntegrationsPage() {
                     Connect your Google account to let Loma access Gmail, Drive, Calendar,
                     Sheets, Docs, and Slides on your behalf. Your tokens are encrypted and stored securely.
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2 flex flex-wrap gap-2">
                     {["Read emails", "Compose & send emails", "Read & write Drive", "Calendar", "Sheets", "Read & edit Docs", "Read & edit Slides"].map((perm) => (
                       <Badge
                         key={perm}
@@ -1082,18 +1086,18 @@ export default function IntegrationsPage() {
           <Card>
             <CardContent>
               <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
                     <SlackLogo />
                   </div>
                   <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-base font-heading font-semibold text-foreground">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm font-heading font-semibold text-foreground">
                         Slack
                       </h2>
                       <StatusBadge status={slackConn?.status || "not_connected"} />
                     </div>
-                    <p className="text-sm text-muted-foreground mt-0.5">
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
                       Read, search, and send messages as you
                     </p>
                   </div>
@@ -1125,7 +1129,7 @@ export default function IntegrationsPage() {
                 <>
                   <Separator className="my-5" />
                   {slackConn.connected_at && (
-                    <p className="text-xs text-muted-foreground mb-3">
+                    <p className="text-xs text-muted-foreground mb-2">
                       Connected {formatDate(slackConn.connected_at)}
                     </p>
                   )}
@@ -1148,7 +1152,7 @@ export default function IntegrationsPage() {
               )}
 
               {isSlackExpired && (
-                <Alert className="mt-4 bg-amber-50 border-amber-100">
+                <Alert className="mt-2 bg-amber-50 border-amber-100">
                   <AlertDescription className="text-amber-700">
                     Your Slack connection has expired. Please reconnect to restore access.
                   </AlertDescription>
@@ -1162,7 +1166,7 @@ export default function IntegrationsPage() {
                     Connect your Slack account to let Loma read channels, search messages, view unreads,
                     and send messages as you. Your token is encrypted and stored securely.
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2 flex flex-wrap gap-2">
                     {["Read channels", "Read DMs", "Send messages as you", "Search messages", "View unreads"].map((perm) => (
                       <Badge
                         key={perm}
@@ -1181,18 +1185,18 @@ export default function IntegrationsPage() {
           <Card>
             <CardContent>
               <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-muted rounded-xl flex items-center justify-center">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
                     <ClaudeLogo />
                   </div>
                   <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-base font-heading font-semibold text-foreground">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm font-heading font-semibold text-foreground">
                         Claude Code
                       </h2>
                       <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
                     </div>
-                    <p className="text-sm text-muted-foreground mt-0.5">
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
                       Your account joins the shared round-robin pool
                     </p>
                   </div>
@@ -1224,7 +1228,7 @@ export default function IntegrationsPage() {
               {claudeAuth?.connected && (
                 <>
                   <Separator className="my-5" />
-                  <div className="flex items-center gap-4 text-sm">
+                  <div className="flex items-center gap-3 text-sm">
                     {claudeAuth.email && (
                       <div>
                         <span className="text-muted-foreground">Account: </span>
@@ -1247,7 +1251,7 @@ export default function IntegrationsPage() {
               {showClaudeTerminal && (
                 <>
                   <Separator className="my-5" />
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-2">
                     <p className="text-sm text-muted-foreground">
                       Complete the OAuth flow in the terminal below:
                     </p>
@@ -1269,7 +1273,7 @@ export default function IntegrationsPage() {
                     Connect your Claude Code subscription (Pro, Max, or Teams) to join the shared
                     round-robin pool. All connected accounts are used to process tasks across the team.
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2 flex flex-wrap gap-2">
                     {["Shared pool", "Round-robin usage", "Rate limit rotation"].map((perm) => (
                       <Badge
                         key={perm}

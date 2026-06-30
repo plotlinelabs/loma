@@ -460,10 +460,10 @@ export default function AdminPage() {
 
   return (
     <>
-    <div className="space-y-5 animate-fade-in-up">
+    <div className="space-y-3 animate-fade-in-up">
       {/* Header — changes based on active tab */}
       <div>
-        <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">
+        <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">
           {tab === "environment" ? "Environment Variables" : tab === "settings" ? "Settings" : tab === "usage" ? "Usage & Authentication" : "Users & Permissions"}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -497,7 +497,7 @@ export default function AdminPage() {
           onClick={() => setShowRoles(!showRoles)}
           className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-muted/50 transition-colors h-auto rounded-none"
         >
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0">
               <RiShieldCheckLine className="text-indigo-500" size={16} />
             </div>
@@ -524,7 +524,7 @@ export default function AdminPage() {
         {showRoles && (
           <div className="border-t border-border px-5 pb-4 pt-2">
             {/* Role descriptions */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
               {(["admin", "maintainer", "operator", "analyst", "chatter"] as const).map((role) => {
                 const m = ROLE_META[role];
                 return (
@@ -541,9 +541,9 @@ export default function AdminPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="border-b border-border">
-                    <TableHead className="py-2 pr-4 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Permission</TableHead>
+                    <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Permission</TableHead>
                     {(["admin", "maintainer", "operator", "analyst", "chatter"] as const).map((role) => (
-                      <TableHead key={role} className="py-2 px-3 text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                      <TableHead key={role} className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                         {ROLE_META[role].label}
                       </TableHead>
                     ))}
@@ -552,9 +552,9 @@ export default function AdminPage() {
                 <TableBody>
                   {ROLE_PERMISSIONS.map((row) => (
                     <TableRow key={row.permission} className="border-b border-muted/50 last:border-0">
-                      <TableCell className="py-2 pr-4 text-[12px] text-muted-foreground">{row.permission}</TableCell>
+                      <TableCell className="text-[12px] text-muted-foreground">{row.permission}</TableCell>
                       {(["admin", "maintainer", "operator", "analyst", "chatter"] as const).map((role) => (
-                        <TableCell key={role} className="py-2 px-3 text-center">
+                        <TableCell key={role} className="text-center">
                           {row[role] ? (
                             <RiCheckLine className="text-emerald-500 mx-auto" size={16} />
                           ) : (
@@ -573,8 +573,8 @@ export default function AdminPage() {
 
       {/* Summary cards — only for users/teams tabs */}
       {(tab === "users" || tab === "teams") && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 stagger-children">
-          <Card className="p-4 flex items-start gap-3 hover-lift">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 stagger-children">
+          <Card className="p-3 flex items-start gap-2 hover-lift">
             <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
               <RiTeamLine className="text-blue-500" size={20} />
             </div>
@@ -583,7 +583,7 @@ export default function AdminPage() {
               <div className="text-xl font-semibold text-foreground mt-0.5">{users.length}</div>
             </div>
           </Card>
-          <Card className="p-4 flex items-start gap-3 hover-lift">
+          <Card className="p-3 flex items-start gap-2 hover-lift">
             <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0">
               <RiTeamLine className="text-emerald-500" size={20} />
             </div>
@@ -592,7 +592,7 @@ export default function AdminPage() {
               <div className="text-xl font-semibold text-foreground mt-0.5">{teams.length}</div>
             </div>
           </Card>
-          <Card className="p-4 flex items-start gap-3 hover-lift">
+          <Card className="p-3 flex items-start gap-2 hover-lift">
             <div className="w-10 h-10 rounded-lg bg-violet-50 flex items-center justify-center flex-shrink-0">
               <RiShieldCheckLine className="text-violet-500" size={20} />
             </div>
@@ -613,16 +613,16 @@ export default function AdminPage() {
             <Table className="min-w-[600px]">
               <TableHeader>
                 <TableRow className="border-b border-border bg-muted/60">
-                  <TableHead className="py-3 px-4 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider sticky left-0 bg-muted/60 z-10 min-w-[180px]">
+                  <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider sticky left-0 bg-muted/60 z-10 min-w-[180px]">
                     User
                   </TableHead>
-                  <TableHead className="py-3 px-2 text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider min-w-[100px]">
+                  <TableHead className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider min-w-[100px]">
                     Role
                   </TableHead>
-                  <TableHead className="py-3 px-2 text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider min-w-[160px]">
+                  <TableHead className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider min-w-[160px]">
                     Status
                   </TableHead>
-                  <TableHead className="py-3 px-2 text-center min-w-[80px]">
+                  <TableHead className="text-center min-w-[80px]">
                     <div className="inline-flex flex-col items-center gap-1">
                       <div className="w-6 h-6 rounded-md flex items-center justify-center bg-amber-50">
                         <img src="/claude.png" alt="Claude" className="w-4 h-4 rounded" />
@@ -630,7 +630,7 @@ export default function AdminPage() {
                       <span className="text-[9px] text-muted-foreground font-medium leading-tight">Claude</span>
                     </div>
                   </TableHead>
-                  <TableHead className="py-3 px-2 text-center min-w-[80px]">
+                  <TableHead className="text-center min-w-[80px]">
                     <div className="inline-flex flex-col items-center gap-1">
                       <div className="w-6 h-6 rounded-md flex items-center justify-center bg-blue-50">
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
@@ -643,7 +643,7 @@ export default function AdminPage() {
                       <span className="text-[9px] text-muted-foreground font-medium leading-tight">Google</span>
                     </div>
                   </TableHead>
-                  <TableHead className="py-3 px-2 text-center min-w-[80px]">
+                  <TableHead className="text-center min-w-[80px]">
                     <div className="inline-flex flex-col items-center gap-1">
                       <div className="w-6 h-6 rounded-md flex items-center justify-center bg-purple-50">
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
@@ -656,7 +656,7 @@ export default function AdminPage() {
                       <span className="text-[9px] text-muted-foreground font-medium leading-tight">Slack</span>
                     </div>
                   </TableHead>
-                  <TableHead className="py-3 px-2 text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider min-w-[90px]">
+                  <TableHead className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider min-w-[90px]">
                     Actions
                   </TableHead>
                 </TableRow>
@@ -664,7 +664,7 @@ export default function AdminPage() {
               <TableBody>
                 {users.map((user) => (
                   <TableRow key={user.email} className="border-b border-border last:border-0 hover:bg-muted/50 transition-colors">
-                    <TableCell className="py-3 px-4 sticky left-0 bg-card z-10">
+                    <TableCell className="sticky left-0 bg-card z-10">
                       <Link href={`/admin/${encodeURIComponent(user.email)}`} className="flex items-center gap-2.5 group">
                         <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
                           <span className="text-sm font-medium text-brand-700">{user.avatar}</span>
@@ -677,7 +677,7 @@ export default function AdminPage() {
                         </div>
                       </Link>
                     </TableCell>
-                    <TableCell className="py-3 px-2 text-center">
+                    <TableCell className="text-center">
                       <Select
                         value={user.system_role}
                         onValueChange={async (newRole: string) => {
@@ -712,7 +712,7 @@ export default function AdminPage() {
                       </Select>
                     </TableCell>
                     {/* Approval status */}
-                    <TableCell className="py-3 px-2 text-center">
+                    <TableCell className="text-center">
                       {(user.status ?? "active") === "pending" ? (
                         <div className="flex items-center justify-center gap-1.5">
                           <Badge variant="secondary" className="text-[10px] bg-amber-50 text-amber-600">Pending</Badge>
@@ -757,7 +757,7 @@ export default function AdminPage() {
                       )}
                     </TableCell>
                     {/* Claude connection + pool toggle */}
-                    <TableCell className="py-3 px-2 text-center">
+                    <TableCell className="text-center">
                       {user.claude_connected ? (
                         <div className="flex items-center justify-center gap-2">
                           <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-600">Connected</Badge>
@@ -791,7 +791,7 @@ export default function AdminPage() {
                       )}
                     </TableCell>
                     {/* Google connection */}
-                    <TableCell className="py-3 px-2 text-center">
+                    <TableCell className="text-center">
                       <StatusCell
                         role={null}
                         oauthStatus={user.tool_assignments?.["google-personal"]?.oauth_status ?? "not_connected"}
@@ -799,7 +799,7 @@ export default function AdminPage() {
                       />
                     </TableCell>
                     {/* Slack connection */}
-                    <TableCell className="py-3 px-2 text-center">
+                    <TableCell className="text-center">
                       <StatusCell
                         role={null}
                         oauthStatus={user.tool_assignments?.["slack-personal"]?.oauth_status ?? "not_connected"}
@@ -807,7 +807,7 @@ export default function AdminPage() {
                       />
                     </TableCell>
                     {/* Actions */}
-                    <TableCell className="py-3 px-2 text-center">
+                    <TableCell className="text-center">
                       {currentUser?.email === user.email ? (
                         <span className="text-[10px] text-muted-foreground/50">You</span>
                       ) : (
@@ -846,7 +846,7 @@ export default function AdminPage() {
 
       {/* ── Teams tab ── */}
       {tab === "teams" && (
-        <div className="space-y-3 stagger-children">
+        <div className="space-y-2 stagger-children">
           {teams.map((team) => {
             const lomaTools = ALL_TOOLS.filter((t) => toolConfigMap[t]?.auth_mode === "loma-managed" && team.tool_defaults[t]?.role);
             const oauthTools = ALL_TOOLS.filter((t) => toolConfigMap[t]?.auth_mode === "tool-managed" && team.tool_defaults[t]?.oauth_required);
@@ -857,8 +857,8 @@ export default function AdminPage() {
                 href={`/admin/teams/${team.team_id}`}
                 className="block"
               >
-                <Card className="p-5 hover-lift transition-all duration-200 group">
-                  <div className="flex items-start gap-4">
+                <Card className="p-3 hover-lift transition-all duration-200 group">
+                  <div className="flex items-start gap-3">
                     {/* Team avatar */}
                     <div
                       className="w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -900,7 +900,7 @@ export default function AdminPage() {
                       </div>
 
                       {/* Tool defaults summary */}
-                      <div className="flex flex-wrap gap-1.5 mt-3">
+                      <div className="flex flex-wrap gap-1.5 mt-2">
                         {lomaTools.slice(0, 6).map((toolKey) => {
                           const meta = getToolMeta(toolKey);
                           const Logo = TOOL_LOGOS[toolKey];
@@ -1023,8 +1023,8 @@ export default function AdminPage() {
                   const connected = isProviderConnected(provider.key);
                   const busy = savingProvider === provider.key;
                   return (
-                    <div key={provider.key} className="p-4 space-y-3">
-                      <div className="flex items-start justify-between gap-3">
+                    <div key={provider.key} className="p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
                         <div>
                           <div className="flex items-center gap-2">
                             <h3 className="text-sm font-semibold text-foreground">{provider.name}</h3>
@@ -1068,7 +1068,7 @@ export default function AdminPage() {
                     </div>
                   );
                 })}
-                <div className="p-4 space-y-3">
+                <div className="p-3 space-y-2">
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-semibold text-foreground">Claude</h3>
                     <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-600">
@@ -1090,8 +1090,8 @@ export default function AdminPage() {
           </Card>
 
           {/* Summary stats */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <Card className="p-4 flex items-start gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <Card className="p-3 flex items-start gap-2">
               <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
                 <RiInformationLine className="text-blue-500" size={20} />
               </div>
@@ -1100,7 +1100,7 @@ export default function AdminPage() {
                 <div className="text-xl font-semibold text-foreground mt-0.5">{envVars.length}</div>
               </div>
             </Card>
-            <Card className="p-4 flex items-start gap-3">
+            <Card className="p-3 flex items-start gap-2">
               <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
                 <RiLockLine className="text-amber-500" size={20} />
               </div>
@@ -1109,7 +1109,7 @@ export default function AdminPage() {
                 <div className="text-xl font-semibold text-foreground mt-0.5">{envVars.filter((v) => v.is_sensitive).length}</div>
               </div>
             </Card>
-            <Card className="p-4 flex items-start gap-3">
+            <Card className="p-3 flex items-start gap-2">
               <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
                 <RiShieldCheckLine className="text-muted-foreground" size={20} />
               </div>
@@ -1191,10 +1191,10 @@ export default function AdminPage() {
                   <Table>
                     <TableHeader>
                       <TableRow className="border-b border-border bg-muted/60">
-                        <TableHead className="py-3 px-4 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[280px]">Key</TableHead>
-                        <TableHead className="py-3 px-4 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Value</TableHead>
-                        <TableHead className="py-3 px-4 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[100px] text-center">Status</TableHead>
-                        <TableHead className="py-3 px-4 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[80px] text-center">Actions</TableHead>
+                        <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[280px]">Key</TableHead>
+                        <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Value</TableHead>
+                        <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[100px] text-center">Status</TableHead>
+                        <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[80px] text-center">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1209,7 +1209,7 @@ export default function AdminPage() {
 
                         return (
                           <TableRow key={v.key} className={cn("border-b border-border last:border-0 transition-colors", v.is_readonly ? "bg-muted/40" : isEdited ? "bg-amber-50/30" : "hover:bg-muted/50")}>
-                            <TableCell className="py-2.5 px-4">
+                            <TableCell>
                               <div className="flex items-center gap-2">
                                 <code className="text-[13px] font-mono text-foreground">{v.key}</code>
                                 {isDuplicate && (
@@ -1217,7 +1217,7 @@ export default function AdminPage() {
                                 )}
                               </div>
                             </TableCell>
-                            <TableCell className="py-2.5 px-4">
+                            <TableCell>
                               {v.is_readonly ? (
                                 <span className="text-[13px] font-mono text-muted-foreground">{displayValue}</span>
                               ) : (
@@ -1230,7 +1230,7 @@ export default function AdminPage() {
                                 />
                               )}
                             </TableCell>
-                            <TableCell className="py-2.5 px-4 text-center">
+                            <TableCell className="text-center">
                               <div className="flex items-center justify-center gap-1">
                                 {v.is_readonly && (
                                   <Badge variant="secondary" className="text-[9px] bg-gray-100 text-muted-foreground inline-flex items-center gap-0.5">
@@ -1246,7 +1246,7 @@ export default function AdminPage() {
                                 )}
                               </div>
                             </TableCell>
-                            <TableCell className="py-2.5 px-4 text-center">
+                            <TableCell className="text-center">
                               <div className="flex items-center justify-center gap-1">
                                 {v.is_sensitive && !(v.key in revealedKeys) && (
                                   <Tooltip>
@@ -1338,7 +1338,7 @@ export default function AdminPage() {
                         const isDuplicate = envVars.some((v) => v.key === nv.key.trim()) || newVars.filter((n, i) => i !== idx && n.key.trim() === nv.key.trim()).length > 0;
                         return (
                           <TableRow key={`new-${idx}`} className="border-b border-border last:border-0 bg-emerald-50/20">
-                            <TableCell className="py-2.5 px-4">
+                            <TableCell>
                               <div className="flex items-center gap-2">
                                 <Input
                                   type="text"
@@ -1352,7 +1352,7 @@ export default function AdminPage() {
                                 )}
                               </div>
                             </TableCell>
-                            <TableCell className="py-2.5 px-4">
+                            <TableCell>
                               <Input
                                 type="text"
                                 value={nv.value}
@@ -1361,7 +1361,7 @@ export default function AdminPage() {
                                 placeholder="value"
                               />
                             </TableCell>
-                            <TableCell className="py-2.5 px-4 text-center">
+                            <TableCell className="text-center">
                               <div className="flex items-center justify-center gap-1">
                                 <Badge variant="secondary" className="text-[9px] bg-emerald-50 text-emerald-600">New</Badge>
                                 {nv.sensitive && (
@@ -1369,7 +1369,7 @@ export default function AdminPage() {
                                 )}
                               </div>
                             </TableCell>
-                            <TableCell className="py-2.5 px-4 text-center">
+                            <TableCell className="text-center">
                               <div className="flex items-center justify-center gap-1">
                                 <Tooltip>
                                   <TooltipTrigger asChild>
@@ -1426,7 +1426,7 @@ export default function AdminPage() {
           {envTab === "audit" && (
             <Card className="overflow-hidden">
               {envAuditLog.length === 0 ? (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">No audit log entries yet.</div>
+                <div className="px-4 py-6 text-center text-sm text-muted-foreground">No audit log entries yet.</div>
               ) : (
                 <div className="divide-y divide-border">
                   {envAuditLog.map((entry, idx) => {
@@ -1443,9 +1443,9 @@ export default function AdminPage() {
                             next.has(idx) ? next.delete(idx) : next.add(idx);
                             return next;
                           })}
-                          className="w-full flex items-center gap-3 px-5 py-3.5 text-left hover:bg-muted/50 transition-colors h-auto rounded-none"
+                          className="w-full flex items-center gap-2 px-5 py-3.5 text-left hover:bg-muted/50 transition-colors h-auto rounded-none"
                         >
-                          <div className="flex-1 flex items-center gap-3 min-w-0">
+                          <div className="flex-1 flex items-center gap-2 min-w-0">
                             <Badge variant="secondary" className={cn("text-[10px]", entry.action === "update" ? "bg-blue-50 text-blue-600" : "bg-violet-50 text-violet-600")}>
                               {entry.action === "update" ? "Update" : "Reveal"}
                             </Badge>
@@ -1537,7 +1537,7 @@ export default function AdminPage() {
           )}
 
           <Card className="overflow-hidden">
-            <CardHeader className="px-5 py-4 border-b border-border flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <CardHeader className="px-5 py-4 border-b border-border flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
                 <CardTitle className="text-sm">Allowed Email Domain</CardTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">Only users with these email domains can sign in to Loma.</p>
@@ -1563,8 +1563,8 @@ export default function AdminPage() {
                 <RiLoader4Line size={32} className="animate-spin text-muted-foreground" />
               </div>
             ) : (
-              <CardContent className="p-5">
-                <Label className={cn("block rounded-lg border p-4 transition-colors",
+              <CardContent className="p-3">
+                <Label className={cn("block rounded-lg border p-3 transition-colors",
                   hasSettingsChanges ? "border-amber-200 bg-amber-50/30" : "border-border bg-muted/30"
                 )}>
                   <div className="flex items-center justify-between gap-2 mb-2">
@@ -1620,8 +1620,8 @@ export default function AdminPage() {
                   const changed = isPromptChanged(setting);
                   const draft = getPromptDraft(setting);
                   return (
-                    <section key={setting.setting_key} className="p-5 space-y-3">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <section key={setting.setting_key} className="p-3 space-y-2">
+                      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                         <div>
                           <div className="flex items-center gap-2">
                             <h3 className="text-sm font-semibold text-foreground">{setting.title}</h3>
@@ -1695,7 +1695,7 @@ export default function AdminPage() {
         <>
           <UsagePanel />
           <div className="mt-6">
-            <h3 className="text-sm font-medium text-muted-foreground mb-3">Server Terminal</h3>
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Server Terminal</h3>
             <WebTerminal />
           </div>
         </>
@@ -1712,7 +1712,7 @@ export default function AdminPage() {
         </DialogHeader>
         <div className="overflow-y-auto max-h-[50vh] space-y-2">
           {computeDiff().some((c) => CONNECTION_VARS.has(c.key)) && (
-            <Alert className="bg-amber-50 border-amber-200 text-amber-700 mb-3">
+            <Alert className="bg-amber-50 border-amber-200 text-amber-700 mb-2">
               <RiAlertLine size={14} className="flex-shrink-0" />
               <AlertDescription className="text-xs">Some of these variables require a service restart to take effect.</AlertDescription>
             </Alert>

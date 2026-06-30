@@ -70,7 +70,7 @@ export default function UserDetailPage() {
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        <div className="bg-card rounded-xl border border-border p-8 text-center">
+        <div className="bg-card rounded-xl border border-border p-6 text-center">
           <p className="text-muted-foreground">User not found</p>
         </div>
       </div>
@@ -91,7 +91,7 @@ export default function UserDetailPage() {
   }).length;
 
   return (
-    <div className="space-y-5 animate-fade-in-up">
+    <div className="space-y-3 animate-fade-in-up">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbList>
@@ -106,13 +106,13 @@ export default function UserDetailPage() {
       </Breadcrumb>
 
       {/* User Header */}
-      <div className="bg-card rounded-xl border border-border p-3 md:p-4">
-        <div className="flex items-center gap-4">
+      <div className="bg-card rounded-xl border border-border p-2 md:p-3">
+        <div className="flex items-center gap-3">
           <div className="w-14 h-14 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
             <span className="text-xl font-semibold text-brand-700">{user.avatar}</span>
           </div>
           <div className="flex-1">
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">{user.name}</h1>
+            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{user.name}</h1>
             <p className="text-sm text-muted-foreground">{user.email}</p>
 
             {/* Team badges */}
@@ -131,7 +131,7 @@ export default function UserDetailPage() {
               </div>
             )}
           </div>
-          <div className="ml-auto flex gap-3">
+          <div className="ml-auto flex gap-2">
             <div className="text-center">
               <div className="text-xl font-semibold text-foreground">{toolsWithAccess}</div>
               <div className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Tools</div>
@@ -147,8 +147,8 @@ export default function UserDetailPage() {
       {/* Tool Cards Grid */}
       {CATEGORIES.map((cat) => (
         <div key={cat.name}>
-          <h2 className="text-[11px] font-heading font-bold uppercase tracking-wider text-muted-foreground mb-3 ml-1">{cat.name}</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 stagger-children">
+          <h2 className="text-[11px] font-heading font-bold uppercase tracking-wider text-muted-foreground mb-2 ml-1">{cat.name}</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 stagger-children">
             {cat.keys.map((toolKey) => {
               const meta = getToolMeta(toolKey);
               const Logo = TOOL_LOGOS[toolKey];
@@ -166,7 +166,7 @@ export default function UserDetailPage() {
                 <Link
                   key={toolKey}
                   href={`/mcp/${toolKey}`}
-                  className={`bg-card rounded-xl border p-4 flex items-start gap-3 transition-all duration-200 hover-lift group ${
+                  className={`bg-card rounded-xl border p-3 flex items-start gap-2 transition-all duration-200 hover-lift group ${
                     hasAccess ? "border-border" : "border-border/50 opacity-60"
                   }`}
                 >

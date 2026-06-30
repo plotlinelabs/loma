@@ -83,7 +83,7 @@ export default function TeamDetailPage() {
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        <div className="bg-card rounded-xl border border-border p-8 text-center">
+        <div className="bg-card rounded-xl border border-border p-6 text-center">
           <p className="text-muted-foreground">Team not found</p>
         </div>
       </div>
@@ -94,7 +94,7 @@ export default function TeamDetailPage() {
   const oauthTools = ALL_TOOLS.filter((t) => toolConfigMap[t]?.auth_mode === "tool-managed");
 
   return (
-    <div className="space-y-5 animate-fade-in-up">
+    <div className="space-y-3 animate-fade-in-up">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbList>
@@ -113,8 +113,8 @@ export default function TeamDetailPage() {
       </Breadcrumb>
 
       {/* Team Header */}
-      <div className="bg-card rounded-xl border border-border p-3 md:p-4">
-        <div className="flex items-center gap-4">
+      <div className="bg-card rounded-xl border border-border p-2 md:p-3">
+        <div className="flex items-center gap-3">
           <div
             className="w-14 h-14 rounded-xl flex items-center justify-center flex-shrink-0"
             style={{ backgroundColor: team.bg_color }}
@@ -124,7 +124,7 @@ export default function TeamDetailPage() {
             </span>
           </div>
           <div className="flex-1">
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">{team.name}</h1>
+            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{team.name}</h1>
             <div className="flex items-center gap-2 mt-1">
               <Badge
                 variant="secondary"
@@ -142,8 +142,8 @@ export default function TeamDetailPage() {
       </div>
 
       {/* Members */}
-      <div className="bg-card rounded-xl border border-border p-3 md:p-4">
-        <div className="flex items-center justify-between mb-4">
+      <div className="bg-card rounded-xl border border-border p-2 md:p-3">
+        <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-heading font-semibold text-foreground">Members</h2>
           <Button variant="ghost" size="xs" className="text-brand-600 hover:text-brand-700">
             <RiAddLine size={14} />
@@ -153,7 +153,7 @@ export default function TeamDetailPage() {
 
         <div className="divide-y divide-border/50">
           {members.map((user) => (
-            <div key={user.email} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+            <div key={user.email} className="flex items-center gap-2 py-3 first:pt-0 last:pb-0">
               <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
                 <span className="text-sm font-medium text-brand-700">{user.avatar}</span>
               </div>
@@ -179,9 +179,9 @@ export default function TeamDetailPage() {
       </div>
 
       {/* Tool Defaults — Loma-managed */}
-      <div className="bg-card rounded-xl border border-border p-3 md:p-4">
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Tool Defaults — Loma-managed</h2>
-        <p className="text-xs text-muted-foreground mb-4">
+      <div className="bg-card rounded-xl border border-border p-2 md:p-3">
+        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Tool Defaults — Loma-managed</h2>
+        <p className="text-xs text-muted-foreground mb-2">
           Default roles assigned to all team members. Individual users can override these.
         </p>
 
@@ -262,9 +262,9 @@ export default function TeamDetailPage() {
       </div>
 
       {/* Tool Defaults — OAuth */}
-      <div className="bg-card rounded-xl border border-border p-3 md:p-4">
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Tool Defaults — OAuth</h2>
-        <p className="text-xs text-muted-foreground mb-4">
+      <div className="bg-card rounded-xl border border-border p-2 md:p-3">
+        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Tool Defaults — OAuth</h2>
+        <p className="text-xs text-muted-foreground mb-2">
           Whether team members are required to connect their accounts via OAuth.
         </p>
 

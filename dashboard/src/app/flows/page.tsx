@@ -98,14 +98,14 @@ function flowModelLabel(model: string | null | undefined) {
 
 function SkeletonCard() {
   return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-4">
+    <Card className="p-3">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2.5 mb-2">
             <Skeleton className="h-4 w-48" />
             <Skeleton className="h-5 w-14 rounded-md" />
           </div>
-          <div className="flex gap-4 mt-2">
+          <div className="flex gap-3 mt-2">
             <Skeleton className="h-3 w-24" />
             <Skeleton className="h-3 w-20" />
             <Skeleton className="h-3 w-28" />
@@ -204,26 +204,26 @@ export default function FlowsPage() {
 
   if (loading) {
     return (
-      <div className="space-y-3 animate-fade-in-up">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="space-y-2 animate-fade-in-up">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Flows</h1>
+            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Flows</h1>
             <p className="text-sm text-muted-foreground mt-1">Pre-defined steps that run on a schedule</p>
           </div>
         </div>
-        <div className="space-y-3"><SkeletonCard /><SkeletonCard /><SkeletonCard /></div>
+        <div className="space-y-2"><SkeletonCard /><SkeletonCard /><SkeletonCard /></div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-3 md:space-y-4 animate-fade-in-up">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="space-y-2 animate-fade-in-up">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Flows</h1>
+          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Flows</h1>
           <p className="text-sm text-muted-foreground mt-1">Pre-defined steps that run on a schedule</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <div className="flex items-center bg-card border border-border rounded-lg p-0.5">
             <Button
               variant={viewMode === "all" ? "secondary" : "ghost"}
@@ -341,10 +341,10 @@ export default function FlowsPage() {
           description={filter === "all" && !selectedLabel && viewMode === "all" ? "Create one via the chat" : undefined}
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 stagger-children">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 stagger-children">
           {filtered.map((flow) => (
             <Card key={flow.flow_id} className="p-3 hover-lift">
-              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 md:gap-4">
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 md:gap-2.5 mb-1 flex-wrap">
                     <Link href={`/flows/${flow.flow_id}`} className="text-sm md:text-base font-semibold text-foreground hover:text-brand-700 transition-colors truncate">

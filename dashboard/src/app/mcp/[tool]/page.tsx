@@ -45,13 +45,13 @@ function StatusBadge({ status }: { status: "connected" | "expired" | "not_connec
 function RoleRow({ role }: { role: { name: string; description: string } }) {
   return (
     <TableRow>
-      <TableCell className="py-3 pr-4">
+      <TableCell>
         <span className="text-sm font-medium text-foreground">{role.name}</span>
       </TableCell>
-      <TableCell className="py-3 pr-4">
+      <TableCell>
         <span className="text-sm text-muted-foreground">{role.description}</span>
       </TableCell>
-      <TableCell className="py-3 text-right">
+      <TableCell className="text-right">
         <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Remove</Button>
       </TableCell>
     </TableRow>
@@ -106,7 +106,7 @@ export default function ToolDetailPage() {
           </BreadcrumbList>
         </Breadcrumb>
         <Card>
-          <CardContent className="p-8 text-center">
+          <CardContent className="p-6 text-center">
             <p className="text-muted-foreground">Tool not found</p>
           </CardContent>
         </Card>
@@ -131,7 +131,7 @@ export default function ToolDetailPage() {
     .filter((u) => u.assignment);
 
   return (
-    <div className="space-y-5 animate-fade-in-up">
+    <div className="space-y-3 animate-fade-in-up">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbList>
@@ -148,7 +148,7 @@ export default function ToolDetailPage() {
       {/* Tool Header */}
       <Card>
         <CardContent>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <div
               className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
               style={{ backgroundColor: meta.bgColor }}
@@ -181,7 +181,7 @@ export default function ToolDetailPage() {
       {/* Auth Mode Toggle */}
       <Card>
         <CardContent>
-          <h2 className="text-sm font-heading font-semibold text-foreground mb-3">Authentication Mode</h2>
+          <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Authentication Mode</h2>
           <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted">
             <Button
               variant={authMode === "loma-managed" ? "secondary" : "ghost"}
@@ -215,7 +215,7 @@ export default function ToolDetailPage() {
           {/* Roles */}
           <Card>
             <CardContent>
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-2">
                 <h2 className="text-sm font-heading font-semibold text-foreground">Roles</h2>
                 <Button variant="ghost" size="xs" className="text-brand-600 hover:text-brand-700">
                   <RiAddLine size={14} />
@@ -227,9 +227,9 @@ export default function ToolDetailPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="border-b border-border">
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Role</TableHead>
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Description</TableHead>
-                      <TableHead className="pb-2" />
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Role</TableHead>
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Description</TableHead>
+                      <TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -253,20 +253,20 @@ export default function ToolDetailPage() {
             return teamsWithDefaults.length > 0 ? (
               <Card>
                 <CardContent>
-                  <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Team Assignments</h2>
+                  <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Team Assignments</h2>
                   <Table>
                     <TableHeader>
                       <TableRow className="border-b border-border">
-                        <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Team</TableHead>
-                        <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Default Role</TableHead>
-                        <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Members</TableHead>
-                        <TableHead className="pb-2" />
+                        <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Team</TableHead>
+                        <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Default Role</TableHead>
+                        <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Members</TableHead>
+                        <TableHead />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {teamsWithDefaults.map((team) => (
                         <TableRow key={team.team_id}>
-                          <TableCell className="py-3 pr-4">
+                          <TableCell>
                             <Link href={`/admin/teams/${team.team_id}`} className="flex items-center gap-2.5 group">
                               <div
                                 className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0"
@@ -281,12 +281,12 @@ export default function ToolDetailPage() {
                               </span>
                             </Link>
                           </TableCell>
-                          <TableCell className="py-3 pr-4">
+                          <TableCell>
                             <Badge className="text-[10px] bg-blue-50 text-blue-600 border-transparent">
                               {team.tool_defaults[toolKey]?.role}
                             </Badge>
                           </TableCell>
-                          <TableCell className="py-3 pr-4">
+                          <TableCell>
                             <div className="flex items-center gap-1">
                               {team.members.slice(0, 4).map((memberEmail) => {
                                 const member = users.find((u) => u.email === memberEmail);
@@ -305,7 +305,7 @@ export default function ToolDetailPage() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell className="py-3 text-right">
+                          <TableCell className="text-right">
                             <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Remove</Button>
                           </TableCell>
                         </TableRow>
@@ -320,17 +320,17 @@ export default function ToolDetailPage() {
           {/* User Assignments */}
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-4">User Assignments</h2>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">User Assignments</h2>
 
               {toolUsers.length > 0 ? (
                 <Table>
                   <TableHeader>
                     <TableRow className="border-b border-border">
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Effective Role</TableHead>
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Source</TableHead>
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last Used</TableHead>
-                      <TableHead className="pb-2" />
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Effective Role</TableHead>
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Source</TableHead>
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last Used</TableHead>
+                      <TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -339,7 +339,7 @@ export default function ToolDetailPage() {
                       const effective = getEffectiveRole(user, allTeams, toolKey);
                       return (
                         <TableRow key={email}>
-                          <TableCell className="py-3 pr-4">
+                          <TableCell>
                             <Link href={`/admin/${encodeURIComponent(email)}`} className="flex items-center gap-2.5 group">
                               <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
                                 <span className="text-xs font-medium text-brand-700">{avatar}</span>
@@ -350,7 +350,7 @@ export default function ToolDetailPage() {
                               </div>
                             </Link>
                           </TableCell>
-                          <TableCell className="py-3 pr-4">
+                          <TableCell>
                             {effective.role ? (
                               <Select defaultValue={effective.role}>
                                 <SelectTrigger className="text-sm">
@@ -366,7 +366,7 @@ export default function ToolDetailPage() {
                               <span className="text-sm text-muted-foreground">No role</span>
                             )}
                           </TableCell>
-                          <TableCell className="py-3 pr-4">
+                          <TableCell>
                             {effective.source === "direct" ? (
                               <Badge variant="secondary" className="text-[10px]">Direct</Badge>
                             ) : effective.source !== "none" ? (
@@ -380,12 +380,12 @@ export default function ToolDetailPage() {
                               <span className="text-[10px] text-muted-foreground/50">&mdash;</span>
                             )}
                           </TableCell>
-                          <TableCell className="py-3 pr-4">
+                          <TableCell>
                             <span className="text-sm text-muted-foreground">
                               {assignment?.last_used ? formatRelativeTime(assignment.last_used) : "Never"}
                             </span>
                           </TableCell>
-                          <TableCell className="py-3 text-right">
+                          <TableCell className="text-right">
                             <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Remove</Button>
                           </TableCell>
                         </TableRow>
@@ -409,7 +409,7 @@ export default function ToolDetailPage() {
           {/* OAuth Configuration */}
           <Card>
             <CardContent>
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-2">
                 <h2 className="text-sm font-heading font-semibold text-foreground">OAuth Configuration</h2>
                 <Badge className={`text-[10px] ${
                   config.oauth.configured
@@ -456,22 +456,22 @@ export default function ToolDetailPage() {
           {/* Connected Users */}
           <Card>
             <CardContent>
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Connected Users</h2>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Connected Users</h2>
 
               {toolUsers.length > 0 ? (
                 <Table>
                   <TableHeader>
                     <TableRow className="border-b border-border">
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</TableHead>
-                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last Used</TableHead>
-                      <TableHead className="pb-2" />
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</TableHead>
+                      <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last Used</TableHead>
+                      <TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {toolUsers.map(({ email, name, avatar, assignment }) => (
                       <TableRow key={email}>
-                        <TableCell className="py-3 pr-4">
+                        <TableCell>
                           <div className="flex items-center gap-2.5">
                             <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
                               <span className="text-xs font-medium text-brand-700">{avatar}</span>
@@ -482,15 +482,15 @@ export default function ToolDetailPage() {
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="py-3 pr-4">
+                        <TableCell>
                           <StatusBadge status={assignment?.oauth_status ?? null} />
                         </TableCell>
-                        <TableCell className="py-3 pr-4">
+                        <TableCell>
                           <span className="text-sm text-muted-foreground">
                             {assignment?.last_used ? formatRelativeTime(assignment.last_used) : "Never"}
                           </span>
                         </TableCell>
-                        <TableCell className="py-3 text-right">
+                        <TableCell className="text-right">
                           {assignment?.oauth_status === "connected" && (
                             <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Revoke</Button>
                           )}

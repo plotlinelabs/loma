@@ -140,8 +140,8 @@ function FlowModelSelector({
   // Build a flat list of items for the Select — radix select doesn't support optgroups natively
   // but we can use SelectGroup + SelectLabel
   return (
-    <div className="bg-card rounded-xl border border-border p-3 space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="bg-card rounded-xl border border-border p-3 space-y-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-sm font-heading font-semibold text-foreground">Agent Model</h2>
         </div>
@@ -189,7 +189,7 @@ function FlowModelSelector({
         </SelectContent>
       </Select>
 
-      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span className="truncate">
           Using <span className="font-medium text-foreground">{modelShortLabel(selected, effectiveModel)}</span>
         </span>
@@ -517,7 +517,7 @@ export default function FlowDetailPage() {
   const webhookUrl = `${window.location.origin}/webhook?flowId=${flow.flow_id}`;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbList>
@@ -532,9 +532,9 @@ export default function FlowDetailPage() {
       </Breadcrumb>
 
       {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex items-center gap-3 mb-1">
+          <div className="flex items-center gap-2 mb-1">
             <h1 className="text-2xl font-heading font-semibold text-foreground">
               {flow.name}
             </h1>
@@ -623,7 +623,7 @@ export default function FlowDetailPage() {
 
       {/* Webhook URL */}
       {isWebhook && (
-        <div className="bg-card rounded-xl border border-border p-3 space-y-3">
+        <div className="bg-card rounded-xl border border-border p-3 space-y-2">
           <h2 className="text-sm font-heading font-semibold text-foreground">Webhook URL</h2>
           <div className="flex items-center gap-2">
             <code className="flex-1 text-sm bg-muted/50 rounded-lg px-3 py-2 text-foreground/80 break-all">
@@ -666,11 +666,11 @@ export default function FlowDetailPage() {
       />
 
       {/* Flow info grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
         {/* Schedule & Channel */}
-        <div className="bg-card rounded-xl border border-border p-3 space-y-3">
+        <div className="bg-card rounded-xl border border-border p-3 space-y-2">
           <h2 className="text-sm font-heading font-semibold text-foreground">Details</h2>
-          <div className="space-y-3 text-sm">
+          <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Trigger</span>
               <span className="text-foreground font-medium">
@@ -749,9 +749,9 @@ export default function FlowDetailPage() {
         </div>
 
         {/* Run stats */}
-        <div className="bg-card rounded-xl border border-border p-3 space-y-3">
+        <div className="bg-card rounded-xl border border-border p-3 space-y-2">
           <h2 className="text-sm font-heading font-semibold text-foreground">Run Stats</h2>
-          <div className="space-y-3 text-sm">
+          <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Total runs</span>
               <span className="text-foreground font-medium">{flow.run_count}</span>
@@ -784,10 +784,10 @@ export default function FlowDetailPage() {
 
       {/* Prompt */}
       <div className="bg-card rounded-xl border border-border p-3">
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-3">
+        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">
           {isWebhook ? "Prompt Template" : "Agent Prompt"}
         </h2>
-        <pre className="text-sm text-foreground/80 whitespace-pre-wrap bg-muted/50 rounded-lg p-4 max-h-96 overflow-y-auto">
+        <pre className="text-sm text-foreground/80 whitespace-pre-wrap bg-muted/50 rounded-lg p-3 max-h-96 overflow-y-auto">
           {isWebhook ? (flow.prompt_template || flow.prompt) : flow.prompt}
         </pre>
       </div>
@@ -795,7 +795,7 @@ export default function FlowDetailPage() {
       {/* Webhook Logs (webhook flows only) */}
       {isWebhook && (
         <div className="bg-card rounded-xl border border-border p-3">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-heading font-semibold text-foreground">Webhook Logs</h2>
             <div className="flex items-center gap-2">
               <Button
@@ -832,10 +832,10 @@ export default function FlowDetailPage() {
               <TableBody>
                 {webhookLogs.slice(0, 20).map((log) => (
                   <TableRow key={log.log_id}>
-                    <TableCell className="pr-3">
+                    <TableCell>
                       <ClientTimestamp iso={log.received_at} variant="full" className="text-foreground/80" />
                     </TableCell>
-                    <TableCell className="pr-3">
+                    <TableCell>
                       <Badge
                         variant="secondary"
                         className={cn(
@@ -850,7 +850,7 @@ export default function FlowDetailPage() {
                         {log.auth_result}
                       </Badge>
                     </TableCell>
-                    <TableCell className="pr-3">
+                    <TableCell>
                       <Badge
                         variant="secondary"
                         className={cn(
@@ -894,7 +894,7 @@ export default function FlowDetailPage() {
 
       {/* Execution history */}
       <div className="bg-card rounded-xl border border-border p-3">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-heading font-semibold text-foreground">
             Execution History
           </h2>
@@ -920,7 +920,7 @@ export default function FlowDetailPage() {
                 href={`${basePath}/conversations/${run.conversation_id}`}
                 className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 transition-colors border border-border/50"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   <span
                     className={cn(
                       "w-2 h-2 rounded-full flex-shrink-0",
@@ -933,7 +933,7 @@ export default function FlowDetailPage() {
                   />
                   <ClientTimestamp iso={run.started_at} variant="full" className="text-sm text-foreground/80" />
                 </div>
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>{run.status}</span>
                   {run.duration_ms && (
                     <span>{(run.duration_ms / 1000).toFixed(1)}s</span>

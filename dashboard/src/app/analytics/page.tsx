@@ -46,7 +46,7 @@ function formatHours(minutes: number): string {
 
 function SkeletonStatCard() {
   return (
-    <Card className="p-3 md:p-4 flex items-start gap-4">
+    <Card className="p-2 md:p-3 flex items-start gap-3">
       <Skeleton className="w-10 h-10 rounded-lg" />
       <div>
         <Skeleton className="h-3 w-24 mb-2" />
@@ -58,8 +58,8 @@ function SkeletonStatCard() {
 
 function SkeletonChartCard() {
   return (
-    <Card className="p-3 md:p-4">
-      <Skeleton className="h-4 w-40 mb-4" />
+    <Card className="p-2 md:p-3">
+      <Skeleton className="h-4 w-40 mb-2" />
       <Skeleton className="h-72 w-full rounded-lg" />
     </Card>
   );
@@ -68,12 +68,12 @@ function SkeletonChartCard() {
 function SkeletonTableRow() {
   return (
     <TableRow>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-14 rounded" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-40 rounded" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-12 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-14 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-40 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-16 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-16 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-16 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-12 rounded" /></TableCell>
     </TableRow>
   );
 }
@@ -133,21 +133,21 @@ export default function AnalyticsPage() {
 
   if (loading && activeTab === "overview") {
     return (
-      <div className="space-y-3 md:space-y-4 animate-fade-in-up">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="space-y-2 animate-fade-in-up">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Analytics</h1>
+            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Analytics</h1>
             <p className="text-sm text-muted-foreground mt-1">Loading analytics data...</p>
           </div>
           <div className="flex gap-2">
             {[7, 30, 90].map((d) => <Skeleton key={d} className="h-8 w-10 rounded-lg" />)}
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard />
         </div>
         <Skeleton className="h-32 w-full rounded-xl" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard /><SkeletonStatCard />
         </div>
         <SkeletonChartCard /><SkeletonChartCard />
@@ -156,10 +156,10 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="space-y-3 md:space-y-4 animate-fade-in-up">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="space-y-2 animate-fade-in-up">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Analytics</h1>
+          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Analytics</h1>
           <p className="text-sm text-muted-foreground mt-1">Track conversations, API usage, spending, and savings vs. human labor</p>
         </div>
         <div className="flex gap-2">
@@ -192,7 +192,7 @@ export default function AnalyticsPage() {
           ) : (
             <>
               {stats && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 stagger-children">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 stagger-children">
                   <ConversationStatCard label="Total Conversations" value={stats.total_conversations}
                     icon={<RiChat1Line size={20} />}
                     iconColor="text-brand-600 bg-brand-50" />
@@ -209,14 +209,14 @@ export default function AnalyticsPage() {
               )}
 
               {costData.total_estimated_human_cost_usd > 0 && (
-                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 p-3 md:p-4 hover-lift">
-                  <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
+                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 p-2 md:p-3 hover-lift">
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2">
                     <div>
                       <div className="text-sm font-medium text-emerald-700 mb-1">Total Savings</div>
                       <div className="text-3xl md:text-4xl font-bold text-emerald-800 tabular-nums">${costData.total_savings_usd.toFixed(2)}</div>
                       <div className="text-sm text-emerald-600 mt-1">{costData.savings_percentage}% saved vs. human labor</div>
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-3 gap-2">
                       <div className="text-center sm:text-center">
                         <div className="text-xs text-emerald-600 font-medium">Human Cost</div>
                         <div className="text-lg md:text-xl font-semibold text-emerald-800 tabular-nums">${costData.total_estimated_human_cost_usd.toFixed(2)}</div>
@@ -234,7 +234,7 @@ export default function AnalyticsPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 stagger-children">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 stagger-children">
                 <CostStatCard label="Total Spend" value={`$${costData.total_cost_usd.toFixed(2)}`}
                   icon={<RiMoneyDollarCircleLine size={20} />}
                   iconColor="text-brand-600 bg-brand-50" />
@@ -249,8 +249,8 @@ export default function AnalyticsPage() {
                   iconColor="text-amber-600 bg-amber-50" />
               </div>
 
-              <Card className="p-3 md:p-4 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Daily Cost: Human vs API</h2>
+              <Card className="p-2 md:p-3 hover-lift">
+                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily Cost: Human vs API</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -270,8 +270,8 @@ export default function AnalyticsPage() {
                 )}
               </Card>
 
-              <Card className="p-3 md:p-4 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Daily API Cost Breakdown (USD)</h2>
+              <Card className="p-2 md:p-3 hover-lift">
+                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily API Cost Breakdown (USD)</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -291,8 +291,8 @@ export default function AnalyticsPage() {
                 )}
               </Card>
 
-              <Card className="p-3 md:p-4 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Daily Token Usage</h2>
+              <Card className="p-2 md:p-3 hover-lift">
+                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily Token Usage</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -312,8 +312,8 @@ export default function AnalyticsPage() {
                 )}
               </Card>
 
-              <Card className="p-3 md:p-4 hover-lift">
-                <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Conversations per Day</h2>
+              <Card className="p-2 md:p-3 hover-lift">
+                <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Conversations per Day</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                 ) : (
@@ -338,7 +338,7 @@ export default function AnalyticsPage() {
       {activeTab === "token-usage" && (
         <>
           {/* Filters */}
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <Select
               value={tokenTypeFilter}
               onValueChange={(v) => setTokenTypeFilter(v as "" | "user" | "flow")}
@@ -363,7 +363,7 @@ export default function AnalyticsPage() {
 
           {/* Summary cards */}
           {tokenData && !tokenLoading && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 stagger-children">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-4 stagger-children">
               <CostStatCard label="Total Tokens" value={formatNumber(tokenData.totals.total_tokens)}
                 icon={<RiComputerLine size={20} />}
                 iconColor="text-brand-600 bg-brand-50" />
@@ -381,12 +381,12 @@ export default function AnalyticsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="border-b border-border bg-muted/50">
-                  <TableHead className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</TableHead>
-                  <TableHead className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</TableHead>
-                  <TableHead className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Input Tokens</TableHead>
-                  <TableHead className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Output Tokens</TableHead>
-                  <TableHead className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total Tokens</TableHead>
-                  <TableHead className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Convos</TableHead>
+                  <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</TableHead>
+                  <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</TableHead>
+                  <TableHead className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Input Tokens</TableHead>
+                  <TableHead className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Output Tokens</TableHead>
+                  <TableHead className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total Tokens</TableHead>
+                  <TableHead className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Convos</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -398,7 +398,7 @@ export default function AnalyticsPage() {
                 ) : tokenData && tokenData.rows.length > 0 ? (
                   tokenData.rows.map((row, i) => (
                     <TableRow key={`${row.type}-${row.name}-${i}`}>
-                      <TableCell className="px-4 py-3">
+                      <TableCell>
                         <Badge
                           variant="secondary"
                           className={cn(
@@ -411,16 +411,16 @@ export default function AnalyticsPage() {
                           {row.type === "user" ? "User" : "Flow"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="px-4 py-3 text-foreground font-medium truncate max-w-xs">{row.name}</TableCell>
-                      <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{formatNumber(row.input_tokens)}</TableCell>
-                      <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{formatNumber(row.output_tokens)}</TableCell>
-                      <TableCell className="px-4 py-3 text-right text-foreground font-semibold tabular-nums">{formatNumber(row.total_tokens)}</TableCell>
-                      <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{row.conversations}</TableCell>
+                      <TableCell className="text-foreground font-medium truncate max-w-xs">{row.name}</TableCell>
+                      <TableCell className="text-right text-muted-foreground tabular-nums">{formatNumber(row.input_tokens)}</TableCell>
+                      <TableCell className="text-right text-muted-foreground tabular-nums">{formatNumber(row.output_tokens)}</TableCell>
+                      <TableCell className="text-right text-foreground font-semibold tabular-nums">{formatNumber(row.total_tokens)}</TableCell>
+                      <TableCell className="text-right text-muted-foreground tabular-nums">{row.conversations}</TableCell>
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={6} className="px-4 py-8">
+                    <TableCell colSpan={6} className="py-6">
                       <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
                     </TableCell>
                   </TableRow>
@@ -436,11 +436,11 @@ export default function AnalyticsPage() {
 
 function ConversationStatCard({ label, value, icon, iconColor }: { label: string; value: number; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-3 md:p-4 flex items-start gap-3 md:gap-4 hover-lift">
+    <Card className="p-2 md:p-3 flex items-start gap-2 md:gap-4 hover-lift">
       <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
         <div className="text-xs text-muted-foreground font-medium">{label}</div>
-        <div className="text-xl md:text-2xl font-semibold text-foreground mt-0.5">{value}</div>
+        <div className="text-lg md:text-xl font-semibold text-foreground mt-0.5">{value}</div>
       </div>
     </Card>
   );
@@ -448,11 +448,11 @@ function ConversationStatCard({ label, value, icon, iconColor }: { label: string
 
 function CostStatCard({ label, value, icon, iconColor }: { label: string; value: string; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-3 md:p-4 flex items-start gap-3 md:gap-4 hover-lift">
+    <Card className="p-2 md:p-3 flex items-start gap-2 md:gap-4 hover-lift">
       <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
         <div className="text-xs text-muted-foreground font-medium">{label}</div>
-        <div className="text-xl md:text-2xl font-semibold text-foreground mt-0.5 tabular-nums">{value}</div>
+        <div className="text-lg md:text-xl font-semibold text-foreground mt-0.5 tabular-nums">{value}</div>
       </div>
     </Card>
   );

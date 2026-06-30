@@ -46,8 +46,8 @@ function payloadPreview(body: unknown): string {
 function ExpandedLogRow({ log }: { log: WebhookLog }) {
   return (
     <TableRow>
-      <TableCell colSpan={7} className="px-4 py-3 bg-muted/50">
-        <div className="space-y-3 text-sm">
+      <TableCell colSpan={7} className="bg-muted/50">
+        <div className="space-y-2 text-sm">
           {/* Headers */}
           <div>
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
@@ -87,7 +87,7 @@ function ExpandedLogRow({ log }: { log: WebhookLog }) {
           )}
 
           {/* Links */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             {log.conversation_id && (
               <a
                 href={`${basePath}/conversations/${log.conversation_id}`}
@@ -119,13 +119,13 @@ function ExpandedLogRow({ log }: { log: WebhookLog }) {
 function SkeletonRow() {
   return (
     <TableRow>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-32" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-24" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-14 rounded" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-40" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-12" /></TableCell>
-      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-10" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-32" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-24" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-14 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-5 w-16 rounded" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-40" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-12" /></TableCell>
+      <TableCell><Skeleton className="h-3 w-10" /></TableCell>
     </TableRow>
   );
 }
@@ -190,10 +190,10 @@ function WebhookLogsContent() {
   }
 
   return (
-    <div className="space-y-3 md:space-y-4 animate-fade-in-up">
+    <div className="space-y-2 animate-fade-in-up">
       {/* Header */}
       <div>
-        <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">
+        <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">
           Webhook Logs
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -204,7 +204,7 @@ function WebhookLogsContent() {
       {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         {/* Flow selector */}
         <Select
           value={flowFilter}
@@ -266,13 +266,13 @@ function WebhookLogsContent() {
           <Table>
             <TableHeader>
               <TableRow className="text-left text-muted-foreground border-b border-border bg-muted/50">
-                <TableHead className="px-4 py-3 font-medium">Received</TableHead>
-                <TableHead className="px-4 py-3 font-medium">Flow</TableHead>
-                <TableHead className="px-4 py-3 font-medium">Auth</TableHead>
-                <TableHead className="px-4 py-3 font-medium">Status</TableHead>
-                <TableHead className="px-4 py-3 font-medium">Payload</TableHead>
-                <TableHead className="px-4 py-3 font-medium">Duration</TableHead>
-                <TableHead className="px-4 py-3 font-medium"></TableHead>
+                <TableHead className="font-medium">Received</TableHead>
+                <TableHead className="font-medium">Flow</TableHead>
+                <TableHead className="font-medium">Auth</TableHead>
+                <TableHead className="font-medium">Status</TableHead>
+                <TableHead className="font-medium">Payload</TableHead>
+                <TableHead className="font-medium">Duration</TableHead>
+                <TableHead className="font-medium"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -296,13 +296,13 @@ function WebhookLogsContent() {
             <Table>
               <TableHeader>
                 <TableRow className="text-left text-muted-foreground border-b border-border bg-muted/50">
-                  <TableHead className="px-4 py-3 font-medium">Received</TableHead>
-                  <TableHead className="px-4 py-3 font-medium">Flow</TableHead>
-                  <TableHead className="px-4 py-3 font-medium">Auth</TableHead>
-                  <TableHead className="px-4 py-3 font-medium">Status</TableHead>
-                  <TableHead className="px-4 py-3 font-medium">Payload</TableHead>
-                  <TableHead className="px-4 py-3 font-medium">Duration</TableHead>
-                  <TableHead className="px-4 py-3 font-medium"></TableHead>
+                  <TableHead className="font-medium">Received</TableHead>
+                  <TableHead className="font-medium">Flow</TableHead>
+                  <TableHead className="font-medium">Auth</TableHead>
+                  <TableHead className="font-medium">Status</TableHead>
+                  <TableHead className="font-medium">Payload</TableHead>
+                  <TableHead className="font-medium">Duration</TableHead>
+                  <TableHead className="font-medium"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -320,14 +320,14 @@ function WebhookLogsContent() {
                         )
                       }
                     >
-                      <TableCell className="px-4 py-3 whitespace-nowrap">
+                      <TableCell className="whitespace-nowrap">
                         <ClientTimestamp
                           iso={log.received_at}
                           variant="full"
                           className="text-foreground"
                         />
                       </TableCell>
-                      <TableCell className="px-4 py-3">
+                      <TableCell>
                         <a
                           href={`${basePath}/flows/${log.flow_id}`}
                           className="text-brand-600 hover:text-brand-700 font-medium truncate block max-w-[160px]"
@@ -337,8 +337,8 @@ function WebhookLogsContent() {
                           {log.flow_name || log.flow_id}
                         </a>
                       </TableCell>
-                      <TableCell className="px-4 py-3">{authBadge(log.auth_result)}</TableCell>
-                      <TableCell className="px-4 py-3">
+                      <TableCell>{authBadge(log.auth_result)}</TableCell>
+                      <TableCell>
                         <div className="flex items-center gap-1.5">
                           {statusBadge(log.execution_status)}
                           {log.error && (
@@ -351,17 +351,17 @@ function WebhookLogsContent() {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="px-4 py-3">
+                      <TableCell>
                         <span className="text-xs text-muted-foreground font-mono truncate block max-w-[200px]">
                           {payloadPreview(log.body)}
                         </span>
                       </TableCell>
-                      <TableCell className="px-4 py-3 whitespace-nowrap text-muted-foreground">
+                      <TableCell className="whitespace-nowrap text-muted-foreground">
                         {log.duration_ms != null
                           ? `${(log.duration_ms / 1000).toFixed(1)}s`
                           : "—"}
                       </TableCell>
-                      <TableCell className="px-4 py-3">
+                      <TableCell>
                         <div className="flex items-center gap-1">
                           {log.conversation_id && (
                             <a
@@ -407,9 +407,9 @@ export default function WebhookLogsPage() {
   return (
     <Suspense
       fallback={
-        <div className="space-y-3 md:space-y-4">
+        <div className="space-y-2">
           <div>
-            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Webhook Logs</h1>
+            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Webhook Logs</h1>
             <p className="text-sm text-muted-foreground mt-1">Incoming webhook requests across all flows</p>
           </div>
           <div className="flex items-center justify-center py-16">

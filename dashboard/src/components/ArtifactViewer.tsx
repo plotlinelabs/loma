@@ -140,7 +140,7 @@ function HtmlRenderer({ content }: { content: string }) {
 
 function MarkdownRenderer({ content }: { content: string }) {
   return (
-    <div className="p-4 md:p-6 overflow-y-auto h-full">
+    <div className="p-3 md:p-6 overflow-y-auto h-full">
       <div className="prose prose-sm max-w-none">
         <MarkdownContent content={content} />
       </div>
@@ -160,7 +160,7 @@ function CodeRenderer({ content, language }: { content: string; language: string
           {getLanguageLabel(language)}
         </div>
       )}
-      <pre className="p-4 text-xs font-mono leading-relaxed">
+      <pre className="p-3 text-xs font-mono leading-relaxed">
         <code>
           {lines.map((line, i) => (
             <div key={i} className="flex">
@@ -246,7 +246,7 @@ function MermaidRenderer({ content }: { content: string }) {
 
   if (error) {
     return (
-      <div className="p-4 h-full overflow-auto bg-white rounded-b-lg">
+      <div className="p-3 h-full overflow-auto bg-white rounded-b-lg">
         <Alert variant="destructive">
           <RiErrorWarningLine size={16} />
           <AlertDescription>
@@ -419,7 +419,7 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
 
   if (error) {
     return (
-      <div className="p-4 h-full overflow-auto bg-white rounded-b-lg">
+      <div className="p-3 h-full overflow-auto bg-white rounded-b-lg">
         <Alert variant="destructive">
           <RiErrorWarningLine size={16} />
           <AlertDescription>
@@ -442,7 +442,7 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
 
 function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full bg-white rounded-b-lg gap-4 p-8">
+    <div className="flex flex-col items-center justify-center h-full bg-white rounded-b-lg gap-3 p-6">
       <div className="w-16 h-16 bg-orange-50 rounded-2xl flex items-center justify-center">
         <span className="text-3xl">📊</span>
       </div>
@@ -464,7 +464,7 @@ function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
 
 function FileDownloadRenderer({ fileUrl, title, fileSize }: { fileUrl: string; title: string; fileSize?: number }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full bg-white rounded-b-lg gap-4 p-8">
+    <div className="flex flex-col items-center justify-center h-full bg-white rounded-b-lg gap-3 p-6">
       <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center">
         <span className="text-3xl">📄</span>
       </div>

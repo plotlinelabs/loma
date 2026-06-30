@@ -100,8 +100,8 @@ function LoginContent() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <Card className="max-w-sm w-full shadow-sm">
-        <CardContent className="p-5">
-          <div className="mb-4 flex items-center justify-center gap-3">
+        <CardContent className="p-3">
+          <div className="mb-2 flex items-center justify-center gap-2">
             <CrosscutIcon size={36} />
             <span className="font-[family-name:var(--font-logo)] text-3xl font-black tracking-[1px] text-foreground">
               Loma
@@ -110,7 +110,7 @@ function LoginContent() {
           <h1 className="text-xl font-heading font-semibold text-foreground mb-1 text-center">
             Loma Agent
           </h1>
-          <p className="text-sm text-muted-foreground mb-3 text-center">
+          <p className="text-sm text-muted-foreground mb-2 text-center">
             Sign in to your company workspace.
           </p>
 
@@ -245,7 +245,7 @@ function LoginContent() {
           )}
 
           {showLocal && showGoogle && (
-            <div className="my-5 flex items-center gap-3">
+            <div className="my-5 flex items-center gap-2">
               <Separator className="flex-1" />
               <span className="text-xs text-muted-foreground">or</span>
               <Separator className="flex-1" />
@@ -281,7 +281,7 @@ function LoginContent() {
             </Button>
           )}
 
-          <p className="text-xs text-muted-foreground mt-4 text-center">
+          <p className="text-xs text-muted-foreground mt-2 text-center">
             Access is restricted to your configured workspace users.
           </p>
         </CardContent>

@@ -32,6 +32,8 @@ import {
   RiSunLine,
   RiComputerLine,
   RiMoonLine,
+  RiMenuFoldLine,
+  RiMenuUnfoldLine,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -47,48 +49,48 @@ const navigation: NavItem[] = [
   {
     name: "Home",
     href: "/",
-    icon: <RiChat1Line size={18} />,
+    icon: <RiChat1Line size={16} />,
   },
   {
     name: "Activity",
     href: "/conversations",
-    icon: <RiGridLine size={18} />,
+    icon: <RiGridLine size={16} />,
   },
   {
     name: "Flows",
     href: "/flows",
     minRole: "analyst",
-    icon: <RiTimeLine size={20} />,
+    icon: <RiTimeLine size={16} />,
   },
   {
     name: "Skills",
     href: "/skills",
     minRole: "analyst",
-    icon: <RiBookOpenLine size={18} />,
+    icon: <RiBookOpenLine size={16} />,
   },
   {
     name: "Webhook Logs",
     href: "/webhook-logs",
     minRole: "analyst",
-    icon: <RiDownloadLine size={20} />,
+    icon: <RiDownloadLine size={16} />,
   },
   {
     name: "Analytics",
     href: "/analytics",
     minRole: "analyst",
-    icon: <RiBarChartBoxLine size={18} />,
+    icon: <RiBarChartBoxLine size={16} />,
   },
   {
     name: "Manage Integrations",
     href: "/integrations/manage",
     minRole: "maintainer",
-    icon: <RiSettings3Line size={18} />,
+    icon: <RiSettings3Line size={16} />,
   },
   {
     name: "Admin",
     href: "/admin",
     minRole: "maintainer",
-    icon: <RiShieldCheckLine size={18} />,
+    icon: <RiShieldCheckLine size={16} />,
   },
 ];
 
@@ -98,22 +100,22 @@ function SidebarSkeleton() {
     <>
       <div className="px-3 space-y-0.5">
         {widths.map((w, i) => (
-          <div key={i} className="flex items-center gap-2.5 px-3 py-2">
-            <Skeleton className="w-[18px] h-[18px] rounded" />
+          <div key={i} className="flex items-center gap-2 px-2 py-1">
+            <Skeleton className="w-[16px] h-[16px] rounded" />
             <Skeleton className="h-3.5 rounded" style={{ width: `${w}px` }} />
           </div>
         ))}
       </div>
-      <div className="mt-5 px-4">
+      <div className="mt-2 px-2.5">
         <Skeleton className="h-2.5 w-12 rounded mb-3" />
         <div className="space-y-2 px-1">
           <Skeleton className="h-3.5 w-36 rounded" />
           <Skeleton className="h-3.5 w-28 rounded" />
         </div>
       </div>
-      <div className="mt-auto px-3 py-3">
+      <div className="mt-auto px-2.5 py-2">
         <Separator className="mb-3" />
-        <div className="flex items-center gap-2.5 px-1">
+        <div className="flex items-center gap-2 px-1">
           <Skeleton className="w-8 h-8 rounded-full" />
           <div className="space-y-1.5 flex-1">
             <Skeleton className="h-3.5 w-28 rounded" />
@@ -125,7 +127,7 @@ function SidebarSkeleton() {
   );
 }
 
-function PoolStatusWidget({ poolStatus }: { poolStatus: PoolStatus }) {
+function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; collapsed: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const accountCount = poolStatus.accounts?.length || 0;
   const cooldownCount = poolStatus.accounts_on_cooldown?.length || 0;
@@ -147,8 +149,19 @@ function PoolStatusWidget({ poolStatus }: { poolStatus: PoolStatus }) {
         ? "bg-amber-400 animate-pulse"
         : "bg-red-500";
 
+  if (collapsed) {
+    return (
+      <div className="px-2.5 py-1 flex flex-col items-center gap-1">
+        <span className={cn("w-2 h-2 rounded-full flex-shrink-0", statusColor)} />
+        {opencode && (
+          <span className={cn("w-2 h-2 rounded-full flex-shrink-0", opencodeColor)} />
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="px-4 py-2 mt-auto">
+    <div className="px-2.5 py-1">
       <Button
         variant="ghost"
         onClick={() => setExpanded(!expanded)}
@@ -240,7 +253,17 @@ function PoolStatusWidget({ poolStatus }: { poolStatus: PoolStatus }) {
   );
 }
 
-export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+export default function Sidebar({
+  isOpen,
+  onClose,
+  collapsed,
+  onToggleCollapse,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}) {
   const { data: session, status } = useSession();
   const { loading: userLoading, hasRole, pinnedIds, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
   const { theme, setTheme } = useTheme();
@@ -304,23 +327,36 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   const sidebarContent = (
     <>
-      {/* Logo + close button */}
-      <div className="px-5 pt-5 pb-4 flex items-center justify-between">
-        <Link href="/" prefetch onClick={onClose} className="flex items-center gap-2.5">
-          <CrosscutIcon size={28} />
-          <span className="font-[family-name:var(--font-logo)] text-2xl font-black tracking-[1px] text-foreground/80">
-            Loma
-          </span>
+      {/* Logo + collapse toggle + close button */}
+      <div className={cn("flex items-center justify-between", collapsed ? "px-2 pt-3 pb-2" : "px-3 pt-3 pb-2")}>
+        <Link href="/" prefetch onClick={onClose} className="flex items-center gap-2">
+          <CrosscutIcon size={20} />
+          {!collapsed && (
+            <span className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
+              Loma
+            </span>
+          )}
         </Link>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={onClose}
-          className="md:hidden text-muted-foreground hover:text-foreground"
-          aria-label="Close menu"
-        >
-          <RiCloseLine size={20} />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={onToggleCollapse}
+            className="hidden md:flex text-muted-foreground hover:text-foreground"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {collapsed ? <RiMenuUnfoldLine size={16} /> : <RiMenuFoldLine size={16} />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onClose}
+            className="md:hidden text-muted-foreground hover:text-foreground"
+            aria-label="Close menu"
+          >
+            <RiCloseLine size={16} />
+          </Button>
+        </div>
       </div>
 
       {userLoading ? (
@@ -340,19 +376,23 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
                   prefetch
                   onClick={onClose}
                   className={cn(
-                    "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150",
+                    "flex items-center rounded-lg text-[12px] font-medium transition-all duration-150",
+                    collapsed
+                      ? "justify-center px-0 py-1.5 mx-auto w-10"
+                      : "px-2 py-1 gap-2",
                     isActive
                       ? "bg-brand-100/80 text-brand-700"
                       : "text-muted-foreground hover:bg-accent-200/15 hover:text-foreground hover:translate-x-0.5"
                   )}
+                  title={collapsed ? item.name : undefined}
                 >
-                  <span className={cn("transition-colors", isActive ? "text-brand-600" : "text-muted-foreground")}>{item.icon}</span>
-                  {item.name}
-                  {item.badgeKey && badgeCounts[item.badgeKey] > 0 ? (
+                  <span className={cn("transition-colors flex-shrink-0", isActive ? "text-brand-600" : "text-muted-foreground")}>{item.icon}</span>
+                  {!collapsed && <span>{item.name}</span>}
+                  {!collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 ? (
                     <span className="ml-auto min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-md bg-brand-50 text-brand-600 text-[10px] font-semibold ring-1 ring-brand-200/60">
                       {badgeCounts[item.badgeKey]}
                     </span>
-                  ) : isActive ? (
+                  ) : !collapsed && isActive ? (
                     <span className="ml-auto w-0.5 h-4 bg-brand-500 rounded-full" />
                   ) : null}
                 </Link>
@@ -361,9 +401,9 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
           </nav>
 
           {/* Projects */}
-          {projects.length > 0 && (
-            <div className="mt-5 flex flex-col">
-              <div className="px-4 pb-2">
+          {!collapsed && projects.length > 0 && (
+            <div className="mt-2 flex flex-col">
+              <div className="px-2.5 pb-1">
                 <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                   Projects
                 </span>
@@ -375,7 +415,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
                     href={`/conversations?project=${p.project_id}`}
                     prefetch
                     onClick={onClose}
-                    className="group flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
+                    className="group flex items-center gap-1 px-2 py-1 text-[12px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
                   >
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
                     <span className="truncate flex-1 min-w-0">{p.name}</span>
@@ -387,9 +427,9 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
           )}
 
           {/* Pinned */}
-          {pinnedConversations.length > 0 && (
-            <div className="mt-5 flex flex-col">
-              <div className="px-4 pb-2">
+          {!collapsed && pinnedConversations.length > 0 && (
+            <div className="mt-2 flex flex-col">
+              <div className="px-2.5 pb-1">
                 <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                   Pinned
                 </span>
@@ -403,7 +443,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
                     <div
                       key={c.conversation_id}
                       className={cn(
-                        "group flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-lg transition-all duration-150",
+                        "group flex items-center gap-1 px-2 py-1 text-[12px] rounded-lg transition-all duration-150",
                         isConvoActive
                           ? "text-brand-700 bg-brand-100/80 font-medium"
                           : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -442,9 +482,9 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
           )}
 
           {/* Recents (excluding pinned) */}
-          {myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
-            <div className="mt-5 flex-1 min-h-0 flex flex-col">
-              <div className="px-4 pb-2">
+          {!collapsed && myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
+            <div className="mt-2 flex-1 min-h-0 flex flex-col">
+              <div className="px-2.5 pb-1">
                 <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                   Recents
                 </span>
@@ -459,7 +499,7 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
                       <div
                         key={c.conversation_id}
                         className={cn(
-                          "group flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-lg transition-all duration-150",
+                          "group flex items-center gap-1 px-2 py-1 text-[12px] rounded-lg transition-all duration-150",
                           isConvoActive
                             ? "text-brand-700 bg-brand-100/80 font-medium"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -498,85 +538,105 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
             </div>
           )}
 
-          {/* Pool status — expandable */}
-          {poolStatus && <PoolStatusWidget poolStatus={poolStatus} />}
+          {/* Bottom section: pool status, theme toggle, user */}
+          <div className="mt-auto">
+            {/* Pool status — expandable */}
+            {poolStatus && <PoolStatusWidget poolStatus={poolStatus} collapsed={collapsed} />}
 
-          {/* Theme toggle */}
-          <div className="px-4 py-2 mt-auto">
-            <ToggleGroup
-              type="single"
-              value={theme}
-              onValueChange={(value) => {
-                if (value) setTheme(value as "light" | "system" | "dark");
-              }}
-              className="w-full bg-muted/50 rounded-lg p-0.5"
-              size="sm"
-            >
-              <ToggleGroupItem
-                value="light"
-                aria-label="Light mode"
-                className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
-              >
-                <RiSunLine size={14} />
-                <span className="hidden sm:inline">Light</span>
-              </ToggleGroupItem>
-              <ToggleGroupItem
-                value="system"
-                aria-label="System mode"
-                className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
-              >
-                <RiComputerLine size={14} />
-                <span className="hidden sm:inline">System</span>
-              </ToggleGroupItem>
-              <ToggleGroupItem
-                value="dark"
-                aria-label="Dark mode"
-                className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
-              >
-                <RiMoonLine size={14} />
-                <span className="hidden sm:inline">Dark</span>
-              </ToggleGroupItem>
-            </ToggleGroup>
-          </div>
-
-          {/* User section */}
-          {status === "authenticated" && session?.user && (
-            <>
-              <Separator />
-              <div className="px-3 py-3">
-                <div className="flex items-center gap-2.5 px-1">
-                  <Avatar size="sm" className="w-8 h-8">
-                    <AvatarFallback className="bg-brand-100 text-brand-700 text-sm font-medium">
-                      {session.user.email?.charAt(0).toUpperCase() || "U"}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-medium text-foreground truncate">
-                      {session.user.name || session.user.email?.split("@")[0]}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="ghost"
-                        onClick={() => signOut({ callbackUrl: "/login" })}
-                        className="text-[11px] text-muted-foreground hover:text-red-500 transition-colors h-auto p-0"
-                      >
-                        Sign out
-                      </Button>
-                      <span className="text-muted-foreground/50">·</span>
-                      <a
-                        href="/brand-guide.html"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        Brand
-                      </a>
-                    </div>
-                  </div>
+            {/* Theme toggle */}
+            <div className="px-2.5 py-1">
+              {collapsed ? (
+                <div className="flex flex-col items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => {
+                      const modes: Array<"light" | "system" | "dark"> = ["light", "system", "dark"];
+                      const idx = modes.indexOf(theme);
+                      setTheme(modes[(idx + 1) % modes.length]);
+                    }}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Toggle theme"
+                  >
+                    {theme === "light" ? <RiSunLine size={14} /> : theme === "dark" ? <RiMoonLine size={14} /> : <RiComputerLine size={14} />}
+                  </Button>
                 </div>
-              </div>
-            </>
-          )}
+              ) : (
+                <ToggleGroup
+                  type="single"
+                  value={theme}
+                  onValueChange={(value) => {
+                    if (value) setTheme(value as "light" | "system" | "dark");
+                  }}
+                  className="w-full bg-muted/50 rounded-lg p-0.5"
+                  size="sm"
+                >
+                  <ToggleGroupItem
+                    value="light"
+                    aria-label="Light mode"
+                    className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+                  >
+                    <RiSunLine size={14} />
+                    <span className="hidden sm:inline">Light</span>
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="system"
+                    aria-label="System mode"
+                    className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+                  >
+                    <RiComputerLine size={14} />
+                    <span className="hidden sm:inline">System</span>
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="dark"
+                    aria-label="Dark mode"
+                    className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+                  >
+                    <RiMoonLine size={14} />
+                    <span className="hidden sm:inline">Dark</span>
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              )}
+            </div>
+
+            {/* User section */}
+            {status === "authenticated" && session?.user && (
+              <>
+                <Separator />
+                <div className={cn("px-2.5 py-2", collapsed && "flex justify-center")}>
+                  {collapsed ? (
+                    <Avatar size="sm" className="w-8 h-8">
+                      <AvatarFallback className="bg-brand-100 text-brand-700 text-sm font-medium">
+                        {session.user.email?.charAt(0).toUpperCase() || "U"}
+                      </AvatarFallback>
+                    </Avatar>
+                  ) : (
+                    <div className="flex items-center gap-2 px-1">
+                      <Avatar size="sm" className="w-8 h-8">
+                        <AvatarFallback className="bg-brand-100 text-brand-700 text-sm font-medium">
+                          {session.user.email?.charAt(0).toUpperCase() || "U"}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[12px] font-medium text-foreground truncate">
+                          {session.user.name || session.user.email?.split("@")[0]}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            onClick={() => signOut({ callbackUrl: "/login" })}
+                            className="text-[11px] text-muted-foreground hover:text-red-500 transition-colors h-auto p-0"
+                          >
+                            Sign out
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </>
       )}
     </>
@@ -594,9 +654,10 @@ export default function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose:
 
       <aside
         className={cn(
-          "fixed top-0 left-0 h-screen w-[260px] bg-muted flex flex-col z-50 transition-transform duration-200 ease-out",
+          "fixed top-0 left-0 h-screen flex flex-col z-50 transition-all duration-200 ease-out bg-muted",
           isOpen ? "translate-x-0" : "-translate-x-full",
-          "md:translate-x-0"
+          "md:translate-x-0",
+          collapsed ? "w-[56px]" : "w-[220px]"
         )}
       >
         {sidebarContent}

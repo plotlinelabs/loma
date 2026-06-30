@@ -105,7 +105,7 @@ export default function ConversationDetailPage() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbList>
@@ -120,8 +120,8 @@ export default function ConversationDetailPage() {
       </Breadcrumb>
 
       {/* Header card */}
-      <div className="bg-card border border-border rounded-xl p-4">
-        <div className="flex flex-wrap items-start justify-between gap-4 mb-3">
+      <div className="bg-card border border-border rounded-xl p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Badge variant="secondary" className={sourceStyles[conversation.source] || "bg-gray-100 text-gray-600"}>
@@ -229,7 +229,7 @@ export default function ConversationDetailPage() {
         </div>
 
         {/* Metadata grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-4 text-sm">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm">
           <div className="bg-muted/50 rounded-lg p-3">
             <span className="text-muted-foreground text-xs font-medium">Started</span>
             <div className="text-foreground/80 mt-0.5">
@@ -270,9 +270,9 @@ export default function ConversationDetailPage() {
 
         {/* Savings card */}
         {conversation.savings && (
-          <div className="mt-4 pt-4 border-t border-border/50">
+          <div className="mt-2 pt-4 border-t border-border/50">
             <span className="text-xs text-muted-foreground font-medium">Savings Estimate</span>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm mt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm mt-2">
               <div className="bg-emerald-50 rounded-lg p-3">
                 <span className="text-emerald-600 text-xs font-medium">Human Cost</span>
                 <div className="text-emerald-800 mt-0.5 font-semibold tabular-nums">
@@ -312,7 +312,7 @@ export default function ConversationDetailPage() {
         {/* Metadata tags */}
         {conversation.metadata &&
           Object.keys(conversation.metadata).length > 0 && (
-            <div className="mt-4 pt-4 border-t border-border/50">
+            <div className="mt-2 pt-4 border-t border-border/50">
               <span className="text-xs text-muted-foreground font-medium">Metadata</span>
               <div className="flex flex-wrap gap-2 mt-2">
                 {Object.entries(conversation.metadata).map(([k, v]) => (
@@ -329,7 +329,7 @@ export default function ConversationDetailPage() {
 
         {/* Confidence reasoning */}
         {conversation.confidence?.reasoning && (
-          <div className="mt-4 pt-4 border-t border-border/50">
+          <div className="mt-2 pt-4 border-t border-border/50">
             <span className="text-xs text-muted-foreground font-medium">Confidence Reasoning</span>
             <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
               {conversation.confidence.reasoning}
@@ -339,7 +339,7 @@ export default function ConversationDetailPage() {
 
         {/* Error */}
         {conversation.error && (
-          <div className="mt-4 pt-4 border-t border-border/50">
+          <div className="mt-2 pt-4 border-t border-border/50">
             <span className="text-xs text-red-500 font-medium">Error</span>
             <pre className="text-sm text-red-600 mt-1 bg-red-50 p-3 rounded-lg overflow-x-auto border border-red-100">
               {conversation.error}
@@ -350,7 +350,7 @@ export default function ConversationDetailPage() {
 
       {/* Messages — chronological order (oldest first, like a chat) */}
       {conversation.messages?.length ? (
-        <div className="space-y-3">
+        <div className="space-y-2">
           <h2 className="text-sm font-heading font-semibold text-foreground">
             Messages ({conversation.messages.length})
           </h2>
@@ -401,14 +401,14 @@ export default function ConversationDetailPage() {
         <>
           {/* Fallback for old conversations without messages array */}
           <div className="bg-card border border-border rounded-xl p-3">
-            <h2 className="text-sm font-heading font-semibold text-foreground mb-3">Full Prompt</h2>
-            <pre className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed bg-muted/50 p-4 rounded-lg border border-border/50">
+            <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Full Prompt</h2>
+            <pre className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed bg-muted/50 p-3 rounded-lg border border-border/50">
               {conversation.prompt}
             </pre>
           </div>
           {conversation.final_response && (
             <div className="bg-card border border-border rounded-xl p-3">
-              <h2 className="text-sm font-heading font-semibold text-foreground mb-3">
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-2">
                 Final Response
               </h2>
               <MarkdownContent
@@ -422,7 +422,7 @@ export default function ConversationDetailPage() {
 
       {/* Turns — reverse chronological (latest first for progress tracking) */}
       <div>
-        <h2 className="text-sm font-heading font-semibold text-foreground mb-3">
+        <h2 className="text-sm font-heading font-semibold text-foreground mb-2">
           Agent Turns ({turns.length})
         </h2>
         <TurnViewer turns={turns} />

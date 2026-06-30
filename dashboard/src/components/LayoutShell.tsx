@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback, Suspense } from "react";
+import { useState, useCallback, useEffect, Suspense } from "react";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import Sidebar from "./Sidebar";
 import CrosscutIcon from "./CrosscutIcon";
 import { useUser } from "../lib/UserContext";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { RiMenuLine } from "@remixicon/react";
 
@@ -14,9 +15,23 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
   const isLogin = pathname === "/login";
   const { user, loading } = useUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("sidebar-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("sidebar-collapsed", String(sidebarCollapsed));
+    } catch {}
+  }, [sidebarCollapsed]);
 
   const toggleSidebar = useCallback(() => setSidebarOpen((prev) => !prev), []);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const toggleCollapse = useCallback(() => setSidebarCollapsed((prev) => !prev), []);
 
   if (isLogin) {
     return <>{children}</>;
@@ -50,7 +65,12 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
   return (
     <>
       <Suspense>
-        <Sidebar isOpen={sidebarOpen} onClose={closeSidebar} />
+        <Sidebar
+          isOpen={sidebarOpen}
+          onClose={closeSidebar}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleCollapse}
+        />
       </Suspense>
 
       {/* Mobile top bar */}
@@ -70,8 +90,11 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         </div>
       </div>
 
-      <main className="ml-0 md:ml-[260px] h-screen pt-14 md:pt-0 flex flex-col">
-        <div className="px-4 md:px-4 lg:px-6 py-4 md:py-4 flex-1 w-full">{children}</div>
+      <main className={cn(
+        "ml-0 h-screen pt-14 md:pt-0 flex flex-col transition-all duration-200",
+        sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
+      )}>
+        <div className="px-3 md:px-3 lg:px-4 py-3 flex-1 w-full">{children}</div>
       </main>
     </>
   );
