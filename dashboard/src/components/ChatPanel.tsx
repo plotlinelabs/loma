@@ -1568,11 +1568,11 @@ export default function ChatPanel({
 
                 if (item.role === "clarify") {
                   return (
-                    <div key={i} className="flex justify-start animate-message-in gap-2">
-                      <CrosscutIcon size={16} className="shrink-0 mt-0.5" />
+                    <div key={i} className="flex justify-start items-start animate-message-in gap-2">
+                      <CrosscutIcon size={16} className="shrink-0 mt-px" />
                       <div className="min-w-0 flex-1 text-[13px] leading-relaxed break-words">
                         {item.content && (
-                          <div className="mb-3">
+                          <div className="mb-3 [&>*:first-child]:mt-0">
                             <MarkdownContent content={item.content} />
                           </div>
                         )}
@@ -1627,9 +1627,9 @@ export default function ChatPanel({
 
                 // Assistant message — editorial style, no bubble
                 return (
-                  <div key={i} className="flex justify-start animate-message-in gap-2">
-                    <CrosscutIcon size={16} className="shrink-0 mt-0.5" />
-                    <div className="min-w-0 flex-1 text-[13px] leading-relaxed break-words">
+                  <div key={i} className="flex justify-start items-start animate-message-in gap-2">
+                    <CrosscutIcon size={16} className="shrink-0 mt-px" />
+                    <div className="min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
                       {item.content ? (
                         <MarkdownContent content={item.content} />
                       ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (
