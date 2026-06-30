@@ -17,12 +17,6 @@ services:
       # Persist connected Claude Code accounts (CLAUDE_USERS_DIR) across container
       # recreation — otherwise `claude login` creds are lost on every rebuild/redeploy.
       - loma-claude-users:/opt/claude-users
-      # Host dev-secret store (plotline-services .env files + login.env), mounted
-      # READ-ONLY so the agent can boot target repos locally for closed-loop dev
-      # (see the run-plotline-services-local skill). The path is kept identical
-      # inside the container so the skill's /home/ubuntu/secrets references work
-      # unchanged. Override the host source via LOMA_SECRETS_DIR; unset →
-      # /home/ubuntu/secrets. Read-only: the agent only reads/copies these files.
       - ${LOMA_SECRETS_DIR:-/home/ubuntu/secrets}:/home/ubuntu/secrets:ro
     restart: unless-stopped
 
