@@ -82,7 +82,7 @@ export default function SkillTreeSidebar({
   return (
     <div className="flex-shrink-0 bg-muted/30 flex flex-col h-full overflow-hidden" style={{ width: width ?? 280 }}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+      <div className="flex items-center justify-between px-4 py-3">
         <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Skills</h1>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
