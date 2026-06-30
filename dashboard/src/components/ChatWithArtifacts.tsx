@@ -132,10 +132,10 @@ export default function ChatWithArtifacts({
   const showArtifactPanel = activeArtifact !== null;
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-hidden flex">
+    <div ref={containerRef} className="flex-1 min-h-0 h-full overflow-hidden flex">
       {/* Chat panel (left) */}
       <div
-        className="overflow-hidden bg-muted/30 flex-shrink-0"
+        className="h-full overflow-hidden bg-muted/30 flex-shrink-0"
         style={{
           width: showArtifactPanel ? `${chatPanelPercent}%` : "100%",
           transition: showArtifactPanel ? "none" : "width 0.3s ease-out",

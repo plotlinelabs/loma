@@ -1281,7 +1281,7 @@ export default function ChatPanel({
             {isActiveComposer ? (
               <>
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                <span className="min-w-0 truncate text-xs font-medium text-foreground">
+                <span className="min-w-0 truncate text-xs text-muted-foreground">
                   {modelLabel}
                 </span>
               </>
@@ -1519,9 +1519,9 @@ export default function ChatPanel({
         <>
           {/* Account info banner */}
           {accountInfo && (
-            <div className="px-3 md:px-6 pt-3">
+            <div className="px-3 md:px-6 pt-5">
               <div className="max-w-3xl mx-auto">
-                <div className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full bg-muted text-muted-foreground border border-border">
+                <div className="inline-flex items-center gap-2 text-[11px] text-muted-foreground/70">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   <span>
                     {accountInfo.runtime === "opencode" ? (
