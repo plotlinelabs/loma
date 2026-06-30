@@ -92,6 +92,16 @@ const userMenuNav: NavItem[] = [
     icon: <RiSettings3Line size={16} />,
   },
   {
+    name: "Dev Environments",
+    href: "/dev-environments",
+    minRole: "maintainer",
+    icon: (
+      <svg className="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 21 12l-3.75 5.25M6.75 6.75 3 12l3.75 5.25M14.25 4.5l-4.5 15" />
+      </svg>
+    ),
+  },
+  {
     name: "Admin",
     href: "/admin",
     minRole: "maintainer",
