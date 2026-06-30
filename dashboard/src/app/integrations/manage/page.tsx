@@ -26,10 +26,20 @@ import {
 } from "../../../lib/integration-api";
 import dynamic from "next/dynamic";
 import { useUser } from "../../../lib/UserContext";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RiCloseLine, RiFileCopyLine, RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
 
 const WebTerminal = dynamic(() => import("../../../components/WebTerminal"), { ssr: false });
 
-/* ── Helpers ──────────────────────────────────────────────────────── */
+/* -- Helpers ---------------------------------------------------------------- */
 
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -73,31 +83,31 @@ function formatScope(scope: string): string {
   return SCOPE_LABELS[scope] || SLACK_SCOPE_LABELS[scope] || scope.split("/").pop() || scope;
 }
 
-/* ── Components ───────────────────────────────────────────────────── */
+/* -- Components ------------------------------------------------------------- */
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "connected")
     return (
-      <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 font-medium">
+      <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
         Connected
-      </span>
+      </Badge>
     );
   if (status === "system_managed")
     return (
-      <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-600 font-medium">
+      <Badge className="bg-blue-50 text-blue-600 border-transparent">
         System-managed
-      </span>
+      </Badge>
     );
   if (status === "expired")
     return (
-      <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 font-medium">
+      <Badge className="bg-amber-50 text-amber-600 border-transparent">
         Expired
-      </span>
+      </Badge>
     );
   return (
-    <span className="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-400 font-medium">
+    <Badge variant="secondary">
       Not connected
-    </span>
+    </Badge>
   );
 }
 
@@ -147,14 +157,16 @@ function LinearLogo() {
   );
 }
 
-/* ── Connect Modal ────────────────────────────────────────────────── */
+/* -- Connect Modal ---------------------------------------------------------- */
 
 function ConnectModal({
   integration,
+  open,
   onClose,
   onConnected,
 }: {
   integration: Integration;
+  open: boolean;
   onClose: () => void;
   onConnected: () => void;
 }) {
@@ -169,7 +181,6 @@ function ConnectModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!apiKey.trim()) return;
-    // Check required extra fields
     for (const field of extraFields) {
       if (field.required && !extraFieldValues[field.key]?.trim()) return;
     }
@@ -189,105 +200,90 @@ function ConnectModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
         <form onSubmit={handleSubmit}>
-          <div className="p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-1">
-              Connect {integration.display_name}
-            </h3>
-            <p className="text-sm text-gray-500 mb-5">
-              {integration.description}
-            </p>
+          <DialogHeader>
+            <DialogTitle>Connect {integration.display_name}</DialogTitle>
+            <DialogDescription>{integration.description}</DialogDescription>
+          </DialogHeader>
 
-            {error && (
-              <div className="bg-red-50 text-red-700 text-sm px-3 py-2 rounded-lg border border-red-100 mb-4">
-                {error}
+          {error && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          <div className="space-y-4 mt-2">
+            {extraFields.map((field) => (
+              <div key={field.key}>
+                <Label className="mb-1">
+                  {field.label}
+                  {!field.required && <span className="text-muted-foreground font-normal ml-1">(optional)</span>}
+                </Label>
+                <Input
+                  type="text"
+                  value={extraFieldValues[field.key] || ""}
+                  onChange={(e) => setExtraFieldValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                  placeholder={field.placeholder || ""}
+                  autoFocus={extraFields[0]?.key === field.key}
+                />
+              </div>
+            ))}
+
+            <div>
+              <Label className="mb-1">{integration.auth_label}</Label>
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={`Paste your ${integration.auth_label.toLowerCase()}`}
+                autoFocus={extraFields.length === 0}
+              />
+              <a
+                href={integration.auth_help_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-600 hover:text-blue-800 mt-1 inline-block"
+              >
+                Where do I find this?
+              </a>
+            </div>
+
+            {integration.has_webhook && integration.webhook_secret_label && (
+              <div>
+                <Label className="mb-1">
+                  {integration.webhook_secret_label}
+                  <span className="text-muted-foreground font-normal ml-1">(optional)</span>
+                </Label>
+                <Input
+                  type="password"
+                  value={webhookSecret}
+                  onChange={(e) => setWebhookSecret(e.target.value)}
+                  placeholder="Paste your webhook signing secret"
+                />
               </div>
             )}
-
-            <div className="space-y-4">
-              {/* Extra fields (e.g., GitBook URL) — rendered before the main auth field */}
-              {extraFields.map((field) => (
-                <div key={field.key}>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {field.label}
-                    {!field.required && <span className="text-gray-400 font-normal ml-1">(optional)</span>}
-                  </label>
-                  <input
-                    type="text"
-                    value={extraFieldValues[field.key] || ""}
-                    onChange={(e) => setExtraFieldValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                    placeholder={field.placeholder || ""}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    autoFocus={extraFields[0]?.key === field.key}
-                  />
-                </div>
-              ))}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {integration.auth_label}
-                </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={`Paste your ${integration.auth_label.toLowerCase()}`}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  autoFocus={extraFields.length === 0}
-                />
-                <a
-                  href={integration.auth_help_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-blue-600 hover:text-blue-800 mt-1 inline-block"
-                >
-                  Where do I find this?
-                </a>
-              </div>
-
-              {integration.has_webhook && integration.webhook_secret_label && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {integration.webhook_secret_label}
-                    <span className="text-gray-400 font-normal ml-1">(optional)</span>
-                  </label>
-                  <input
-                    type="password"
-                    value={webhookSecret}
-                    onChange={(e) => setWebhookSecret(e.target.value)}
-                    placeholder="Paste your webhook signing secret"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-              )}
-            </div>
           </div>
 
-          <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-sm px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-            >
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={!apiKey.trim() || submitting || extraFields.some((f) => f.required && !extraFieldValues[f.key]?.trim())}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
             >
               {submitting ? "Connecting..." : "Connect"}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-/* ── Main Page ────────────────────────────────────────────────────── */
+/* -- Main Page -------------------------------------------------------------- */
 
 export default function IntegrationsPage() {
   const [connections, setConnections] = useState<OAuthConnection[]>([]);
@@ -299,23 +295,19 @@ export default function IntegrationsPage() {
   const [disconnectingSlack, setDisconnectingSlack] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Org integration modal state
   const [connectModalTarget, setConnectModalTarget] = useState<Integration | null>(null);
   const [disconnectingOrg, setDisconnectingOrg] = useState<string | null>(null);
   const [webhookUrls, setWebhookUrls] = useState<Record<string, string>>({});
 
-  // Role check — only maintainers+ can see org integrations
   const { hasRole, isAdmin } = useUser();
   const canManageOrgIntegrations = hasRole("maintainer");
 
-  // Custom MCP connector modal state (admin only)
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [customForm, setCustomForm] = useState({ name: "", url: "", token: "", authHeader: "" });
   const [customAdvanced, setCustomAdvanced] = useState(false);
   const [addingCustom, setAddingCustom] = useState(false);
   const [removingCustom, setRemovingCustom] = useState<string | null>(null);
 
-  // Claude Code integration state
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
   const [showClaudeTerminal, setShowClaudeTerminal] = useState(false);
   const [claudeAutoCommand, setClaudeAutoCommand] = useState<string | undefined>();
@@ -332,7 +324,6 @@ export default function IntegrationsPage() {
       if (claude) setClaudeAuth(claude);
       setOrgIntegrations(orgInteg);
 
-      // Load webhook URLs for connected integrations
       const urls: Record<string, string> = {};
       for (const integ of orgInteg) {
         if ((integ.status === "connected" || integ.status === "system_managed") && integ.has_webhook) {
@@ -344,7 +335,6 @@ export default function IntegrationsPage() {
         }
       }
       setWebhookUrls(urls);
-
       setError(null);
     } catch (e) {
       console.error("Failed to load connections:", e);
@@ -358,7 +348,6 @@ export default function IntegrationsPage() {
     loadConnections();
   }, [loadConnections]);
 
-  // Poll claude auth status while login terminal is open
   useEffect(() => {
     if (!showClaudeTerminal) return;
     const interval = setInterval(async () => {
@@ -375,7 +364,6 @@ export default function IntegrationsPage() {
     return () => clearInterval(interval);
   }, [showClaudeTerminal]);
 
-  // Listen for OAuth popup completion (Google or Slack)
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (event.data?.type === "oauth-complete") {
@@ -397,7 +385,6 @@ export default function IntegrationsPage() {
     setError(null);
     try {
       const url = await getGoogleAuthorizeUrl();
-      // Open in popup
       const w = 500;
       const h = 600;
       const left = window.screenX + (window.outerWidth - w) / 2;
@@ -560,7 +547,6 @@ export default function IntegrationsPage() {
 
   const handleClaudeTerminalDone = () => {
     setShowClaudeTerminal(false);
-    // Refresh status after login
     loadConnections();
   };
 
@@ -584,752 +570,727 @@ export default function IntegrationsPage() {
   const isSlackConnected = slackConn?.status === "connected";
   const isSlackExpired = slackConn?.status === "expired";
 
-  // Split org integrations into user-managed, system-managed, and custom connectors
   const userManagedIntegrations = orgIntegrations.filter((i) => !i.is_custom && i.status !== "system_managed");
   const systemManagedIntegrations = orgIntegrations.filter((i) => !i.is_custom && i.status === "system_managed");
   const customConnectors = orgIntegrations.filter((i) => i.is_custom);
 
   return (
-    <div className="space-y-6 animate-fade-in-up">
+    <div className="space-y-2 animate-fade-in-up">
       {/* Header */}
       <div>
-        <h1 className="text-xl font-semibold text-gray-900">Integrations</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-xl font-heading font-semibold text-foreground">Integrations</h1>
+        <p className="text-[13px] text-muted-foreground mt-1">
           Connect tools and personal accounts to let Loma work across your stack
         </p>
       </div>
 
       {error && (
-        <div className="bg-red-50 text-red-700 text-sm px-4 py-3 rounded-lg border border-red-100">
-          {error}
-        </div>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
       {/* Connect Modal */}
       {connectModalTarget && (
         <ConnectModal
           integration={connectModalTarget}
+          open={!!connectModalTarget}
           onClose={() => setConnectModalTarget(null)}
           onConnected={handleOrgConnected}
         />
       )}
 
-      {/* Add Custom Connector Modal — admin only */}
-      {showCustomModal && isAdmin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-surface rounded-2xl border border-gray-200 w-full max-w-lg p-6 shadow-xl">
-            <div className="flex items-start justify-between mb-1">
-              <h2 className="text-lg font-semibold text-gray-900">Add custom connector</h2>
-              <button
-                onClick={() => setShowCustomModal(false)}
-                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
-                aria-label="Close"
-              >
-                ×
-              </button>
-            </div>
-            <p className="text-sm text-gray-500 mb-5">
+      {/* Add Custom Connector Modal -- admin only */}
+      <Dialog open={showCustomModal && isAdmin} onOpenChange={(o) => { if (!o) setShowCustomModal(false); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add custom connector</DialogTitle>
+            <DialogDescription>
               Connect the agent to any remote MCP server. Its tools become available to every user.
-            </p>
+            </DialogDescription>
+          </DialogHeader>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Name</label>
-                <input
-                  type="text"
-                  value={customForm.name}
-                  onChange={(e) => setCustomForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="Acme MCP"
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Remote MCP server URL</label>
-                <input
-                  type="url"
-                  value={customForm.url}
-                  onChange={(e) => setCustomForm((f) => ({ ...f, url: e.target.value }))}
-                  placeholder="https://mcp.example.com/mcp"
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                />
-              </div>
+          <div className="space-y-4">
+            <div>
+              <Label className="mb-1">Name</Label>
+              <Input
+                type="text"
+                value={customForm.name}
+                onChange={(e) => setCustomForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Acme MCP"
+              />
+            </div>
+            <div>
+              <Label className="mb-1">Remote MCP server URL</Label>
+              <Input
+                type="url"
+                value={customForm.url}
+                onChange={(e) => setCustomForm((f) => ({ ...f, url: e.target.value }))}
+                placeholder="https://mcp.example.com/mcp"
+              />
+            </div>
 
-              <button
-                type="button"
-                onClick={() => setCustomAdvanced((v) => !v)}
-                className="text-xs font-medium text-gray-500 hover:text-gray-700"
-              >
-                {customAdvanced ? "▾" : "▸"} Advanced settings
-              </button>
-              {customAdvanced && (
-                <div className="space-y-4 pl-1">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Access token (optional)</label>
-                    <input
-                      type="password"
-                      value={customForm.token}
-                      onChange={(e) => setCustomForm((f) => ({ ...f, token: e.target.value }))}
-                      placeholder="Sent as the auth header value"
-                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Auth header name (optional)</label>
-                    <input
-                      type="text"
-                      value={customForm.authHeader}
-                      onChange={(e) => setCustomForm((f) => ({ ...f, authHeader: e.target.value }))}
-                      placeholder="Authorization"
-                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
-                    <p className="text-[11px] text-gray-400 mt-1">
-                      Defaults to <code>Authorization</code>. The token is sent as this header&apos;s value.
-                    </p>
-                  </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => setCustomAdvanced((v) => !v)}
+            >
+              {customAdvanced ? <RiArrowDownSLine size={12} /> : <RiArrowRightSLine size={12} />}
+              Advanced settings
+            </Button>
+            {customAdvanced && (
+              <div className="space-y-4 pl-1">
+                <div>
+                  <Label className="mb-1">Access token (optional)</Label>
+                  <Input
+                    type="password"
+                    value={customForm.token}
+                    onChange={(e) => setCustomForm((f) => ({ ...f, token: e.target.value }))}
+                    placeholder="Sent as the auth header value"
+                  />
                 </div>
-              )}
+                <div>
+                  <Label className="mb-1">Auth header name (optional)</Label>
+                  <Input
+                    type="text"
+                    value={customForm.authHeader}
+                    onChange={(e) => setCustomForm((f) => ({ ...f, authHeader: e.target.value }))}
+                    placeholder="Authorization"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Defaults to <code>Authorization</code>. The token is sent as this header&apos;s value.
+                  </p>
+                </div>
+              </div>
+            )}
 
-              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+            <Alert>
+              <AlertDescription className="text-xs text-amber-600">
                 Only add MCP servers you trust — their tools run for every user&apos;s agent. Interactive-OAuth
                 servers are not supported; use token/header auth.
-              </p>
-            </div>
-
-            <div className="flex justify-end gap-2 mt-6">
-              <button
-                onClick={() => setShowCustomModal(false)}
-                className="text-sm px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleAddCustomConnector}
-                disabled={addingCustom || !customForm.name.trim() || !customForm.url.trim()}
-                className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
-              >
-                {addingCustom ? "Adding..." : "Add"}
-              </button>
-            </div>
+              </AlertDescription>
+            </Alert>
           </div>
-        </div>
-      )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCustomModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddCustomConnector}
+              disabled={addingCustom || !customForm.name.trim() || !customForm.url.trim()}
+            >
+              {addingCustom ? "Adding..." : "Add"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {loading ? (
-        <div className="bg-surface rounded-xl border border-gray-200 p-12 text-center">
-          <div className="animate-pulse text-gray-400 text-sm">Loading integrations...</div>
-        </div>
+        <Card>
+          <CardContent className="p-6 text-center">
+            <div className="animate-pulse text-muted-foreground text-[13px]">Loading integrations...</div>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="space-y-8">
-          {/* Org Integrations — maintainer+ only */}
-          {canManageOrgIntegrations && userManagedIntegrations.length > 0 && (
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                  Org Integrations
-                </h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Shared across the team — connect with an API key
-                </p>
-              </div>
+        <Tabs defaultValue="org">
+          <TabsList>
+            <TabsTrigger value="org">Org</TabsTrigger>
+            <TabsTrigger value="system">System</TabsTrigger>
+            <TabsTrigger value="custom">Custom</TabsTrigger>
+            <TabsTrigger value="personal">Personal</TabsTrigger>
+          </TabsList>
 
+          {/* Org Integrations */}
+          <TabsContent value="org">
+            {canManageOrgIntegrations && userManagedIntegrations.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {userManagedIntegrations.map((integ) => {
                 const isOrgConnected = integ.status === "connected";
                 const Logo = PROVIDER_LOGOS[integ.provider];
                 return (
-                  <div
-                    key={integ.provider}
-                    className="bg-surface rounded-xl border border-gray-200 overflow-hidden"
-                  >
-                    <div className="p-6">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
-                            {Logo ? <Logo /> : (
-                              <span className="text-lg font-bold text-gray-400">
-                                {integ.display_name[0]}
-                              </span>
-                            )}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-3">
-                              <h2 className="text-base font-semibold text-gray-900">
-                                {integ.display_name}
-                              </h2>
-                              <StatusBadge status={integ.status} />
-                            </div>
-                            <p className="text-sm text-gray-500 mt-0.5">
-                              {integ.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div>
-                          {isOrgConnected ? (
-                            <button
-                              onClick={() => handleDisconnectOrg(integ.provider, integ.display_name)}
-                              disabled={disconnectingOrg === integ.provider}
-                              className="text-sm px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                            >
-                              {disconnectingOrg === integ.provider ? "Disconnecting..." : "Disconnect"}
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => setConnectModalTarget(integ)}
-                              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-                            >
-                              Connect
-                            </button>
+                  <Card key={integ.provider}>
+                    <CardContent>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                          {Logo ? <Logo /> : (
+                            <span className="text-lg font-bold text-muted-foreground">
+                              {integ.display_name[0]}
+                            </span>
                           )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h2 className="text-[13px] font-semibold text-foreground truncate">
+                            {integ.display_name}
+                          </h2>
+                          <p className="text-xs text-muted-foreground line-clamp-1">
+                            {integ.description}
+                          </p>
                         </div>
                       </div>
+                      <div className="flex items-center justify-between mt-2">
+                        <StatusBadge status={integ.status} />
+                        {isOrgConnected ? (
+                          <Button
+                            variant="destructive"
+                            size="xs"
+                            onClick={() => handleDisconnectOrg(integ.provider, integ.display_name)}
+                            disabled={disconnectingOrg === integ.provider}
+                          >
+                            {disconnectingOrg === integ.provider ? "..." : "Disconnect"}
+                          </Button>
+                        ) : (
+                          <Button
+                            size="xs"
+                            onClick={() => setConnectModalTarget(integ)}
+                          >
+                            Connect
+                          </Button>
+                        )}
+                      </div>
 
-                      {/* Connected details */}
                       {isOrgConnected && (
-                        <div className="mt-5 pt-5 border-t border-gray-100 space-y-3">
-                          {integ.connected_at && (
-                            <p className="text-xs text-gray-400">
-                              Connected {formatDate(integ.connected_at)}
-                              {integ.connected_by && ` by ${integ.connected_by}`}
-                            </p>
-                          )}
-
-                          <div className="flex flex-wrap gap-2">
-                            <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
-                              MCP tools active
-                            </span>
-                            {integ.has_webhook && integ.has_webhook_secret && (
-                              <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
-                                Webhooks configured
-                              </span>
+                        <>
+                          <Separator className="my-5" />
+                          <div className="space-y-2">
+                            {integ.connected_at && (
+                              <p className="text-xs text-muted-foreground">
+                                Connected {formatDate(integ.connected_at)}
+                                {integ.connected_by && ` by ${integ.connected_by}`}
+                              </p>
                             )}
-                            {integ.has_webhook && !integ.has_webhook_secret && (
-                              <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 border border-amber-100">
-                                Webhook secret not set
-                              </span>
+
+                            <div className="flex flex-wrap gap-2">
+                              <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
+                                MCP tools active
+                              </Badge>
+                              {integ.has_webhook && integ.has_webhook_secret && (
+                                <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
+                                  Webhooks configured
+                                </Badge>
+                              )}
+                              {integ.has_webhook && !integ.has_webhook_secret && (
+                                <Badge className="bg-amber-50 text-amber-600 border-amber-100">
+                                  Webhook secret not set
+                                </Badge>
+                              )}
+                            </div>
+
+                            {integ.has_webhook && webhookUrls[integ.provider] && (
+                              <div>
+                                <p className="text-xs font-medium text-muted-foreground mb-1">
+                                  Webhook URL
+                                </p>
+                                <div className="flex items-center gap-2">
+                                  <code className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded-lg border border-border flex-1 truncate">
+                                    {webhookUrls[integ.provider]}
+                                  </code>
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    onClick={() => copyWebhookUrl(webhookUrls[integ.provider])}
+                                  >
+                                    <RiFileCopyLine size={12} />
+                                    Copy
+                                  </Button>
+                                </div>
+                              </div>
                             )}
                           </div>
-
-                          {/* Webhook URL */}
-                          {integ.has_webhook && webhookUrls[integ.provider] && (
-                            <div>
-                              <p className="text-xs font-medium text-gray-500 mb-1">
-                                Webhook URL
-                              </p>
-                              <div className="flex items-center gap-2">
-                                <code className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg border border-gray-100 flex-1 truncate">
-                                  {webhookUrls[integ.provider]}
-                                </code>
-                                <button
-                                  onClick={() => copyWebhookUrl(webhookUrls[integ.provider])}
-                                  className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors shrink-0"
-                                >
-                                  Copy
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                        </>
                       )}
 
-                      {/* Not connected */}
                       {!isOrgConnected && (
-                        <div className="mt-5 pt-5 border-t border-gray-100">
-                          <p className="text-sm text-gray-500">
+                        <>
+                          <Separator className="my-5" />
+                          <p className="text-[13px] text-muted-foreground">
                             Connect your {integ.display_name} account to enable MCP tools
                             {integ.has_webhook ? ", webhook event ingestion, and agent capabilities" : " and agent capabilities"}.
                           </p>
-                          <div className="mt-3 flex flex-wrap gap-2">
+                          <div className="mt-2 flex flex-wrap gap-2">
                             {["MCP tools", integ.has_webhook ? "Event ingestion" : null, "Agent skills"].filter(Boolean).map((cap) => (
-                              <span
+                              <Badge
                                 key={cap}
-                                className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-600"
+                                className="bg-indigo-50 text-indigo-600 border-transparent"
                               >
                                 {cap}
-                              </span>
+                              </Badge>
                             ))}
                           </div>
-                        </div>
+                        </>
                       )}
-                    </div>
-                  </div>
+                    </CardContent>
+                  </Card>
                 );
               })}
-            </div>
-          )}
+              </div>
+            ) : (
+              <Card className="border-dashed">
+                <CardContent className="p-3 text-center">
+                  <p className="text-[13px] text-muted-foreground">
+                    No org integrations available.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
 
           {/* System-Managed Integrations */}
-          {canManageOrgIntegrations && systemManagedIntegrations.length > 0 && (
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                  System-Managed Integrations
-                </h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Configured via server environment — no manual setup needed
-                </p>
-              </div>
-
+          <TabsContent value="system">
+            {canManageOrgIntegrations && systemManagedIntegrations.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {systemManagedIntegrations.map((integ) => {
                 const Logo = PROVIDER_LOGOS[integ.provider];
                 return (
-                  <div
-                    key={integ.provider}
-                    className="bg-surface rounded-xl border border-gray-200 overflow-hidden"
-                  >
-                    <div className="p-6">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
-                            {Logo ? <Logo /> : (
-                              <span className="text-lg font-bold text-gray-400">
-                                {integ.display_name[0]}
-                              </span>
-                            )}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-3">
-                              <h2 className="text-base font-semibold text-gray-900">
-                                {integ.display_name}
-                              </h2>
-                              <StatusBadge status="system_managed" />
-                            </div>
-                            <p className="text-sm text-gray-500 mt-0.5">
-                              {integ.description}
-                            </p>
-                          </div>
+                  <Card key={integ.provider}>
+                    <CardContent>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                          {Logo ? <Logo /> : (
+                            <span className="text-lg font-bold text-muted-foreground">
+                              {integ.display_name[0]}
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h2 className="text-[13px] font-semibold text-foreground truncate">
+                            {integ.display_name}
+                          </h2>
+                          <p className="text-xs text-muted-foreground line-clamp-1">
+                            {integ.description}
+                          </p>
                         </div>
                       </div>
-
-                      <div className="mt-5 pt-5 border-t border-gray-100">
-                        <div className="flex flex-wrap gap-2">
-                          <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
-                            MCP tools active
-                          </span>
-                          <span className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-100">
-                            Configured via server environment
-                          </span>
-                        </div>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100">
+                          MCP tools
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-600 border-blue-100">
+                          Server configured
+                        </Badge>
                       </div>
-                    </div>
-                  </div>
+                    </CardContent>
+                  </Card>
                 );
               })}
-            </div>
-          )}
-
-          {/* Custom MCP Connectors — admin only */}
-          {isAdmin && (
-            <div className="space-y-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                    Custom Connectors
-                  </h2>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    Add any remote MCP server — its tools become available to every user
-                  </p>
-                </div>
-                <button
-                  onClick={() => setShowCustomModal(true)}
-                  className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shrink-0"
-                >
-                  Add custom connector
-                </button>
               </div>
+            ) : (
+              <Card className="border-dashed">
+                <CardContent className="p-3 text-center">
+                  <p className="text-[13px] text-muted-foreground">
+                    No system-managed integrations configured.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          {/* Custom MCP Connectors */}
+          <TabsContent value="custom">
+            <div className="space-y-2">
+              {isAdmin && (
+                <div className="flex justify-end">
+                  <Button size="sm" onClick={() => setShowCustomModal(true)}>
+                    Add custom connector
+                  </Button>
+                </div>
+              )}
 
               {customConnectors.length === 0 ? (
-                <div className="bg-surface rounded-xl border border-dashed border-gray-200 p-6 text-center">
-                  <p className="text-sm text-gray-400">
-                    No custom connectors yet. Add a remote MCP server to extend the agent.
-                  </p>
-                </div>
+                <Card className="border-dashed">
+                  <CardContent className="p-3 text-center">
+                    <p className="text-[13px] text-muted-foreground">
+                      No custom connectors yet.{isAdmin ? " Add a remote MCP server to extend the agent." : ""}
+                    </p>
+                  </CardContent>
+                </Card>
               ) : (
                 customConnectors.map((integ) => (
-                  <div
-                    key={integ.provider}
-                    className="bg-surface rounded-xl border border-gray-200 overflow-hidden"
-                  >
-                    <div className="p-6">
+                  <Card key={integ.provider}>
+                    <CardContent>
                       <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
-                            <span className="text-lg font-bold text-gray-400">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                            <span className="text-lg font-bold text-muted-foreground">
                               {integ.display_name[0]}
                             </span>
                           </div>
                           <div>
-                            <div className="flex items-center gap-3">
-                              <h2 className="text-base font-semibold text-gray-900">
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-[13px] font-semibold text-foreground">
                                 {integ.display_name}
                               </h2>
                               <StatusBadge status="connected" />
                             </div>
-                            <p className="text-sm text-gray-500 mt-0.5 font-mono break-all">
+                            <p className="text-[13px] text-muted-foreground mt-0.5 font-mono break-all">
                               {integ.url}
                             </p>
                           </div>
                         </div>
-                        <button
-                          onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
-                          disabled={removingCustom === integ.provider}
-                          className="text-sm px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
-                        >
-                          {removingCustom === integ.provider ? "Removing..." : "Remove"}
-                        </button>
+                        {isAdmin && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="shrink-0 whitespace-nowrap"
+                            onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
+                            disabled={removingCustom === integ.provider}
+                          >
+                            {removingCustom === integ.provider ? "Removing..." : "Remove"}
+                          </Button>
+                        )}
                       </div>
-                      <div className="mt-5 pt-5 border-t border-gray-100 flex flex-wrap items-center gap-2">
-                        <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
+                      <Separator className="my-5" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
                           MCP tools active (mcp__{integ.provider})
-                        </span>
-                        <span className="text-xs px-2.5 py-1 rounded-full bg-gray-50 text-gray-500 border border-gray-100">
+                        </Badge>
+                        <Badge variant="secondary">
                           {integ.has_token ? "Token auth" : "No auth"}
-                        </span>
+                        </Badge>
                         {integ.connected_by && (
-                          <span className="text-xs text-gray-400">
+                          <span className="text-xs text-muted-foreground">
                             Added {formatDate(integ.connected_at)} by {integ.connected_by}
                           </span>
                         )}
                       </div>
-                    </div>
-                  </div>
+                    </CardContent>
+                  </Card>
                 ))
               )}
             </div>
-          )}
+          </TabsContent>
 
           {/* Personal Integrations */}
-          <div className="space-y-4">
-            {canManageOrgIntegrations && orgIntegrations.length > 0 && (
-              <div>
-                <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                  Personal Integrations
-                </h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Scoped to your account — Loma acts on your behalf
-                </p>
-              </div>
-            )}
-
-          {/* Google Integration Card */}
-          <div className="bg-surface rounded-xl border border-gray-200 overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
-                    <GoogleLogo />
-                  </div>
-                  <div>
+          <TabsContent value="personal">
+            <div className="space-y-2">
+              {/* Google Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
-                      <h2 className="text-base font-semibold text-gray-900">
-                        Google
-                      </h2>
-                      <StatusBadge status={googleConn?.status || "not_connected"} />
-                    </div>
-                    <p className="text-sm text-gray-500 mt-0.5">
-                      Gmail, Drive, Calendar, Sheets, Docs, Slides
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  {isConnected ? (
-                    <button
-                      onClick={handleDisconnect}
-                      disabled={disconnecting}
-                      className="text-sm px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                    >
-                      {disconnecting ? "Disconnecting..." : "Disconnect"}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleConnect}
-                      disabled={connecting}
-                      className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
-                    >
-                      {connecting ? "Connecting..." : isExpired ? "Reconnect" : "Connect Google"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Connected details */}
-              {isConnected && googleConn && (
-                <div className="mt-5 pt-5 border-t border-gray-100">
-                  {googleConn.connected_at && (
-                    <p className="text-xs text-gray-400 mb-3">
-                      Connected {formatDate(googleConn.connected_at)}
-                    </p>
-                  )}
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-                      Permissions granted
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {(googleConn.scopes || []).map((scope) => (
-                        <span
-                          key={scope}
-                          className="text-xs px-2.5 py-1 rounded-full bg-gray-50 text-gray-600 border border-gray-100"
-                        >
-                          {formatScope(scope)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Expired notice */}
-              {isExpired && (
-                <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-100">
-                  <p className="text-sm text-amber-700">
-                    Your Google connection has expired. Please reconnect to restore access.
-                  </p>
-                </div>
-              )}
-
-              {/* Not connected — description */}
-              {!isConnected && !isExpired && (
-                <div className="mt-5 pt-5 border-t border-gray-100">
-                  <p className="text-sm text-gray-500">
-                    Connect your Google account to let Loma access Gmail, Drive, Calendar,
-                    Sheets, Docs, and Slides on your behalf. Your tokens are encrypted and stored securely.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {["Read emails", "Compose & send emails", "Read & write Drive", "Calendar", "Sheets", "Read & edit Docs", "Read & edit Slides"].map((perm) => (
-                      <span
-                        key={perm}
-                        className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-600"
-                      >
-                        {perm}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Slack Integration Card */}
-          <div className="bg-surface rounded-xl border border-gray-200 overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
-                    <SlackLogo />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-base font-semibold text-gray-900">
-                        Slack
-                      </h2>
-                      <StatusBadge status={slackConn?.status || "not_connected"} />
-                    </div>
-                    <p className="text-sm text-gray-500 mt-0.5">
-                      Read, search, and send messages as you
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  {isSlackConnected ? (
-                    <button
-                      onClick={handleDisconnectSlack}
-                      disabled={disconnectingSlack}
-                      className="text-sm px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                    >
-                      {disconnectingSlack ? "Disconnecting..." : "Disconnect"}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleConnectSlack}
-                      disabled={connectingSlack}
-                      className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
-                    >
-                      {connectingSlack ? "Connecting..." : isSlackExpired ? "Reconnect" : "Connect Slack"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Connected details */}
-              {isSlackConnected && slackConn && (
-                <div className="mt-5 pt-5 border-t border-gray-100">
-                  {slackConn.connected_at && (
-                    <p className="text-xs text-gray-400 mb-3">
-                      Connected {formatDate(slackConn.connected_at)}
-                    </p>
-                  )}
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-                      Permissions granted
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {(slackConn.scopes || []).map((scope) => (
-                        <span
-                          key={scope}
-                          className="text-xs px-2.5 py-1 rounded-full bg-gray-50 text-gray-600 border border-gray-100"
-                        >
-                          {formatScope(scope)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Expired notice */}
-              {isSlackExpired && (
-                <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-100">
-                  <p className="text-sm text-amber-700">
-                    Your Slack connection has expired. Please reconnect to restore access.
-                  </p>
-                </div>
-              )}
-
-              {/* Not connected — description */}
-              {!isSlackConnected && !isSlackExpired && (
-                <div className="mt-5 pt-5 border-t border-gray-100">
-                  <p className="text-sm text-gray-500">
-                    Connect your Slack account to let Loma read channels, search messages, view unreads,
-                    and send messages as you. Your token is encrypted and stored securely.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {["Read channels", "Read DMs", "Send messages as you", "Search messages", "View unreads"].map((perm) => (
-                      <span
-                        key={perm}
-                        className="text-xs px-2.5 py-1 rounded-full bg-purple-50 text-purple-600"
-                      >
-                        {perm}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Claude Code Integration Card */}
-          <div className="bg-surface rounded-xl border border-gray-200 overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
-                    <ClaudeLogo />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-base font-semibold text-gray-900">
-                        Claude Code
-                      </h2>
-                      <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
-                    </div>
-                    <p className="text-sm text-gray-500 mt-0.5">
-                      Your account joins the shared round-robin pool
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  {claudeAuth?.connected ? (
-                    <button
-                      onClick={handleDisconnectClaude}
-                      disabled={disconnectingClaude}
-                      className="text-sm px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                    >
-                      {disconnectingClaude ? "Disconnecting..." : "Disconnect"}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleConnectClaude}
-                      disabled={showClaudeTerminal}
-                      className="text-sm px-4 py-2 rounded-lg bg-[#D97706] text-white hover:bg-[#B45309] transition-colors disabled:opacity-50"
-                    >
-                      {showClaudeTerminal ? "Logging in..." : "Login with Claude"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Connected details */}
-              {claudeAuth?.connected && (
-                <div className="mt-5 pt-5 border-t border-gray-100">
-                  <div className="flex items-center gap-4 text-sm">
-                    {claudeAuth.email && (
-                      <div>
-                        <span className="text-gray-500">Account: </span>
-                        <span className="text-gray-900">{claudeAuth.email}</span>
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <GoogleLogo />
                       </div>
-                    )}
-                    {claudeAuth.authMethod && (
                       <div>
-                        <span className="text-gray-500">Auth: </span>
-                        <span className="text-gray-900">{claudeAuth.authMethod}</span>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-[13px] font-semibold text-foreground">
+                            Google
+                          </h2>
+                          <StatusBadge status={googleConn?.status || "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Gmail, Drive, Calendar, Sheets, Docs, Slides
+                        </p>
                       </div>
-                    )}
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">
-                      In round-robin pool
-                    </span>
-                  </div>
-                </div>
-              )}
+                    </div>
 
-              {/* Login terminal */}
-              {showClaudeTerminal && (
-                <div className="mt-5 pt-5 border-t border-gray-100">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm text-gray-600">
-                      Complete the OAuth flow in the terminal below:
-                    </p>
-                    <button
-                      onClick={handleClaudeTerminalDone}
-                      className="text-xs text-blue-600 hover:text-blue-800"
-                    >
-                      Done
-                    </button>
+                    <div className="shrink-0">
+                      {isConnected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnect}
+                          disabled={disconnecting}
+                        >
+                          {disconnecting ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleConnect}
+                          disabled={connecting}
+                        >
+                          {connecting ? "Connecting..." : isExpired ? "Reconnect" : "Connect Google"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  <WebTerminal
-                    autoCommand={claudeAutoCommand}
-                    tokenEndpoint="/api/terminal/token"
-                  />
-                </div>
-              )}
 
-              {/* Not connected — description */}
-              {!claudeAuth?.connected && !showClaudeTerminal && (
-                <div className="mt-5 pt-5 border-t border-gray-100">
-                  <p className="text-sm text-gray-500">
-                    Connect your Claude Code subscription (Pro, Max, or Teams) to join the shared
-                    round-robin pool. All connected accounts are used to process tasks across the team.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {["Shared pool", "Round-robin usage", "Rate limit rotation"].map((perm) => (
-                      <span
-                        key={perm}
-                        className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-600"
-                      >
-                        {perm}
-                      </span>
-                    ))}
+                  {isConnected && googleConn && (
+                    <>
+                      <Separator className="my-5" />
+                      {googleConn.connected_at && (
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Connected {formatDate(googleConn.connected_at)}
+                        </p>
+                      )}
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                          Permissions granted
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {(googleConn.scopes || []).map((scope) => (
+                            <Badge
+                              key={scope}
+                              variant="outline"
+                            >
+                              {formatScope(scope)}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {isExpired && (
+                    <Alert className="mt-2 bg-amber-50 border-amber-100">
+                      <AlertDescription className="text-amber-700">
+                        Your Google connection has expired. Please reconnect to restore access.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!isConnected && !isExpired && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-[13px] text-muted-foreground">
+                        Connect your Google account to let Loma access Gmail, Drive, Calendar,
+                        Sheets, Docs, and Slides on your behalf. Your tokens are encrypted and stored securely.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Read emails", "Compose & send emails", "Read & write Drive", "Calendar", "Sheets", "Read & edit Docs", "Read & edit Slides"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-blue-50 text-blue-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Slack Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <SlackLogo />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-[13px] font-semibold text-foreground">
+                            Slack
+                          </h2>
+                          <StatusBadge status={slackConn?.status || "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Read, search, and send messages as you
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {isSlackConnected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnectSlack}
+                          disabled={disconnectingSlack}
+                        >
+                          {disconnectingSlack ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleConnectSlack}
+                          disabled={connectingSlack}
+                        >
+                          {connectingSlack ? "Connecting..." : isSlackExpired ? "Reconnect" : "Connect Slack"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+
+                  {isSlackConnected && slackConn && (
+                    <>
+                      <Separator className="my-5" />
+                      {slackConn.connected_at && (
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Connected {formatDate(slackConn.connected_at)}
+                        </p>
+                      )}
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                          Permissions granted
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {(slackConn.scopes || []).map((scope) => (
+                            <Badge
+                              key={scope}
+                              variant="outline"
+                            >
+                              {formatScope(scope)}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {isSlackExpired && (
+                    <Alert className="mt-2 bg-amber-50 border-amber-100">
+                      <AlertDescription className="text-amber-700">
+                        Your Slack connection has expired. Please reconnect to restore access.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!isSlackConnected && !isSlackExpired && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-[13px] text-muted-foreground">
+                        Connect your Slack account to let Loma read channels, search messages, view unreads,
+                        and send messages as you. Your token is encrypted and stored securely.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Read channels", "Read DMs", "Send messages as you", "Search messages", "View unreads"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-purple-50 text-purple-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Claude Code Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <ClaudeLogo />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-[13px] font-semibold text-foreground">
+                            Claude Code
+                          </h2>
+                          <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Your account joins the shared round-robin pool
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {claudeAuth?.connected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnectClaude}
+                          disabled={disconnectingClaude}
+                        >
+                          {disconnectingClaude ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="bg-amber-600 text-white hover:bg-amber-700 whitespace-nowrap"
+                          onClick={handleConnectClaude}
+                          disabled={showClaudeTerminal}
+                        >
+                          {showClaudeTerminal ? "Logging in..." : "Login with Claude"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {claudeAuth?.connected && (
+                    <>
+                      <Separator className="my-5" />
+                      <div className="flex items-center gap-3 text-[13px]">
+                        {claudeAuth.email && (
+                          <div>
+                            <span className="text-muted-foreground">Account: </span>
+                            <span className="text-foreground">{claudeAuth.email}</span>
+                          </div>
+                        )}
+                        {claudeAuth.authMethod && (
+                          <div>
+                            <span className="text-muted-foreground">Auth: </span>
+                            <span className="text-foreground">{claudeAuth.authMethod}</span>
+                          </div>
+                        )}
+                        <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
+                          In round-robin pool
+                        </Badge>
+                      </div>
+                    </>
+                  )}
+
+                  {showClaudeTerminal && (
+                    <>
+                      <Separator className="my-5" />
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[13px] text-muted-foreground">
+                          Complete the OAuth flow in the terminal below:
+                        </p>
+                        <Button variant="link" size="xs" onClick={handleClaudeTerminalDone}>
+                          Done
+                        </Button>
+                      </div>
+                      <WebTerminal
+                        autoCommand={claudeAutoCommand}
+                        tokenEndpoint="/api/terminal/token"
+                      />
+                    </>
+                  )}
+
+                  {!claudeAuth?.connected && !showClaudeTerminal && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-[13px] text-muted-foreground">
+                        Connect your Claude Code subscription (Pro, Max, or Teams) to join the shared
+                        round-robin pool. All connected accounts are used to process tasks across the team.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Shared pool", "Round-robin usage", "Rate limit rotation"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-amber-50 text-amber-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
             </div>
-          </div>
-          </div>
-        </div>
+          </TabsContent>
+        </Tabs>
       )}
 
       {/* Info section */}
-      <div className="bg-gray-50 rounded-xl border border-gray-100 p-5">
-        <h3 className="text-sm font-medium text-gray-700 mb-2">How it works</h3>
-        <ul className="text-sm text-gray-500 space-y-1.5">
-          <li>Org integrations are shared across the team — connect with an API key</li>
-          <li>System-managed integrations are configured on the server — no setup needed</li>
-          <li>Personal integrations are scoped to your account only</li>
-          <li>All tokens and keys are encrypted at rest</li>
-          <li>You can disconnect at any time to revoke access</li>
-        </ul>
-      </div>
+      <Card className="bg-muted/50">
+        <CardContent>
+          <h3 className="text-[13px] font-medium text-foreground mb-2">How it works</h3>
+          <ul className="text-[13px] text-muted-foreground space-y-1.5">
+            <li>Org integrations are shared across the team — connect with an API key</li>
+            <li>System-managed integrations are configured on the server — no setup needed</li>
+            <li>Personal integrations are scoped to your account only</li>
+            <li>All tokens and keys are encrypted at rest</li>
+            <li>You can disconnect at any time to revoke access</li>
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   );
 }

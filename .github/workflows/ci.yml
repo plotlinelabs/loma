@@ -77,7 +77,8 @@ jobs:
         run: |
           install -m 600 /dev/null key
           printf '%s\n' "$SSH_KEY" > key
-          ssh -i key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+          ssh -i key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
             "$SSH_USER@$SSH_HOST" \
             'set -e; cd ~/loma; git fetch origin --prune; git reset --hard origin/main; bash scripts/deploy.sh'
 

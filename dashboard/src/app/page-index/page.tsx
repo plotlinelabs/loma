@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { Button } from "@/components/ui/button";
+import { RiCloseLine, RiAddLine, RiSubtractLine } from "@remixicon/react";
 
-/* ── Types ─────────────────────────────────────────────────── */
+/* -- Types ---------------------------------------------------------- */
 interface IndexNode {
   title: string;
   summary?: string;
@@ -30,7 +32,7 @@ interface LayoutNode {
   hasChildren: boolean;
 }
 
-/* ── Constants ────────────────────────────────────────────── */
+/* -- Constants ------------------------------------------------------- */
 const NODE_WIDTH = 200;
 const NODE_HEIGHT = 44;
 const H_GAP = 60;
@@ -66,7 +68,7 @@ function countLeaves(node: IndexNode): number {
   return node.nodes.reduce((s, n) => s + countLeaves(n), 0);
 }
 
-/* ── Tree Layout Engine ──────────────────────────────────── */
+/* -- Tree Layout Engine --------------------------------------------- */
 function computeLayout(
   structure: IndexNode[],
   expandedSet: Set<string>,
@@ -127,13 +129,13 @@ function computeLayout(
   return { nodes, links, width: maxX, height: maxY };
 }
 
-/* ── Curved Link Path ────────────────────────────────────── */
+/* -- Curved Link Path ----------------------------------------------- */
 function linkPath(x1: number, y1: number, x2: number, y2: number): string {
   const midX = x1 + (x2 - x1) * 0.5;
   return `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`;
 }
 
-/* ── Graph Node Component ────────────────────────────────── */
+/* -- Graph Node Component ------------------------------------------- */
 function GraphNode({
   layout,
   categoryIndex,
@@ -232,7 +234,7 @@ function GraphNode({
   );
 }
 
-/* ── Detail Panel ────────────────────────────────────────── */
+/* -- Detail Panel --------------------------------------------------- */
 function DetailPanel({
   layout,
   categoryIndex,
@@ -247,27 +249,27 @@ function DetailPanel({
   const [showFullText, setShowFullText] = useState(false);
 
   return (
-    <div className="absolute top-4 right-4 w-96 max-h-[calc(100%-32px)] bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col z-20">
+    <div className="absolute top-4 right-4 w-96 max-h-[calc(100%-32px)] bg-background rounded-2xl shadow-2xl border border-border overflow-hidden flex flex-col z-20">
       {/* Header */}
-      <div className="p-4 border-b border-gray-100" style={{ background: colors.light }}>
+      <div className="p-4 border-b border-border" style={{ background: colors.light }}>
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: colors.fill }} />
-              <h2 className="text-sm font-bold truncate" style={{ color: colors.text }}>{node.title}</h2>
+              <h2 className="text-[13px] font-heading font-bold truncate" style={{ color: colors.text }}>{node.title}</h2>
             </div>
             {node.node_id && (
-              <span className="text-[10px] font-mono text-gray-400">#{node.node_id}</span>
+              <span className="text-[10px] font-mono text-muted-foreground">#{node.node_id}</span>
             )}
           </div>
-          <button
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-white/50 transition-colors flex-shrink-0"
+            className="flex-shrink-0"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+            <RiCloseLine size={16} />
+          </Button>
         </div>
       </div>
 
@@ -280,9 +282,9 @@ function DetailPanel({
             { label: "Leaves", value: layout.leafCount },
             { label: "Depth", value: layout.depth },
           ].map((s) => (
-            <div key={s.label} className="bg-gray-50 rounded-lg p-2 text-center">
-              <div className="text-base font-bold text-gray-900">{s.value}</div>
-              <div className="text-[10px] text-gray-500">{s.label}</div>
+            <div key={s.label} className="bg-muted rounded-lg p-2 text-center">
+              <div className="text-base font-bold text-foreground">{s.value}</div>
+              <div className="text-[10px] text-muted-foreground">{s.label}</div>
             </div>
           ))}
         </div>
@@ -290,8 +292,8 @@ function DetailPanel({
         {/* Summary */}
         {node.summary && (
           <div>
-            <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Summary</h3>
-            <p className="text-xs text-gray-700 leading-relaxed">{node.summary}</p>
+            <h3 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Summary</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">{node.summary}</p>
           </div>
         )}
 
@@ -299,15 +301,17 @@ function DetailPanel({
         {node.text && (
           <div>
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Content</h3>
-              <button
+              <h3 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Content</h3>
+              <Button
+                variant="link"
+                size="xs"
                 onClick={() => setShowFullText(!showFullText)}
-                className="text-[10px] text-blue-500 hover:text-blue-700"
+                className="text-[10px]"
               >
                 {showFullText ? "Collapse" : "Expand"}
-              </button>
+              </Button>
             </div>
-            <pre className={`text-[11px] text-gray-600 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap font-mono leading-relaxed overflow-y-auto ${showFullText ? "max-h-96" : "max-h-32"}`}>
+            <pre className={`text-[11px] text-muted-foreground bg-muted rounded-lg p-3 whitespace-pre-wrap font-mono leading-relaxed overflow-y-auto ${showFullText ? "max-h-96" : "max-h-32"}`}>
               {node.text}
             </pre>
           </div>
@@ -316,16 +320,16 @@ function DetailPanel({
         {/* Children list */}
         {node.nodes.length > 0 && (
           <div>
-            <h3 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
+            <h3 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
               Children ({node.nodes.length})
             </h3>
             <div className="space-y-1">
               {node.nodes.map((child, i) => (
-                <div key={i} className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-gray-50 text-xs text-gray-700">
+                <div key={i} className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-muted text-xs text-muted-foreground">
                   <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: colors.fill, opacity: 0.5 }} />
                   <span className="truncate">{child.title}</span>
                   {child.nodes.length > 0 && (
-                    <span className="text-[10px] text-gray-400 flex-shrink-0 ml-auto">+{countDescendants(child)}</span>
+                    <span className="text-[10px] text-muted-foreground flex-shrink-0 ml-auto">+{countDescendants(child)}</span>
                   )}
                 </div>
               ))}
@@ -337,7 +341,7 @@ function DetailPanel({
   );
 }
 
-/* ── Minimap ─────────────────────────────────────────────── */
+/* -- Minimap -------------------------------------------------------- */
 function Minimap({
   nodes,
   canvasWidth,
@@ -367,7 +371,7 @@ function Minimap({
   const viewY = viewBox.y * scale;
 
   return (
-    <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-sm rounded-xl border border-gray-200 shadow-lg p-2 z-20">
+    <div className="absolute bottom-4 left-4 bg-background/90 backdrop-blur-sm rounded-xl border border-border shadow-lg p-2 z-20">
       <svg
         width={mmWidth}
         height={mmHeight}
@@ -408,7 +412,7 @@ function Minimap({
   );
 }
 
-/* ── Main Page ───────────────────────────────────────────── */
+/* -- Main Page ------------------------------------------------------ */
 export default function PageIndexPage() {
   const [data, setData] = useState<PageIndex | null>(null);
   const [loading, setLoading] = useState(true);
@@ -464,7 +468,6 @@ export default function PageIndexPage() {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
-        // Collapse this and all children
         for (const key of next) {
           if (key === id || key.startsWith(id + "/")) next.delete(key);
         }
@@ -477,9 +480,6 @@ export default function PageIndexPage() {
 
   const expandAll = useCallback(() => {
     if (!layout) return;
-    const all = new Set<string>();
-    layout.nodes.forEach((n) => { if (n.hasChildren) all.add(n.id); });
-    // Need to recompute with all expanded - just expand from data
     if (!data) return;
     const allIds = new Set<string>();
     function walk(nodes: IndexNode[], prefix: string) {
@@ -528,7 +528,6 @@ export default function PageIndexPage() {
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     setViewBox((v) => {
       const newZoom = Math.min(Math.max(v.zoom * delta, 0.1), 3);
-      // Zoom toward mouse position
       const rect = containerRef.current?.getBoundingClientRect();
       if (rect) {
         const mouseX = e.clientX - rect.left;
@@ -546,15 +545,15 @@ export default function PageIndexPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-sm text-gray-400">Loading page index...</div>
+        <div className="text-[13px] text-muted-foreground">Loading page index...</div>
       </div>
     );
   }
 
   if (!data || !layout) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        Failed to load. Ensure <code className="bg-gray-100 px-1.5 py-0.5 rounded mx-1">page-index.json</code> exists.
+      <div className="flex items-center justify-center h-full text-muted-foreground text-[13px]">
+        Failed to load. Ensure <code className="bg-muted px-1.5 py-0.5 rounded mx-1">page-index.json</code> exists.
       </div>
     );
   }
@@ -564,11 +563,11 @@ export default function PageIndexPage() {
   return (
     <div className="h-full flex flex-col animate-fade-in-up">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-background flex-shrink-0">
         <div className="flex items-center gap-4">
           <div>
-            <h1 className="text-sm font-semibold text-gray-900">Page Index</h1>
-            <p className="text-[11px] text-gray-400">{data.doc_description}</p>
+            <h1 className="text-[13px] font-heading font-semibold text-foreground">Page Index</h1>
+            <p className="text-[11px] text-muted-foreground">{data.doc_description}</p>
           </div>
           <div className="flex items-center gap-3 ml-4">
             {[
@@ -576,8 +575,8 @@ export default function PageIndexPage() {
               { label: "Categories", value: data.structure.length },
             ].map((s) => (
               <div key={s.label} className="flex items-center gap-1.5">
-                <span className="text-sm font-bold text-gray-900">{s.value}</span>
-                <span className="text-[10px] text-gray-400">{s.label}</span>
+                <span className="text-[13px] font-bold text-foreground">{s.value}</span>
+                <span className="text-[10px] text-muted-foreground">{s.label}</span>
               </div>
             ))}
           </div>
@@ -589,38 +588,38 @@ export default function PageIndexPage() {
             {data.structure.slice(0, 6).map((s, i) => (
               <div key={i} className="flex items-center gap-1" title={s.title}>
                 <span className="w-2 h-2 rounded-full" style={{ background: getCategoryColor(i).fill }} />
-                <span className="text-[10px] text-gray-400 hidden xl:inline max-w-[80px] truncate">{s.title}</span>
+                <span className="text-[10px] text-muted-foreground hidden xl:inline max-w-[80px] truncate">{s.title}</span>
               </div>
             ))}
             {data.structure.length > 6 && (
-              <span className="text-[10px] text-gray-400">+{data.structure.length - 6}</span>
+              <span className="text-[10px] text-muted-foreground">+{data.structure.length - 6}</span>
             )}
           </div>
 
-          <button onClick={expandAll} className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+          <Button variant="ghost" size="xs" onClick={expandAll}>
             Expand
-          </button>
-          <button onClick={collapseAll} className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+          </Button>
+          <Button variant="ghost" size="xs" onClick={collapseAll}>
             Collapse
-          </button>
-          <div className="w-px h-4 bg-gray-200 mx-1" />
-          <button onClick={() => setViewBox((v) => ({ ...v, zoom: Math.min(v.zoom * 1.2, 3) }))} className="text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-          </button>
-          <button onClick={() => setViewBox((v) => ({ ...v, zoom: Math.max(v.zoom * 0.8, 0.1) }))} className="text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14" /></svg>
-          </button>
-          <button onClick={resetView} className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+          </Button>
+          <div className="w-px h-4 bg-border mx-1" />
+          <Button variant="ghost" size="icon-xs" onClick={() => setViewBox((v) => ({ ...v, zoom: Math.min(v.zoom * 1.2, 3) }))}>
+            <RiAddLine size={16} />
+          </Button>
+          <Button variant="ghost" size="icon-xs" onClick={() => setViewBox((v) => ({ ...v, zoom: Math.max(v.zoom * 0.8, 0.1) }))}>
+            <RiSubtractLine size={16} />
+          </Button>
+          <Button variant="ghost" size="xs" onClick={resetView}>
             Reset
-          </button>
-          <span className="text-[10px] text-gray-400 ml-1">{Math.round(viewBox.zoom * 100)}%</span>
+          </Button>
+          <span className="text-[10px] text-muted-foreground ml-1">{Math.round(viewBox.zoom * 100)}%</span>
         </div>
       </div>
 
       {/* Graph canvas */}
       <div
         ref={containerRef}
-        className="flex-1 relative overflow-hidden bg-gray-50"
+        className="flex-1 relative overflow-hidden bg-muted"
         style={{ cursor: isPanning ? "grabbing" : "grab" }}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
@@ -703,7 +702,7 @@ export default function PageIndexPage() {
         />
 
         {/* Zoom hint */}
-        <div className="absolute bottom-4 right-4 text-[10px] text-gray-400 bg-white/80 backdrop-blur-sm px-2 py-1 rounded-lg z-10">
+        <div className="absolute bottom-4 right-4 text-[10px] text-muted-foreground bg-background/80 backdrop-blur-sm px-2 py-1 rounded-lg z-10">
           Scroll to zoom &middot; Drag to pan
         </div>
       </div>

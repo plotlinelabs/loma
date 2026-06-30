@@ -391,8 +391,8 @@ function renderBlock(block: Block, key: number): React.ReactElement {
       const sizes: Record<number, string> = {
         1: "text-lg font-bold mt-4 mb-2",
         2: "text-base font-bold mt-3 mb-1.5",
-        3: "text-sm font-semibold mt-2 mb-1",
-        4: "text-sm font-semibold mt-2 mb-1",
+        3: "text-[13px] font-semibold mt-2 mb-1",
+        4: "text-[13px] font-semibold mt-2 mb-1",
         5: "text-xs font-semibold mt-1 mb-0.5",
         6: "text-xs font-semibold mt-1 mb-0.5",
       };
@@ -471,7 +471,7 @@ function renderBlock(block: Block, key: number): React.ReactElement {
       return (
         <ul key={key} className="list-disc list-inside my-1 space-y-0.5">
           {block.items?.map((item, j) => (
-            <li key={j} className="text-sm">
+            <li key={j} className="text-[13px]">
               {renderInline(item)}
             </li>
           ))}
@@ -482,7 +482,7 @@ function renderBlock(block: Block, key: number): React.ReactElement {
       return (
         <ol key={key} className="list-decimal list-inside my-1 space-y-0.5">
           {block.items?.map((item, j) => (
-            <li key={j} className="text-sm">
+            <li key={j} className="text-[13px]">
               {renderInline(item)}
             </li>
           ))}
@@ -492,7 +492,7 @@ function renderBlock(block: Block, key: number): React.ReactElement {
     case "paragraph":
     default:
       return (
-        <p key={key} className="my-1 text-sm leading-relaxed">
+        <p key={key} className="my-1 text-[13px] leading-relaxed">
           {renderInline(block.text || "")}
         </p>
       );

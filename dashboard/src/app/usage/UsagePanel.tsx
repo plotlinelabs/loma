@@ -7,6 +7,12 @@ import {
   logout,
 } from "../../lib/usage-api";
 import type { UsageStats, UsageBucket, AuthInfo } from "../../lib/usage-api";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertAction } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { RiInformationLine, RiCloseLine } from "@remixicon/react";
 
 function formatResetTime(unixTimestamp: number): string {
   if (!unixTimestamp) return "Unknown";
@@ -59,53 +65,57 @@ function UsageBucketCard({ bucket, showReset = true }: { bucket: UsageBucket; sh
   const isLimited = bucket.status !== "allowed";
 
   return (
-    <div className="bg-surface rounded-xl border border-gray-200 p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-gray-600">{bucket.label}</h3>
-        {isLimited && (
-          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-            Rate Limited
+    <Card>
+      <CardContent>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-[13px] font-medium text-muted-foreground">{bucket.label}</h3>
+          {isLimited && (
+            <Badge variant="destructive">
+              Rate Limited
+            </Badge>
+          )}
+        </div>
+
+        <div className="flex items-end gap-2 mb-2">
+          <span className={`text-3xl font-bold ${utilizationColor(bucket.utilization)}`}>
+            {remaining}%
           </span>
-        )}
-      </div>
+          <span className="text-[13px] text-muted-foreground mb-1">remaining</span>
+        </div>
 
-      <div className="flex items-end gap-2 mb-3">
-        <span className={`text-3xl font-bold ${utilizationColor(bucket.utilization)}`}>
-          {remaining}%
-        </span>
-        <span className="text-sm text-gray-500 mb-1">remaining</span>
-      </div>
+        <div className={`w-full h-2.5 rounded-full ${barBgColor(bucket.utilization)}`}>
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${barColor(bucket.utilization)}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
 
-      <div className={`w-full h-2.5 rounded-full ${barBgColor(bucket.utilization)}`}>
-        <div
-          className={`h-full rounded-full transition-all duration-500 ${barColor(bucket.utilization)}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-
-      <div className="flex justify-between mt-2 text-xs text-gray-500">
-        <span>{pct}% used</span>
-        {showReset && bucket.reset > 0 && (
-          <span title={formatResetDate(bucket.reset)}>
-            Resets in {formatResetTime(bucket.reset)}
-          </span>
-        )}
-      </div>
-    </div>
+        <div className="flex justify-between mt-2 text-xs text-muted-foreground">
+          <span>{pct}% used</span>
+          {showReset && bucket.reset > 0 && (
+            <span title={formatResetDate(bucket.reset)}>
+              Resets in {formatResetTime(bucket.reset)}
+            </span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
 function SkeletonCard() {
   return (
-    <div className="bg-surface rounded-xl border border-gray-200 p-5">
-      <div className="skeleton h-3 w-32 mb-4" />
-      <div className="skeleton h-8 w-20 mb-3" />
-      <div className="skeleton h-2.5 w-full rounded-full mb-2" />
-      <div className="flex justify-between">
-        <div className="skeleton h-3 w-16" />
-        <div className="skeleton h-3 w-24" />
-      </div>
-    </div>
+    <Card>
+      <CardContent>
+        <Skeleton className="h-3 w-32 mb-2" />
+        <Skeleton className="h-8 w-20 mb-2" />
+        <Skeleton className="h-2.5 w-full rounded-full mb-2" />
+        <div className="flex justify-between">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -118,50 +128,58 @@ function AuthStatusCard({
 }) {
   if (auth === null) {
     return (
-      <div className="bg-surface rounded-xl border border-gray-200 p-5">
-        <div className="skeleton h-4 w-48 mb-2" />
-        <div className="skeleton h-3 w-32" />
-      </div>
+      <Card>
+        <CardContent>
+          <Skeleton className="h-4 w-48 mb-2" />
+          <Skeleton className="h-3 w-32" />
+        </CardContent>
+      </Card>
     );
   }
 
   if (!auth.loggedIn) {
     return (
-      <div className="bg-surface rounded-xl border border-amber-300 p-5">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
-          <h3 className="text-sm font-medium text-amber-700">Not Logged In</h3>
-        </div>
-        <p className="text-sm text-gray-600">
-          Run <code className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">claude auth login</code> in the terminal below to authenticate.
-        </p>
-      </div>
+      <Card className="ring-amber-300">
+        <CardContent>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+            <h3 className="text-[13px] font-medium text-amber-700">Not Logged In</h3>
+          </div>
+          <p className="text-[13px] text-muted-foreground">
+            Run <code className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">claude auth login</code> in the terminal below to authenticate.
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className="bg-surface rounded-xl border border-gray-200 p-5">
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-          <div>
-            <h3 className="text-sm font-medium text-gray-900">
-              {auth.email || "Authenticated"}
-            </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {auth.authMethod === "claude.ai" ? "Claude MAX" : auth.authMethod}
-              {auth.orgId && ` \u00b7 Org ${auth.orgId.slice(0, 8)}...`}
-            </p>
+    <Card>
+      <CardContent>
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+            <div>
+              <h3 className="text-[13px] font-medium text-foreground">
+                {auth.email || "Authenticated"}
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {auth.authMethod === "claude.ai" ? "Claude MAX" : auth.authMethod}
+                {auth.orgId && ` · Org ${auth.orgId.slice(0, 8)}...`}
+              </p>
+            </div>
           </div>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={onLogout}
+            className="text-muted-foreground hover:text-red-600"
+          >
+            Logout
+          </Button>
         </div>
-        <button
-          onClick={onLogout}
-          className="text-xs text-gray-500 hover:text-red-600 transition-colors"
-        >
-          Logout
-        </button>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -208,32 +226,33 @@ export default function UsagePanel() {
   return (
     <div className="space-y-4">
       {/* Refresh row */}
-      <div className="flex items-center justify-end gap-3">
+      <div className="flex items-center justify-end gap-2">
         {lastRefresh && (
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-muted-foreground">
             Updated {lastRefresh.toLocaleTimeString()}
           </span>
         )}
-        <button
+        <Button
+          variant="outline"
+          size="sm"
           onClick={loadData}
           disabled={loading}
-          className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
         >
           {loading ? "Refreshing..." : "Refresh"}
-        </button>
+        </Button>
       </div>
 
       {/* Error banner */}
       {error && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
-          </svg>
-          {error}
-          <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
-          </button>
-        </div>
+        <Alert variant="destructive">
+          <RiInformationLine size={16} />
+          <AlertDescription>{error}</AlertDescription>
+          <AlertAction>
+            <Button variant="ghost" size="icon-xs" onClick={() => setError(null)}>
+              <RiCloseLine size={16} />
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
 
       {/* Auth Status */}
@@ -241,50 +260,52 @@ export default function UsagePanel() {
 
       {/* Usage Cards */}
       {loading && !stats ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <SkeletonCard />
           <SkeletonCard />
           <SkeletonCard />
           <SkeletonCard />
         </div>
       ) : stats ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <UsageBucketCard bucket={stats.session} />
           <UsageBucketCard bucket={stats.weekly} />
           <UsageBucketCard bucket={stats.weekly_sonnet} />
           <UsageBucketCard bucket={stats.overage} showReset={stats.overage.utilization > 0} />
         </div>
       ) : auth?.loggedIn === false ? (
-        <div className="text-center py-12 text-gray-500">
+        <div className="text-center py-6 text-muted-foreground">
           <p>Login to view usage statistics</p>
         </div>
       ) : null}
 
       {/* Detailed Info */}
       {stats && (
-        <div className="bg-surface rounded-xl border border-gray-200 p-5">
-          <h3 className="text-sm font-medium text-gray-600 mb-3">Details</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-500">Session Reset</span>
-              <span className="text-gray-900">{formatResetDate(stats.session.reset)}</span>
+        <Card>
+          <CardContent>
+            <h3 className="text-[13px] font-medium text-muted-foreground mb-2">Details</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[13px]">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Session Reset</span>
+                <span className="text-foreground">{formatResetDate(stats.session.reset)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Weekly Reset</span>
+                <span className="text-foreground">{formatResetDate(stats.weekly.reset)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Overall Status</span>
+                <span className={stats.overall_status === "allowed" ? "text-emerald-600" : "text-red-600"}>
+                  {stats.overall_status === "allowed" ? "Active" : stats.overall_status}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Fallback %</span>
+                <span className="text-foreground">{Math.round(stats.fallback_percentage * 100)}%</span>
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Weekly Reset</span>
-              <span className="text-gray-900">{formatResetDate(stats.weekly.reset)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Overall Status</span>
-              <span className={stats.overall_status === "allowed" ? "text-emerald-600" : "text-red-600"}>
-                {stats.overall_status === "allowed" ? "Active" : stats.overall_status}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Fallback %</span>
-              <span className="text-gray-900">{Math.round(stats.fallback_percentage * 100)}%</span>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

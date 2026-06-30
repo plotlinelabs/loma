@@ -4,6 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { basePath, fetchSkills } from "../../lib/api";
 import type { Skill } from "../../lib/api";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import { RiBookOpenLine } from "@remixicon/react";
+import { EmptyState } from "@/components/EmptyState";
 
 function chatUrl(prompt: string): string {
   return `${basePath}/chat?prompt=${encodeURIComponent(prompt)}`;
@@ -25,7 +32,7 @@ function buildCreateSkillPrompt(): string {
 
 function formatUpdated(value?: string): string {
   if (!value) return "-";
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export default function SkillsPage() {
@@ -43,50 +50,57 @@ export default function SkillsPage() {
   }, []);
 
   return (
-    <div className="space-y-5 animate-fade-in-up">
-      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+    <div className="space-y-3 animate-fade-in-up">
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3">
         <div>
-          <h1 className="text-lg md:text-xl font-semibold text-gray-900">Skills</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Skills</h1>
+          <p className="text-[13px] text-muted-foreground mt-1">
             Company playbooks and supporting files the agent can search, read, and update through chat.
           </p>
         </div>
-        <Link
-          href={createPromptUrl}
-          className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg bg-brand-500 text-gray-950 hover:bg-brand-400 transition-colors"
-        >
-          Create Skill in Chat
-        </Link>
+        <Button asChild>
+          <Link href={createPromptUrl}>
+            Create Skill in Chat
+          </Link>
+        </Button>
       </div>
 
       {error && (
-        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-          {error}
-        </div>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
-      <div className="bg-surface border border-gray-200 rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50/50">
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Skill</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Description</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Tags</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Files</th>
-              <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-5 py-3">Updated</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
+      <div className="bg-card border border-border rounded-xl overflow-hidden overflow-x-auto">
+        <Table className="table-fixed min-w-[760px]">
+          <TableHeader>
+            <TableRow className="border-b border-border bg-muted/50">
+              <TableHead className="w-[140px]">Skill</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead className="w-[110px]">Tags</TableHead>
+              <TableHead className="w-[120px]">Files</TableHead>
+              <TableHead className="w-[110px]">Updated</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {loading ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">Loading skills...</td>
-              </tr>
+              <>
+                {[1, 2, 3].map((i) => (
+                  <TableRow key={i}>
+                    <TableCell><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-20 mt-1.5" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-48" /></TableCell>
+                    <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                  </TableRow>
+                ))}
+              </>
             ) : skills.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">
-                  No skills yet. Create one in chat to make company knowledge available to the agent.
-                </td>
-              </tr>
+              <TableRow>
+                <TableCell colSpan={5}>
+                  <EmptyState icon={RiBookOpenLine} title="No skills yet" description="Skills can be created from the chat interface" />
+                </TableCell>
+              </TableRow>
             ) : (
               skills.map((skill) => {
                 const slug = skill.slug || skill.name;
@@ -94,33 +108,35 @@ export default function SkillsPage() {
                 const assetCount = files.filter((file) => file.kind === "local_asset").length;
                 const textCount = files.filter((file) => file.kind === "inline_text").length;
                 return (
-                  <tr key={slug} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-5 py-4 align-top">
-                      <Link href={`/skills/${slug}`} className="text-sm font-semibold text-gray-900 hover:text-brand-700">
+                  <TableRow key={slug}>
+                    <TableCell className="align-top overflow-hidden">
+                      <Link href={`/skills/${slug}`} className="text-[13px] font-semibold text-foreground hover:text-brand-700 truncate block">
                         {skill.name || slug}
                       </Link>
-                      <div className="text-xs text-gray-400 font-mono mt-1">{slug}</div>
-                    </td>
-                    <td className="px-5 py-4 align-top text-sm text-gray-500 max-w-xl">{skill.description || "-"}</td>
-                    <td className="px-5 py-4 align-top">
+                      <div className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{slug}</div>
+                    </TableCell>
+                    <TableCell className="align-top text-[13px] text-muted-foreground overflow-hidden"><span className="line-clamp-2">{skill.description || "-"}</span></TableCell>
+                    <TableCell className="align-top overflow-hidden">
                       {skill.tags?.length ? (
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="flex flex-wrap gap-1 overflow-hidden max-h-[3rem]">
                           {skill.tags.map((tag) => (
-                            <span key={tag} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-md">{tag}</span>
+                            <Badge key={tag} variant="secondary" className="text-[11px]">
+                              {tag}
+                            </Badge>
                           ))}
                         </div>
-                      ) : <span className="text-xs text-gray-400">-</span>}
-                    </td>
-                    <td className="px-5 py-4 align-top text-xs text-gray-500">
+                      ) : <span className="text-xs text-muted-foreground">-</span>}
+                    </TableCell>
+                    <TableCell className="align-top text-xs text-muted-foreground whitespace-nowrap">
                       {textCount} text · {assetCount} asset{assetCount === 1 ? "" : "s"}
-                    </td>
-                    <td className="px-5 py-4 align-top text-xs text-gray-400">{formatUpdated(skill.updated_at)}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className="align-top text-xs text-muted-foreground whitespace-nowrap">{formatUpdated(skill.updated_at)}</TableCell>
+                  </TableRow>
                 );
               })
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   );
