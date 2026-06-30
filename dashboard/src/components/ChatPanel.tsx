@@ -121,6 +121,8 @@ export interface ChatItem {
   /** Client-observed response duration for this assistant message */
   responseTimeSeconds?: number;
   elapsedSeconds?: number;
+  /** True when this user message is queued to be sent after the current stream finishes */
+  queued?: boolean;
 }
 
 /** Pretty-print a tool name for display */
@@ -698,6 +700,8 @@ export default function ChatPanel({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const queuedMessagesRef = useRef<{ text: string; files?: ChatFile[] }[]>([]);
+  const [queuedCount, setQueuedCount] = useState(0);
 
   const selectedModelInfo = useMemo(
     () => agentModels.find((model) => model.id === selectedModel) || null,
@@ -860,7 +864,7 @@ export default function ChatPanel({
 
   useEffect(() => {
     const handleEscapeKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isStreaming) {
+      if (e.key === "Escape" && isStreaming && document.activeElement !== inputRef.current) {
         e.preventDefault();
         handleStop();
       }
@@ -931,9 +935,30 @@ export default function ChatPanel({
     }
   });
 
-  const handleSend = async (overrideMessage?: string) => {
+  const handleSend = async (overrideMessage?: string, { fromQueue }: { fromQueue?: boolean } = {}) => {
     const displayText = overrideMessage ?? input.trim();
-    if ((!displayText && pendingFiles.length === 0) || isStreaming) return;
+    if (!displayText && pendingFiles.length === 0) return;
+
+    if (isStreaming) {
+      const isOverride = overrideMessage !== undefined;
+      const filesToQueue = !isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined;
+      const fileNames = filesToQueue?.map((f) => f.name);
+      queuedMessagesRef.current.push({ text: displayText, files: filesToQueue });
+      setQueuedCount(queuedMessagesRef.current.length);
+      setItems((prev) => [
+        ...prev,
+        { role: "user", content: displayText, fileNames, files: filesToQueue, queued: true },
+      ]);
+      if (!isOverride) {
+        setInput("");
+        setPendingFiles([]);
+        requestAnimationFrame(() => {
+          if (inputRef.current) inputRef.current.style.height = "auto";
+        });
+      }
+      scrollToBottom();
+      return;
+    }
     const message = systemContext && overrideMessage
       ? `[Context: ${systemContext}]\n\n${displayText}`
       : displayText;
@@ -961,7 +986,9 @@ export default function ChatPanel({
       setPendingFiles([]);
       setAccountInfo(null);
     }
-    setItems((prev) => [...prev, { role: "user", content: displayMessage, fileNames, files: filesToSend }]);
+    if (!fromQueue) {
+      setItems((prev) => [...prev, { role: "user", content: displayMessage, fileNames, files: filesToSend }]);
+    }
     setIsStreaming(true);
     setStreamStartedAt(performance.now());
 
@@ -1175,7 +1202,21 @@ export default function ChatPanel({
       }
       abortControllerRef.current = null;
       scrollToBottom();
-      if (!enteredRecovery) {
+
+      const queued = queuedMessagesRef.current;
+      if (queued.length > 0 && !enteredRecovery) {
+        queuedMessagesRef.current = [];
+        setQueuedCount(0);
+        setItems((prev) => prev.map((item) =>
+          item.queued ? { ...item, queued: false } : item
+        ));
+        const combinedText = queued.map((q) => q.text).join("\n\n");
+        const combinedFiles = queued.flatMap((q) => q.files || []);
+        if (combinedFiles.length) {
+          setPendingFiles(combinedFiles);
+        }
+        requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+      } else if (!enteredRecovery) {
         requestAnimationFrame(() => {
           inputRef.current?.focus();
         });
@@ -1491,10 +1532,9 @@ export default function ChatPanel({
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder="What do you need to get done?"
-                  disabled={isStreaming}
+                  placeholder={isStreaming ? "Type your next message..." : "What do you need to get done?"}
                   rows={2}
-                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
                 />
                 <div className="flex items-center justify-between gap-2 px-3 pb-3">
@@ -1507,7 +1547,6 @@ export default function ChatPanel({
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={isStreaming}
                       title="Attach files"
                       className="text-muted-foreground hover:text-foreground"
                     >
@@ -1515,15 +1554,11 @@ export default function ChatPanel({
                     </Button>
                     <Button
                       type="submit"
-                      disabled={isStreaming || (!input.trim() && pendingFiles.length === 0)}
+                      disabled={!input.trim() && pendingFiles.length === 0}
                       className="bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
                       size="icon-sm"
                     >
-                      {isStreaming ? (
-                        <RiLoader4Line size={16} className="animate-spin" />
-                      ) : (
-                        <RiSendPlaneLine size={16} />
-                      )}
+                      <RiSendPlaneLine size={16} />
                     </Button>
                   </div>
                 </div>
@@ -1609,8 +1644,17 @@ export default function ChatPanel({
                 if (item.role === "user") {
                   return (
                     <div key={i} className="flex justify-end animate-message-in">
-                      <div className="bg-muted rounded-xl px-3 py-2 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap">
+                      <div className={cn(
+                        "rounded-xl px-3 py-2 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
+                        item.queued ? "bg-muted/60 border border-dashed border-border" : "bg-muted"
+                      )}>
                         {item.content || <TypingIndicator />}
+                        {item.queued && (
+                          <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground">
+                            <RiTimeLine size={12} />
+                            <span>Queued — will send when agent finishes</span>
+                          </div>
+                        )}
                         {item.fileNames && item.fileNames.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap gap-1.5">
                             {item.fileNames.map((name, fi) => {
@@ -1735,10 +1779,9 @@ export default function ChatPanel({
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder={isStreaming ? "Agent is working... press Esc or Stop to interrupt" : "Ask the agent something..."}
-                  disabled={isStreaming}
+                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : "Type a follow-up while agent is working...") : "Ask the agent something..."}
                   rows={1}
-                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none disabled:opacity-50 resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "160px" }}
                 />
                 <div className="flex items-center justify-between gap-2 px-2 pb-2">
@@ -1751,13 +1794,12 @@ export default function ChatPanel({
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={isStreaming}
                       title="Attach files"
                       className="text-muted-foreground hover:text-foreground"
                     >
                       <RiAttachmentLine size={16} />
                     </Button>
-                    {isStreaming ? (
+                    {isStreaming && (
                       <Button
                         type="button"
                         variant="destructive"
@@ -1768,16 +1810,15 @@ export default function ChatPanel({
                       >
                         <RiStopLine size={16} />
                       </Button>
-                    ) : (
-                      <Button
-                        type="submit"
-                        size="icon-sm"
-                        disabled={!input.trim() && pendingFiles.length === 0}
-                        className="bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
-                      >
-                        <RiSendPlaneLine size={16} />
-                      </Button>
                     )}
+                    <Button
+                      type="submit"
+                      size="icon-sm"
+                      disabled={!input.trim() && pendingFiles.length === 0}
+                      className="bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
+                    >
+                      <RiSendPlaneLine size={16} />
+                    </Button>
                   </div>
                 </div>
               </div>
