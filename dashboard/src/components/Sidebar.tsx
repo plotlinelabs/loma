@@ -18,7 +18,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuLabel } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   RiChat1Line,
   RiGridLine,
@@ -635,11 +635,7 @@ export default function Sidebar({
                         )}
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent side="top" align="start" className="w-[200px]">
-                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground truncate">
-                        {session.user.email}
-                      </DropdownMenuLabel>
-                      <DropdownMenuSeparator />
+                    <DropdownMenuContent side="top" align="start" className="w-[180px]">
                       {userMenuNav.filter((item) => !item.minRole || hasRole(item.minRole)).map((item) => (
                         <DropdownMenuItem key={item.href} asChild>
                           <Link href={item.href} onClick={onClose} className="flex items-center gap-2 text-[13px]">
@@ -648,7 +644,6 @@ export default function Sidebar({
                           </Link>
                         </DropdownMenuItem>
                       ))}
-                      <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => signOut({ callbackUrl: "/login" })}
                         className="text-red-600 focus:text-red-600 text-[13px]"

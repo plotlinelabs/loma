@@ -1264,15 +1264,6 @@ export default function ChatPanel({
       ? "Default model"
       : "Choose model";
     const isActiveComposer = compact;
-    const providerDisplay = selectedModelInfo
-      ? selectedModelInfo.provider_id === "anthropic"
-        ? "Claude"
-        : selectedModelInfo.provider_id === "opencode-go"
-        ? "OpenCode Go"
-        : selectedModelInfo.provider_id === "openai"
-        ? "OpenAI"
-        : selectedModelInfo.provider_id
-      : providerLabel;
 
     return (
       <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
@@ -1290,10 +1281,8 @@ export default function ChatPanel({
             {isActiveComposer ? (
               <>
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                <span className="min-w-0 truncate text-xs font-medium">
-                  <span className="text-muted-foreground">{providerDisplay}</span>
-                  <span className="mx-1 text-muted-foreground/40">/</span>
-                  <span className="font-semibold text-foreground">{modelLabel}</span>
+                <span className="min-w-0 truncate text-xs font-medium text-foreground">
+                  {modelLabel}
                 </span>
               </>
             ) : (

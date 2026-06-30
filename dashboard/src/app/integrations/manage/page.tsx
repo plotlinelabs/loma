@@ -721,7 +721,7 @@ export default function IntegrationsPage() {
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <h2 className="text-sm font-heading font-semibold text-foreground truncate">
+                          <h2 className="text-sm font-semibold text-foreground truncate">
                             {integ.display_name}
                           </h2>
                           <p className="text-xs text-muted-foreground line-clamp-1">
@@ -854,7 +854,7 @@ export default function IntegrationsPage() {
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <h2 className="text-sm font-heading font-semibold text-foreground truncate">
+                          <h2 className="text-sm font-semibold text-foreground truncate">
                             {integ.display_name}
                           </h2>
                           <p className="text-xs text-muted-foreground line-clamp-1">
@@ -918,7 +918,7 @@ export default function IntegrationsPage() {
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
-                              <h2 className="text-sm font-heading font-semibold text-foreground">
+                              <h2 className="text-sm font-semibold text-foreground">
                                 {integ.display_name}
                               </h2>
                               <StatusBadge status="connected" />
@@ -974,7 +974,7 @@ export default function IntegrationsPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h2 className="text-sm font-heading font-semibold text-foreground">
+                          <h2 className="text-sm font-semibold text-foreground">
                             Google
                           </h2>
                           <StatusBadge status={googleConn?.status || "not_connected"} />
@@ -1075,7 +1075,7 @@ export default function IntegrationsPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h2 className="text-sm font-heading font-semibold text-foreground">
+                          <h2 className="text-sm font-semibold text-foreground">
                             Slack
                           </h2>
                           <StatusBadge status={slackConn?.status || "not_connected"} />
@@ -1176,7 +1176,7 @@ export default function IntegrationsPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h2 className="text-sm font-heading font-semibold text-foreground">
+                          <h2 className="text-sm font-semibold text-foreground">
                             Claude Code
                           </h2>
                           <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
