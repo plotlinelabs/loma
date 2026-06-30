@@ -6,40 +6,34 @@ import { fetchWebhookLogs, fetchFlows } from "../../lib/api";
 import type { WebhookLog, Flow } from "../../lib/api";
 import { basePath } from "../../lib/api";
 import ClientTimestamp from "../../components/ClientTimestamp";
+import { cn } from "@/lib/utils";
+import { statusColors } from "@/lib/status-colors";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { RiArrowDownSLine, RiDownloadLine, RiLoader4Line } from "@remixicon/react";
+import { EmptyState } from "@/components/EmptyState";
 
 const AUTH_FILTERS = ["all", "success", "failed", "skipped"] as const;
 const STATUS_FILTERS = ["all", "completed", "error", "running", "skipped", "pending"] as const;
 
 function authBadge(result: string) {
-  const styles: Record<string, string> = {
-    success: "bg-green-50 text-green-700 border-green-200",
-    failed: "bg-red-50 text-red-700 border-red-200",
-    skipped: "bg-gray-50 text-gray-500 border-gray-200",
-    pending: "bg-yellow-50 text-yellow-700 border-yellow-200",
-  };
   return (
-    <span
-      className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border ${styles[result] || styles.pending}`}
-    >
+    <Badge variant="outline" className={cn("rounded", statusColors[result] || statusColors.pending)}>
       {result}
-    </span>
+    </Badge>
   );
 }
 
 function statusBadge(status: string) {
-  const styles: Record<string, string> = {
-    completed: "bg-green-50 text-green-700 border-green-200",
-    error: "bg-red-50 text-red-700 border-red-200",
-    running: "bg-blue-50 text-blue-700 border-blue-200",
-    skipped: "bg-gray-50 text-gray-500 border-gray-200",
-    pending: "bg-yellow-50 text-yellow-700 border-yellow-200",
-  };
   return (
-    <span
-      className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border ${styles[status] || styles.pending}`}
-    >
+    <Badge variant="outline" className={cn("rounded", statusColors[status] || statusColors.pending)}>
       {status}
-    </span>
+    </Badge>
   );
 }
 
@@ -51,15 +45,15 @@ function payloadPreview(body: unknown): string {
 
 function ExpandedLogRow({ log }: { log: WebhookLog }) {
   return (
-    <tr>
-      <td colSpan={7} className="px-4 py-3 bg-gray-50">
+    <TableRow>
+      <TableCell colSpan={7} className="px-4 py-3 bg-muted/50">
         <div className="space-y-3 text-sm">
           {/* Headers */}
           <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
               Headers
             </h4>
-            <pre className="text-xs text-gray-600 bg-surface rounded-lg border border-gray-200 p-3 max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
+            <pre className="text-xs text-muted-foreground bg-card rounded-lg border border-border p-3 max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
               {log.headers
                 ? JSON.stringify(log.headers, null, 2)
                 : "No headers recorded"}
@@ -68,10 +62,10 @@ function ExpandedLogRow({ log }: { log: WebhookLog }) {
 
           {/* Payload */}
           <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
               Payload
             </h4>
-            <pre className="text-xs text-gray-600 bg-surface rounded-lg border border-gray-200 p-3 max-h-60 overflow-y-auto whitespace-pre-wrap break-all">
+            <pre className="text-xs text-muted-foreground bg-card rounded-lg border border-border p-3 max-h-60 overflow-y-auto whitespace-pre-wrap break-all">
               {log.body
                 ? typeof log.body === "string"
                   ? log.body
@@ -86,9 +80,9 @@ function ExpandedLogRow({ log }: { log: WebhookLog }) {
               <h4 className="text-xs font-semibold text-red-500 uppercase tracking-wider mb-1">
                 Error
               </h4>
-              <div className="text-xs text-red-600 bg-red-50 rounded-lg border border-red-200 p-3">
-                {log.error}
-              </div>
+              <Alert variant="destructive" className="text-xs">
+                <AlertDescription>{log.error}</AlertDescription>
+              </Alert>
             </div>
           )}
 
@@ -111,28 +105,28 @@ function ExpandedLogRow({ log }: { log: WebhookLog }) {
               </a>
             )}
             {log.duration_ms != null && (
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-muted-foreground">
                 Duration: {(log.duration_ms / 1000).toFixed(1)}s
               </span>
             )}
           </div>
         </div>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
 function SkeletonRow() {
   return (
-    <tr>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-32" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-24" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-5 w-14 rounded" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-5 w-16 rounded" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-40" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-12" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-10" /></td>
-    </tr>
+    <TableRow>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-32" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-24" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-14 rounded" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-40" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-12" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-10" /></TableCell>
+    </TableRow>
   );
 }
 
@@ -147,6 +141,7 @@ function WebhookLogsContent() {
   const [authFilter, setAuthFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -154,6 +149,7 @@ function WebhookLogsContent() {
 
   async function loadData() {
     setLoading(true);
+    setError(null);
     try {
       const [logsData, flowsData] = await Promise.all([
         fetchWebhookLogs(initialFlowId || undefined, 100),
@@ -163,6 +159,7 @@ function WebhookLogsContent() {
       setFlows(flowsData.flows);
     } catch (e) {
       console.error("Failed to load webhook logs:", e);
+      setError("Failed to load webhook logs");
     } finally {
       setLoading(false);
     }
@@ -171,11 +168,13 @@ function WebhookLogsContent() {
   async function handleFlowFilterChange(newFlowId: string) {
     setFlowFilter(newFlowId);
     setLoading(true);
+    setError(null);
     try {
       const data = await fetchWebhookLogs(newFlowId || undefined, 100);
       setLogs(data.logs);
     } catch (e) {
       console.error("Failed to load webhook logs:", e);
+      setError("Failed to load webhook logs");
     } finally {
       setLoading(false);
     }
@@ -191,137 +190,144 @@ function WebhookLogsContent() {
   }
 
   return (
-    <div className="space-y-4 md:space-y-6 animate-fade-in-up">
+    <div className="space-y-3 md:space-y-4 animate-fade-in-up">
       {/* Header */}
       <div>
-        <h1 className="text-xl md:text-2xl font-semibold text-gray-900">
+        <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">
           Webhook Logs
         </h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <p className="text-sm text-muted-foreground mt-1">
           Incoming webhook requests across all flows
         </p>
       </div>
 
+      {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         {/* Flow selector */}
-        <select
+        <Select
           value={flowFilter}
-          onChange={(e) => handleFlowFilterChange(e.target.value)}
-          className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 bg-surface text-gray-700 focus:outline-none focus:ring-2 focus:ring-accent-200 focus:border-accent-200"
+          onValueChange={(v) => handleFlowFilterChange(v)}
         >
-          <option value="">All flows</option>
-          {flows.map((f) => (
-            <option key={f.flow_id} value={f.flow_id}>
-              {f.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-[200px]">
+            <SelectValue placeholder="All flows" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All flows</SelectItem>
+            {flows.map((f) => (
+              <SelectItem key={f.flow_id} value={f.flow_id}>
+                {f.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         {/* Auth result filter */}
         <div className="flex gap-1.5">
           {AUTH_FILTERS.map((a) => (
-            <button
+            <Button
               key={a}
               onClick={() => setAuthFilter(a)}
-              className={`px-2.5 py-1 text-xs rounded-lg font-medium capitalize transition-colors press-scale ${
-                authFilter === a
-                  ? "bg-brand-100 text-brand-700"
-                  : "bg-surface border border-gray-200 text-gray-600 hover:bg-gray-50"
-              }`}
+              variant={authFilter === a ? "secondary" : "outline"}
+              size="xs"
+              className={cn(
+                "capitalize press-scale",
+                authFilter === a && "bg-brand-100 text-brand-700"
+              )}
             >
               {a === "all" ? "Auth: All" : a}
-            </button>
+            </Button>
           ))}
         </div>
 
         {/* Execution status filter */}
         <div className="flex gap-1.5">
           {STATUS_FILTERS.map((s) => (
-            <button
+            <Button
               key={s}
               onClick={() => setStatusFilter(s)}
-              className={`px-2.5 py-1 text-xs rounded-lg font-medium capitalize transition-colors press-scale ${
-                statusFilter === s
-                  ? "bg-brand-100 text-brand-700"
-                  : "bg-surface border border-gray-200 text-gray-600 hover:bg-gray-50"
-              }`}
+              variant={statusFilter === s ? "secondary" : "outline"}
+              size="xs"
+              className={cn(
+                "capitalize press-scale",
+                statusFilter === s && "bg-brand-100 text-brand-700"
+              )}
             >
               {s === "all" ? "Status: All" : s}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
 
       {/* Table */}
       {loading ? (
-        <div className="bg-surface rounded-xl border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50/50">
-                <th className="px-4 py-3 font-medium">Received</th>
-                <th className="px-4 py-3 font-medium">Flow</th>
-                <th className="px-4 py-3 font-medium">Auth</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Payload</th>
-                <th className="px-4 py-3 font-medium">Duration</th>
-                <th className="px-4 py-3 font-medium"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="text-left text-muted-foreground border-b border-border bg-muted/50">
+                <TableHead className="px-4 py-3 font-medium">Received</TableHead>
+                <TableHead className="px-4 py-3 font-medium">Flow</TableHead>
+                <TableHead className="px-4 py-3 font-medium">Auth</TableHead>
+                <TableHead className="px-4 py-3 font-medium">Status</TableHead>
+                <TableHead className="px-4 py-3 font-medium">Payload</TableHead>
+                <TableHead className="px-4 py-3 font-medium">Duration</TableHead>
+                <TableHead className="px-4 py-3 font-medium"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               <SkeletonRow />
               <SkeletonRow />
               <SkeletonRow />
               <SkeletonRow />
               <SkeletonRow />
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       ) : filtered.length === 0 ? (
-        <div className="bg-surface rounded-xl border border-gray-200 p-12 text-center">
-          <div className="text-gray-400 text-sm">
-            {logs.length === 0
-              ? "No webhook requests received yet."
-              : "No logs match the current filters."}
-          </div>
-        </div>
+        <EmptyState
+          icon={RiDownloadLine}
+          title={logs.length === 0 ? "No webhook requests received yet" : "No logs match the current filters"}
+          description={logs.length === 0 ? "Webhook events will appear here when triggered" : undefined}
+        />
       ) : (
-        <div className="bg-surface rounded-xl border border-gray-200 overflow-hidden">
+        <Card className="overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50/50">
-                  <th className="px-4 py-3 font-medium">Received</th>
-                  <th className="px-4 py-3 font-medium">Flow</th>
-                  <th className="px-4 py-3 font-medium">Auth</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Payload</th>
-                  <th className="px-4 py-3 font-medium">Duration</th>
-                  <th className="px-4 py-3 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
+            <Table>
+              <TableHeader>
+                <TableRow className="text-left text-muted-foreground border-b border-border bg-muted/50">
+                  <TableHead className="px-4 py-3 font-medium">Received</TableHead>
+                  <TableHead className="px-4 py-3 font-medium">Flow</TableHead>
+                  <TableHead className="px-4 py-3 font-medium">Auth</TableHead>
+                  <TableHead className="px-4 py-3 font-medium">Status</TableHead>
+                  <TableHead className="px-4 py-3 font-medium">Payload</TableHead>
+                  <TableHead className="px-4 py-3 font-medium">Duration</TableHead>
+                  <TableHead className="px-4 py-3 font-medium"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {filtered.map((log) => (
                   <>
-                    <tr
+                    <TableRow
                       key={log.log_id}
-                      className={`hover:bg-gray-50 cursor-pointer transition-colors ${
-                        expandedLogId === log.log_id ? "bg-gray-50" : ""
-                      }`}
+                      className={cn(
+                        "cursor-pointer",
+                        expandedLogId === log.log_id && "bg-muted/50"
+                      )}
                       onClick={() =>
                         setExpandedLogId(
                           expandedLogId === log.log_id ? null : log.log_id
                         )
                       }
                     >
-                      <td className="px-4 py-3 whitespace-nowrap">
+                      <TableCell className="px-4 py-3 whitespace-nowrap">
                         <ClientTimestamp
                           iso={log.received_at}
                           variant="full"
-                          className="text-gray-700"
+                          className="text-foreground"
                         />
-                      </td>
-                      <td className="px-4 py-3">
+                      </TableCell>
+                      <TableCell className="px-4 py-3">
                         <a
                           href={`${basePath}/flows/${log.flow_id}`}
                           className="text-brand-600 hover:text-brand-700 font-medium truncate block max-w-[160px]"
@@ -330,9 +336,9 @@ function WebhookLogsContent() {
                         >
                           {log.flow_name || log.flow_id}
                         </a>
-                      </td>
-                      <td className="px-4 py-3">{authBadge(log.auth_result)}</td>
-                      <td className="px-4 py-3">
+                      </TableCell>
+                      <TableCell className="px-4 py-3">{authBadge(log.auth_result)}</TableCell>
+                      <TableCell className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           {statusBadge(log.execution_status)}
                           {log.error && (
@@ -344,18 +350,18 @@ function WebhookLogsContent() {
                             </span>
                           )}
                         </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs text-gray-500 font-mono truncate block max-w-[200px]">
+                      </TableCell>
+                      <TableCell className="px-4 py-3">
+                        <span className="text-xs text-muted-foreground font-mono truncate block max-w-[200px]">
                           {payloadPreview(log.body)}
                         </span>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">
+                      </TableCell>
+                      <TableCell className="px-4 py-3 whitespace-nowrap text-muted-foreground">
                         {log.duration_ms != null
                           ? `${(log.duration_ms / 1000).toFixed(1)}s`
-                          : "\u2014"}
-                      </td>
-                      <td className="px-4 py-3">
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           {log.conversation_id && (
                             <a
@@ -366,38 +372,30 @@ function WebhookLogsContent() {
                               View
                             </a>
                           )}
-                          <svg
-                            className={`w-4 h-4 text-gray-400 transition-transform ${
-                              expandedLogId === log.log_id ? "rotate-180" : ""
-                            }`}
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            strokeWidth={1.5}
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="m19.5 8.25-7.5 7.5-7.5-7.5"
-                            />
-                          </svg>
+                          <RiArrowDownSLine
+                            size={16}
+                            className={cn(
+                              "text-muted-foreground transition-transform",
+                              expandedLogId === log.log_id && "rotate-180"
+                            )}
+                          />
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                     {expandedLogId === log.log_id && (
                       <ExpandedLogRow key={`${log.log_id}-expanded`} log={log} />
                     )}
                   </>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Footer count */}
       {!loading && (
-        <div className="text-xs text-gray-400 text-right">
+        <div className="text-xs text-muted-foreground text-right">
           Showing {filtered.length} of {logs.length} logs
         </div>
       )}
@@ -409,10 +407,13 @@ export default function WebhookLogsPage() {
   return (
     <Suspense
       fallback={
-        <div className="space-y-4 md:space-y-6">
+        <div className="space-y-3 md:space-y-4">
           <div>
-            <h1 className="text-xl md:text-2xl font-semibold text-gray-900">Webhook Logs</h1>
-            <p className="text-sm text-gray-500 mt-1">Loading...</p>
+            <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Webhook Logs</h1>
+            <p className="text-sm text-muted-foreground mt-1">Incoming webhook requests across all flows</p>
+          </div>
+          <div className="flex items-center justify-center py-16">
+            <RiLoader4Line size={32} className="animate-spin text-muted-foreground" />
           </div>
         </div>
       }

@@ -10,6 +10,16 @@ import { useUser } from "../../lib/UserContext";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import ConfidenceBadge from "../../components/ConfidenceBadge";
 import ClientTimestamp from "../../components/ClientTimestamp";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { RiSearchLine, RiCloseLine, RiRefreshLine, RiChat1Line } from "@remixicon/react";
+import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/EmptyState";
 
 const sourceLabels: Record<string, string> = {
   slack_mention: "Slack Mention",
@@ -63,37 +73,39 @@ const topicLabels: Record<string, string> = {
 
 function SkeletonRow() {
   return (
-    <tr>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-20" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-5 w-16 rounded-full" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-48" /><div className="skeleton h-2 w-32 mt-1.5" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-5 w-14 rounded-full" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-6 mx-auto" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-10" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-14" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-12" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-5 w-16 rounded-full" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-5 w-10 rounded-full" /></td>
-      <td className="px-4 py-3"><div className="skeleton h-3 w-14" /></td>
-    </tr>
+    <TableRow>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-20" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-48" /><Skeleton className="h-2 w-32 mt-1.5" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-14 rounded-full" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-6 mx-auto" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-10" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-14" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-12" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-5 w-10 rounded-full" /></TableCell>
+      <TableCell className="px-4 py-3"><Skeleton className="h-3 w-14" /></TableCell>
+    </TableRow>
   );
 }
 
 function MobileSkeletonCard() {
   return (
-    <div className="bg-surface rounded-xl border border-gray-200 p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <div className="skeleton h-5 w-16 rounded-full" />
-        <div className="skeleton h-5 w-14 rounded-full" />
-      </div>
-      <div className="skeleton h-4 w-3/4 mb-1" />
-      <div className="skeleton h-3 w-1/2 mb-3" />
-      <div className="flex items-center gap-3">
-        <div className="skeleton h-3 w-20" />
-        <div className="skeleton h-3 w-16" />
-        <div className="skeleton h-3 w-12" />
-      </div>
-    </div>
+    <Card className="p-4">
+      <CardContent className="p-0">
+        <div className="flex items-center gap-2 mb-2">
+          <Skeleton className="h-5 w-16 rounded-full" />
+          <Skeleton className="h-5 w-14 rounded-full" />
+        </div>
+        <Skeleton className="h-4 w-3/4 mb-1" />
+        <Skeleton className="h-3 w-1/2 mb-3" />
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-3 w-12" />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -185,187 +197,199 @@ export default function ConversationsPage() {
   }, [viewMode]);
 
   return (
-    <div className="space-y-4 md:space-y-6 animate-fade-in-up">
+    <div className="space-y-3 md:space-y-4 animate-fade-in-up">
       {/* Page header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-semibold text-gray-900">Conversations</h1>
-          <p className="text-sm text-gray-500 mt-1">Browse and manage all agent conversations</p>
+          <h1 className="text-xl md:text-2xl font-heading font-semibold text-foreground">Conversations</h1>
+          <p className="text-sm text-muted-foreground mt-1">Browse and manage all agent conversations</p>
         </div>
         {isAdmin && (
-          <div className="flex items-center bg-surface border border-gray-200 rounded-lg p-0.5">
-            <button
+          <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+            <Button
+              variant={viewMode === "mine" ? "default" : "ghost"}
+              size="sm"
               onClick={() => setViewMode("mine")}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              className={cn(
                 viewMode === "mine"
                   ? "bg-accent-200 text-accent-on"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
+                  : "text-muted-foreground hover:text-foreground"
+              )}
             >
               My Conversations
-            </button>
-            <button
+            </Button>
+            <Button
+              variant={viewMode === "all" ? "default" : "ghost"}
+              size="sm"
               onClick={() => setViewMode("all")}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              className={cn(
                 viewMode === "all"
                   ? "bg-accent-200 text-accent-on"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
+                  : "text-muted-foreground hover:text-foreground"
+              )}
             >
               All
-            </button>
+            </Button>
           </div>
         )}
       </div>
 
       {/* Search bar */}
-      <div className="bg-surface rounded-xl border border-gray-200 px-4 py-3">
+      <div className="bg-card rounded-xl border border-border px-4 py-3">
         <div className="relative">
-          <svg
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={1.5}
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
-            />
-          </svg>
-          <input
+          <RiSearchLine className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
+          <Input
             type="text"
             placeholder="Search conversations..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-200 focus:border-accent-200 focus:bg-surface transition-colors"
+            className="w-full pl-10 pr-4 py-2 text-sm bg-muted/50 border-border focus-visible:ring-accent-200 focus-visible:border-accent-200"
           />
         </div>
       </div>
 
       {/* Filters bar */}
-      <div className="bg-surface rounded-xl border border-gray-200 px-4 py-3">
+      <div className="bg-card rounded-xl border border-border px-4 py-3">
         <div className="flex flex-col md:flex-row md:flex-wrap gap-3 md:items-center md:justify-between">
           <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-3">
-            <select
-              value={sourceFilter}
-              onChange={(e) => { setSourceFilter(e.target.value); setPage(1); }}
-              className="bg-surface border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-accent-200 focus:border-accent-200"
+            <Select
+              value={sourceFilter || "__all__"}
+              onValueChange={(val) => { setSourceFilter(val === "__all__" ? "" : val); setPage(1); }}
             >
-              <option value="">All Sources</option>
-              <option value="slack_mention">Slack Mention</option>
-              <option value="slack_dm">Slack DM</option>
-              <option value="pylon_webhook">Pylon</option>
-              <option value="dashboard">Dashboard</option>
-            </select>
-            <select
-              value={categoryFilter}
-              onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }}
-              className="bg-surface border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-accent-200 focus:border-accent-200"
+              <SelectTrigger className="bg-card border-border text-sm text-foreground">
+                <SelectValue placeholder="All Sources" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Sources</SelectItem>
+                <SelectItem value="slack_mention">Slack Mention</SelectItem>
+                <SelectItem value="slack_dm">Slack DM</SelectItem>
+                <SelectItem value="pylon_webhook">Pylon</SelectItem>
+                <SelectItem value="dashboard">Dashboard</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={categoryFilter || "__all__"}
+              onValueChange={(val) => { setCategoryFilter(val === "__all__" ? "" : val); setPage(1); }}
             >
-              <option value="">All Categories</option>
-              <option value="resolved">Resolved</option>
-              <option value="partial">Partial</option>
-              <option value="unresolved">Unresolved</option>
-              <option value="escalation_needed">Escalation Needed</option>
-            </select>
+              <SelectTrigger className="bg-card border-border text-sm text-foreground">
+                <SelectValue placeholder="All Categories" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Categories</SelectItem>
+                <SelectItem value="resolved">Resolved</SelectItem>
+                <SelectItem value="partial">Partial</SelectItem>
+                <SelectItem value="unresolved">Unresolved</SelectItem>
+                <SelectItem value="escalation_needed">Escalation Needed</SelectItem>
+              </SelectContent>
+            </Select>
             {viewMode === "all" && (
-              <select
-                value={personFilter}
-                onChange={(e) => { setPersonFilter(e.target.value); setPage(1); }}
-                className="bg-surface border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-accent-200 focus:border-accent-200"
+              <Select
+                value={personFilter || "__all__"}
+                onValueChange={(val) => { setPersonFilter(val === "__all__" ? "" : val); setPage(1); }}
               >
-                <option value="">All Persons</option>
-                {persons.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
+                <SelectTrigger className="bg-card border-border text-sm text-foreground">
+                  <SelectValue placeholder="All Persons" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All Persons</SelectItem>
+                  {persons.map((p) => (
+                    <SelectItem key={p} value={p}>{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
-            <select
-              value={topicFilter}
-              onChange={(e) => { setTopicFilter(e.target.value); setPage(1); }}
-              className="bg-surface border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-accent-200 focus:border-accent-200"
+            <Select
+              value={topicFilter || "__all__"}
+              onValueChange={(val) => { setTopicFilter(val === "__all__" ? "" : val); setPage(1); }}
             >
-              <option value="">All Topics</option>
-              <option value="debugging">Debugging</option>
-              <option value="integration">Integration</option>
-              <option value="billing">Billing</option>
-              <option value="feature-request">Feature Request</option>
-              <option value="campaign">Campaign</option>
-              <option value="sdk">SDK</option>
-              <option value="data">Data</option>
-              <option value="security">Security</option>
-              <option value="documentation">Docs</option>
-              <option value="other">Other</option>
-            </select>
+              <SelectTrigger className="bg-card border-border text-sm text-foreground">
+                <SelectValue placeholder="All Topics" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Topics</SelectItem>
+                <SelectItem value="debugging">Debugging</SelectItem>
+                <SelectItem value="integration">Integration</SelectItem>
+                <SelectItem value="billing">Billing</SelectItem>
+                <SelectItem value="feature-request">Feature Request</SelectItem>
+                <SelectItem value="campaign">Campaign</SelectItem>
+                <SelectItem value="sdk">SDK</SelectItem>
+                <SelectItem value="data">Data</SelectItem>
+                <SelectItem value="security">Security</SelectItem>
+                <SelectItem value="documentation">Docs</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex items-center gap-3">
             {hasActiveFilters && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={clearFilters}
-                className="text-sm text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1 transition-colors press-scale"
+                className="text-muted-foreground hover:text-foreground press-scale"
               >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                </svg>
+                <RiCloseLine size={14} />
                 Clear
-              </button>
+              </Button>
             )}
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => loadData()}
-              className="text-sm text-brand-600 hover:text-brand-800 font-medium flex items-center gap-1.5 transition-colors press-scale"
+              className="text-brand-600 hover:text-brand-800 press-scale"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182" />
-              </svg>
+              <RiRefreshLine size={16} />
               Refresh
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
       {/* Desktop table */}
-      <div className="desktop-table bg-surface rounded-xl border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100 text-left">
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Time</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Source</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Account</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Title</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Topic</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Turns</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Duration</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Cost</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Savings</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Status</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider">Confidence</th>
-              <th className="px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wider w-10"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
+      <div className="desktop-table bg-card rounded-xl border border-border overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow className="border-b border-muted text-left">
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Time</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Source</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Account</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Title</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Topic</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Turns</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Duration</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Cost</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Savings</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Status</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Confidence</TableHead>
+              <TableHead className="px-4 py-3 font-medium text-muted-foreground text-xs uppercase tracking-wider w-10"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody className="divide-y divide-muted/50">
             {loading ? (
               <>
                 <SkeletonRow /><SkeletonRow /><SkeletonRow /><SkeletonRow />
                 <SkeletonRow /><SkeletonRow /><SkeletonRow /><SkeletonRow />
               </>
             ) : conversations.length === 0 ? (
-              <tr>
-                <td colSpan={12} className="px-4 py-12 text-center text-gray-400">
+              <TableRow>
+                <TableCell colSpan={12} className="px-4 py-8">
                   {hasActiveFilters ? (
-                    <div>
-                      <p>No conversations match your filters.</p>
-                      <button onClick={clearFilters} className="mt-2 text-sm text-brand-600 hover:text-brand-800 font-medium">Clear all filters</button>
-                    </div>
-                  ) : "No conversations found."}
-                </td>
-              </tr>
+                    <EmptyState
+                      icon={RiChat1Line}
+                      title="No conversations match your filters"
+                      action="Clear all filters"
+                      onAction={clearFilters}
+                    />
+                  ) : (
+                    <EmptyState icon={RiChat1Line} title="No conversations found" description="Start a new conversation from the chat page" />
+                  )}
+                </TableCell>
+              </TableRow>
             ) : (
               conversations.map((c, idx) => (
-                <tr
+                <TableRow
                   key={c.conversation_id}
-                  className="hover:bg-gray-50/80 cursor-pointer transition-colors animate-fade-in-up"
+                  className="hover:bg-muted/50 cursor-pointer transition-colors animate-fade-in-up"
                   style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
                   onClick={(e) => {
                     const url = `/conversations/${c.conversation_id}`;
@@ -376,64 +400,63 @@ export default function ConversationsPage() {
                     }
                   }}
                 >
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
+                  <TableCell className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs">
                     <ClientTimestamp iso={c.started_at} variant="short" />
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceStyles[c.source] || "bg-gray-100 text-gray-600"}`}>
+                  </TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Badge variant="secondary" className={cn("text-xs", sourceStyles[c.source] || "bg-gray-100 text-gray-600")}>
                       {sourceLabels[c.source] || c.source}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
-                    {c.claude_account ? c.claude_account : <span className="text-gray-300">&mdash;</span>}
-                  </td>
-                  <td className="px-4 py-3 text-gray-700 max-w-xs">
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground text-xs">
+                    {c.claude_account ? c.claude_account : <span className="text-muted-foreground/50">&mdash;</span>}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-foreground max-w-xs">
                     <div className="truncate font-medium" title={c.title || c.prompt?.slice(0, 80)}>
                       {c.title || c.prompt?.slice(0, 60) + (c.prompt?.length > 60 ? "..." : "")}
                     </div>
                     {c.title && (
-                      <div className="truncate text-xs text-gray-400 mt-0.5" title={c.prompt}>
+                      <div className="truncate text-xs text-muted-foreground mt-0.5" title={c.prompt}>
                         {c.prompt?.slice(0, 60)}{c.prompt?.length > 60 ? "..." : ""}
                       </div>
                     )}
-                  </td>
-                  <td className="px-4 py-3">
+                  </TableCell>
+                  <TableCell className="px-4 py-3">
                     {c.topic ? (
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${topicStyles[c.topic] || "bg-gray-100 text-gray-600"}`}>
+                      <Badge variant="secondary" className={cn("text-xs", topicStyles[c.topic] || "bg-gray-100 text-gray-600")}>
                         {topicLabels[c.topic] || c.topic}
-                      </span>
-                    ) : <span className="text-xs text-gray-300">&mdash;</span>}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 text-center">{c.total_turns}</td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                      </Badge>
+                    ) : <span className="text-xs text-muted-foreground/50">&mdash;</span>}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground text-center">{c.total_turns}</TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground whitespace-nowrap">
                     {c.duration_ms ? (c.duration_ms > 60000 ? `${Math.round(c.duration_ms / 60000)}m` : `${Math.round(c.duration_ms / 1000)}s`) : "-"}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs tabular-nums">
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground whitespace-nowrap text-xs tabular-nums">
                     {c.cost?.total_cost_usd != null ? `$${c.cost.total_cost_usd.toFixed(4)}` : "-"}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-xs tabular-nums">
+                  </TableCell>
+                  <TableCell className="px-4 py-3 whitespace-nowrap text-xs tabular-nums">
                     {c.savings?.savings_usd != null ? (
                       <span className="text-emerald-600 font-medium">+${c.savings.savings_usd.toFixed(2)}</span>
-                    ) : <span className="text-gray-400">-</span>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusStyles[c.status] || "bg-gray-100 text-gray-600"}`}>{c.status}</span>
-                  </td>
-                  <td className="px-4 py-3"><ConfidenceBadge confidence={c.confidence} /></td>
-                  <td className="px-4 py-3">
+                    ) : <span className="text-muted-foreground">-</span>}
+                  </TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Badge variant="secondary" className={cn("text-xs", statusStyles[c.status] || "bg-gray-100 text-gray-600")}>{c.status}</Badge>
+                  </TableCell>
+                  <TableCell className="px-4 py-3"><ConfidenceBadge confidence={c.confidence} /></TableCell>
+                  <TableCell className="px-4 py-3">
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       {c.status !== "running" && (
-                        <Link
-                          href={`/chat?continue=${c.conversation_id}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-brand-600 hover:bg-brand-50 rounded-md transition-colors press-scale"
-                          title="Continue this conversation"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 0 1 .865-.501 48.172 48.172 0 0 0 3.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
-                          </svg>
-                          Continue
-                        </Link>
+                        <Button variant="ghost" size="xs" asChild className="text-brand-600 hover:bg-brand-50 press-scale">
+                          <Link
+                            href={`/chat?continue=${c.conversation_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Continue this conversation"
+                          >
+                            <RiChat1Line size={14} />
+                            Continue
+                          </Link>
+                        </Button>
                       )}
                       <ChatContextMenu
                         conversationId={c.conversation_id}
@@ -449,12 +472,12 @@ export default function ConversationsPage() {
                         onCreateProject={async (name) => { await addProject(name); }}
                       />
                     </div>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       {/* Mobile card list */}
@@ -465,19 +488,21 @@ export default function ConversationsPage() {
             <MobileSkeletonCard /><MobileSkeletonCard />
           </>
         ) : conversations.length === 0 ? (
-          <div className="bg-surface rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
-            {hasActiveFilters ? (
-              <div>
-                <p>No conversations match your filters.</p>
-                <button onClick={clearFilters} className="mt-2 text-sm text-brand-600 hover:text-brand-800 font-medium">Clear all filters</button>
-              </div>
-            ) : "No conversations found."}
-          </div>
+          hasActiveFilters ? (
+            <EmptyState
+              icon={RiChat1Line}
+              title="No conversations match your filters"
+              action="Clear all filters"
+              onAction={clearFilters}
+            />
+          ) : (
+            <EmptyState icon={RiChat1Line} title="No conversations found" description="Start a new conversation from the chat page" />
+          )
         ) : (
           conversations.map((c, idx) => (
-            <div
+            <Card
               key={c.conversation_id}
-              className="bg-surface rounded-xl border border-gray-200 p-4 active:bg-gray-50 transition-colors animate-fade-in-up cursor-pointer"
+              className="p-4 active:bg-muted/50 transition-colors animate-fade-in-up cursor-pointer"
               style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
               onClick={(e) => {
                 const url = `/conversations/${c.conversation_id}`;
@@ -488,51 +513,53 @@ export default function ConversationsPage() {
                 }
               }}
             >
-              <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceStyles[c.source] || "bg-gray-100 text-gray-600"}`}>
-                  {sourceLabels[c.source] || c.source}
-                </span>
-                {c.topic && (
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${topicStyles[c.topic] || "bg-gray-100 text-gray-600"}`}>
-                    {topicLabels[c.topic] || c.topic}
-                  </span>
-                )}
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusStyles[c.status] || "bg-gray-100 text-gray-600"}`}>{c.status}</span>
-                <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
-                  <ChatContextMenu
-                    conversationId={c.conversation_id}
-                    conversationTitle={c.title || c.prompt?.slice(0, 50) || "Untitled"}
-                    isPinned={isPinned(c.conversation_id)}
-                    projectId={c.project_id}
-                    projects={projects}
-                    onRename={async (id, newTitle) => { await renameConversation(id, newTitle); loadData(); }}
-                    onDelete={async (id) => { await removeConversation(id); loadData(); }}
-                    onTogglePin={togglePin}
-                    onAssignProject={async (id, pid) => { await assignToProject(id, pid); loadData(); }}
-                    onRemoveProject={async (id) => { await unassignFromProject(id); loadData(); }}
-                    onCreateProject={async (name) => { await addProject(name); }}
-                  />
+              <CardContent className="p-0">
+                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                  <Badge variant="secondary" className={cn("text-xs", sourceStyles[c.source] || "bg-gray-100 text-gray-600")}>
+                    {sourceLabels[c.source] || c.source}
+                  </Badge>
+                  {c.topic && (
+                    <Badge variant="secondary" className={cn("text-xs", topicStyles[c.topic] || "bg-gray-100 text-gray-600")}>
+                      {topicLabels[c.topic] || c.topic}
+                    </Badge>
+                  )}
+                  <Badge variant="secondary" className={cn("text-xs", statusStyles[c.status] || "bg-gray-100 text-gray-600")}>{c.status}</Badge>
+                  <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
+                    <ChatContextMenu
+                      conversationId={c.conversation_id}
+                      conversationTitle={c.title || c.prompt?.slice(0, 50) || "Untitled"}
+                      isPinned={isPinned(c.conversation_id)}
+                      projectId={c.project_id}
+                      projects={projects}
+                      onRename={async (id, newTitle) => { await renameConversation(id, newTitle); loadData(); }}
+                      onDelete={async (id) => { await removeConversation(id); loadData(); }}
+                      onTogglePin={togglePin}
+                      onAssignProject={async (id, pid) => { await assignToProject(id, pid); loadData(); }}
+                      onRemoveProject={async (id) => { await unassignFromProject(id); loadData(); }}
+                      onCreateProject={async (name) => { await addProject(name); }}
+                    />
+                  </div>
                 </div>
-              </div>
-              <div className="text-sm font-medium text-gray-900 truncate">
-                {c.title || c.prompt?.slice(0, 60) + (c.prompt?.length > 60 ? "..." : "")}
-              </div>
-              {c.title && (
-                <div className="text-xs text-gray-400 truncate mt-0.5">
-                  {c.prompt?.slice(0, 60)}{c.prompt?.length > 60 ? "..." : ""}
+                <div className="text-sm font-medium text-foreground truncate">
+                  {c.title || c.prompt?.slice(0, 60) + (c.prompt?.length > 60 ? "..." : "")}
                 </div>
-              )}
-              <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                <ClientTimestamp iso={c.started_at} variant="short" />
-                <span>{c.total_turns} turns</span>
-                {c.cost?.total_cost_usd != null && (
-                  <span className="tabular-nums">${c.cost.total_cost_usd.toFixed(4)}</span>
+                {c.title && (
+                  <div className="text-xs text-muted-foreground truncate mt-0.5">
+                    {c.prompt?.slice(0, 60)}{c.prompt?.length > 60 ? "..." : ""}
+                  </div>
                 )}
-                {c.savings?.savings_usd != null && (
-                  <span className="text-emerald-600 font-medium tabular-nums">+${c.savings.savings_usd.toFixed(2)}</span>
-                )}
-              </div>
-            </div>
+                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                  <ClientTimestamp iso={c.started_at} variant="short" />
+                  <span>{c.total_turns} turns</span>
+                  {c.cost?.total_cost_usd != null && (
+                    <span className="tabular-nums">${c.cost.total_cost_usd.toFixed(4)}</span>
+                  )}
+                  {c.savings?.savings_usd != null && (
+                    <span className="text-emerald-600 font-medium tabular-nums">+${c.savings.savings_usd.toFixed(2)}</span>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           ))
         )}
       </div>
@@ -540,23 +567,27 @@ export default function ConversationsPage() {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex justify-center items-center gap-2">
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page === 1}
-            className="px-3 py-1.5 text-sm bg-surface border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-50 text-gray-700 font-medium transition-colors press-scale"
+            className="press-scale"
           >
             Previous
-          </button>
-          <span className="px-3 py-1.5 text-sm text-gray-500">
+          </Button>
+          <span className="px-3 py-1.5 text-sm text-muted-foreground">
             Page {page} of {totalPages}
           </span>
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}
-            className="px-3 py-1.5 text-sm bg-surface border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-50 text-gray-700 font-medium transition-colors press-scale"
+            className="press-scale"
           >
             Next
-          </button>
+          </Button>
         </div>
       )}
     </div>

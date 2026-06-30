@@ -1,6 +1,23 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import {
+  RiFileCopyLine,
+  RiDownloadLine,
+  RiCloseLine,
+  RiCodeSLine,
+  RiEyeLine,
+  RiFullscreenLine,
+  RiArrowLeftSLine,
+  RiArrowRightSLine,
+  RiCheckLine,
+  RiLoader4Line,
+  RiErrorWarningLine,
+} from "@remixicon/react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { cn } from "@/lib/utils";
 import MarkdownContent from "./MarkdownContent";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -91,57 +108,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// ── Toolbar Icons ───────────────────────────────────────────────────────────
-
-function CopyIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className || "w-4 h-4"} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9.75a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" />
-    </svg>
-  );
-}
-
-function DownloadIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className || "w-4 h-4"} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
-    </svg>
-  );
-}
-
-function CloseIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className || "w-4 h-4"} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-    </svg>
-  );
-}
-
-function CodeIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className || "w-4 h-4"} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
-    </svg>
-  );
-}
-
-function EyeIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className || "w-4 h-4"} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-    </svg>
-  );
-}
-
-function ExpandIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className || "w-4 h-4"} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-    </svg>
-  );
 }
 
 // ── HTML Renderer (sandboxed iframe) ────────────────────────────────────────
@@ -270,11 +236,8 @@ function MermaidRenderer({ content }: { content: string }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-white rounded-b-lg">
-        <div className="flex items-center gap-2 text-gray-400 text-sm">
-          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
+        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+          <RiLoader4Line size={16} className="animate-spin" />
           Rendering diagram...
         </div>
       </div>
@@ -284,15 +247,13 @@ function MermaidRenderer({ content }: { content: string }) {
   if (error) {
     return (
       <div className="p-4 h-full overflow-auto bg-white rounded-b-lg">
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <div className="flex items-center gap-2 text-red-700 text-sm font-medium mb-2">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-            </svg>
-            Mermaid Syntax Error
-          </div>
-          <pre className="text-xs text-red-600 whitespace-pre-wrap font-mono">{error}</pre>
-        </div>
+        <Alert variant="destructive">
+          <RiErrorWarningLine size={16} />
+          <AlertDescription>
+            <div className="font-medium mb-2">Mermaid Syntax Error</div>
+            <pre className="text-xs whitespace-pre-wrap font-mono">{error}</pre>
+          </AlertDescription>
+        </Alert>
       </div>
     );
   }
@@ -386,9 +347,9 @@ function ReactRenderer({ content }: { content: string }) {
   return (
     <div className="h-full flex flex-col rounded-b-lg overflow-hidden">
       {error && (
-        <div className="px-3 py-2 bg-red-50 border-b border-red-200 text-xs text-red-600 font-mono truncate">
-          {error}
-        </div>
+        <Alert variant="destructive" className="rounded-none border-x-0 border-t-0 text-xs font-mono">
+          <AlertDescription className="truncate">{error}</AlertDescription>
+        </Alert>
       )}
       <iframe
         ref={iframeRef}
@@ -448,11 +409,8 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-white rounded-b-lg">
-        <div className="flex items-center gap-2 text-gray-400 text-sm">
-          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
+        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+          <RiLoader4Line size={16} className="animate-spin" />
           Converting document...
         </div>
       </div>
@@ -462,15 +420,13 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
   if (error) {
     return (
       <div className="p-4 h-full overflow-auto bg-white rounded-b-lg">
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <div className="flex items-center gap-2 text-red-700 text-sm font-medium mb-2">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-            </svg>
-            Document Error
-          </div>
-          <pre className="text-xs text-red-600 whitespace-pre-wrap font-mono">{error}</pre>
-        </div>
+        <Alert variant="destructive">
+          <RiErrorWarningLine size={16} />
+          <AlertDescription>
+            <div className="font-medium mb-2">Document Error</div>
+            <pre className="text-xs whitespace-pre-wrap font-mono">{error}</pre>
+          </AlertDescription>
+        </Alert>
       </div>
     );
   }
@@ -491,17 +447,15 @@ function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
         <span className="text-3xl">📊</span>
       </div>
       <div className="text-center">
-        <h3 className="text-lg font-medium text-gray-800 mb-1">{title}</h3>
-        <p className="text-sm text-gray-500">PowerPoint files cannot be previewed in the browser.</p>
+        <h3 className="text-lg font-medium text-foreground mb-1">{title}</h3>
+        <p className="text-sm text-muted-foreground">PowerPoint files cannot be previewed in the browser.</p>
       </div>
-      <a
-        href={fileUrl}
-        download
-        className="inline-flex items-center gap-2 px-4 py-2 bg-accent-200 hover:bg-accent-300 text-accent-on rounded-lg text-sm font-medium transition-colors"
-      >
-        <DownloadIcon className="w-4 h-4" />
-        Download File
-      </a>
+      <Button asChild variant="default" className="bg-accent-200 hover:bg-accent-300 text-accent-on">
+        <a href={fileUrl} download>
+          <RiDownloadLine size={16} />
+          Download File
+        </a>
+      </Button>
     </div>
   );
 }
@@ -511,23 +465,21 @@ function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
 function FileDownloadRenderer({ fileUrl, title, fileSize }: { fileUrl: string; title: string; fileSize?: number }) {
   return (
     <div className="flex flex-col items-center justify-center h-full bg-white rounded-b-lg gap-4 p-8">
-      <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center">
+      <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center">
         <span className="text-3xl">📄</span>
       </div>
       <div className="text-center">
-        <h3 className="text-lg font-medium text-gray-800 mb-1">{title}</h3>
+        <h3 className="text-lg font-medium text-foreground mb-1">{title}</h3>
         {fileSize != null && (
-          <p className="text-sm text-gray-500">{formatFileSize(fileSize)}</p>
+          <p className="text-sm text-muted-foreground">{formatFileSize(fileSize)}</p>
         )}
       </div>
-      <a
-        href={fileUrl}
-        download
-        className="inline-flex items-center gap-2 px-4 py-2 bg-accent-200 hover:bg-accent-300 text-accent-on rounded-lg text-sm font-medium transition-colors"
-      >
-        <DownloadIcon className="w-4 h-4" />
-        Download File
-      </a>
+      <Button asChild variant="default" className="bg-accent-200 hover:bg-accent-300 text-accent-on">
+        <a href={fileUrl} download>
+          <RiDownloadLine size={16} />
+          Download File
+        </a>
+      </Button>
     </div>
   );
 }
@@ -624,31 +576,31 @@ export default function ArtifactViewer({
   }, [allArtifacts, artifact.title]);
 
   const containerClass = isFullscreen
-    ? "fixed inset-0 z-[90] bg-surface flex flex-col animate-fade-in"
-    : "flex flex-col h-full bg-surface border-l border-gray-200 animate-artifact-slide-in";
+    ? "fixed inset-0 z-[90] bg-card flex flex-col animate-fade-in"
+    : "flex flex-col h-full bg-card border-l border-border animate-artifact-slide-in";
 
   return (
     <div className={containerClass}>
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-gray-50 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/50 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {/* Language badge */}
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 flex-shrink-0">
+          <Badge variant="secondary" className="text-[10px] font-mono flex-shrink-0">
             {getLanguageLabel(artifact.language)}
-          </span>
+          </Badge>
           {/* Title */}
-          <span className="text-sm font-medium text-gray-800 truncate" title={artifact.title}>
+          <span className="text-sm font-medium text-foreground truncate" title={artifact.title}>
             {artifact.title}
           </span>
           {/* File size badge (for file artifacts) */}
           {isFileArtifact && artifact.file_size != null && (
-            <span className="text-[10px] text-gray-400 flex-shrink-0">
+            <span className="text-[10px] text-muted-foreground flex-shrink-0">
               {formatFileSize(artifact.file_size)}
             </span>
           )}
           {/* Version indicator */}
           {versions.length > 1 && (
-            <span className="text-[10px] text-gray-400 flex-shrink-0">
+            <span className="text-[10px] text-muted-foreground flex-shrink-0">
               v{artifact.version}{versions.length > 1 ? ` of ${versions.length}` : ""}
             </span>
           )}
@@ -657,112 +609,124 @@ export default function ArtifactViewer({
         <div className="flex items-center gap-0.5 flex-shrink-0">
           {/* Preview/Code toggle — only show for text-based artifacts with preview */}
           {canPreview && !isFileArtifact && (
-            <div className="flex items-center bg-gray-200 rounded-lg p-0.5 mr-1">
-              <button
+            <div className="flex items-center bg-muted rounded-lg p-0.5 mr-1">
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => setViewMode("preview")}
-                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                className={cn(
+                  "flex items-center gap-1 rounded-md text-xs font-medium transition-colors",
                   viewMode === "preview"
-                    ? "bg-surface text-gray-800 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
                 title="Preview"
               >
-                <EyeIcon className="w-3.5 h-3.5" />
+                <RiEyeLine size={14} />
                 Preview
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => setViewMode("code")}
-                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                className={cn(
+                  "flex items-center gap-1 rounded-md text-xs font-medium transition-colors",
                   viewMode === "code"
-                    ? "bg-surface text-gray-800 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
                 title="Code"
               >
-                <CodeIcon className="w-3.5 h-3.5" />
+                <RiCodeSLine size={14} />
                 Code
-              </button>
+              </Button>
             </div>
           )}
 
           {/* Version selector */}
           {versions.length > 1 && (
             <div className="flex items-center gap-0.5 mr-1">
-              <button
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={() => {
                   const idx = versions.findIndex((v) => v.id === artifact.id);
                   if (idx > 0 && onSelectArtifact) onSelectArtifact(versions[idx - 1].id);
                 }}
                 disabled={versions.findIndex((v) => v.id === artifact.id) === 0}
-                className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded transition-colors"
+                className="text-muted-foreground hover:text-foreground"
                 title="Previous version"
               >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-                </svg>
-              </button>
-              <button
+                <RiArrowLeftSLine size={14} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={() => {
                   const idx = versions.findIndex((v) => v.id === artifact.id);
                   if (idx < versions.length - 1 && onSelectArtifact) onSelectArtifact(versions[idx + 1].id);
                 }}
                 disabled={versions.findIndex((v) => v.id === artifact.id) === versions.length - 1}
-                className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded transition-colors"
+                className="text-muted-foreground hover:text-foreground"
                 title="Next version"
               >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                </svg>
-              </button>
+                <RiArrowRightSLine size={14} />
+              </Button>
             </div>
           )}
 
           {/* Copy — only for text-based artifacts */}
           {!isFileArtifact && (
-            <button
+            <Button
+              variant="ghost"
+              size="icon-sm"
               onClick={handleCopy}
-              className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+              className="text-muted-foreground hover:text-foreground"
               title={copyFeedback ? "Copied!" : "Copy to clipboard"}
             >
               {copyFeedback ? (
-                <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                </svg>
+                <RiCheckLine size={16} className="text-green-500" />
               ) : (
-                <CopyIcon />
+                <RiFileCopyLine size={16} />
               )}
-            </button>
+            </Button>
           )}
 
           {/* Download */}
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={handleDownload}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+            className="text-muted-foreground hover:text-foreground"
             title="Download file"
           >
-            <DownloadIcon />
-          </button>
+            <RiDownloadLine size={16} />
+          </Button>
 
           {/* Fullscreen toggle */}
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+            className="text-muted-foreground hover:text-foreground"
             title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           >
-            <ExpandIcon />
-          </button>
+            <RiFullscreenLine size={16} />
+          </Button>
 
           {/* Close */}
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => {
               if (isFullscreen) setIsFullscreen(false);
               onClose();
             }}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+            className="text-muted-foreground hover:text-foreground"
             title="Close (Esc)"
           >
-            <CloseIcon />
-          </button>
+            <RiCloseLine size={16} />
+          </Button>
         </div>
       </div>
 
