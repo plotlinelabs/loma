@@ -54,8 +54,38 @@ _EXPORT_MIME_TYPES = {
     ),
 }
 
+# MIME types where we can extract text from binary content
+_EXTRACTABLE_BINARY_MIME_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
 # Max content size to return (prevent huge files from overwhelming the agent)
 MAX_CONTENT_SIZE = 50_000  # ~50KB
+
+
+def _extract_text_from_binary(content: bytes, mime_type: str) -> str | None:
+    """Extract text from PDF or DOCX bytes. Returns None on failure."""
+    if mime_type == "application/pdf":
+        try:
+            import pymupdf
+            doc = pymupdf.open(stream=content, filetype="pdf")
+            pages = [page.get_text() for page in doc]
+            doc.close()
+            return "\n\n".join(pages).strip() or None
+        except Exception:
+            return None
+
+    if mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(content))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            return "\n\n".join(paragraphs).strip() or None
+        except Exception:
+            return None
+
+    return None
 
 
 async def _get_service(user_email: str):
@@ -110,7 +140,8 @@ async def read_file(user_email: str, file_id: str) -> dict:
     """Read the content of a file from Drive.
 
     For Google Docs/Sheets/Slides, exports as text.
-    For regular files, downloads content (text files only).
+    For PDF and DOCX files, downloads and extracts text.
+    For other text-like files, downloads content directly.
     """
     service = await _get_service(user_email)
 
@@ -153,6 +184,28 @@ async def read_file(user_email: str, file_id: str) -> dict:
             while not done:
                 _, done = downloader.next_chunk()
             content = fh.getvalue().decode("utf-8", errors="replace")
+        except Exception as e:
+            content = f"[Error downloading file: {e}]"
+
+    # Extractable binary — download and extract text (PDF, DOCX)
+    elif mime_type in _EXTRACTABLE_BINARY_MIME_TYPES:
+        try:
+            from googleapiclient.http import MediaIoBaseDownload
+
+            request = service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            extracted = _extract_text_from_binary(fh.getvalue(), mime_type)
+            if extracted:
+                content = extracted
+            else:
+                content = (
+                    f"[Could not extract text from {mime_type} file. "
+                    f"Use webViewLink to open in browser: {meta.get('webViewLink', 'N/A')}]"
+                )
         except Exception as e:
             content = f"[Error downloading file: {e}]"
 
