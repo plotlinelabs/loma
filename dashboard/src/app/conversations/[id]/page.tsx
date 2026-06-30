@@ -115,7 +115,7 @@ export default function ConversationDetailPage() {
   }
 
   const metaItems = [
-    { label: "Duration", value: formatDuration(conversation.duration_ms) },
+    { label: "Duration", value: formatDuration(conversation.duration_ms ?? undefined) },
     { label: "Turns", value: String(conversation.total_turns) },
     { label: "Model", value: conversation.model || "-" },
     { label: "Cost", value: formatCost(conversation.cost) },
