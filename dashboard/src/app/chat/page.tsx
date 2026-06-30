@@ -32,6 +32,7 @@ function ChatPageContent() {
   const flowId = searchParams.get("flow");
   const taskId = null; // Tasks system removed
   const promptParam = searchParams.get("prompt");
+  const autoSendParam = searchParams.get("autoSend") === "true";
   const [initialItems, setInitialItems] = useState<ChatItem[] | undefined>();
   const [initialArtifacts, setInitialArtifacts] = useState<Artifact[] | undefined>();
   const [initialStatus, setInitialStatus] = useState<string | undefined>();
@@ -333,6 +334,7 @@ function ChatPageContent() {
         conversationId={activeConversationId || undefined}
 
         initialPrompt={promptParam || undefined}
+        autoSend={autoSendParam}
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
       />

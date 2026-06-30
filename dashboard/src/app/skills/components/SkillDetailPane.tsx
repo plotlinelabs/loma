@@ -129,13 +129,10 @@ export default function SkillDetailPane({
     e.preventDefault();
     if (!chatInput.trim() || !skill) return;
     const slug = skill.slug || skill.name;
-    const prompt = [
-      chatInput.trim(),
-      "",
-      `Context: Loma skill \`${slug}\`, file \`${filePath}\`.`,
-      `Inspect with \`python3 tools/loma_skills.py file --slug ${slug} --path ${filePath}\`.`,
-    ].join("\n");
-    window.location.href = chatUrl(prompt);
+    const userMessage = chatInput.trim();
+    const prompt = `[Skill context: \`${slug}\`, file \`${filePath}\`. Use \`python3 tools/loma_skills.py dump --slug ${slug}\` to read it.]\n\n${userMessage}`;
+    const params = new URLSearchParams({ prompt, autoSend: "true" });
+    window.location.href = `${basePath}/chat?${params.toString()}`;
   }
 
   if (loading) {
