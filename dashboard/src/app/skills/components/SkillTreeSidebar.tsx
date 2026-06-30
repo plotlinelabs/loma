@@ -106,7 +106,7 @@ export default function SkillTreeSidebar({
       </div>
 
       {/* Tree */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="py-2">
           {SECTIONS.map(({ key, label, showInfo }) => {
             const sectionSkills = grouped[key];
