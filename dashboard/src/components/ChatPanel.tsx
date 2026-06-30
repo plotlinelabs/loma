@@ -1456,9 +1456,6 @@ export default function ChatPanel({
             <h2 className="text-xl md:text-3xl font-heading font-normal text-foreground tracking-tight">
               What do you need to get done?
             </h2>
-            <p className="text-[15px] text-muted-foreground mt-2 max-w-md mx-auto">
-              Say the word. I&apos;ll do the rest. Go.
-            </p>
           </div>
 
           <div className="w-full max-w-full md:max-w-[680px]">
