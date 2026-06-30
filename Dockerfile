@@ -25,5 +25,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 ENV PYTHONPATH=/app
 ENV WEBHOOK_PORT=3000
+# Persistent in-container workspace for cloning & running repos (named volume
+# loma-workspace -> /opt/loma-workspace in docker-compose.yml). Lets long-running
+# agent tasks keep their clone across container recreation, unlike /tmp's
+# ephemeral writable overlay. Exposed as $LOMA_WORKSPACE_DIR to the agent process.
+ENV LOMA_WORKSPACE_DIR=/opt/loma-workspace
+RUN mkdir -p /opt/loma-workspace
 EXPOSE 3000
 CMD ["python", "app.py"]
