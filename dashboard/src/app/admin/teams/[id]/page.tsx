@@ -187,7 +187,7 @@ export default function TeamDetailPage() {
 
         <Table>
           <TableHeader>
-            <TableRow className="border-border">
+            <TableRow className="">
               <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Tool</TableHead>
               <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Default Role</TableHead>
               <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Members Affected</TableHead>
@@ -203,7 +203,7 @@ export default function TeamDetailPage() {
               const defaultRole = td?.role ?? null;
 
               return (
-                <TableRow key={toolKey} className="border-border/50">
+                <TableRow key={toolKey} className="">
                   <TableCell className="pr-4">
                     <Link href={`/mcp/${toolKey}`} className="flex items-center gap-2.5 group">
                       <div
@@ -270,7 +270,7 @@ export default function TeamDetailPage() {
 
         <Table>
           <TableHeader>
-            <TableRow className="border-border">
+            <TableRow className="">
               <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Tool</TableHead>
               <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">OAuth Required</TableHead>
               <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Connected</TableHead>
@@ -289,7 +289,7 @@ export default function TeamDetailPage() {
               ).length;
 
               return (
-                <TableRow key={toolKey} className="border-border/50">
+                <TableRow key={toolKey} className="">
                   <TableCell className="pr-4">
                     <Link href={`/mcp/${toolKey}`} className="flex items-center gap-2.5 group">
                       <div

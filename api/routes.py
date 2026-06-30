@@ -300,7 +300,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
         if proc.returncode != 0:
-            logger.warning("Title generation CLI failed (rc=%d)", proc.returncode)
+            logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
             return "Untitled conversation"
 
         output = stdout.decode().strip()
@@ -354,6 +354,7 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
         if proc.returncode != 0:
+            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
             return "other"
 
         output = stdout.decode().strip()

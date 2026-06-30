@@ -226,7 +226,7 @@ export default function ToolDetailPage() {
               {config?.roles && config.roles.length > 0 ? (
                 <Table>
                   <TableHeader>
-                    <TableRow className="border-b border-border">
+                    <TableRow className="">
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Role</TableHead>
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Description</TableHead>
                       <TableHead />
@@ -256,7 +256,7 @@ export default function ToolDetailPage() {
                   <h2 className="text-[13px] font-heading font-semibold text-foreground mb-2">Team Assignments</h2>
                   <Table>
                     <TableHeader>
-                      <TableRow className="border-b border-border">
+                      <TableRow className="">
                         <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Team</TableHead>
                         <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Default Role</TableHead>
                         <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Members</TableHead>
@@ -325,7 +325,7 @@ export default function ToolDetailPage() {
               {toolUsers.length > 0 ? (
                 <Table>
                   <TableHeader>
-                    <TableRow className="border-b border-border">
+                    <TableRow className="">
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Effective Role</TableHead>
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Source</TableHead>
@@ -461,7 +461,7 @@ export default function ToolDetailPage() {
               {toolUsers.length > 0 ? (
                 <Table>
                   <TableHeader>
-                    <TableRow className="border-b border-border">
+                    <TableRow className="">
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</TableHead>
                       <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last Used</TableHead>
