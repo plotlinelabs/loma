@@ -234,6 +234,8 @@ export interface Skill {
   files: string[];
   file_details?: SkillFile[];
   updated_at?: string;
+  created_by?: string;
+  scope?: "system" | "personal" | "workspace";
 }
 
 export interface SkillFile {
@@ -255,6 +257,8 @@ export interface SkillDetailResponse {
   files: SkillFile[];
   assets?: SkillFile[];
   updated_at?: string;
+  created_by?: string;
+  scope?: "system" | "personal" | "workspace";
 }
 
 export async function fetchSkills(): Promise<{ skills: Skill[] }> {
@@ -304,6 +308,19 @@ export async function updateSkillFile(name: string, path: string, content: strin
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Failed to update skill file: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function updateSkillScope(name: string, scope: "personal" | "workspace"): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/scope`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to update skill scope: ${res.status}`);
   }
   return res.json();
 }

@@ -94,7 +94,10 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         "ml-0 h-screen pt-14 md:pt-0 flex flex-col transition-all duration-200",
         sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
-        <div className="px-3 md:px-3 lg:px-4 py-3 flex-1 w-full flex flex-col min-h-0">{children}</div>
+        <div className={cn(
+          "flex-1 w-full flex flex-col min-h-0",
+          pathname.startsWith("/skills") ? "overflow-hidden" : "px-3 md:px-3 lg:px-4 py-3"
+        )}>{children}</div>
       </main>
     </>
   );

@@ -631,6 +631,8 @@ export default function ChatPanel({
   initialArtifacts,
   conversationId: initialConversationId,
   initialPrompt,
+  autoSend,
+  systemContext,
   initialStatus,
   activeArtifactId,
   onArtifactOpen,
@@ -643,6 +645,8 @@ export default function ChatPanel({
   initialArtifacts?: Artifact[];
   conversationId?: string;
   initialPrompt?: string;
+  autoSend?: boolean;
+  systemContext?: string;
   initialStatus?: string;
   /** Currently active artifact ID (for highlighting the active card) */
   activeArtifactId?: string | null;
@@ -917,14 +921,27 @@ export default function ChatPanel({
     }
   }, [initialStatus, initialConversationId]);
 
+  const autoSendFired = useRef(false);
+  useEffect(() => {
+    if (autoSend && initialPrompt && !autoSendFired.current && !isStreaming && session) {
+      autoSendFired.current = true;
+      setInput("");
+      const timer = setTimeout(() => handleSend(initialPrompt), 0);
+      return () => clearTimeout(timer);
+    }
+  });
+
   const handleSend = async (overrideMessage?: string) => {
-    const message = overrideMessage ?? input.trim();
-    if ((!message && pendingFiles.length === 0) || isStreaming) return;
+    const displayText = overrideMessage ?? input.trim();
+    if ((!displayText && pendingFiles.length === 0) || isStreaming) return;
+    const message = systemContext && overrideMessage
+      ? `[Context: ${systemContext}]\n\n${displayText}`
+      : displayText;
 
     const isOverride = overrideMessage !== undefined;
     const filesToSend = !isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined;
     const fileNames = filesToSend?.map((f) => f.name);
-    const displayMessage = message || `[${fileNames?.join(", ")}]`;
+    const displayMessage = displayText || `[${fileNames?.join(", ")}]`;
 
     const history = buildHistory(items);
     const responseStartedAt = performance.now();

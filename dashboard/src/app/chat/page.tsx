@@ -32,6 +32,8 @@ function ChatPageContent() {
   const flowId = searchParams.get("flow");
   const taskId = null; // Tasks system removed
   const promptParam = searchParams.get("prompt");
+  const autoSendParam = searchParams.get("autoSend") === "true";
+  const skillContextParam = searchParams.get("skillContext");
   const [initialItems, setInitialItems] = useState<ChatItem[] | undefined>();
   const [initialArtifacts, setInitialArtifacts] = useState<Artifact[] | undefined>();
   const [initialStatus, setInitialStatus] = useState<string | undefined>();
@@ -148,10 +150,12 @@ function ChatPageContent() {
     );
   }
 
+  const showHeader = !!activeConversationId || (!promptParam && !autoSendParam);
+
   return (
     <div className="flex-1 min-h-0 flex flex-col -mb-3">
-      {/* Header with title and action buttons */}
-      <div className="px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
+      {/* Header with title and action buttons — hidden for auto-sent prompts until conversation starts */}
+      {showHeader && <div className="px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
         <div className="flex items-center gap-2">
           {/* Title area */}
           <div className="min-w-0 flex-1">
@@ -318,7 +322,7 @@ function ChatPageContent() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {error && (
         <div className="px-3 lg:px-4 py-2">
@@ -333,6 +337,8 @@ function ChatPageContent() {
         conversationId={activeConversationId || undefined}
 
         initialPrompt={promptParam || undefined}
+        autoSend={autoSendParam}
+        systemContext={skillContextParam || undefined}
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
       />
