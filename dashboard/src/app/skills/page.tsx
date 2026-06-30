@@ -72,14 +72,14 @@ export default function SkillsPage() {
       )}
 
       <div className="bg-card border border-border rounded-xl overflow-hidden overflow-x-auto">
-        <Table>
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow className="border-b border-border bg-muted/50">
-              <TableHead className="w-[15%]">Skill</TableHead>
+              <TableHead className="w-[160px]">Skill</TableHead>
               <TableHead>Description</TableHead>
-              <TableHead className="w-[15%]">Tags</TableHead>
-              <TableHead className="w-[10%]">Files</TableHead>
-              <TableHead className="w-[15%]">Updated</TableHead>
+              <TableHead className="w-[120px]">Tags</TableHead>
+              <TableHead className="w-[80px]">Files</TableHead>
+              <TableHead className="w-[100px]">Updated</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -109,28 +109,28 @@ export default function SkillsPage() {
                 const textCount = files.filter((file) => file.kind === "inline_text").length;
                 return (
                   <TableRow key={slug}>
-                    <TableCell className="align-top">
+                    <TableCell className="align-top overflow-hidden">
                       <Link href={`/skills/${slug}`} className="text-sm font-semibold text-foreground hover:text-brand-700 truncate block">
                         {skill.name || slug}
                       </Link>
-                      <div className="text-xs text-muted-foreground font-mono mt-1">{slug}</div>
+                      <div className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{slug}</div>
                     </TableCell>
-                    <TableCell className="align-top text-sm text-muted-foreground max-w-xl"><span className="line-clamp-2">{skill.description || "-"}</span></TableCell>
-                    <TableCell className="align-top">
+                    <TableCell className="align-top text-sm text-muted-foreground overflow-hidden"><span className="line-clamp-2">{skill.description || "-"}</span></TableCell>
+                    <TableCell className="align-top overflow-hidden">
                       {skill.tags?.length ? (
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="flex flex-wrap gap-1 overflow-hidden max-h-[3rem]">
                           {skill.tags.map((tag) => (
-                            <Badge key={tag} variant="secondary" className="text-xs">
+                            <Badge key={tag} variant="secondary" className="text-[11px]">
                               {tag}
                             </Badge>
                           ))}
                         </div>
                       ) : <span className="text-xs text-muted-foreground">-</span>}
                     </TableCell>
-                    <TableCell className="align-top text-xs text-muted-foreground">
+                    <TableCell className="align-top text-xs text-muted-foreground whitespace-nowrap">
                       {textCount} text · {assetCount} asset{assetCount === 1 ? "" : "s"}
                     </TableCell>
-                    <TableCell className="align-top text-xs text-muted-foreground">{formatUpdated(skill.updated_at)}</TableCell>
+                    <TableCell className="align-top text-xs text-muted-foreground whitespace-nowrap">{formatUpdated(skill.updated_at)}</TableCell>
                   </TableRow>
                 );
               })

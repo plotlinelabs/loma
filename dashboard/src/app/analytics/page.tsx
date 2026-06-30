@@ -192,7 +192,7 @@ export default function AnalyticsPage() {
           ) : (
             <>
               {stats && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 stagger-children">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
                   <ConversationStatCard label="Total Conversations" value={stats.total_conversations}
                     icon={<RiChat1Line size={20} />}
                     iconColor="text-brand-600 bg-brand-50" />
@@ -219,22 +219,22 @@ export default function AnalyticsPage() {
                     <div className="grid grid-cols-3 gap-2">
                       <div className="text-center sm:text-center">
                         <div className="text-xs text-emerald-600 font-medium">Human Cost</div>
-                        <div className="text-lg md:text-xl font-semibold text-emerald-800 tabular-nums">${costData.total_estimated_human_cost_usd.toFixed(2)}</div>
+                        <div className="text-base font-semibold text-emerald-800 tabular-nums">${costData.total_estimated_human_cost_usd.toFixed(2)}</div>
                       </div>
                       <div className="text-center sm:text-center">
                         <div className="text-xs text-emerald-600 font-medium">API Cost</div>
-                        <div className="text-lg md:text-xl font-semibold text-emerald-800 tabular-nums">${costData.total_cost_usd.toFixed(2)}</div>
+                        <div className="text-base font-semibold text-emerald-800 tabular-nums">${costData.total_cost_usd.toFixed(2)}</div>
                       </div>
                       <div className="text-center sm:text-center">
                         <div className="text-xs text-emerald-600 font-medium">Time Saved</div>
-                        <div className="text-lg md:text-xl font-semibold text-emerald-800">{formatHours(costData.total_estimated_human_minutes)}</div>
+                        <div className="text-base font-semibold text-emerald-800">{formatHours(costData.total_estimated_human_minutes)}</div>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 stagger-children">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
                 <CostStatCard label="Total Spend" value={`$${costData.total_cost_usd.toFixed(2)}`}
                   icon={<RiMoneyDollarCircleLine size={20} />}
                   iconColor="text-brand-600 bg-brand-50" />
@@ -363,7 +363,7 @@ export default function AnalyticsPage() {
 
           {/* Summary cards */}
           {tokenData && !tokenLoading && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-4 stagger-children">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 stagger-children">
               <CostStatCard label="Total Tokens" value={formatNumber(tokenData.totals.total_tokens)}
                 icon={<RiComputerLine size={20} />}
                 iconColor="text-brand-600 bg-brand-50" />
@@ -436,11 +436,11 @@ export default function AnalyticsPage() {
 
 function ConversationStatCard({ label, value, icon, iconColor }: { label: string; value: number; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-2 md:p-3 flex items-start gap-2 md:gap-4 hover-lift">
+    <Card className="p-2 md:p-3 flex items-start gap-2 hover-lift">
       <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
         <div className="text-xs text-muted-foreground font-medium">{label}</div>
-        <div className="text-lg md:text-xl font-semibold text-foreground mt-0.5">{value}</div>
+        <div className="text-base font-semibold text-foreground mt-0.5">{value}</div>
       </div>
     </Card>
   );
@@ -448,11 +448,11 @@ function ConversationStatCard({ label, value, icon, iconColor }: { label: string
 
 function CostStatCard({ label, value, icon, iconColor }: { label: string; value: string; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-2 md:p-3 flex items-start gap-2 md:gap-4 hover-lift">
+    <Card className="p-2 md:p-3 flex items-start gap-2 hover-lift">
       <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
         <div className="text-xs text-muted-foreground font-medium">{label}</div>
-        <div className="text-lg md:text-xl font-semibold text-foreground mt-0.5 tabular-nums">{value}</div>
+        <div className="text-base font-semibold text-foreground mt-0.5 tabular-nums">{value}</div>
       </div>
     </Card>
   );
