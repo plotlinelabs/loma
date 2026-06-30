@@ -35,6 +35,7 @@ import {
   RiMoonLine,
   RiMenuFoldLine,
   RiMenuUnfoldLine,
+  RiExpandUpDownLine,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -169,7 +170,7 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
       <Button
         variant="ghost"
         onClick={() => setExpanded(!expanded)}
-        className="w-full text-left group space-y-1.5 h-auto px-0 rounded-none overflow-hidden"
+        className="w-full text-left group flex-col items-stretch gap-1.5 h-auto px-0 rounded-none overflow-hidden"
       >
         <div className="flex items-center gap-2">
           <span className={cn("w-2 h-2 rounded-full flex-shrink-0", statusColor)} />
@@ -487,7 +488,7 @@ export default function Sidebar({
 
           {/* Recents (excluding pinned) */}
           {!collapsed && myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
-            <div className="mt-2 flex-1 min-h-0 flex flex-col">
+            <div className="mt-1 flex-1 min-h-0 flex flex-col">
               <div className="px-2.5 pb-1">
                 <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                   Recents
@@ -620,14 +621,17 @@ export default function Sidebar({
                           </AvatarFallback>
                         </Avatar>
                         {!collapsed && (
-                          <div className="min-w-0 flex-1 text-left">
-                            <div className="text-[12px] font-medium text-foreground truncate">
-                              {session.user.name || session.user.email?.split("@")[0]}
+                          <>
+                            <div className="min-w-0 flex-1 text-left">
+                              <div className="text-[12px] font-medium text-foreground truncate">
+                                {session.user.name || session.user.email?.split("@")[0]}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground truncate">
+                                {session.user.email}
+                              </div>
                             </div>
-                            <div className="text-[10px] text-muted-foreground truncate">
-                              {session.user.email}
-                            </div>
-                          </div>
+                            <RiExpandUpDownLine size={14} className="text-muted-foreground shrink-0" />
+                          </>
                         )}
                       </button>
                     </DropdownMenuTrigger>

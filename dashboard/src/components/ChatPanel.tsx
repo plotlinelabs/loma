@@ -1702,6 +1702,9 @@ export default function ChatPanel({
                       <div className="flex items-center gap-1.5 mb-1">
                         <CrosscutIcon size={14} />
                         <span className="text-xs text-muted-foreground font-medium">Loma</span>
+                        {typeof item.responseTimeSeconds === "number" && (
+                          <span className="ml-auto text-[10px] text-muted-foreground/60">{formatResponseTime(item.responseTimeSeconds)}</span>
+                        )}
                       </div>
                       {item.content ? (
                         <MarkdownContent content={item.content} />
@@ -1733,12 +1736,6 @@ export default function ChatPanel({
                           {item.fileAttachments.map((file) => (
                             <FileAttachmentCard key={file.file_id} file={file} />
                           ))}
-                        </div>
-                      )}
-                      {typeof item.responseTimeSeconds === "number" && (
-                        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-                          <RiTimeLine size={12} />
-                          <span>{formatResponseTime(item.responseTimeSeconds)}</span>
                         </div>
                       )}
                     </div>

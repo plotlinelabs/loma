@@ -46,8 +46,8 @@ function formatHours(minutes: number): string {
 
 function SkeletonStatCard() {
   return (
-    <Card className="p-2 md:p-3 flex items-start gap-3">
-      <Skeleton className="w-10 h-10 rounded-lg" />
+    <Card className="p-2 flex items-center gap-2">
+      <Skeleton className="w-7 h-7 rounded-md" />
       <div>
         <Skeleton className="h-3 w-24 mb-2" />
         <Skeleton className="h-7 w-16" />
@@ -194,22 +194,22 @@ export default function AnalyticsPage() {
               {stats && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
                   <ConversationStatCard label="Total Conversations" value={stats.total_conversations}
-                    icon={<RiChat1Line size={20} />}
+                    icon={<RiChat1Line size={16} />}
                     iconColor="text-brand-600 bg-brand-50" />
                   <ConversationStatCard label="Resolved" value={stats.by_category?.resolved || 0}
-                    icon={<RiCheckboxCircleLine size={20} />}
+                    icon={<RiCheckboxCircleLine size={16} />}
                     iconColor="text-green-600 bg-green-50" />
                   <ConversationStatCard label="Unresolved" value={stats.by_category?.unresolved || 0}
-                    icon={<RiErrorWarningLine size={20} />}
+                    icon={<RiErrorWarningLine size={16} />}
                     iconColor="text-red-600 bg-red-50" />
                   <ConversationStatCard label="Errors" value={stats.by_status?.error || 0}
-                    icon={<RiAlertLine size={20} />}
+                    icon={<RiAlertLine size={16} />}
                     iconColor="text-amber-600 bg-amber-50" />
                 </div>
               )}
 
               {costData.total_estimated_human_cost_usd > 0 && (
-                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 p-2 md:p-3 hover-lift">
+                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 p-2 hover-lift">
                   <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2">
                     <div>
                       <div className="text-sm font-medium text-emerald-700 mb-1">Total Savings</div>
@@ -236,20 +236,20 @@ export default function AnalyticsPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 stagger-children">
                 <CostStatCard label="Total Spend" value={`$${costData.total_cost_usd.toFixed(2)}`}
-                  icon={<RiMoneyDollarCircleLine size={20} />}
+                  icon={<RiMoneyDollarCircleLine size={16} />}
                   iconColor="text-brand-600 bg-brand-50" />
                 <CostStatCard label="Avg / Conversation" value={`$${costData.avg_cost_per_conversation.toFixed(4)}`}
-                  icon={<RiBarChartBoxLine size={20} />}
+                  icon={<RiBarChartBoxLine size={16} />}
                   iconColor="text-blue-600 bg-blue-50" />
                 <CostStatCard label="Input Tokens" value={formatNumber(costData.total_input_tokens)}
-                  icon={<RiUploadLine size={20} />}
+                  icon={<RiUploadLine size={16} />}
                   iconColor="text-green-600 bg-green-50" />
                 <CostStatCard label="Output Tokens" value={formatNumber(costData.total_output_tokens)}
-                  icon={<RiDownloadLine size={20} />}
+                  icon={<RiDownloadLine size={16} />}
                   iconColor="text-amber-600 bg-amber-50" />
               </div>
 
-              <Card className="p-2 md:p-3 hover-lift">
+              <Card className="p-2 hover-lift">
                 <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily Cost: Human vs API</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
@@ -270,7 +270,7 @@ export default function AnalyticsPage() {
                 )}
               </Card>
 
-              <Card className="p-2 md:p-3 hover-lift">
+              <Card className="p-2 hover-lift">
                 <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily API Cost Breakdown (USD)</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
@@ -291,7 +291,7 @@ export default function AnalyticsPage() {
                 )}
               </Card>
 
-              <Card className="p-2 md:p-3 hover-lift">
+              <Card className="p-2 hover-lift">
                 <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Daily Token Usage</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
@@ -312,7 +312,7 @@ export default function AnalyticsPage() {
                 )}
               </Card>
 
-              <Card className="p-2 md:p-3 hover-lift">
+              <Card className="p-2 hover-lift">
                 <h2 className="text-sm font-heading font-semibold text-foreground mb-2">Conversations per Day</h2>
                 {costData.daily.length === 0 ? (
                   <EmptyState icon={RiBarChartBoxLine} title="No data for this period" className="py-6" />
@@ -365,13 +365,13 @@ export default function AnalyticsPage() {
           {tokenData && !tokenLoading && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 stagger-children">
               <CostStatCard label="Total Tokens" value={formatNumber(tokenData.totals.total_tokens)}
-                icon={<RiComputerLine size={20} />}
+                icon={<RiComputerLine size={16} />}
                 iconColor="text-brand-600 bg-brand-50" />
               <CostStatCard label="Input Tokens" value={formatNumber(tokenData.totals.input_tokens)}
-                icon={<RiUploadLine size={20} />}
+                icon={<RiUploadLine size={16} />}
                 iconColor="text-green-600 bg-green-50" />
               <CostStatCard label="Output Tokens" value={formatNumber(tokenData.totals.output_tokens)}
-                icon={<RiDownloadLine size={20} />}
+                icon={<RiDownloadLine size={16} />}
                 iconColor="text-amber-600 bg-amber-50" />
             </div>
           )}
@@ -436,11 +436,11 @@ export default function AnalyticsPage() {
 
 function ConversationStatCard({ label, value, icon, iconColor }: { label: string; value: number; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-2 md:p-3 flex items-start gap-2 hover-lift">
-      <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
+    <Card className="p-2 flex items-center gap-2 hover-lift">
+      <div className={cn("w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
-        <div className="text-xs text-muted-foreground font-medium">{label}</div>
-        <div className="text-base font-semibold text-foreground mt-0.5">{value}</div>
+        <div className="text-[11px] text-muted-foreground font-medium">{label}</div>
+        <div className="text-sm font-semibold text-foreground">{value}</div>
       </div>
     </Card>
   );
@@ -448,11 +448,11 @@ function ConversationStatCard({ label, value, icon, iconColor }: { label: string
 
 function CostStatCard({ label, value, icon, iconColor }: { label: string; value: string; icon: React.ReactNode; iconColor: string }) {
   return (
-    <Card className="p-2 md:p-3 flex items-start gap-2 hover-lift">
-      <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
+    <Card className="p-2 flex items-center gap-2 hover-lift">
+      <div className={cn("w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0", iconColor)}>{icon}</div>
       <div>
-        <div className="text-xs text-muted-foreground font-medium">{label}</div>
-        <div className="text-base font-semibold text-foreground mt-0.5 tabular-nums">{value}</div>
+        <div className="text-[11px] text-muted-foreground font-medium">{label}</div>
+        <div className="text-sm font-semibold text-foreground tabular-nums">{value}</div>
       </div>
     </Card>
   );

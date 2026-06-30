@@ -415,11 +415,6 @@ export default function ConversationsPage() {
                     <div className="truncate font-medium" title={c.title || c.prompt?.slice(0, 80)}>
                       {c.title || c.prompt?.slice(0, 60) + (c.prompt?.length > 60 ? "..." : "")}
                     </div>
-                    {c.title && (
-                      <div className="truncate text-xs text-muted-foreground mt-0.5" title={c.prompt}>
-                        {c.prompt?.slice(0, 60)}{c.prompt?.length > 60 ? "..." : ""}
-                      </div>
-                    )}
                   </TableCell>
                   <TableCell>
                     {c.topic ? (
