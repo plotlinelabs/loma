@@ -33,6 +33,7 @@ function ChatPageContent() {
   const taskId = null; // Tasks system removed
   const promptParam = searchParams.get("prompt");
   const autoSendParam = searchParams.get("autoSend") === "true";
+  const skillContextParam = searchParams.get("skillContext");
   const [initialItems, setInitialItems] = useState<ChatItem[] | undefined>();
   const [initialArtifacts, setInitialArtifacts] = useState<Artifact[] | undefined>();
   const [initialStatus, setInitialStatus] = useState<string | undefined>();
@@ -337,6 +338,7 @@ function ChatPageContent() {
 
         initialPrompt={promptParam || undefined}
         autoSend={autoSendParam}
+        systemContext={skillContextParam || undefined}
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
       />

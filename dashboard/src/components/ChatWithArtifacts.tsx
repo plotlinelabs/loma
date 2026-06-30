@@ -76,6 +76,7 @@ export default function ChatWithArtifacts({
   conversationId,
   initialPrompt,
   autoSend,
+  systemContext,
   initialStatus,
   onConversationCreated,
 }: {
@@ -84,6 +85,7 @@ export default function ChatWithArtifacts({
   conversationId?: string;
   initialPrompt?: string;
   autoSend?: boolean;
+  systemContext?: string;
   initialStatus?: string;
   onConversationCreated?: (conversationId: string) => void;
 }) {
@@ -149,6 +151,7 @@ export default function ChatWithArtifacts({
           conversationId={conversationId}
           initialPrompt={initialPrompt}
           autoSend={autoSend}
+          systemContext={systemContext}
           initialStatus={initialStatus}
           activeArtifactId={activeArtifactId}
           onArtifactOpen={handleArtifactOpen}
