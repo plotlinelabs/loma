@@ -540,7 +540,7 @@ export default function AdminPage() {
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
-                  <TableRow className="border-b border-border">
+                  <TableRow>
                     <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Permission</TableHead>
                     {(["admin", "maintainer", "operator", "analyst", "chatter"] as const).map((role) => (
                       <TableHead key={role} className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
@@ -551,7 +551,7 @@ export default function AdminPage() {
                 </TableHeader>
                 <TableBody>
                   {ROLE_PERMISSIONS.map((row) => (
-                    <TableRow key={row.permission} className="border-b border-muted/50 last:border-0">
+                    <TableRow key={row.permission}>
                       <TableCell className="text-xs text-muted-foreground">{row.permission}</TableCell>
                       {(["admin", "maintainer", "operator", "analyst", "chatter"] as const).map((role) => (
                         <TableCell key={role} className="text-center">
@@ -612,7 +612,7 @@ export default function AdminPage() {
           <div className="overflow-x-auto">
             <Table className="min-w-[600px]">
               <TableHeader>
-                <TableRow className="border-b border-border bg-muted/60">
+                <TableRow className="bg-muted/40">
                   <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider sticky left-0 bg-muted/60 z-10 min-w-[180px]">
                     User
                   </TableHead>
@@ -663,7 +663,7 @@ export default function AdminPage() {
               </TableHeader>
               <TableBody>
                 {users.map((user) => (
-                  <TableRow key={user.email} className="border-b border-border last:border-0 hover:bg-muted/50 transition-colors">
+                  <TableRow key={user.email} className="hover:bg-muted/50 transition-colors">
                     <TableCell className="sticky left-0 bg-card z-10">
                       <Link href={`/admin/${encodeURIComponent(user.email)}`} className="flex items-center gap-2.5 group">
                         <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
@@ -1190,7 +1190,7 @@ export default function AdminPage() {
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
-                      <TableRow className="border-b border-border bg-muted/60">
+                      <TableRow className="bg-muted/40">
                         <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[280px]">Key</TableHead>
                         <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Value</TableHead>
                         <TableHead className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-[100px] text-center">Status</TableHead>
@@ -1208,7 +1208,7 @@ export default function AdminPage() {
                         const isDuplicate = newVars.some((nv) => nv.key.trim() === v.key);
 
                         return (
-                          <TableRow key={v.key} className={cn("border-b border-border last:border-0 transition-colors", v.is_readonly ? "bg-muted/40" : isEdited ? "bg-amber-50/30" : "hover:bg-muted/50")}>
+                          <TableRow key={v.key} className={cn("transition-colors", v.is_readonly ? "bg-muted/40" : isEdited ? "bg-amber-50/30" : "hover:bg-muted/50")}>
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <code className="text-[13px] font-mono text-foreground">{v.key}</code>
@@ -1337,7 +1337,7 @@ export default function AdminPage() {
                       {newVars.map((nv, idx) => {
                         const isDuplicate = envVars.some((v) => v.key === nv.key.trim()) || newVars.filter((n, i) => i !== idx && n.key.trim() === nv.key.trim()).length > 0;
                         return (
-                          <TableRow key={`new-${idx}`} className="border-b border-border last:border-0 bg-emerald-50/20">
+                          <TableRow key={`new-${idx}`} className="bg-emerald-50/20">
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <Input

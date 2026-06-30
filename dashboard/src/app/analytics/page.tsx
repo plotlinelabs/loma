@@ -385,7 +385,7 @@ export default function AnalyticsPage() {
           <Card className="overflow-hidden">
             <Table>
               <TableHeader>
-                <TableRow className="border-b border-border bg-muted/50">
+                <TableRow className="bg-muted/40">
                   <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Type</TableHead>
                   <TableHead className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</TableHead>
                   <TableHead className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Input Tokens</TableHead>

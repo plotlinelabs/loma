@@ -265,7 +265,7 @@ function WebhookLogsContent() {
         <Card className="overflow-hidden">
           <Table>
             <TableHeader>
-              <TableRow className="text-left text-muted-foreground border-b border-border bg-muted/50">
+              <TableRow className="text-left text-muted-foreground">
                 <TableHead className="font-medium">Received</TableHead>
                 <TableHead className="font-medium">Flow</TableHead>
                 <TableHead className="font-medium">Auth</TableHead>
@@ -295,7 +295,7 @@ function WebhookLogsContent() {
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow className="text-left text-muted-foreground border-b border-border bg-muted/50">
+                <TableRow className="text-left text-muted-foreground">
                   <TableHead className="font-medium">Received</TableHead>
                   <TableHead className="font-medium">Flow</TableHead>
                   <TableHead className="font-medium">Auth</TableHead>
