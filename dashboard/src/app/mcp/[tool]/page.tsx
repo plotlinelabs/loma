@@ -15,40 +15,50 @@ import {
   type Team,
   type ToolConfig,
 } from "../../../lib/governance-api";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { RiAddLine, RiLoader4Line } from "@remixicon/react";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 
-/* ── Helpers ──────────────────────────────────────────────────────── */
+/* -- Helpers ---------------------------------------------------------------- */
 
 function getAllToolKeys(): string[] {
   return CATEGORIES.flatMap((c) => c.keys);
 }
 
-/* ── Components ───────────────────────────────────────────────────── */
+/* -- Components ------------------------------------------------------------- */
 
 function StatusBadge({ status }: { status: "connected" | "expired" | "not_connected" | null }) {
   if (status === "connected")
-    return <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 font-medium">Connected</span>;
+    return <Badge className="text-[10px] bg-emerald-50 text-emerald-600 border-transparent">Connected</Badge>;
   if (status === "expired")
-    return <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium">Expired</span>;
-  return <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-medium">Not connected</span>;
+    return <Badge className="text-[10px] bg-amber-50 text-amber-600 border-transparent">Expired</Badge>;
+  return <Badge variant="secondary" className="text-[10px]">Not connected</Badge>;
 }
 
 function RoleRow({ role }: { role: { name: string; description: string } }) {
   return (
-    <tr className="border-b border-gray-100 last:border-0">
-      <td className="py-3 pr-4">
-        <span className="text-sm font-medium text-gray-900">{role.name}</span>
-      </td>
-      <td className="py-3 pr-4">
-        <span className="text-sm text-gray-500">{role.description}</span>
-      </td>
-      <td className="py-3 text-right">
-        <button className="text-xs text-gray-400 hover:text-red-500 transition-colors">Remove</button>
-      </td>
-    </tr>
+    <TableRow>
+      <TableCell className="py-3 pr-4">
+        <span className="text-sm font-medium text-foreground">{role.name}</span>
+      </TableCell>
+      <TableCell className="py-3 pr-4">
+        <span className="text-sm text-muted-foreground">{role.description}</span>
+      </TableCell>
+      <TableCell className="py-3 text-right">
+        <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Remove</Button>
+      </TableCell>
+    </TableRow>
   );
 }
 
-/* ── Main Page ────────────────────────────────────────────────────── */
+/* -- Main Page -------------------------------------------------------------- */
 
 export default function ToolDetailPage() {
   const params = useParams();
@@ -84,15 +94,22 @@ export default function ToolDetailPage() {
   if (!isValidTool) {
     return (
       <div className="space-y-4 animate-fade-in-up">
-        <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-          </svg>
-          Back to Admin
-        </Link>
-        <div className="bg-surface rounded-xl border border-gray-200 p-12 text-center">
-          <p className="text-gray-500">Tool not found</p>
-        </div>
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink href="/admin">Admin</BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>Tool not found</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+        <Card>
+          <CardContent className="p-8 text-center">
+            <p className="text-muted-foreground">Tool not found</p>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -100,7 +117,7 @@ export default function ToolDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
+        <RiLoader4Line size={32} className="animate-spin text-foreground" />
       </div>
     );
   }
@@ -115,138 +132,141 @@ export default function ToolDetailPage() {
 
   return (
     <div className="space-y-5 animate-fade-in-up">
-      {/* Back link */}
-      <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1">
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-        </svg>
-        Back to Admin
-      </Link>
+      {/* Breadcrumb */}
+      <Breadcrumb>
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink href="/admin">Admin</BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbPage>{meta.displayName}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
 
       {/* Tool Header */}
-      <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
-        <div className="flex items-center gap-4">
-          <div
-            className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ backgroundColor: meta.bgColor }}
-          >
-            {Logo ? (
-              <Logo className="w-6 h-6" />
-            ) : (
-              <span className="text-lg font-bold" style={{ color: meta.color }}>
-                {meta.displayName.charAt(0)}
-              </span>
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-lg md:text-xl font-semibold text-gray-900">{meta.displayName}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: meta.bgColor, color: meta.color }}>
-                {meta.authMethod}
-              </span>
-              {meta.supportsOAuth && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">
-                  OAuth supported
+      <Card>
+        <CardContent>
+          <div className="flex items-center gap-4">
+            <div
+              className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ backgroundColor: meta.bgColor }}
+            >
+              {Logo ? (
+                <Logo className="w-6 h-6" />
+              ) : (
+                <span className="text-lg font-bold" style={{ color: meta.color }}>
+                  {meta.displayName.charAt(0)}
                 </span>
               )}
             </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{meta.displayName}</h1>
+              <div className="flex items-center gap-2 mt-1">
+                <Badge className="text-[10px]" style={{ backgroundColor: meta.bgColor, color: meta.color }}>
+                  {meta.authMethod}
+                </Badge>
+                {meta.supportsOAuth && (
+                  <Badge className="text-[10px] bg-blue-50 text-blue-600 border-transparent">
+                    OAuth supported
+                  </Badge>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Auth Mode Toggle */}
-      <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
-        <h2 className="text-sm font-semibold text-gray-900 mb-3">Authentication Mode</h2>
-        <div className="inline-flex rounded-lg border border-gray-200 p-0.5 bg-gray-50">
-          <button
-            onClick={() => setAuthMode("loma-managed")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-150 ${
-              authMode === "loma-managed"
-                ? "bg-surface text-gray-900 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Loma-managed
-          </button>
-          <button
-            onClick={() => setAuthMode("tool-managed")}
-            disabled={!meta.supportsOAuth}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-150 ${
-              authMode === "tool-managed"
-                ? "bg-surface text-gray-900 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            } ${!meta.supportsOAuth ? "opacity-40 cursor-not-allowed" : ""}`}
-          >
-            Tool-managed (OAuth)
-          </button>
-        </div>
-        {!meta.supportsOAuth && (
-          <p className="text-xs text-gray-400 mt-2">
-            This tool does not support OAuth. Only Loma-managed authentication is available.
-          </p>
-        )}
-      </div>
+      <Card>
+        <CardContent>
+          <h2 className="text-sm font-heading font-semibold text-foreground mb-3">Authentication Mode</h2>
+          <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted">
+            <Button
+              variant={authMode === "loma-managed" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setAuthMode("loma-managed")}
+              className={authMode === "loma-managed" ? "shadow-sm" : ""}
+            >
+              Loma-managed
+            </Button>
+            <Button
+              variant={authMode === "tool-managed" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setAuthMode("tool-managed")}
+              disabled={!meta.supportsOAuth}
+              className={authMode === "tool-managed" ? "shadow-sm" : ""}
+            >
+              Tool-managed (OAuth)
+            </Button>
+          </div>
+          {!meta.supportsOAuth && (
+            <p className="text-xs text-muted-foreground mt-2">
+              This tool does not support OAuth. Only Loma-managed authentication is available.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
-      {/* ── Loma-managed mode ── */}
+      {/* -- Loma-managed mode -- */}
       {authMode === "loma-managed" && (
         <>
           {/* Roles */}
-          <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-gray-900">Roles</h2>
-              <button className="text-xs font-medium text-brand-600 hover:text-brand-700 transition-colors flex items-center gap-1">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-                Add Role
-              </button>
-            </div>
+          <Card>
+            <CardContent>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-heading font-semibold text-foreground">Roles</h2>
+                <Button variant="ghost" size="xs" className="text-brand-600 hover:text-brand-700">
+                  <RiAddLine size={14} />
+                  Add Role
+                </Button>
+              </div>
 
-            {config?.roles && config.roles.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-gray-200">
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Role</th>
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Description</th>
-                      <th className="pb-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
+              {config?.roles && config.roles.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-b border-border">
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Role</TableHead>
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Description</TableHead>
+                      <TableHead className="pb-2" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {config.roles.map((role) => (
                       <RoleRow key={role.name} role={role} />
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-sm text-gray-400">No roles defined yet</p>
-                <p className="text-xs text-gray-300 mt-1">Add a role to start managing access</p>
-              </div>
-            )}
-          </div>
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="text-center py-6">
+                  <p className="text-sm text-muted-foreground">No roles defined yet</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">Add a role to start managing access</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Team Assignments */}
           {(() => {
             const teamsWithDefaults = allTeams.filter((t) => t.tool_defaults[toolKey]?.role);
             return teamsWithDefaults.length > 0 ? (
-              <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
-                <h2 className="text-sm font-semibold text-gray-900 mb-4">Team Assignments</h2>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Team</th>
-                        <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Default Role</th>
-                        <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Members</th>
-                        <th className="pb-2" />
-                      </tr>
-                    </thead>
-                    <tbody>
+              <Card>
+                <CardContent>
+                  <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Team Assignments</h2>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-b border-border">
+                        <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Team</TableHead>
+                        <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Default Role</TableHead>
+                        <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Members</TableHead>
+                        <TableHead className="pb-2" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {teamsWithDefaults.map((team) => (
-                        <tr key={team.team_id} className="border-b border-gray-100 last:border-0">
-                          <td className="py-3 pr-4">
+                        <TableRow key={team.team_id}>
+                          <TableCell className="py-3 pr-4">
                             <Link href={`/admin/teams/${team.team_id}`} className="flex items-center gap-2.5 group">
                               <div
                                 className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0"
@@ -256,17 +276,17 @@ export default function ToolDetailPage() {
                                   {team.name.charAt(0)}
                                 </span>
                               </div>
-                              <span className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors">
+                              <span className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">
                                 {team.name}
                               </span>
                             </Link>
-                          </td>
-                          <td className="py-3 pr-4">
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">
+                          </TableCell>
+                          <TableCell className="py-3 pr-4">
+                            <Badge className="text-[10px] bg-blue-50 text-blue-600 border-transparent">
                               {team.tool_defaults[toolKey]?.role}
-                            </span>
-                          </td>
-                          <td className="py-3 pr-4">
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="py-3 pr-4">
                             <div className="flex items-center gap-1">
                               {team.members.slice(0, 4).map((memberEmail) => {
                                 const member = users.find((u) => u.email === memberEmail);
@@ -281,207 +301,211 @@ export default function ToolDetailPage() {
                                 );
                               })}
                               {team.members.length > 4 && (
-                                <span className="text-[10px] text-gray-400 ml-0.5">+{team.members.length - 4}</span>
+                                <span className="text-[10px] text-muted-foreground ml-0.5">+{team.members.length - 4}</span>
                               )}
                             </div>
-                          </td>
-                          <td className="py-3 text-right">
-                            <button className="text-xs text-gray-400 hover:text-red-500 transition-colors">Remove</button>
-                          </td>
-                        </tr>
+                          </TableCell>
+                          <TableCell className="py-3 text-right">
+                            <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Remove</Button>
+                          </TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
             ) : null;
           })()}
 
           {/* User Assignments */}
-          <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
-            <h2 className="text-sm font-semibold text-gray-900 mb-4">User Assignments</h2>
+          <Card>
+            <CardContent>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-4">User Assignments</h2>
 
-            {toolUsers.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-gray-200">
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">User</th>
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Effective Role</th>
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Source</th>
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Last Used</th>
-                      <th className="pb-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
+              {toolUsers.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-b border-border">
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Effective Role</TableHead>
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Source</TableHead>
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last Used</TableHead>
+                      <TableHead className="pb-2" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {toolUsers.map(({ email, name, avatar, assignment }) => {
                       const user = users.find((u) => u.email === email)!;
                       const effective = getEffectiveRole(user, allTeams, toolKey);
                       return (
-                        <tr key={email} className="border-b border-gray-100 last:border-0">
-                          <td className="py-3 pr-4">
+                        <TableRow key={email}>
+                          <TableCell className="py-3 pr-4">
                             <Link href={`/admin/${encodeURIComponent(email)}`} className="flex items-center gap-2.5 group">
                               <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
                                 <span className="text-xs font-medium text-brand-700">{avatar}</span>
                               </div>
                               <div>
-                                <div className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{name}</div>
-                                <div className="text-xs text-gray-400">{email}</div>
+                                <div className="text-sm font-medium text-foreground group-hover:text-brand-600 transition-colors">{name}</div>
+                                <div className="text-xs text-muted-foreground">{email}</div>
                               </div>
                             </Link>
-                          </td>
-                          <td className="py-3 pr-4">
+                          </TableCell>
+                          <TableCell className="py-3 pr-4">
                             {effective.role ? (
-                              <select
-                                defaultValue={effective.role}
-                                className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-surface text-gray-700 focus:outline-none focus:ring-2 focus:ring-accent-200"
-                              >
-                                {config?.roles.map((r) => (
-                                  <option key={r.name} value={r.name}>{r.name}</option>
-                                ))}
-                              </select>
+                              <Select defaultValue={effective.role}>
+                                <SelectTrigger className="text-sm">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {config?.roles.map((r) => (
+                                    <SelectItem key={r.name} value={r.name}>{r.name}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             ) : (
-                              <span className="text-sm text-gray-400">No role</span>
+                              <span className="text-sm text-muted-foreground">No role</span>
                             )}
-                          </td>
-                          <td className="py-3 pr-4">
+                          </TableCell>
+                          <TableCell className="py-3 pr-4">
                             {effective.source === "direct" ? (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">Direct</span>
+                              <Badge variant="secondary" className="text-[10px]">Direct</Badge>
                             ) : effective.source !== "none" ? (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium" style={{
+                              <Badge className="text-[10px]" style={{
                                 backgroundColor: allTeams.find((t) => t.name === effective.source)?.bg_color ?? "#F3F4F6",
                                 color: allTeams.find((t) => t.name === effective.source)?.color ?? "#6B7280",
                               }}>
                                 {effective.source}
-                              </span>
+                              </Badge>
                             ) : (
-                              <span className="text-[10px] text-gray-300">&mdash;</span>
+                              <span className="text-[10px] text-muted-foreground/50">&mdash;</span>
                             )}
-                          </td>
-                          <td className="py-3 pr-4">
-                            <span className="text-sm text-gray-500">
+                          </TableCell>
+                          <TableCell className="py-3 pr-4">
+                            <span className="text-sm text-muted-foreground">
                               {assignment?.last_used ? formatRelativeTime(assignment.last_used) : "Never"}
                             </span>
-                          </td>
-                          <td className="py-3 text-right">
-                            <button className="text-xs text-gray-400 hover:text-red-500 transition-colors">Remove</button>
-                          </td>
-                        </tr>
+                          </TableCell>
+                          <TableCell className="py-3 text-right">
+                            <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Remove</Button>
+                          </TableCell>
+                        </TableRow>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-sm text-gray-400">No users assigned</p>
-              </div>
-            )}
-          </div>
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="text-center py-6">
+                  <p className="text-sm text-muted-foreground">No users assigned</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
 
-      {/* ── Tool-managed (OAuth) mode ── */}
+      {/* -- Tool-managed (OAuth) mode -- */}
       {authMode === "tool-managed" && config?.oauth && (
         <>
           {/* OAuth Configuration */}
-          <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-gray-900">OAuth Configuration</h2>
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                config.oauth.configured
-                  ? "bg-emerald-50 text-emerald-600"
-                  : "bg-amber-50 text-amber-600"
-              }`}>
-                {config.oauth.configured ? "Configured" : "Not configured"}
-              </span>
-            </div>
+          <Card>
+            <CardContent>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-heading font-semibold text-foreground">OAuth Configuration</h2>
+                <Badge className={`text-[10px] ${
+                  config.oauth.configured
+                    ? "bg-emerald-50 text-emerald-600"
+                    : "bg-amber-50 text-amber-600"
+                } border-transparent`}>
+                  {config.oauth.configured ? "Configured" : "Not configured"}
+                </Badge>
+              </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Client ID</label>
-                <input
-                  type="text"
-                  readOnly
-                  value={config.oauth.client_id}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 text-gray-700 font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Redirect URI</label>
-                <input
-                  type="text"
-                  readOnly
-                  value={config.oauth.redirect_uri}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 text-gray-700 font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Scopes</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {config.oauth.scopes.map((scope) => (
-                    <span key={scope} className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-mono font-medium">
-                      {scope}
-                    </span>
-                  ))}
+              <div className="space-y-4">
+                <div>
+                  <Label className="mb-1 text-xs text-muted-foreground">Client ID</Label>
+                  <Input
+                    type="text"
+                    readOnly
+                    value={config.oauth.client_id}
+                    className="bg-muted font-mono"
+                  />
+                </div>
+                <div>
+                  <Label className="mb-1 text-xs text-muted-foreground">Redirect URI</Label>
+                  <Input
+                    type="text"
+                    readOnly
+                    value={config.oauth.redirect_uri}
+                    className="bg-muted font-mono"
+                  />
+                </div>
+                <div>
+                  <Label className="mb-1 text-xs text-muted-foreground">Scopes</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {config.oauth.scopes.map((scope) => (
+                      <Badge key={scope} className="text-[11px] bg-blue-50 text-blue-600 font-mono border-transparent">
+                        {scope}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
           {/* Connected Users */}
-          <div className="bg-surface rounded-xl border border-gray-200 p-5 md:p-6">
-            <h2 className="text-sm font-semibold text-gray-900 mb-4">Connected Users</h2>
+          <Card>
+            <CardContent>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Connected Users</h2>
 
-            {toolUsers.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-gray-200">
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">User</th>
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Status</th>
-                      <th className="pb-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Last Used</th>
-                      <th className="pb-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
+              {toolUsers.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-b border-border">
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">User</TableHead>
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</TableHead>
+                      <TableHead className="pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Last Used</TableHead>
+                      <TableHead className="pb-2" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {toolUsers.map(({ email, name, avatar, assignment }) => (
-                      <tr key={email} className="border-b border-gray-100 last:border-0">
-                        <td className="py-3 pr-4">
+                      <TableRow key={email}>
+                        <TableCell className="py-3 pr-4">
                           <div className="flex items-center gap-2.5">
                             <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
                               <span className="text-xs font-medium text-brand-700">{avatar}</span>
                             </div>
                             <div>
-                              <div className="text-sm font-medium text-gray-900">{name}</div>
-                              <div className="text-xs text-gray-400">{email}</div>
+                              <div className="text-sm font-medium text-foreground">{name}</div>
+                              <div className="text-xs text-muted-foreground">{email}</div>
                             </div>
                           </div>
-                        </td>
-                        <td className="py-3 pr-4">
+                        </TableCell>
+                        <TableCell className="py-3 pr-4">
                           <StatusBadge status={assignment?.oauth_status ?? null} />
-                        </td>
-                        <td className="py-3 pr-4">
-                          <span className="text-sm text-gray-500">
+                        </TableCell>
+                        <TableCell className="py-3 pr-4">
+                          <span className="text-sm text-muted-foreground">
                             {assignment?.last_used ? formatRelativeTime(assignment.last_used) : "Never"}
                           </span>
-                        </td>
-                        <td className="py-3 text-right">
+                        </TableCell>
+                        <TableCell className="py-3 text-right">
                           {assignment?.oauth_status === "connected" && (
-                            <button className="text-xs text-gray-400 hover:text-red-500 transition-colors">Revoke</button>
+                            <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-red-500">Revoke</Button>
                           )}
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-sm text-gray-400">No users have connected yet</p>
-              </div>
-            )}
-          </div>
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="text-center py-6">
+                  <p className="text-sm text-muted-foreground">No users have connected yet</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

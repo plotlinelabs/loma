@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import type { Turn } from "../lib/api";
 import ClientTimestamp from "./ClientTimestamp";
 
@@ -18,42 +22,48 @@ function ToolCallCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
-      <button
+    <div className="border border-border rounded-lg overflow-hidden">
+      <Button
+        variant="ghost"
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+        className="w-full flex items-center justify-between px-3 py-2 h-auto bg-muted/50 hover:bg-muted transition-colors text-left rounded-none"
       >
         <div className="flex items-center gap-2">
           <span className="text-brand-700 text-xs font-mono font-medium">
             {call.tool_name}
           </span>
           {result?.is_error && (
-            <span className="text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded">Error</span>
+            <Badge variant="destructive" className="text-xs">Error</Badge>
           )}
         </div>
-        <span className="text-gray-400 text-xs">
-          {expanded ? "collapse" : "expand"}
+        <span className="text-muted-foreground text-xs flex items-center">
+          {expanded ? (
+            <RiArrowDownSLine size={14} />
+          ) : (
+            <RiArrowRightSLine size={14} />
+          )}
         </span>
-      </button>
+      </Button>
       {expanded && (
-        <div className="p-3 space-y-2 text-xs bg-surface">
+        <div className="p-3 space-y-2 text-xs bg-card">
           <div>
-            <div className="text-gray-500 mb-1 font-medium">Input:</div>
-            <pre className="bg-gray-50 p-2 rounded-lg overflow-x-auto text-gray-700 max-h-60 overflow-y-auto border border-gray-100">
+            <div className="text-muted-foreground mb-1 font-medium">Input:</div>
+            <pre className="bg-muted/50 p-2 rounded-lg overflow-x-auto text-foreground/70 max-h-60 overflow-y-auto border border-border/50">
               {call.input}
             </pre>
           </div>
           {result && (
             <div>
-              <div className="text-gray-500 mb-1 font-medium">
+              <div className="text-muted-foreground mb-1 font-medium">
                 Output{result.is_error ? " (Error)" : ""}:
               </div>
               <pre
-                className={`p-2 rounded-lg overflow-x-auto max-h-60 overflow-y-auto border ${
+                className={cn(
+                  "p-2 rounded-lg overflow-x-auto max-h-60 overflow-y-auto border",
                   result.is_error
                     ? "bg-red-50 text-red-700 border-red-100"
-                    : "bg-gray-50 text-gray-700 border-gray-100"
-                }`}
+                    : "bg-muted/50 text-foreground/70 border-border/50"
+                )}
               >
                 {result.output}
               </pre>
@@ -68,7 +78,7 @@ function ToolCallCard({
 export default function TurnViewer({ turns }: TurnViewerProps) {
   if (!turns.length) {
     return (
-      <p className="text-gray-400 text-sm italic">No turns recorded.</p>
+      <p className="text-muted-foreground text-sm italic">No turns recorded.</p>
     );
   }
 
@@ -85,16 +95,16 @@ export default function TurnViewer({ turns }: TurnViewerProps) {
         return (
           <div
             key={`${turn.conversation_id}-${turn.turn_number}`}
-            className="bg-surface border border-gray-200 rounded-xl p-4"
+            className="bg-card border border-border rounded-xl p-4"
           >
             <div className="flex items-center gap-3 mb-3">
-              <span className="text-xs font-mono bg-brand-50 text-brand-700 px-2 py-0.5 rounded-md font-medium">
+              <Badge variant="secondary" className="font-mono text-xs bg-brand-50 text-brand-700">
                 Turn {turn.turn_number}
-              </span>
+              </Badge>
               <ClientTimestamp
                 iso={turn.timestamp}
                 variant="time"
-                className="text-xs text-gray-400"
+                className="text-xs text-muted-foreground"
               />
             </div>
 
@@ -102,7 +112,7 @@ export default function TurnViewer({ turns }: TurnViewerProps) {
             {turn.text_blocks?.map((block, i) => (
               <div
                 key={i}
-                className="mb-3 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed"
+                className="mb-3 text-sm text-foreground/70 whitespace-pre-wrap leading-relaxed"
               >
                 {block.text}
               </div>

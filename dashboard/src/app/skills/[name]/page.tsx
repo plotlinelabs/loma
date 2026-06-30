@@ -12,9 +12,15 @@ import {
   skillAssetUrl,
 } from "../../../lib/api";
 import type { SkillCommit, SkillDetailResponse, SkillFile } from "../../../lib/api";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Separator } from "@/components/ui/separator";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 
 const PROSE_CLASSES =
-  "prose prose-sm max-w-none prose-headings:text-gray-900 prose-p:text-gray-700 prose-a:text-brand-600 prose-strong:text-gray-800 prose-code:text-brand-700 prose-code:bg-brand-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-pre:bg-gray-50 prose-pre:border prose-pre:border-gray-100 prose-li:text-gray-700";
+  "prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-muted-foreground prose-a:text-brand-600 prose-strong:text-foreground prose-code:text-brand-700 prose-code:bg-brand-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-pre:bg-muted prose-pre:border prose-pre:border-border prose-li:text-muted-foreground";
 
 function isAsset(file: SkillFile): boolean {
   return file.kind === "local_asset";
@@ -92,7 +98,7 @@ function renderTextFile(path: string, content: string) {
     );
   }
   return (
-    <pre className="whitespace-pre-wrap text-xs text-gray-700 leading-relaxed bg-gray-50 rounded-lg p-4 border border-gray-100 overflow-x-auto max-h-[520px] overflow-y-auto">
+    <pre className="whitespace-pre-wrap text-xs text-muted-foreground leading-relaxed bg-muted rounded-lg p-4 border border-border overflow-x-auto max-h-[520px] overflow-y-auto">
       {content}
     </pre>
   );
@@ -125,11 +131,11 @@ export default function SkillDetailPage() {
   }, [skill]);
 
   if (loading) {
-    return <div className="py-20 text-center text-sm text-gray-400">Loading skill...</div>;
+    return <div className="py-20 text-center text-sm text-muted-foreground">Loading skill...</div>;
   }
 
   if (!skill) {
-    return <div className="py-20 text-center text-sm text-red-600">{error || "Skill not found"}</div>;
+    return <div className="py-20 text-center text-sm text-destructive">{error || "Skill not found"}</div>;
   }
 
   const slug = skillSlug(skill, name);
@@ -138,128 +144,153 @@ export default function SkillDetailPage() {
 
   return (
     <div className="space-y-5 animate-fade-in-up">
-      <Link href="/skills" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors font-medium">
-        Back to skills
-      </Link>
+      <Breadcrumb>
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink href="/skills">Skills</BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbPage>{skill.name || slug}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
 
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">{skill.name || slug}</h1>
-          <p className="text-sm text-gray-500 mt-1">{skill.description || "No description yet."}</p>
+          <h1 className="text-xl font-heading font-semibold text-foreground">{skill.name || slug}</h1>
+          <p className="text-sm text-muted-foreground mt-1">{skill.description || "No description yet."}</p>
           <div className="flex flex-wrap gap-1.5 mt-3">
-            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-md font-mono">{slug}</span>
+            <Badge variant="secondary" className="font-mono">{slug}</Badge>
             {skill.tags?.map((tag) => (
-              <span key={tag} className="text-xs bg-brand-50 text-brand-700 px-2 py-0.5 rounded-md">{tag}</span>
+              <Badge key={tag} className="bg-brand-50 text-brand-700 border-transparent">{tag}</Badge>
             ))}
           </div>
         </div>
-        <Link
-          href={chatUrl(buildEditSkillPrompt(skill, name))}
-          className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg bg-brand-500 text-gray-950 hover:bg-brand-400 transition-colors"
-        >
-          Edit in Chat
-        </Link>
+        <Button asChild>
+          <Link href={chatUrl(buildEditSkillPrompt(skill, name))}>
+            Edit in Chat
+          </Link>
+        </Button>
       </div>
 
       {error && (
-        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-          {error}
-        </div>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-5">
         <div className="space-y-5 min-w-0">
-          <section className="bg-surface border border-gray-200 rounded-xl p-5">
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <h2 className="text-sm font-semibold text-gray-900">SKILL.md</h2>
-              <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, files.find((file) => file.path === "SKILL.md") || { path: "SKILL.md", kind: "inline_text" }))} className="text-xs font-semibold text-brand-700 hover:text-brand-800">
-                Edit file in chat
-              </Link>
-            </div>
-            {renderTextFile("SKILL.md", skill.content)}
-          </section>
+          <Card>
+            <CardContent>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h2 className="text-sm font-heading font-semibold text-foreground">SKILL.md</h2>
+                <Button variant="link" size="xs" asChild>
+                  <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, files.find((file) => file.path === "SKILL.md") || { path: "SKILL.md", kind: "inline_text" }))}>
+                    Edit file in chat
+                  </Link>
+                </Button>
+              </div>
+              {renderTextFile("SKILL.md", skill.content)}
+            </CardContent>
+          </Card>
 
           {textFiles.filter((file) => file.path !== "SKILL.md").map((file) => {
             const content = skill.extra_files[file.path] || "";
             return (
-              <section key={file.path} className="bg-surface border border-gray-200 rounded-xl p-5">
-                <div className="flex items-center justify-between gap-3 mb-4">
-                  <div>
-                    <h2 className="text-sm font-semibold text-gray-900 font-mono">{file.path}</h2>
-                    <p className="text-xs text-gray-400 mt-1">{file.content_type || "text"} · {formatBytes(file.size_bytes)}</p>
+              <Card key={file.path}>
+                <CardContent>
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                      <h2 className="text-sm font-heading font-semibold text-foreground font-mono">{file.path}</h2>
+                      <p className="text-xs text-muted-foreground mt-1">{file.content_type || "text"} · {formatBytes(file.size_bytes)}</p>
+                    </div>
+                    <Button variant="link" size="xs" asChild>
+                      <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, file))}>
+                        Edit file in chat
+                      </Link>
+                    </Button>
                   </div>
-                  <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, file))} className="text-xs font-semibold text-brand-700 hover:text-brand-800">
-                    Edit file in chat
-                  </Link>
-                </div>
-                {renderTextFile(file.path, content)}
-              </section>
+                  {renderTextFile(file.path, content)}
+                </CardContent>
+              </Card>
             );
           })}
 
           {assetFiles.length > 0 && (
-            <section className="bg-surface border border-gray-200 rounded-xl p-5">
-              <h2 className="text-sm font-semibold text-gray-900 mb-4">Assets</h2>
-              <div className="space-y-4">
-                {assetFiles.map((file) => (
-                  <div key={file.path} className="border border-gray-100 rounded-lg p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-gray-900 font-mono truncate">{file.path}</h3>
-                        <p className="text-xs text-gray-400 mt-1">{file.content_type || "asset"} · {formatBytes(file.size_bytes)}</p>
+            <Card>
+              <CardContent>
+                <h2 className="text-sm font-heading font-semibold text-foreground mb-4">Assets</h2>
+                <div className="space-y-4">
+                  {assetFiles.map((file) => (
+                    <div key={file.path} className="border border-border rounded-lg p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-semibold text-foreground font-mono truncate">{file.path}</h3>
+                          <p className="text-xs text-muted-foreground mt-1">{file.content_type || "asset"} · {formatBytes(file.size_bytes)}</p>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <Button variant="ghost" size="xs" asChild>
+                            <a href={skillAssetUrl(slug, file.path)} target="_blank" rel="noreferrer">
+                              Open
+                            </a>
+                          </Button>
+                          <Button variant="link" size="xs" asChild>
+                            <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, file))}>
+                              Edit in chat
+                            </Link>
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <a href={skillAssetUrl(slug, file.path)} target="_blank" rel="noreferrer" className="text-xs font-semibold text-gray-600 hover:text-gray-900">
-                          Open
-                        </a>
-                        <Link href={chatUrl(buildEditSkillFilePrompt(skill, name, file))} className="text-xs font-semibold text-brand-700 hover:text-brand-800">
-                          Edit in chat
-                        </Link>
-                      </div>
+                      {file.content_type?.startsWith("image/") && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={skillAssetUrl(slug, file.path)} alt={file.path} className="max-w-full max-h-[420px] rounded-lg border border-border" />
+                      )}
+                      {file.content_type === "application/pdf" && (
+                        <iframe src={skillAssetUrl(slug, file.path)} className="w-full h-[520px] rounded-lg border border-border" />
+                      )}
                     </div>
-                    {file.content_type?.startsWith("image/") && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={skillAssetUrl(slug, file.path)} alt={file.path} className="max-w-full max-h-[420px] rounded-lg border border-gray-200" />
-                    )}
-                    {file.content_type === "application/pdf" && (
-                      <iframe src={skillAssetUrl(slug, file.path)} className="w-full h-[520px] rounded-lg border border-gray-200" />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
 
         <aside className="space-y-5">
-          <section className="bg-surface border border-gray-200 rounded-xl p-5">
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">Package</h2>
-            <div className="space-y-2">
-              {files.map((file) => (
-                <div key={file.path} className="flex items-center justify-between gap-3 text-xs">
-                  <span className="font-mono text-gray-600 truncate">{file.path}</span>
-                  <span className="text-gray-400 flex-shrink-0">{file.kind === "local_asset" ? "asset" : "text"}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="bg-surface border border-gray-200 rounded-xl p-5">
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">History</h2>
-            {history.length === 0 ? (
-              <p className="text-xs text-gray-400">No versions yet.</p>
-            ) : (
-              <div className="space-y-3">
-                {history.slice(0, 20).map((commit) => (
-                  <div key={commit.sha} className="border-b border-gray-100 pb-3 last:border-0">
-                    <p className="text-xs font-medium text-gray-800">{commit.message}</p>
-                    <p className="text-[11px] text-gray-400 mt-1">{commit.author} · {new Date(commit.date).toLocaleString()}</p>
-                    <p className="text-[10px] font-mono text-gray-300 mt-1">{commit.sha.slice(0, 10)}</p>
+          <Card>
+            <CardContent>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-3">Package</h2>
+              <div className="space-y-2">
+                {files.map((file) => (
+                  <div key={file.path} className="flex items-center justify-between gap-3 text-xs">
+                    <span className="font-mono text-muted-foreground truncate">{file.path}</span>
+                    <span className="text-muted-foreground flex-shrink-0">{file.kind === "local_asset" ? "asset" : "text"}</span>
                   </div>
                 ))}
               </div>
-            )}
-          </section>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent>
+              <h2 className="text-sm font-heading font-semibold text-foreground mb-3">History</h2>
+              {history.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No versions yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {history.slice(0, 20).map((commit) => (
+                    <div key={commit.sha} className="border-b border-border pb-3 last:border-0">
+                      <p className="text-xs font-medium text-foreground">{commit.message}</p>
+                      <p className="text-[11px] text-muted-foreground mt-1">{commit.author} · {new Date(commit.date).toLocaleString()}</p>
+                      <p className="text-[10px] font-mono text-muted-foreground/50 mt-1">{commit.sha.slice(0, 10)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </aside>
       </div>
     </div>

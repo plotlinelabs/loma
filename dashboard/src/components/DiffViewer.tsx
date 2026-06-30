@@ -1,5 +1,8 @@
 "use client";
 
+import { RiCheckLine } from "@remixicon/react";
+import { Skeleton } from "@/components/ui/skeleton";
+
 /* ── Diff Viewer ─────────────────────────────────────────────────── */
 
 export interface DiffLine {
@@ -47,7 +50,7 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
     return (
       <div className="space-y-1">
         {Array.from({ length: 12 }).map((_, i) => (
-          <div key={i} className="skeleton h-5 rounded" style={{ width: `${60 + Math.random() * 40}%` }} />
+          <Skeleton key={i} className="h-5 rounded" style={{ width: `${60 + Math.random() * 40}%` }} />
         ))}
       </div>
     );
@@ -55,11 +58,9 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
 
   if (!diff.trim()) {
     return (
-      <div className="flex items-center justify-center py-12 text-gray-400">
+      <div className="flex items-center justify-center py-8 text-muted-foreground">
         <div className="text-center">
-          <svg className="w-8 h-8 mx-auto mb-2 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-          </svg>
+          <RiCheckLine size={32} className="mx-auto mb-2 text-muted-foreground/60" />
           <p className="text-sm font-medium">No differences</p>
           <p className="text-xs mt-0.5">These versions are identical.</p>
         </div>
@@ -100,7 +101,7 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
       </div>
 
       {/* Diff lines */}
-      <div className="rounded-lg border border-gray-200 overflow-hidden font-mono text-[11px] leading-5 max-h-[600px] overflow-y-auto">
+      <div className="rounded-lg border border-border overflow-hidden font-mono text-[11px] leading-5 max-h-[600px] overflow-y-auto">
         {lines.map((line, i) => {
           if (line.type === "header") return null;
 
@@ -111,7 +112,7 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
                 ? "bg-red-50"
                 : line.type === "hunk"
                   ? "bg-blue-50"
-                  : "bg-surface";
+                  : "bg-card";
 
           const textColor =
             line.type === "add"
@@ -120,7 +121,7 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
                 ? "text-red-700"
                 : line.type === "hunk"
                   ? "text-blue-600"
-                  : "text-gray-600";
+                  : "text-muted-foreground";
 
           const prefix =
             line.type === "add"
@@ -132,19 +133,19 @@ export function DiffViewer({ diff, loading }: { diff: string; loading: boolean }
                   : " ";
 
           return (
-            <div key={i} className={`flex ${bg} border-b border-gray-100 last:border-b-0`}>
+            <div key={i} className={`flex ${bg} border-b border-border/50 last:border-b-0`}>
               {/* Line numbers */}
               {line.type !== "hunk" ? (
                 <>
-                  <span className="w-10 text-right pr-2 text-gray-300 select-none flex-shrink-0 border-r border-gray-100 bg-gray-50/50">
+                  <span className="w-10 text-right pr-2 text-muted-foreground/40 select-none flex-shrink-0 border-r border-border/50 bg-muted/30">
                     {line.type !== "add" ? line.oldNum ?? "" : ""}
                   </span>
-                  <span className="w-10 text-right pr-2 text-gray-300 select-none flex-shrink-0 border-r border-gray-100 bg-gray-50/50">
+                  <span className="w-10 text-right pr-2 text-muted-foreground/40 select-none flex-shrink-0 border-r border-border/50 bg-muted/30">
                     {line.type !== "remove" ? line.newNum ?? "" : ""}
                   </span>
                 </>
               ) : (
-                <span className="w-20 flex-shrink-0 border-r border-gray-100 bg-blue-50" />
+                <span className="w-20 flex-shrink-0 border-r border-border/50 bg-blue-50" />
               )}
 
               {/* Prefix + content */}
