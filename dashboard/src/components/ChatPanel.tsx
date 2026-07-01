@@ -1733,7 +1733,7 @@ export default function ChatPanel({
 
               {/* Fallback indicator before any events arrive */}
               {isStreaming && !isRecovering && items.length > 0 && items[items.length - 1].role === "user" && (
-                <div className="flex justify-start animate-message-in">
+                <div className="flex justify-start animate-message-in ml-6">
                   <StatusPill
                     message={
                       accountInfo?.runtime === "opencode"
@@ -1901,20 +1901,32 @@ function applyEvent(items: ChatItem[], event: ChatEvent): ChatItem[] {
 
     case "text": {
       updated = removeTransientStatusItems(updated);
-      const last = updated[updated.length - 1];
-      const newText = last?.role === "assistant" && event.append
-        ? last.content + event.text
-        : last?.role === "assistant"
-        ? (last.content ? last.content + "\n\n" + event.text : event.text)
+
+      // Find the last assistant message, skipping queued user messages and steps
+      // so that a user message sent mid-stream doesn't split the response.
+      let assistantIdx = -1;
+      for (let i = updated.length - 1; i >= 0; i--) {
+        if (updated[i].role === "assistant") {
+          assistantIdx = i;
+          break;
+        }
+        if (updated[i].role === "user" && !updated[i].queued) break;
+      }
+
+      const target = assistantIdx >= 0 ? updated[assistantIdx] : null;
+      const newText = target && event.append
+        ? target.content + event.text
+        : target
+        ? (target.content ? target.content + "\n\n" + event.text : event.text)
         : event.text;
 
       const clarify = extractClarifyBlock(newText);
       if (clarify) {
-        if (last?.role === "assistant") {
+        if (target) {
           if (clarify.before) {
-            updated[updated.length - 1] = { ...last, content: clarify.before };
+            updated[assistantIdx] = { ...target, content: clarify.before };
           } else {
-            updated.pop();
+            updated.splice(assistantIdx, 1);
           }
         }
         updated.push({
@@ -1926,8 +1938,8 @@ function applyEvent(items: ChatItem[], event: ChatEvent): ChatItem[] {
           updated.push({ role: "assistant", content: clarify.after });
         }
       } else {
-        if (last?.role === "assistant") {
-          updated[updated.length - 1] = { ...last, content: newText };
+        if (target) {
+          updated[assistantIdx] = { ...target, content: newText };
         } else {
           updated.push({ role: "assistant", content: event.text });
         }
@@ -2095,54 +2107,79 @@ function ClarifyingQuestions({
   );
 }
 
-/** Renders a group of tool call steps as a compact collapsible timeline */
 function StatusPill({ message, elapsedSeconds }: { message: string; elapsedSeconds?: number }) {
   const suffix = typeof elapsedSeconds === "number" && elapsedSeconds > 0 ? ` · ${elapsedSeconds}s` : "";
   return (
-    <div className="inline-flex max-w-[90vw] items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-sm">
-      <RiLoader4Line size={14} className="animate-spin text-brand-500" />
+    <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
+      <RiLoader4Line size={12} className="animate-spin text-brand-500 flex-shrink-0" />
       <span className="truncate max-w-[560px]">{message}{suffix}</span>
-    </div>
+    </span>
   );
 }
 
 function StatusLine({ message, elapsedSeconds }: { message: string; elapsedSeconds?: number }) {
   return (
-    <div className="flex justify-start animate-message-in">
-      <div className="w-0 md:w-7 flex-shrink-0 mr-0 md:mr-3" />
-      <div className="max-w-[90%] md:max-w-[75%]">
-        <StatusPill message={message} elapsedSeconds={elapsedSeconds} />
-      </div>
+    <div className="flex justify-start animate-message-in ml-6">
+      <StatusPill message={message} elapsedSeconds={elapsedSeconds} />
     </div>
   );
 }
 
+function StepIcon({ status }: { status: Step["status"] }) {
+  if (status === "running") return <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />;
+  if (status === "error") return <RiCloseLine size={10} className="text-red-500 flex-shrink-0" />;
+  return <RiCheckLine size={10} className="text-green-500/70 flex-shrink-0" />;
+}
+
 function StepsGroup({ steps }: { steps: Step[] }) {
-  return (
-    <div className="flex justify-start animate-message-in">
-      <div className="flex flex-wrap gap-1">
-        {steps.map((step, i) => (
-          <span
-            key={i}
-            className={cn(
-              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-[11px] text-muted-foreground border border-border",
-              step.status === "error" && "border-red-200 text-red-600"
-            )}
-            title={step.input || undefined}
-          >
-            {step.status === "running" ? (
-              <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />
-            ) : step.status === "error" ? (
-              <RiCloseLine size={10} className="text-red-500 flex-shrink-0" />
-            ) : (
-              <RiCheckLine size={10} className="text-green-500 flex-shrink-0" />
-            )}
-            <span className="truncate max-w-[200px]">
-              {formatToolName(step.name || "tool")}
-            </span>
-          </span>
-        ))}
+  const [expanded, setExpanded] = useState(false);
+
+  if (steps.length === 1) {
+    const step = steps[0];
+    const summary = step.input ? summarizeToolInput(step.name || "", step.input) : "";
+    return (
+      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground animate-message-in ml-6">
+        <StepIcon status={step.status} />
+        <span className={step.status === "error" ? "text-red-600" : ""}>{formatToolName(step.name || "tool")}</span>
+        {summary && <span className="text-muted-foreground/40 truncate max-w-[300px]">· {summary}</span>}
       </div>
+    );
+  }
+
+  const hasRunning = steps.some(s => s.status === "running");
+  const errorCount = steps.filter(s => s.status === "error").length;
+  const uniqueNames = [...new Set(steps.map(s => formatToolName(s.name || "tool")))];
+  const preview = uniqueNames.slice(0, 4).join(", ") + (uniqueNames.length > 4 ? ", …" : "");
+
+  return (
+    <div className="animate-message-in ml-6">
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground/80 transition-colors"
+      >
+        <RiArrowDownSLine
+          size={12}
+          className={cn("transition-transform flex-shrink-0", !expanded && "-rotate-90")}
+        />
+        {hasRunning && <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />}
+        <span>{steps.length} tool calls</span>
+        {errorCount > 0 && <span className="text-red-500">· {errorCount} failed</span>}
+        {!expanded && <span className="text-muted-foreground/40">· {preview}</span>}
+      </button>
+      {expanded && (
+        <div className="ml-4 mt-0.5 space-y-px">
+          {steps.map((step, i) => {
+            const summary = step.input ? summarizeToolInput(step.name || "", step.input) : "";
+            return (
+              <div key={i} className="flex items-center gap-1.5 text-[11px] text-muted-foreground py-px">
+                <StepIcon status={step.status} />
+                <span className={step.status === "error" ? "text-red-600" : ""}>{formatToolName(step.name || "tool")}</span>
+                {summary && <span className="text-muted-foreground/40 truncate max-w-[300px]">{summary}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
