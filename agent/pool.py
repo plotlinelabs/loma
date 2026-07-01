@@ -335,7 +335,7 @@ class ClientPool:
         max_turns = int(os.environ.get("AGENT_MAX_TURNS", "500"))
         mcp_servers = self._config.get("mcp_servers", {})
 
-        allowed_tools = ["Bash", "Read", "Skill", "WebSearch"]
+        allowed_tools = ["Bash", "Read", "Skill", "WebSearch", "Agent"]
         for server_name in mcp_servers:
             allowed_tools.append(f"mcp__{server_name}")
 

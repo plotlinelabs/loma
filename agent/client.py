@@ -805,6 +805,7 @@ async def stream_agent(
     last_total_cost_usd: float | None = None
     # Track pending tool calls for file artifact detection
     pending_tool_inputs: dict[str, tuple[str, object]] = {}  # tool_use_id -> (tool_name, tool_input)
+    pending_subagent_tool_ids: set[str] = set()  # Agent tool calls awaiting results
 
     if observer:
         observer.turn_count = 0
@@ -925,7 +926,7 @@ async def stream_agent(
             streamed_in_turn = False
             streamed_first_chunk = False
 
-            async for message in client.receive_response():
+            async for message in client.receive_messages():
                 if isinstance(message, StreamEvent) and include_steps:
                     evt = message.event
                     if evt.get("type") == "content_block_delta":
@@ -1059,6 +1060,8 @@ async def stream_agent(
                                 skill_name = block.input.get("skill", "unknown") if isinstance(block.input, dict) else "unknown"
                                 skills_used.add(skill_name)
                                 logger.info("[SKILL LOADED] %s", skill_name)
+                            if block.name == "Agent":
+                                pending_subagent_tool_ids.add(block.id)
                             # Track tool input for file artifact detection
                             pending_tool_inputs[block.id] = (block.name, block.input)
                             if observer:
@@ -1090,6 +1093,7 @@ async def stream_agent(
                     if content and isinstance(content, list):
                         for block in content:
                             if isinstance(block, ToolResultBlock):
+                                pending_subagent_tool_ids.discard(block.tool_use_id)
                                 logger.info("[TOOL RESULT] tool_use_id=%s, is_error=%s",
                                             block.tool_use_id, getattr(block, "is_error", False))
                                 result_text = _extract_result_text(block)
@@ -1142,12 +1146,18 @@ async def stream_agent(
                                 logger.info("[RESULT BLOCK] type=%s", type(block).__name__)
                     else:
                         logger.info("[RESULT] %s", _truncate_json(vars(message) if hasattr(message, '__dict__') else str(message)))
+                    if not pending_subagent_tool_ids:
+                        break
+                    logger.info("[SUBAGENT] Waiting for %d pending sub-agent(s) before finishing",
+                                len(pending_subagent_tool_ids))
                 else:
                     logger.info("[MESSAGE] type=%s", type(message).__name__)
 
         except Exception as e:
             if isinstance(getattr(e, "__context__", None), GeneratorExit):
                 logger.info("Client disconnected, agent generator closed")
+                if observer:
+                    await observer.mark_interrupted("Client disconnected")
                 return
             err_str = str(e).lower()
             # Auth errors (401) should failover to a different account, not give up.
