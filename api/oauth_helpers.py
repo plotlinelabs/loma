@@ -390,6 +390,284 @@ async def store_slack_tokens(
     logger.info("Stored Slack OAuth token for %s", user_email)
 
 
+async def _exchange_oauth_code(
+    token_endpoint: str,
+    code: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    auth_method: str = "client_secret_post",
+) -> dict | None:
+    """Exchange an authorization code for tokens at any OAuth provider."""
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }
+    headers: dict[str, str] = {}
+
+    if auth_method == "client_secret_basic":
+        import base64
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        headers["Authorization"] = f"Basic {credentials}"
+    else:
+        data["client_id"] = client_id
+        data["client_secret"] = client_secret
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                token_endpoint, data=data, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.error("OAuth code exchange failed (%d): %s", resp.status, text[:300])
+                    return None
+                return await resp.json()
+    except Exception as e:
+        logger.error("OAuth code exchange request failed: %s", e)
+        return None
+
+
+async def _refresh_oauth_token(
+    token_endpoint: str,
+    refresh_token: str,
+    client_id: str,
+    client_secret: str,
+    auth_method: str = "client_secret_post",
+) -> dict | None:
+    """Exchange a refresh token for a new access token at any OAuth provider."""
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+    headers: dict[str, str] = {}
+
+    if auth_method == "client_secret_basic":
+        import base64
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        headers["Authorization"] = f"Basic {credentials}"
+    else:
+        data["client_id"] = client_id
+        data["client_secret"] = client_secret
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                token_endpoint, data=data, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.error("OAuth token refresh failed (%d): %s", resp.status, text[:300])
+                    return None
+                return await resp.json()
+    except Exception as e:
+        logger.error("OAuth token refresh request failed: %s", e)
+        return None
+
+
+async def register_oauth_client(
+    registration_endpoint: str,
+    redirect_uri: str,
+    client_name: str = "Loma",
+) -> dict | None:
+    """Dynamically register as an OAuth client (RFC 7591).
+
+    Returns {"client_id": ..., "client_secret": ...} or None on failure.
+    """
+    body = {
+        "client_name": client_name,
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_post",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                registration_endpoint,
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    logger.error("OAuth client registration failed (%d): %s", resp.status, text[:300])
+                    return None
+                data = await resp.json()
+                if not data.get("client_id"):
+                    logger.error("OAuth registration returned no client_id")
+                    return None
+                return {
+                    "client_id": data["client_id"],
+                    "client_secret": data.get("client_secret", ""),
+                    "token_endpoint_auth_method": data.get(
+                        "token_endpoint_auth_method", "client_secret_post"
+                    ),
+                }
+    except Exception as e:
+        logger.error("OAuth client registration request failed: %s", e)
+        return None
+
+
+# ── Custom MCP OAuth token storage ──────────────────────────────────────
+
+
+async def store_custom_mcp_tokens(
+    db,
+    user_email: str,
+    provider: str,
+    access_token: str,
+    refresh_token: str | None,
+    expires_in: int | None,
+    scopes: list[str],
+) -> None:
+    """Encrypt and store custom MCP OAuth tokens per user."""
+    now = datetime.now(timezone.utc)
+    token_expiry = (
+        datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc)
+        if expires_in else None
+    )
+
+    update_doc: dict = {
+        "provider": provider,
+        "provider_type": "custom_mcp",
+        "access_token": encrypt_token(access_token),
+        "token_expiry": token_expiry,
+        "scopes": scopes,
+        "updated_at": now,
+    }
+    if refresh_token:
+        update_doc["refresh_token"] = encrypt_token(refresh_token)
+
+    await db.oauth_tokens.update_one(
+        {"user_email": user_email, "provider": provider},
+        {"$set": update_doc, "$setOnInsert": {"connected_at": now}},
+        upsert=True,
+    )
+
+    await _ensure_tool_assignments_mapping(db, user_email)
+    await db.users.update_one(
+        {"email": user_email},
+        {"$set": {
+            f"tool_assignments.custom-mcp-{provider}.oauth_status": "connected",
+            f"tool_assignments.custom-mcp-{provider}.last_used": now.isoformat() + "Z",
+            "updated_at": now,
+        }},
+    )
+    logger.info("Stored custom MCP OAuth tokens for %s / %s", user_email, provider)
+
+
+async def get_valid_custom_mcp_token(user_email: str, provider: str, db=None) -> str | None:
+    """Get a valid custom MCP access token for a user, auto-refreshing if expired."""
+    if db is None:
+        db = get_db()
+    if db is None:
+        return None
+
+    doc = await db.oauth_tokens.find_one({
+        "user_email": user_email, "provider": provider, "provider_type": "custom_mcp",
+    })
+    if doc is None:
+        return None
+
+    expiry = doc.get("token_expiry")
+    if expiry is None or expiry.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc):
+        try:
+            return decrypt_token(doc["access_token"])
+        except ValueError:
+            logger.error("Failed to decrypt custom MCP access token for %s / %s", user_email, provider)
+            return None
+
+    refresh_encrypted = doc.get("refresh_token")
+    if not refresh_encrypted:
+        await _mark_custom_mcp_expired(db, user_email, provider)
+        return None
+
+    try:
+        refresh_token_val = decrypt_token(refresh_encrypted)
+    except ValueError:
+        await _mark_custom_mcp_expired(db, user_email, provider)
+        return None
+
+    integration = await db.integrations.find_one({
+        "provider": provider, "is_custom": True, "auth_mode": "oauth",
+    })
+    if not integration:
+        return None
+
+    oauth_cfg = integration.get("oauth_config", {})
+    client_id = decrypt_token(oauth_cfg["client_id_encrypted"]) if oauth_cfg.get("client_id_encrypted") else ""
+    client_secret = decrypt_token(oauth_cfg["client_secret_encrypted"]) if oauth_cfg.get("client_secret_encrypted") else ""
+
+    new_token = await _refresh_oauth_token(
+        token_endpoint=oauth_cfg["token_endpoint"],
+        refresh_token=refresh_token_val,
+        client_id=client_id,
+        client_secret=client_secret,
+        auth_method=oauth_cfg.get("token_endpoint_auth_method", "client_secret_post"),
+    )
+
+    if new_token is None:
+        await _mark_custom_mcp_expired(db, user_email, provider)
+        return None
+
+    now = datetime.now(timezone.utc)
+    token_expiry = datetime.fromtimestamp(
+        time.time() + new_token.get("expires_in", 3600), tz=timezone.utc
+    )
+    update: dict = {
+        "access_token": encrypt_token(new_token["access_token"]),
+        "token_expiry": token_expiry,
+        "updated_at": now,
+    }
+    if "refresh_token" in new_token:
+        update["refresh_token"] = encrypt_token(new_token["refresh_token"])
+
+    await db.oauth_tokens.update_one(
+        {"user_email": user_email, "provider": provider},
+        {"$set": update},
+    )
+
+    logger.info("Refreshed custom MCP token for %s / %s", user_email, provider)
+    return new_token["access_token"]
+
+
+async def _mark_custom_mcp_expired(db, user_email: str, provider: str) -> None:
+    now = datetime.now(timezone.utc)
+    await _ensure_tool_assignments_mapping(db, user_email)
+    await db.users.update_one(
+        {"email": user_email},
+        {"$set": {
+            f"tool_assignments.custom-mcp-{provider}.oauth_status": "expired",
+            "updated_at": now,
+        }},
+    )
+    logger.warning("Marked custom MCP OAuth as expired for %s / %s", user_email, provider)
+
+
+async def revoke_custom_mcp_tokens(db, user_email: str, provider: str) -> bool:
+    """Delete custom MCP tokens from DB, update user status."""
+    result = await db.oauth_tokens.delete_one({
+        "user_email": user_email, "provider": provider, "provider_type": "custom_mcp",
+    })
+    if result.deleted_count == 0:
+        return False
+
+    now = datetime.now(timezone.utc)
+    await _ensure_tool_assignments_mapping(db, user_email)
+    await db.users.update_one(
+        {"email": user_email},
+        {"$set": {
+            f"tool_assignments.custom-mcp-{provider}.oauth_status": "not_connected",
+            "updated_at": now,
+        }},
+    )
+    logger.info("Disconnected custom MCP for %s / %s", user_email, provider)
+    return True
+
+
 async def revoke_slack_tokens(db, user_email: str) -> bool:
     """Revoke Slack user token, delete from DB, update user status."""
     doc = await db.oauth_tokens.find_one({"user_email": user_email, "provider": "slack"})

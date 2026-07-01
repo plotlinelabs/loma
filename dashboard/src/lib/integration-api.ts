@@ -31,6 +31,19 @@ export interface Integration {
   is_custom?: boolean;
   url?: string;
   has_token?: boolean;
+  auth_mode?: "none" | "static" | "oauth";
+  user_oauth_status?: "connected" | "not_connected" | "expired";
+}
+
+export interface ProbeResult {
+  requires_oauth: boolean;
+  reachable: boolean;
+  oauth_metadata?: {
+    authorization_endpoint: string;
+    token_endpoint: string;
+    registration_endpoint?: string;
+    scopes_supported: string[];
+  } | null;
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────
@@ -73,12 +86,35 @@ export async function disconnectIntegration(provider: string): Promise<void> {
   }
 }
 
+export async function probeCustomConnector(url: string): Promise<ProbeResult> {
+  const res = await fetch(`${API_BASE}/api/integrations/custom/probe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Probe failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function addCustomConnector(input: {
   name: string;
   url: string;
   token?: string;
   authHeader?: string;
-}): Promise<void> {
+  authMode?: "none" | "static" | "oauth";
+  oauthConfig?: {
+    authorization_endpoint: string;
+    token_endpoint: string;
+    registration_endpoint?: string;
+    client_id?: string;
+    client_secret?: string;
+    scopes?: string[];
+    token_endpoint_auth_method?: string;
+  };
+}): Promise<{ status: string; provider: string; auth_mode?: string }> {
   const res = await fetch(`${API_BASE}/api/integrations/custom`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -87,12 +123,15 @@ export async function addCustomConnector(input: {
       url: input.url,
       token: input.token || "",
       auth_header: input.authHeader || "",
+      auth_mode: input.authMode || (input.token ? "static" : "none"),
+      oauth_config: input.oauthConfig,
     }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Failed to add connector: ${res.status}`);
   }
+  return res.json();
 }
 
 export async function removeCustomConnector(provider: string): Promise<void> {

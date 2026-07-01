@@ -213,7 +213,9 @@ async def _health_check(base_url: str) -> bool:
         return False
 
 
-async def ensure_opencode_server() -> str:
+async def ensure_opencode_server(
+    user_mcp_overrides: dict | None = None,
+) -> str:
     """Return a reachable OpenCode server URL, starting one if needed.
 
     By default the app starts OpenCode with an isolated config home so global
@@ -228,7 +230,9 @@ async def ensure_opencode_server() -> str:
             return base_url
         raise OpenCodeError(f"Configured OPENCODE_SERVER_URL is not reachable: {base_url}")
 
-    config_home, config_hash = await _write_managed_opencode_config()
+    config_home, config_hash = await _write_managed_opencode_config(
+        user_mcp_overrides=user_mcp_overrides,
+    )
 
     global _opencode_process, _opencode_config_hash
     should_start = _opencode_process is None or _opencode_process.returncode is not None
@@ -286,19 +290,36 @@ async def ensure_opencode_server() -> str:
     raise OpenCodeError(f"OpenCode server did not become ready at {base_url}")
 
 
-async def _write_managed_opencode_config() -> tuple[Path, str]:
+_opencode_config_last_user: str | None = None
+
+
+async def _write_managed_opencode_config(
+    user_mcp_overrides: dict | None = None,
+) -> tuple[Path, str]:
     """Write isolated OpenCode config from this app's MCP source of truth."""
     global _opencode_config_home, _opencode_mcp_names, _opencode_config_checked_at
+    global _opencode_config_last_user
+
+    # Cache key includes user overrides so config changes per-user
+    overrides_key = json.dumps(sorted((user_mcp_overrides or {}).keys()))
 
     now = time.monotonic()
     if (
         _opencode_config_home is not None
         and _opencode_config_hash is not None
         and now - _opencode_config_checked_at < OPENCODE_CONFIG_TTL_SECONDS
+        and _opencode_config_last_user == overrides_key
     ):
         return _opencode_config_home, _opencode_config_hash
 
+    _opencode_config_last_user = overrides_key
+
     app_config = await _load_current_agent_config()
+    # Merge per-user MCP overrides into the app config
+    if user_mcp_overrides:
+        mcp_servers = dict(app_config.get("mcp_servers", {}))
+        mcp_servers.update(user_mcp_overrides)
+        app_config["mcp_servers"] = mcp_servers
     mcp_config = claude_mcp_to_opencode(app_config.get("mcp_servers", {}))
     _opencode_mcp_names = set(mcp_config.keys())
     opencode_config = {
@@ -975,6 +996,8 @@ async def run_opencode_agent(
     observer=None,
     include_steps: bool = False,
     source: str = "dashboard",
+    user_email: str | None = None,
+    user_mcp_overrides: dict | None = None,
     image_files: list[dict] | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     """Run one dashboard chat turn through OpenCode and yield dashboard events."""
@@ -1083,7 +1106,7 @@ async def run_opencode_agent(
         yield {"type": "turn", "turn_number": turn_count}
         yield {"type": "status", "message": "Sent prompt to OpenCode; waiting for model/tool events"}
 
-    base_url = await ensure_opencode_server()
+    base_url = await ensure_opencode_server(user_mcp_overrides=user_mcp_overrides)
     assistant_message_ids: set[str] = set()
     emitted_text_part_ids: set[str] = set()
     emitted_text_by_part_id: dict[str, str] = {}

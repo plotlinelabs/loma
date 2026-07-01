@@ -23,6 +23,10 @@ from api.oauth_helpers import (
     revoke_google_tokens,
     store_slack_tokens,
     revoke_slack_tokens,
+    decrypt_token,
+    _exchange_oauth_code,
+    store_custom_mcp_tokens,
+    revoke_custom_mcp_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -440,6 +444,20 @@ async def handle_list_connections(request: web.Request) -> web.Response:
             "updated_at": _serialize(doc.get("updated_at")),
         })
 
+    # Include custom MCP OAuth connections
+    async for doc in db.oauth_tokens.find(
+        {"user_email": email, "provider_type": "custom_mcp"},
+        {"access_token": 0, "refresh_token": 0},
+    ):
+        connections.append({
+            "provider": doc.get("provider", "unknown"),
+            "provider_type": "custom_mcp",
+            "status": "connected",
+            "scopes": doc.get("scopes", []),
+            "connected_at": _serialize(doc.get("connected_at")),
+            "updated_at": _serialize(doc.get("updated_at")),
+        })
+
     # Check for expired statuses for providers without active connections
     user = await db.users.find_one({"email": email})
     if user is not None:
@@ -493,6 +511,136 @@ async def handle_disconnect_slack(request: web.Request) -> web.Response:
     return web.json_response({"disconnected": True})
 
 
+# ── Custom MCP OAuth flow ────────────────────────────────────────────────
+
+
+async def handle_custom_mcp_authorize(request: web.Request) -> web.Response:
+    """GET /api/oauth/custom-mcp/{provider}/authorize — return the OAuth consent URL."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+
+    provider = request.match_info["provider"]
+    email = get_user_email(request)
+    if not email:
+        return web.json_response({"error": "User not authenticated"}, status=401)
+
+    integration = await db.integrations.find_one({
+        "provider": provider, "is_custom": True, "auth_mode": "oauth",
+    })
+    if not integration:
+        return web.json_response({"error": "No OAuth-configured connector found"}, status=404)
+
+    oauth_cfg = integration.get("oauth_config", {})
+    auth_endpoint = oauth_cfg.get("authorization_endpoint")
+    if not auth_endpoint:
+        return web.json_response({"error": "Connector missing authorization_endpoint"}, status=500)
+
+    client_id = decrypt_token(oauth_cfg["client_id_encrypted"]) if oauth_cfg.get("client_id_encrypted") else ""
+    if not client_id:
+        return web.json_response({"error": "Connector missing OAuth client credentials"}, status=500)
+
+    redirect_uri = _oauth_redirect_uri(request, f"custom-mcp/{provider}")
+    state = create_oauth_state(email)
+
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "state": state,
+    }
+    scopes = oauth_cfg.get("scopes")
+    if scopes:
+        params["scope"] = " ".join(scopes)
+
+    authorize_url = f"{auth_endpoint}?{urlencode(params)}"
+    return web.json_response({"authorize_url": authorize_url})
+
+
+async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
+    """GET /api/oauth/custom-mcp/{provider}/callback — handle OAuth redirect."""
+    db = get_db()
+    provider = request.match_info["provider"]
+
+    if db is None:
+        return _callback_error("Database not available", provider=provider)
+
+    error = request.query.get("error")
+    if error:
+        logger.warning("Custom MCP OAuth error for %s: %s", provider, error)
+        return _callback_error(f"Authorization failed: {error}", provider=provider)
+
+    code = request.query.get("code")
+    state = request.query.get("state")
+    if not code or not state:
+        return _callback_error("Missing authorization code or state", provider=provider)
+
+    email = verify_oauth_state(state)
+    if email is None:
+        return _callback_error("Invalid or expired authorization state", provider=provider)
+
+    integration = await db.integrations.find_one({
+        "provider": provider, "is_custom": True, "auth_mode": "oauth",
+    })
+    if not integration:
+        return _callback_error("Connector not found", provider=provider)
+
+    oauth_cfg = integration.get("oauth_config", {})
+    client_id = decrypt_token(oauth_cfg["client_id_encrypted"]) if oauth_cfg.get("client_id_encrypted") else ""
+    client_secret = decrypt_token(oauth_cfg["client_secret_encrypted"]) if oauth_cfg.get("client_secret_encrypted") else ""
+    redirect_uri = _oauth_redirect_uri(request, f"custom-mcp/{provider}")
+
+    token_data = await _exchange_oauth_code(
+        token_endpoint=oauth_cfg["token_endpoint"],
+        code=code,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        auth_method=oauth_cfg.get("token_endpoint_auth_method", "client_secret_post"),
+    )
+    if token_data is None:
+        return _callback_error("Failed to exchange authorization code", provider=provider)
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return _callback_error("OAuth provider did not return an access token", provider=provider)
+
+    raw_scope = token_data.get("scope", "")
+    scopes = raw_scope.split() if isinstance(raw_scope, str) else []
+
+    await store_custom_mcp_tokens(
+        db=db,
+        user_email=email,
+        provider=provider,
+        access_token=access_token,
+        refresh_token=token_data.get("refresh_token"),
+        expires_in=token_data.get("expires_in"),
+        scopes=scopes,
+    )
+
+    display_name = integration.get("display_name", provider)
+    logger.info("Custom MCP OAuth completed for %s / %s", email, provider)
+    return _callback_success_generic(provider=provider, display_name=display_name)
+
+
+async def handle_disconnect_custom_mcp(request: web.Request) -> web.Response:
+    """DELETE /api/oauth/connections/custom-mcp/{provider} — disconnect per-user."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+
+    email = get_user_email(request)
+    if not email:
+        return web.json_response({"error": "User not authenticated"}, status=401)
+
+    provider = request.match_info["provider"]
+    revoked = await revoke_custom_mcp_tokens(db, email, provider)
+    if not revoked:
+        return web.json_response({"error": "No connection found"}, status=404)
+
+    return web.json_response({"disconnected": True})
+
+
 # ── Route registration ────────────────────────────────────────────────────
 
 
@@ -506,5 +654,9 @@ def setup_oauth_routes(app: web.Application):
     app.router.add_get("/api/oauth/slack/authorize", handle_slack_authorize)
     app.router.add_get("/api/oauth/slack/callback", handle_slack_callback)
     app.router.add_delete("/api/oauth/connections/slack", handle_disconnect_slack)
+    # Custom MCP
+    app.router.add_get("/api/oauth/custom-mcp/{provider}/authorize", handle_custom_mcp_authorize)
+    app.router.add_get("/api/oauth/custom-mcp/{provider}/callback", handle_custom_mcp_callback)
+    app.router.add_delete("/api/oauth/connections/custom-mcp/{provider}", handle_disconnect_custom_mcp)
     # Shared
     app.router.add_get("/api/oauth/connections", handle_list_connections)
