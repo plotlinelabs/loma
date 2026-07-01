@@ -25,7 +25,7 @@ TEXT_EXTENSIONS = {".md", ".py", ".json", ".xml", ".txt", ".yaml", ".yml", ".csv
 MAX_INLINE_TEXT_BYTES = int(os.environ.get("LOMA_SKILL_MAX_INLINE_TEXT_BYTES", str(512 * 1024)))
 MAX_ASSET_BYTES = int(os.environ.get("LOMA_SKILL_MAX_ASSET_BYTES", str(100 * 1024 * 1024)))
 MAX_PACKAGE_BYTES = int(os.environ.get("LOMA_SKILL_MAX_PACKAGE_BYTES", str(500 * 1024 * 1024)))
-SKILL_INDEX_LIMIT = int(os.environ.get("LOMA_SKILL_INDEX_LIMIT", "40"))
+SKILL_INDEX_LIMIT = int(os.environ.get("LOMA_SKILL_INDEX_LIMIT", "150"))
 
 
 class SkillError(ValueError):

@@ -17,6 +17,7 @@ services:
       # Persist connected Claude Code accounts (CLAUDE_USERS_DIR) across container
       # recreation — otherwise `claude login` creds are lost on every rebuild/redeploy.
       - loma-claude-users:/opt/claude-users
+      - loma-workspace:/opt/loma-workspace
       - ${LOMA_SECRETS_DIR:-/home/ubuntu/secrets}:/home/ubuntu/secrets:ro
     restart: unless-stopped
 
@@ -70,3 +71,4 @@ services:
 volumes:
   loma-skill-assets:
   loma-claude-users:
+  loma-workspace:

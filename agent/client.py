@@ -734,7 +734,11 @@ async def stream_agent(
             f"When using personal tools (gmail, google_drive, google_calendar, "
             f"google_sheets, google_slides, google_docs_personal, slack_user), you MUST pass "
             f"`--user-email {user_email} --auth-token {auth_token}`. "
-            f"Never use a different user's email with --user-email."
+            f"Never use a different user's email with --user-email.\n"
+            f"IMPORTANT: Always use the personal CLI tools (e.g. `python3 tools/google_drive.py`, "
+            f"`python3 tools/gmail.py`) instead of any MCP equivalents (e.g. mcp__claude_ai_Google_Drive__*, "
+            f"mcp__claude_ai_Gmail__*). The CLI tools use the user's own authenticated credentials and are "
+            f"more reliable. Do NOT fall back to MCP Google Drive or Gmail tools."
         )
 
     if conversation_context:
@@ -747,6 +751,7 @@ async def stream_agent(
 
     # Append file contents inline; save images to temp files for the agent to read
     temp_files = []  # track temp files to clean up later
+    image_files: list[dict] = []  # raw image data for OpenCode file parts
     if files:
         for f in files:
             if f["type"] == "text":
@@ -754,8 +759,7 @@ async def stream_agent(
                     f"## Attached File: {f['name']}\n```\n{f['data']}\n```"
                 )
             elif f["type"] == "image":
-                # Save image to a temp file \u2014 the Claude Code CLI can read
-                # images via its built-in Read tool (multimodal support)
+                image_files.append(f)
                 ext = Path(f["name"]).suffix or ".png"
                 tmp = tempfile.NamedTemporaryFile(
                     suffix=ext, prefix="slack_img_", delete=False
@@ -866,6 +870,7 @@ async def stream_agent(
                 source=source,
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
+                image_files=image_files or None,
             ):
                 yield event
         except Exception as e:
