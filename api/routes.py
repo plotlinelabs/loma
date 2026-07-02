@@ -137,6 +137,7 @@ logger = logging.getLogger(__name__)
 # The first entry is treated as the headline/default Claude model.
 SUPPORTED_CLAUDE_MODEL_IDS = (
     "claude-opus-4-8",
+    "claude-fable-5",
     "claude-opus-4-7",
     "claude-opus-4-6",
 )
@@ -144,6 +145,7 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 FAVORITE_MODEL_IDS = (
     "opencode-go/deepseek-v4-flash",
     "anthropic/claude-opus-4-8",
+    "anthropic/claude-fable-5",
     "anthropic/claude-opus-4-7",
     "anthropic/claude-opus-4-6",
     "openai/gpt-5.5",

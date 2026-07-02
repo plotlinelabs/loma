@@ -34,6 +34,7 @@ const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 const FAVORITE_MODEL_IDS = [
   "opencode-go/deepseek-v4-flash",
   "anthropic/claude-opus-4-8",
+  "anthropic/claude-fable-5",
   "anthropic/claude-opus-4-7",
   "anthropic/claude-opus-4-6",
   "openai/gpt-5.5",
