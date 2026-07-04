@@ -332,12 +332,13 @@ async def handle_update_task(request: web.Request) -> web.Response:
         # - "todo" holds both unstarted drafts and *parked* started tasks
         #   (active -> todo shelves a chat in a lane to recontinue later;
         #   sending a message flips it back to active in handle_chat).
+        #   done -> todo un-completes a task back into a staging lane.
         # - "active" from todo happens in handle_chat on first send, but is
         #   also allowed here for done->active (reopen) and for converting an
         #   existing chat into a task (current is None).
-        if target == "todo" and current not in ("todo", "active"):
+        if target == "todo" and current not in ("todo", "active", "done"):
             return web.json_response(
-                {"error": "Only active tasks can move to a staging lane"}, status=400)
+                {"error": "Only active or done tasks can move to a staging lane"}, status=400)
         if target == "active" and not has_run and current == "todo":
             return web.json_response(
                 {"error": "Start the task by sending its prompt, not by PATCH"}, status=400)
@@ -348,14 +349,14 @@ async def handle_update_task(request: web.Request) -> web.Response:
         updates["task_status"] = target
         if target == "done" and current != "done":
             updates["task_done_at"] = now
-        if target == "active" and current == "done":
+        if target in ("active", "todo") and current == "done":
             updates["task_done_at"] = None
         if target == "active" and current is None:
             # Converting an existing chat into a board task.
             updates["task_created_at"] = conversation.get("task_created_at") or now
-        if target == "todo" and current == "active":
-            # Parking: land in the requested lane (validated below) or the
-            # task's previous lane, defaulting to the first lane.
+        if target == "todo" and current in ("active", "done"):
+            # Parking (or un-completing): land in the requested lane (validated
+            # below) or the task's previous lane, defaulting to the first lane.
             updates["task_staged_at"] = now
             if "task_lane" not in body and not conversation.get("task_lane"):
                 owner = (conversation.get("metadata") or {}).get("user_name") or user_email

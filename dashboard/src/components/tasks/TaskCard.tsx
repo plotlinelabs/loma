@@ -120,11 +120,11 @@ export function TaskCard({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {(() => {
-                // Staged cards move between other lanes; needs-input cards
-                // park into any lane to be recontinued later.
+                // Staged cards move between other lanes; needs-input and
+                // done cards park into any lane to be recontinued later.
                 const targetLanes = isStaged
                   ? lanes.filter((lane) => lane.id !== task.task_lane)
-                  : task.column === "needs_input" ? lanes : [];
+                  : task.column === "needs_input" || task.column === "done" ? lanes : [];
                 return targetLanes.length > 0 && (
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>Move to</DropdownMenuSubTrigger>
