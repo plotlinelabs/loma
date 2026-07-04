@@ -57,6 +57,11 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
     for (const task of board.tasks) {
       (map[task.column] ??= []).push(task);
     }
+    // Rank-sort client-side so optimistic reorders move cards immediately
+    // (the server emits an effective rank for every card).
+    for (const list of Object.values(map)) {
+      list.sort((a, b) => (a.task_rank ?? 0) - (b.task_rank ?? 0));
+    }
     return map;
   }, [board.tasks, columns]);
 
@@ -119,7 +124,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       }),
     );
 
-  const reorderInLane = (task: Task, rank: number) =>
+  const reorderInColumn = (task: Task, rank: number) =>
     mutate(
       (tasks) => tasks
         .map((t) => (t.conversation_id === task.conversation_id ? { ...t, task_rank: rank } : t)),
@@ -168,6 +173,23 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
     const target = resolveColumn(overId);
     if (!target || !canMove(task, task.column, target, laneIds)) return;
 
+    // Position relative to the card we dropped on (or column end).
+    const columnTasks = (tasksByColumn[target] ?? []).filter(
+      (t) => t.conversation_id !== task.conversation_id,
+    );
+    let index = columnTasks.findIndex((t) => t.conversation_id === overId);
+    if (index === -1) index = columnTasks.length;
+    const before = index > 0 ? columnTasks[index - 1].task_rank : null;
+    const after = index < columnTasks.length ? columnTasks[index].task_rank : null;
+    const rank = rankBetween(before, after);
+
+    // Same-column drop = manual reorder, in any column — check this before
+    // the transition branches or a reorder inside Working would start a task.
+    if (target === task.column) {
+      reorderInColumn(task, rank);
+      return;
+    }
+
     if (target === "working") {
       startTask(task);
       return;
@@ -177,21 +199,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       return;
     }
 
-    // Staged lane: position relative to the card we dropped on (or lane end).
-    const laneTasks = (tasksByColumn[target] ?? []).filter(
-      (t) => t.conversation_id !== task.conversation_id,
-    );
-    let index = laneTasks.findIndex((t) => t.conversation_id === overId);
-    if (index === -1) index = laneTasks.length;
-    const before = index > 0 ? laneTasks[index - 1].task_rank : null;
-    const after = index < laneTasks.length ? laneTasks[index].task_rank : null;
-    const rank = rankBetween(before, after);
-
-    if (target === task.column) {
-      reorderInLane(task, rank);
-    } else {
-      moveToLane(task, target, rank);
-    }
+    moveToLane(task, target, rank);
   };
 
   return (
