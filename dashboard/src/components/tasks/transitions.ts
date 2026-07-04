@@ -13,7 +13,7 @@ import type { Task } from "@/lib/api";
  * | staged lane  | yes              | draft only (=start)| no          | parked only   |
  * | working      | no               | —                  | (derived)   | yes           |
  * | needs_input  | yes (=park)      | (by replying)      | —           | yes           |
- * | done         | no               | no                 | no          | — (reopen via menu) |
+ * | done         | yes (=park)      | no                 | yes (=reopen) | —           |
  */
 export function canMove(task: Task, from: string, to: string, laneIds: string[]): boolean {
   if (from === to) return true; // reorder within any column
@@ -29,7 +29,8 @@ export function canMove(task: Task, from: string, to: string, laneIds: string[])
   }
   if (from === "needs_input") return to === "done" || toStaged; // park to recontinue later
   if (from === "working") return to === "done";
-  return false; // done: reopen via context menu only
+  if (from === "done") return to === "needs_input" || toStaged; // reopen or park back
+  return false;
 }
 
 /** Midpoint rank for dropping between two neighbors in a column. */

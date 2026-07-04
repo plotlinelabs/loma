@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +32,17 @@ interface TaskDialogProps {
     values: { title: string; prompt: string; lane: string; model: string },
     start: boolean,
   ) => Promise<void>;
+}
+
+const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad|od)/.test(navigator.platform);
+const modKey = isMac ? "\u2318" : "Ctrl";
+
+function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="pointer-events-none ml-1 rounded border border-current/25 px-1 font-sans text-[10px] font-normal leading-4 opacity-70">
+      {children}
+    </kbd>
+  );
 }
 
 export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSubmit }: TaskDialogProps) {
@@ -92,9 +103,24 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
     }
   };
 
+  // Cmd/Ctrl+Enter = add & start; plain Enter = add. Textareas keep Enter
+  // for newlines and buttons/selects keep their native Enter behavior.
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Enter" || busy) return;
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      void submit(true);
+      return;
+    }
+    const el = e.target as HTMLElement;
+    if (el.tagName === "TEXTAREA" || el.tagName === "BUTTON") return;
+    e.preventDefault();
+    void submit(false);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg" onKeyDown={handleKeyDown}>
         <DialogHeader>
           <DialogTitle>{task ? "Task details" : "New task"}</DialogTitle>
         </DialogHeader>
@@ -158,9 +184,11 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
           </Button>
           <Button variant="outline" onClick={() => submit(false)} disabled={busy}>
             {task ? "Save" : "Add"}
+            <Kbd>{"\u23CE"}</Kbd>
           </Button>
           <Button onClick={() => submit(true)} disabled={busy}>
             {task ? "Save & start" : "Add & start"}
+            <Kbd>{modKey} {"\u23CE"}</Kbd>
           </Button>
         </DialogFooter>
       </DialogContent>

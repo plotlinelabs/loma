@@ -118,7 +118,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
             }
           : t),
       () => updateTask(task.conversation_id, {
-        ...(task.task_status === "active" ? { task_status: "todo" as const } : {}),
+        ...(task.task_status !== "todo" ? { task_status: "todo" as const } : {}),
         task_lane: laneId,
         ...(rank !== undefined ? { task_rank: rank } : {}),
       }),
@@ -148,8 +148,15 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
     // (including chats parked in a lane) opens the conversation.
     if (task.task_status === "todo" && !task.status) {
       onEditDraft(task);
+      return;
+    }
+    const url = `${basePath}/chat?continue=${task.conversation_id}`;
+    // Running / Needs input / Done cards open in a new tab so the board
+    // stays put; parked lane chats keep in-place navigation.
+    if (task.column === "working" || task.column === "needs_input" || task.column === "done") {
+      window.open(url, "_blank", "noopener,noreferrer");
     } else {
-      router.push(`${basePath}/chat?continue=${task.conversation_id}`);
+      router.push(url);
     }
   };
 
@@ -196,6 +203,11 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
     }
     if (target === "done") {
       markDone(task);
+      return;
+    }
+    if (target === "needs_input") {
+      // Only reachable from Done (see canMove) — same effect as Reopen.
+      reopen(task);
       return;
     }
 
