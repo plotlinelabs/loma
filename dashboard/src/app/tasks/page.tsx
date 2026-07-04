@@ -84,7 +84,7 @@ export default function TasksPage() {
   }, [sessionStatus, refresh]);
 
   const handleTaskSubmit = async (
-    values: { title: string; prompt: string; lane: string },
+    values: { title: string; prompt: string; lane: string; model: string },
     start: boolean,
   ) => {
     busyRef.current = true;
@@ -95,6 +95,7 @@ export default function TasksPage() {
           title: values.title,
           prompt: values.prompt,
           task_lane: values.lane,
+          model: values.model,
         });
         conversationId = editingTask.conversation_id;
       } else {
@@ -102,6 +103,7 @@ export default function TasksPage() {
           prompt: values.prompt,
           title: values.title || undefined,
           lane: values.lane,
+          model: values.model || undefined,
         });
         conversationId = task.conversation_id;
       }

@@ -49,6 +49,7 @@ function ChatPageContent() {
   const [error, setError] = useState<string | null>(null);
   // Draft prompt for staged board tasks — prefills the composer (or auto-sends with ?start=1)
   const [taskDraftPrompt, setTaskDraftPrompt] = useState<string | null>(null);
+  const [taskModel, setTaskModel] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
 
   // Track the active conversation ID — starts from URL param but also updates
@@ -108,6 +109,7 @@ function ChatPageContent() {
           // message) — put the draft in the composer instead.
           setInitialItems([]);
           setTaskDraftPrompt(data.conversation.prompt);
+          setTaskModel(data.conversation.model || null);
           setConversationTitle(data.conversation.title || null);
           setPromptPreview(
             data.conversation.prompt.length > 80
@@ -358,6 +360,7 @@ function ChatPageContent() {
         conversationId={activeConversationId || undefined}
 
         initialPrompt={taskDraftPrompt || promptParam || undefined}
+        initialModel={taskModel || undefined}
         autoSend={autoSendParam || (startParam && !!taskDraftPrompt)}
         systemContext={skillContextParam || undefined}
         initialStatus={initialStatus}

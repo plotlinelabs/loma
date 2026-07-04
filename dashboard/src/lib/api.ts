@@ -955,6 +955,7 @@ export interface Task {
   conversation_id: string;
   title: string | null;
   prompt: string;
+  model: string | null;
   status: string | null;
   task_status: "todo" | "active" | "done";
   task_lane: string | null;
@@ -998,6 +999,7 @@ export async function createTask(params: {
   prompt: string;
   title?: string;
   lane?: string;
+  model?: string;
 }): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: "POST",
@@ -1019,6 +1021,7 @@ export async function updateTask(
     task_rank?: number;
     prompt?: string;
     title?: string;
+    model?: string;
   },
 ): Promise<{ task: Task | null }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}`, {

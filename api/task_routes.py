@@ -99,6 +99,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "conversation_id": task.get("conversation_id"),
         "title": task.get("title") or None,
         "prompt": prompt[:200],
+        "model": task.get("model") or None,
         "status": task.get("status"),
         "task_status": task.get("task_status"),
         "task_lane": task.get("task_lane"),
@@ -115,7 +116,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
 
 
 _TASK_PROJECTION = {
-    "conversation_id": 1, "title": 1, "prompt": 1, "status": 1,
+    "conversation_id": 1, "title": 1, "prompt": 1, "model": 1, "status": 1,
     "task_status": 1, "task_lane": 1, "task_rank": 1,
     "total_turns": 1, "started_at": 1, "finished_at": 1,
     "task_created_at": 1, "task_staged_at": 1, "task_started_at": 1,
@@ -143,6 +144,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "prompt is required"}, status=400)
 
     title = (body.get("title") or "").strip() or None
+    model = (body.get("model") or "").strip()
     board = await _get_board_config_for(db, user_email)
     lane_ids = [lane["id"] for lane in board["lanes"]]
     lane = body.get("lane") or lane_ids[0]
@@ -163,7 +165,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "status": None,
         "metadata": {"user_name": user_email},
         "prompt": prompt,
-        "model": "",
+        "model": model,
         "total_turns": 0,
         "final_response": "",
         "messages": [],
@@ -367,6 +369,11 @@ async def handle_update_task(request: web.Request) -> web.Response:
         if not prompt:
             return web.json_response({"error": "prompt cannot be empty"}, status=400)
         updates["prompt"] = prompt
+
+    if "model" in body:
+        if current != "todo":
+            return web.json_response({"error": "Only drafts can be edited"}, status=400)
+        updates["model"] = (body["model"] or "").strip()
 
     if "title" in body:
         title = (body["title"] or "").strip() or None
