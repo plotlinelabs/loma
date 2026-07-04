@@ -16,7 +16,7 @@ import type { Task } from "@/lib/api";
  * | done         | no               | no                 | no          | — (reopen via menu) |
  */
 export function canMove(task: Task, from: string, to: string, laneIds: string[]): boolean {
-  if (from === to) return laneIds.includes(from); // same-lane reorder only
+  if (from === to) return true; // reorder within any column
   const fromStaged = laneIds.includes(from);
   const toStaged = laneIds.includes(to);
   const isDraft = !task.status;
@@ -32,9 +32,11 @@ export function canMove(task: Task, from: string, to: string, laneIds: string[])
   return false; // done: reopen via context menu only
 }
 
-/** Midpoint rank for dropping between two neighbors in a staged lane. */
+/** Midpoint rank for dropping between two neighbors in a column. */
 export function rankBetween(before: number | null, after: number | null): number {
-  if (before === null && after === null) return -Date.now();
+  // Empty column: negated epoch *seconds* — same scale as the backend's
+  // recency fallback so defaults and manual ranks stay comparable.
+  if (before === null && after === null) return -Date.now() / 1000;
   if (before === null) return (after as number) - 1;
   if (after === null) return before + 1;
   return (before + after) / 2;

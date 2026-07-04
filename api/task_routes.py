@@ -93,9 +93,30 @@ def derive_column(task: dict, lane_ids: list[str]) -> str:
     return "needs_input"
 
 
+def _effective_rank(task: dict, column: str, lane_ids: list[str]) -> float:
+    """Manual sort key for any column: the stored rank, or a recency fallback
+    (negated epoch → newest first when ascending). Emitting this for every
+    card means a drag-reorder can always slot an explicit rank between two
+    neighbors, in derived columns as well as staging lanes."""
+    rank = task.get("task_rank")
+    if rank is not None:
+        return rank
+    if column in lane_ids:
+        ts = task.get("task_staged_at") or task.get("task_created_at")
+    elif column == "working":
+        ts = task.get("started_at")
+    elif column == "done":
+        ts = task.get("task_done_at")
+    else:  # needs_input
+        ts = task.get("finished_at")
+    ts = ts or task.get("task_created_at") or task.get("started_at")
+    return -ts.timestamp() if isinstance(ts, datetime) else 0.0
+
+
 def _task_view(task: dict, lane_ids: list[str]) -> dict:
     """Shape a conversation doc into the board card payload."""
     prompt = task.get("prompt") or ""
+    column = derive_column(task, lane_ids)
     return {
         "conversation_id": task.get("conversation_id"),
         "title": task.get("title") or None,
@@ -104,8 +125,8 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "status": task.get("status"),
         "task_status": task.get("task_status"),
         "task_lane": task.get("task_lane"),
-        "task_rank": task.get("task_rank"),
-        "column": derive_column(task, lane_ids),
+        "task_rank": _effective_rank(task, column, lane_ids),
+        "column": column,
         "total_turns": task.get("total_turns", 0),
         "started_at": _serialize(task.get("started_at")),
         "finished_at": _serialize(task.get("finished_at")),
@@ -214,26 +235,12 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
         _TASK_PROJECTION,
     ).to_list(500)
 
-    views = [_task_view(t, lane_ids) for t in tasks]
-
-    def sort_key(view):
-        column = view["column"]
-        if column in lane_ids:
-            return view.get("task_rank") or 0
-        # Newest first for the derived/done columns.
-        stamp = {
-            "working": view.get("started_at"),
-            "needs_input": view.get("finished_at"),
-            "done": view.get("task_done_at"),
-        }.get(column) or ""
-        return stamp
-
-    staged = sorted([v for v in views if v["column"] in lane_ids], key=sort_key)
-    others = sorted(
-        [v for v in views if v["column"] not in lane_ids],
-        key=sort_key, reverse=True,
+    # Every column orders by effective rank (manual rank, or recency fallback
+    # baked in by _task_view) — so all columns are manually reorderable.
+    ordered = sorted(
+        (_task_view(t, lane_ids) for t in tasks),
+        key=lambda view: view["task_rank"],
     )
-    ordered = staged + others
 
     counts: dict[str, int] = {lane_id: 0 for lane_id in lane_ids}
     counts.update({"working": 0, "needs_input": 0, "done": 0})
