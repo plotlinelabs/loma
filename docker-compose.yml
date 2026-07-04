@@ -19,6 +19,10 @@ services:
       - loma-claude-users:/opt/claude-users
       - loma-workspace:/opt/loma-workspace
       - ${LOMA_SECRETS_DIR:-/home/ubuntu/secrets}:/home/ubuntu/secrets:ro
+      # Host SSH key dir (key authorized on 98.83.133.237), mounted read-only at a
+      # side path so the container keeps a writable /root/.ssh for known_hosts.
+      # Override LOMA_SSH_DIR if the key lives elsewhere on the host.
+      - ${LOMA_SSH_DIR:-/home/ubuntu/.ssh}:/root/.ssh-host:ro
     restart: unless-stopped
 
   loma-dashboard:
