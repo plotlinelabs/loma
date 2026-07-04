@@ -20,6 +20,8 @@ pytesseract>=0.3.10
 apscheduler>=3.10.0
 openai>=1.50.0
 cryptography>=41.0.0
+# Web push notifications (tasks board attention)
+pywebpush>=2.0
 google-auth>=2.22.0
 google-api-python-client>=2.100.0
 boto3>=1.28.0

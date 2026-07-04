@@ -29,16 +29,20 @@ import {
   RiFolderLine,
   RiCloseLine,
   RiCheckLine,
+  RiCheckboxLine,
   RiAddLine,
   RiDeleteBinLine,
   RiLoader4Line,
 } from "@remixicon/react";
+import { updateTask } from "@/lib/api";
 
 interface ChatContextMenuProps {
   conversationId: string;
   conversationTitle: string;
   isPinned: boolean;
   projectId?: string | null;
+  /** Board membership — pass conversation.task_status to enable add/remove */
+  taskStatus?: "todo" | "active" | "done" | null;
   projects: Array<{ project_id: string; name: string }>;
   onRename: (conversationId: string, newTitle: string) => Promise<void>;
   onDelete: (conversationId: string) => Promise<void>;
@@ -54,6 +58,7 @@ export default function ChatContextMenu({
   conversationTitle,
   isPinned,
   projectId,
+  taskStatus,
   projects,
   onRename,
   onDelete,
@@ -70,6 +75,23 @@ export default function ChatContextMenu({
   const [renameValue, setRenameValue] = useState(conversationTitle);
   const [newProjectName, setNewProjectName] = useState("");
   const [loading, setLoading] = useState(false);
+  // Optimistic board membership — lists refresh on their own poll cycles.
+  const [onBoard, setOnBoard] = useState(!!taskStatus);
+
+  useEffect(() => {
+    setOnBoard(!!taskStatus);
+  }, [taskStatus]);
+
+  async function handleToggleBoard() {
+    const next = !onBoard;
+    setOnBoard(next);
+    try {
+      await updateTask(conversationId, { task_status: next ? "active" : null });
+    } catch (e) {
+      setOnBoard(!next);
+      console.error("Failed to update board membership:", e);
+    }
+  }
   const renameInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
 
@@ -271,6 +293,27 @@ export default function ChatContextMenu({
               )}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+
+          {/* Tasks board */}
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleBoard();
+              setDropdownOpen(false);
+            }}
+          >
+            {onBoard ? (
+              <>
+                <RiCheckboxLine size={16} className="text-brand-600" />
+                Remove from board
+              </>
+            ) : (
+              <>
+                <RiCheckboxLine size={16} className="text-muted-foreground" />
+                Add to board
+              </>
+            )}
+          </DropdownMenuItem>
 
           <DropdownMenuSeparator />
 

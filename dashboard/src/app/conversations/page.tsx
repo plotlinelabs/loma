@@ -509,6 +509,7 @@ export default function ConversationsPage() {
                           conversationTitle={c.title || c.prompt?.slice(0, 50) || "Untitled"}
                           isPinned={isPinned(c.conversation_id)}
                           projectId={c.project_id}
+                          taskStatus={c.task_status}
                           projects={projects}
                           onRename={async (id, newTitle) => { await renameConversation(id, newTitle); loadData(); }}
                           onDelete={async (id) => { await removeConversation(id); loadData(); }}
@@ -587,6 +588,7 @@ export default function ConversationsPage() {
                         conversationTitle={c.title || c.prompt?.slice(0, 50) || "Untitled"}
                         isPinned={isPinned(c.conversation_id)}
                         projectId={c.project_id}
+                        taskStatus={c.task_status}
                         projects={projects}
                         onRename={async (id, newTitle) => { await renameConversation(id, newTitle); loadData(); }}
                         onDelete={async (id) => { await removeConversation(id); loadData(); }}

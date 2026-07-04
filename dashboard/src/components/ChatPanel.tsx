@@ -634,6 +634,7 @@ export default function ChatPanel({
   initialArtifacts,
   conversationId: initialConversationId,
   initialPrompt,
+  initialModel,
   autoSend,
   systemContext,
   initialStatus,
@@ -648,6 +649,8 @@ export default function ChatPanel({
   initialArtifacts?: Artifact[];
   conversationId?: string;
   initialPrompt?: string;
+  /** Model to preselect (e.g. a board task's chosen model) — wins over the saved preference */
+  initialModel?: string;
   autoSend?: boolean;
   systemContext?: string;
   initialStatus?: string;
@@ -753,9 +756,12 @@ export default function ChatPanel({
           ? window.localStorage.getItem(MODEL_STORAGE_KEY)
           : null;
         const savedIsValid = saved && models.some((model) => model.id === saved);
-        const nextModel = savedIsValid
-          ? saved
-          : catalog.default_model || models[0]?.id || "";
+        const initialIsValid = initialModel && models.some((model) => model.id === initialModel);
+        const nextModel = initialIsValid
+          ? initialModel
+          : savedIsValid
+            ? saved
+            : catalog.default_model || models[0]?.id || "";
         setSelectedModel(nextModel);
         setModelLoadState("ready");
       } catch (e) {
@@ -771,7 +777,8 @@ export default function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialModel]);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -928,11 +935,16 @@ export default function ChatPanel({
 
   const autoSendFired = useRef(false);
   useEffect(() => {
-    if (autoSend && initialPrompt && !autoSendFired.current && !isStreaming && session) {
+    // Wait for the model catalog so the send uses the intended model (e.g. a
+    // board task's chosen model) instead of racing the default.
+    if (autoSend && initialPrompt && !autoSendFired.current && !isStreaming && session
+        && modelLoadState !== "loading") {
       autoSendFired.current = true;
       setInput("");
-      const timer = setTimeout(() => handleSend(initialPrompt), 0);
-      return () => clearTimeout(timer);
+      // Call directly — a deferred setTimeout gets cancelled by this effect's
+      // own cleanup when setInput triggers a re-render (no dep array), which
+      // made auto-send silently flaky.
+      handleSend(initialPrompt);
     }
   });
 

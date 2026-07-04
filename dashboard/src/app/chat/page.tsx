@@ -33,6 +33,8 @@ function ChatPageContent() {
   const taskId = null; // Tasks system removed
   const promptParam = searchParams.get("prompt");
   const autoSendParam = searchParams.get("autoSend") === "true";
+  // Tasks board start flow: ?continue=<id>&start=1 auto-sends a staged draft's prompt
+  const startParam = searchParams.get("start") === "1";
   const skillContextParam = searchParams.get("skillContext");
   const [initialItems, setInitialItems] = useState<ChatItem[] | undefined>();
   const [initialArtifacts, setInitialArtifacts] = useState<Artifact[] | undefined>();
@@ -45,6 +47,10 @@ function ChatPageContent() {
   const [titleValue, setTitleValue] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Draft prompt for staged board tasks — prefills the composer (or auto-sends with ?start=1)
+  const [taskDraftPrompt, setTaskDraftPrompt] = useState<string | null>(null);
+  const [taskModel, setTaskModel] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
 
   // Track the active conversation ID — starts from URL param but also updates
   // when a fresh chat creates a new conversation (via onConversationCreated callback)
@@ -96,6 +102,23 @@ function ChatPageContent() {
     async function loadConversation() {
       try {
         const data = await fetchConversation(continueId!);
+        setTaskStatus(data.conversation.task_status || null);
+        if (data.conversation.task_status === "todo" && !data.conversation.status) {
+          // Unstarted board draft: nothing has been sent yet. Don't rebuild
+          // items (the fallback would render the draft prompt as an already-
+          // sent message) — put the draft in the composer instead. Parked
+          // chats (staged after running) fall through to the normal rebuild.
+          setInitialItems([]);
+          setTaskDraftPrompt(data.conversation.prompt);
+          setTaskModel(data.conversation.model || null);
+          setConversationTitle(data.conversation.title || null);
+          setPromptPreview(
+            data.conversation.prompt.length > 80
+              ? data.conversation.prompt.slice(0, 80) + "..."
+              : data.conversation.prompt
+          );
+          return;
+        }
         const { items, artifacts: restoredArtifacts } = rebuildItemsFromConversation(
           data.conversation.messages,
           data.conversation.prompt,
@@ -254,6 +277,7 @@ function ChatPageContent() {
                 conversationTitle={conversationTitle || promptPreview || "Untitled"}
                 isPinned={isPinned(activeConversationId)}
                 projectId={projectId}
+                taskStatus={taskStatus}
                 projects={projects}
                 onRename={async (cid, newTitle) => {
                   await renameConversation(cid, newTitle);
@@ -336,8 +360,9 @@ function ChatPageContent() {
         initialArtifacts={initialArtifacts}
         conversationId={activeConversationId || undefined}
 
-        initialPrompt={promptParam || undefined}
-        autoSend={autoSendParam}
+        initialPrompt={taskDraftPrompt || promptParam || undefined}
+        initialModel={taskModel || undefined}
+        autoSend={autoSendParam || (startParam && !!taskDraftPrompt)}
         systemContext={skillContextParam || undefined}
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}

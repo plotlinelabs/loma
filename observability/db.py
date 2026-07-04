@@ -95,6 +95,15 @@ async def init_observability():
     await _db.conversations.create_index("deleted")
     await _db.conversations.create_index("project_id")
 
+    # Tasks board: per-user board queries + needs-input counts
+    await _db.conversations.create_index(
+        [("metadata.user_name", 1), ("task_status", 1), ("status", 1)],
+    )
+
+    # Web push subscriptions (tasks board attention) — one doc per browser
+    await _db.push_subscriptions.create_index("subscription.endpoint", unique=True)
+    await _db.push_subscriptions.create_index("user_email")
+
     # Projects collection (chat organization)
     await _db.projects.create_index("project_id", unique=True)
     await _db.projects.create_index("created_by")

@@ -357,6 +357,10 @@ class ConversationObserver:
             duration_ms=duration_ms,
         ))
 
+        # Board tasks: notify the owner that the agent awaits their input
+        from observability.push import fire_task_push
+        fire_task_push(self.db, self.conversation_id)
+
     async def record_error(self, error: str):
         """Mark conversation as errored."""
         self._stop_heartbeat()
@@ -375,6 +379,9 @@ class ConversationObserver:
             )
         except Exception as e:
             logger.warning("Observability: failed to record error: %s", e)
+
+        from observability.push import fire_task_push
+        fire_task_push(self.db, self.conversation_id)
 
     async def record_account(self, account_email: str):
         """Record which Claude account is processing this conversation."""
@@ -405,6 +412,9 @@ class ConversationObserver:
         except Exception as e:
             logger.warning("Observability: failed to mark conversation as interrupted: %s", e)
 
+        from observability.push import fire_task_push
+        fire_task_push(self.db, self.conversation_id)
+
     async def _run_title_topic_enrichment(self, final_response: str):
         """Generate title and topic for the conversation via LLM."""
         try:
@@ -417,9 +427,16 @@ class ConversationObserver:
                 _classify_topic_llm(prompt, response_snippet),
             )
 
+            # Never clobber a user-provided title (rename PATCH / task drafts
+            # set title_edited) — only enrich the topic in that case.
+            existing = await self.db.conversations.find_one(
+                {"conversation_id": self.conversation_id}, {"title_edited": 1})
+            update_fields = {"topic": topic}
+            if not (existing or {}).get("title_edited"):
+                update_fields["title"] = title
             await self.db.conversations.update_one(
                 {"conversation_id": self.conversation_id},
-                {"$set": {"title": title, "topic": topic}},
+                {"$set": update_fields},
             )
             logger.info("Observability: enrichment complete for %s: title=%r topic=%s",
                          self.conversation_id, title, topic)
