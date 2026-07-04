@@ -2,6 +2,7 @@
 
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { RiAddLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/lib/api";
 
@@ -11,10 +12,12 @@ interface TaskColumnProps {
   tasks: Task[];
   /** Whether the current drag can drop here (undefined = no drag active). */
   droppable?: boolean;
+  /** Staging lanes only: create a task directly in this lane. */
+  onAddTask?: () => void;
   children: React.ReactNode;
 }
 
-export function TaskColumn({ id, name, tasks, droppable, children }: TaskColumnProps) {
+export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: TaskColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
     id,
     disabled: droppable === false,
@@ -41,6 +44,18 @@ export function TaskColumn({ id, name, tasks, droppable, children }: TaskColumnP
           )}
         >
           {children}
+          {onAddTask && (
+            <button
+              onClick={onAddTask}
+              className={cn(
+                "flex items-center gap-1 rounded-md px-2 py-1.5 text-xs",
+                "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
+              )}
+            >
+              <RiAddLine className="h-3.5 w-3.5" />
+              Task
+            </button>
+          )}
         </div>
       </SortableContext>
     </div>

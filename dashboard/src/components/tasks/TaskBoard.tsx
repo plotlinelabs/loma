@@ -31,10 +31,12 @@ interface TaskBoardProps {
   onBoardChange: (board: TasksBoardResponse) => void;
   onRefresh: () => void;
   onEditDraft: (task: Task) => void;
+  /** Open the new-task dialog with a lane preselected. */
+  onAddTask: (laneId: string) => void;
   onError: (message: string | null) => void;
 }
 
-export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onError }: TaskBoardProps) {
+export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError }: TaskBoardProps) {
   const router = useRouter();
   const [activeTask, setActiveTask] = useState<Task | null>(null);
 
@@ -212,6 +214,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onErro
                 ? canMove(activeTask, activeTask.column, column.id, laneIds)
                 : undefined
             }
+            onAddTask={laneIds.includes(column.id) ? () => onAddTask(column.id) : undefined}
           >
             {(tasksByColumn[column.id] ?? []).map((task) => (
               <TaskCard

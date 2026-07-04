@@ -37,6 +37,7 @@ export default function TasksPage() {
   const [error, setError] = useState<string | null>(null);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
@@ -134,7 +135,7 @@ export default function TasksPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Tasks</h1>
         <div className="flex items-center gap-1">
-          <Button size="sm" onClick={() => { setEditingTask(null); setTaskDialogOpen(true); }}>
+          <Button size="sm" onClick={() => { setEditingTask(null); setNewTaskLane(undefined); setTaskDialogOpen(true); }}>
             <RiAddLine className="h-4 w-4" />
             New task
           </Button>
@@ -193,6 +194,7 @@ export default function TasksPage() {
           onBoardChange={setBoard}
           onRefresh={refresh}
           onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
+          onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
           onError={setError}
         />
       ) : (
@@ -212,6 +214,7 @@ export default function TasksPage() {
         onOpenChange={setTaskDialogOpen}
         lanes={board?.lanes ?? []}
         task={editingTask}
+        defaultLane={newTaskLane}
         onSubmit={handleTaskSubmit}
       />
       <AddChatDialog
