@@ -19,6 +19,10 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     ResultMessage,
     StreamEvent,
+    TaskNotificationMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
+    TERMINAL_TASK_STATUSES,
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
@@ -851,7 +855,13 @@ async def stream_agent(
     last_total_cost_usd: float | None = None
     # Track pending tool calls for file artifact detection
     pending_tool_inputs: dict[str, tuple[str, object]] = {}  # tool_use_id -> (tool_name, tool_input)
-    pending_subagent_tool_ids: set[str] = set()  # Agent tool calls awaiting results
+    pending_subagent_tool_ids: set[str] = set()  # foreground Agent calls awaiting tool results
+    # Background Agent calls (run_in_background=true). Their ToolResultBlock is
+    # only a launch acknowledgment ("Async agent launched..."), NOT completion:
+    # completion is signalled later by a terminal task lifecycle message
+    # (TaskNotificationMessage, or TaskUpdatedMessage with a terminal status).
+    pending_background_tool_ids: set[str] = set()
+    background_task_to_tool: dict[str, str] = {}  # task_id -> originating tool_use_id
 
     if observer:
         observer.turn_count = 0
@@ -1038,10 +1048,12 @@ async def stream_agent(
                         "[SUBAGENT] Timed out after %ss waiting for %d pending "
                         "sub-agent result(s) (tool_use_ids=%s); finishing run anyway",
                         SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS,
-                        len(pending_subagent_tool_ids),
-                        sorted(pending_subagent_tool_ids),
+                        len(pending_subagent_tool_ids) + len(pending_background_tool_ids),
+                        sorted(pending_subagent_tool_ids | pending_background_tool_ids),
                     )
                     pending_subagent_tool_ids.clear()
+                    pending_background_tool_ids.clear()
+                    background_task_to_tool.clear()
                     break
 
                 if isinstance(message, StreamEvent) and include_steps:
@@ -1178,7 +1190,18 @@ async def stream_agent(
                                 skills_used.add(skill_name)
                                 logger.info("[SKILL LOADED] %s", skill_name)
                             if block.name == "Agent":
-                                pending_subagent_tool_ids.add(block.id)
+                                is_background = bool(
+                                    isinstance(block.input, dict)
+                                    and block.input.get("run_in_background")
+                                )
+                                if is_background:
+                                    # Resolved by a terminal task lifecycle
+                                    # message, not by its tool result (which is
+                                    # only the launch acknowledgment).
+                                    pending_background_tool_ids.add(block.id)
+                                    logger.info("[SUBAGENT] Background Agent launched (tool_use_id=%s)", block.id)
+                                else:
+                                    pending_subagent_tool_ids.add(block.id)
                             # Track tool input for file artifact detection
                             pending_tool_inputs[block.id] = (block.name, block.input)
                             if observer:
@@ -1207,15 +1230,20 @@ async def stream_agent(
                         last_total_cost_usd = msg_cost
                     logger.info("[USAGE] cost=%.6f usage=%s", msg_cost or 0, msg_usage)
                     logger.info("[RESULT] %s", _truncate_json(vars(message) if hasattr(message, '__dict__') else str(message)))
-                    if not pending_subagent_tool_ids:
+                    if not pending_subagent_tool_ids and not pending_background_tool_ids:
                         break
-                    # Sub-agent tool results arrive in UserMessages (handled
-                    # below), never here — keep the stream open to collect
-                    # them, but only with an idle timeout so a mismatch can
-                    # never hang the run forever.
+                    # Keep the stream open: foreground Agent results arrive in
+                    # UserMessages; background Agent completion arrives as a
+                    # terminal task lifecycle message, after which the CLI
+                    # re-invokes the model — its follow-up turn(s) stream
+                    # through this same loop and end with a fresh
+                    # ResultMessage, which is the only break point. The idle
+                    # timeout guarantees a mismatch can never hang the run.
                     awaiting_subagents = True
-                    logger.info("[SUBAGENT] Waiting for %d pending sub-agent(s) before finishing",
-                                len(pending_subagent_tool_ids))
+                    logger.info(
+                        "[SUBAGENT] Waiting before finishing: %d foreground result(s), %d background task(s) pending",
+                        len(pending_subagent_tool_ids), len(pending_background_tool_ids),
+                    )
                 elif isinstance(message, UserMessage):
                     # Tool results (including Agent sub-agent results) arrive
                     # in UserMessages — ResultMessage has no `content` field in
@@ -1226,6 +1254,10 @@ async def stream_agent(
                         for block in content:
                             if not isinstance(block, ToolResultBlock):
                                 continue
+                            # Foreground Agent calls resolve here. Background
+                            # Agent calls do NOT: their tool result is just the
+                            # launch ack, so they stay pending until a terminal
+                            # task lifecycle message arrives.
                             pending_subagent_tool_ids.discard(block.tool_use_id)
                             logger.info("[TOOL RESULT] tool_use_id=%s, is_error=%s",
                                         block.tool_use_id, getattr(block, "is_error", False))
@@ -1275,9 +1307,47 @@ async def stream_agent(
                                                     "file_type": artifact.get("file_type", ""),
                                                 })
                                             yield artifact
-                    if awaiting_subagents and not pending_subagent_tool_ids:
-                        logger.info("[SUBAGENT] All pending sub-agent results received; finishing run")
-                        break
+                elif isinstance(message, TaskStartedMessage):
+                    tool_use_id = message.tool_use_id or ""
+                    if tool_use_id in pending_background_tool_ids:
+                        background_task_to_tool[message.task_id] = tool_use_id
+                        logger.info(
+                            "[SUBAGENT] Background task started: task_id=%s tool_use_id=%s (%s)",
+                            message.task_id, tool_use_id, message.description,
+                        )
+
+                elif isinstance(message, TaskNotificationMessage):
+                    # Terminal by definition (completed/failed/stopped). The
+                    # CLI re-invokes the model with the task result next, so
+                    # do NOT break here — the follow-up turn(s) end with a
+                    # fresh ResultMessage, which is where the run finishes.
+                    tool_use_id = (
+                        message.tool_use_id
+                        or background_task_to_tool.get(message.task_id, "")
+                    )
+                    background_task_to_tool.pop(message.task_id, None)
+                    if tool_use_id in pending_background_tool_ids:
+                        pending_background_tool_ids.discard(tool_use_id)
+                        logger.info(
+                            "[SUBAGENT] Background task %s %s (tool_use_id=%s); %d still pending",
+                            message.task_id, message.status, tool_use_id,
+                            len(pending_background_tool_ids),
+                        )
+
+                elif isinstance(message, TaskUpdatedMessage):
+                    # A background task's terminal state can arrive ONLY as a
+                    # task_updated patch, with no task_notification (per SDK
+                    # docs) — so terminal statuses must be handled here too.
+                    if message.status in TERMINAL_TASK_STATUSES:
+                        tool_use_id = background_task_to_tool.pop(message.task_id, "")
+                        if tool_use_id in pending_background_tool_ids:
+                            pending_background_tool_ids.discard(tool_use_id)
+                            logger.info(
+                                "[SUBAGENT] Background task %s reached terminal state %r (tool_use_id=%s); %d still pending",
+                                message.task_id, message.status, tool_use_id,
+                                len(pending_background_tool_ids),
+                            )
+
                 else:
                     logger.info("[MESSAGE] type=%s", type(message).__name__)
 
