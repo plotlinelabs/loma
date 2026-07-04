@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiNotification3Line, RiNotificationOffLine, RiSettings3Line } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiNotification3Line, RiNotificationOffLine, RiSettings3Line } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TaskBoard } from "@/components/tasks/TaskBoard";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
+import { AddChatDialog } from "@/components/tasks/AddChatDialog";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 
 const POLL_INTERVAL_MS = 5000;
@@ -37,6 +38,7 @@ export default function TasksPage() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addChatOpen, setAddChatOpen] = useState(false);
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
   const [pushState, setPushState] = useState<PushState | null>(null);
   // Pause polling while a mutation is in flight to avoid clobbering optimistic state.
@@ -132,6 +134,17 @@ export default function TasksPage() {
             <RiAddLine className="h-4 w-4" />
             New task
           </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"
+                onClick={() => setAddChatOpen(true)}
+              >
+                <RiChatHistoryLine className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Add existing chat</TooltipContent>
+          </Tooltip>
           {pushState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -196,6 +209,11 @@ export default function TasksPage() {
         lanes={board?.lanes ?? []}
         task={editingTask}
         onSubmit={handleTaskSubmit}
+      />
+      <AddChatDialog
+        open={addChatOpen}
+        onOpenChange={setAddChatOpen}
+        onAdded={refresh}
       />
       <BoardSettingsDialog
         open={settingsOpen}
