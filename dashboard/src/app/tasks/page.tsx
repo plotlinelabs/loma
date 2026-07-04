@@ -61,10 +61,14 @@ export default function TasksPage() {
     }
   };
 
+  const hasBoardRef = useRef(false);
   const refresh = useCallback(async () => {
-    if (busyRef.current || document.hidden) return;
+    // Pause polling when the tab is hidden — but always allow the initial
+    // load (a background/occluded tab would otherwise show skeletons forever).
+    if (busyRef.current || (document.hidden && hasBoardRef.current)) return;
     try {
       const data = await fetchTasksBoard();
+      hasBoardRef.current = true;
       setBoard(data);
     } catch {
       // Transient poll failures are fine — keep showing the last board.

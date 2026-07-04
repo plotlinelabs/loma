@@ -96,13 +96,22 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onErro
       () => updateTask(task.conversation_id, { task_status: "active" }),
     );
 
+  // Moving into a staging lane also *parks* active tasks (todo + lane) so a
+  // needs-input chat can be shelved and recontinued later.
   const moveToLane = (task: Task, laneId: string, rank?: number) =>
     mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
-          ? { ...t, task_lane: laneId, column: laneId, task_rank: rank ?? t.task_rank }
+          ? {
+              ...t,
+              task_status: "todo" as const,
+              task_lane: laneId,
+              column: laneId,
+              task_rank: rank ?? t.task_rank,
+            }
           : t),
       () => updateTask(task.conversation_id, {
+        ...(task.task_status === "active" ? { task_status: "todo" as const } : {}),
         task_lane: laneId,
         ...(rank !== undefined ? { task_rank: rank } : {}),
       }),
@@ -128,7 +137,9 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onErro
     );
 
   const openTask = (task: Task) => {
-    if (task.task_status === "todo") {
+    // Only unstarted drafts open the details editor; anything with history
+    // (including chats parked in a lane) opens the conversation.
+    if (task.task_status === "todo" && !task.status) {
       onEditDraft(task);
     } else {
       router.push(`${basePath}/chat?continue=${task.conversation_id}`);

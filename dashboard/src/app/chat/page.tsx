@@ -103,10 +103,11 @@ function ChatPageContent() {
       try {
         const data = await fetchConversation(continueId!);
         setTaskStatus(data.conversation.task_status || null);
-        if (data.conversation.task_status === "todo") {
-          // Staged board task: nothing has been sent yet. Don't rebuild items
-          // (the fallback would render the draft prompt as an already-sent
-          // message) — put the draft in the composer instead.
+        if (data.conversation.task_status === "todo" && !data.conversation.status) {
+          // Unstarted board draft: nothing has been sent yet. Don't rebuild
+          // items (the fallback would render the draft prompt as an already-
+          // sent message) — put the draft in the composer instead. Parked
+          // chats (staged after running) fall through to the normal rebuild.
           setInitialItems([]);
           setTaskDraftPrompt(data.conversation.prompt);
           setTaskModel(data.conversation.model || null);

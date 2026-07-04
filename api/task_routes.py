@@ -1,7 +1,8 @@
 """Tasks board routes — a kanban layer over conversations.
 
 A task IS a conversation (1:1) plus board state stored on the conversation doc:
-  - task_status: "todo" (staged draft) | "active" (started) | "done" (user-closed)
+  - task_status: "todo" (staged: an unstarted draft OR a started chat parked
+    to recontinue later) | "active" (started) | "done" (user-closed)
   - task_lane: staging lane id (meaningful only while task_status == "todo")
   - task_rank: float sort key within staged lanes
 
@@ -321,18 +322,20 @@ async def handle_update_task(request: web.Request) -> web.Response:
         if target not in ("todo", "active", "done"):
             return web.json_response({"error": "Invalid task_status"}, status=400)
         # Transition matrix (server side of components/tasks/transitions.ts):
-        # - "todo" is only valid before the first run (drafts); once a
-        #   conversation exists it can never go back to a staging lane.
+        # - "todo" holds both unstarted drafts and *parked* started tasks
+        #   (active -> todo shelves a chat in a lane to recontinue later;
+        #   sending a message flips it back to active in handle_chat).
         # - "active" from todo happens in handle_chat on first send, but is
         #   also allowed here for done->active (reopen) and for converting an
         #   existing chat into a task (current is None).
-        if target == "todo" and has_run:
+        if target == "todo" and current not in ("todo", "active"):
             return web.json_response(
-                {"error": "A started task cannot return to a staging lane"}, status=400)
+                {"error": "Only active tasks can move to a staging lane"}, status=400)
         if target == "active" and not has_run and current == "todo":
             return web.json_response(
                 {"error": "Start the task by sending its prompt, not by PATCH"}, status=400)
-        if target == "done" and current not in ("active", "done"):
+        started = current in ("active", "done") or (current == "todo" and has_run)
+        if target == "done" and not started:
             return web.json_response(
                 {"error": "Only started tasks can be marked done"}, status=400)
         updates["task_status"] = target
@@ -343,6 +346,16 @@ async def handle_update_task(request: web.Request) -> web.Response:
         if target == "active" and current is None:
             # Converting an existing chat into a board task.
             updates["task_created_at"] = conversation.get("task_created_at") or now
+        if target == "todo" and current == "active":
+            # Parking: land in the requested lane (validated below) or the
+            # task's previous lane, defaulting to the first lane.
+            updates["task_staged_at"] = now
+            if "task_lane" not in body and not conversation.get("task_lane"):
+                owner = (conversation.get("metadata") or {}).get("user_name") or user_email
+                board = await _get_board_config_for(db, owner)
+                updates["task_lane"] = board["lanes"][0]["id"]
+            if conversation.get("task_rank") is None and "task_rank" not in body:
+                updates["task_rank"] = -now.timestamp()
 
     if "task_lane" in body:
         if (updates.get("task_status") or current) != "todo":
@@ -363,7 +376,7 @@ async def handle_update_task(request: web.Request) -> web.Response:
             return web.json_response({"error": "task_rank must be a number"}, status=400)
 
     if "prompt" in body:
-        if current != "todo":
+        if current != "todo" or has_run:
             return web.json_response({"error": "Only drafts can be edited"}, status=400)
         prompt = (body["prompt"] or "").strip()
         if not prompt:
@@ -371,7 +384,7 @@ async def handle_update_task(request: web.Request) -> web.Response:
         updates["prompt"] = prompt
 
     if "model" in body:
-        if current != "todo":
+        if current != "todo" or has_run:
             return web.json_response({"error": "Only drafts can be edited"}, status=400)
         updates["model"] = (body["model"] or "").strip()
 

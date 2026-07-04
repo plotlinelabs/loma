@@ -425,9 +425,12 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
     page = int(request.query.get("page", 1))
     per_page = min(int(request.query.get("per_page", 50)), 100)
 
-    # Staged board drafts (task_status="todo") haven't run yet — they belong
-    # on the tasks board, not in Activity. They appear here once started.
-    query: dict = {"deleted": {"$ne": True}, "task_status": {"$ne": "todo"}}
+    # Unstarted board drafts (staged, never run) belong on the tasks board,
+    # not in Activity. Parked tasks (staged after running) stay visible.
+    query: dict = {
+        "deleted": {"$ne": True},
+        "$nor": [{"task_status": "todo", "status": None}],
+    }
     # Track isolation condition separately to avoid $or key conflicts with search
     isolation_condition: dict | None = None
 
@@ -569,18 +572,19 @@ async def handle_get_stats(request: web.Request) -> web.Response:
     if db is None:
         return web.json_response({"error": "Observability not configured"}, status=503)
 
-    # Exclude staged board drafts — they haven't run yet.
-    total = await db.conversations.count_documents({"task_status": {"$ne": "todo"}})
+    # Exclude unstarted board drafts — they haven't run yet.
+    _no_drafts = {"$nor": [{"task_status": "todo", "status": None}]}
+    total = await db.conversations.count_documents(_no_drafts)
     by_source = await db.conversations.aggregate([
-        {"$match": {"task_status": {"$ne": "todo"}}},
+        {"$match": _no_drafts},
         {"$group": {"_id": "$source", "count": {"$sum": 1}}}
     ]).to_list(20)
     by_category = await db.conversations.aggregate([
-        {"$match": {"task_status": {"$ne": "todo"}}},
+        {"$match": _no_drafts},
         {"$group": {"_id": "$confidence.category", "count": {"$sum": 1}}}
     ]).to_list(20)
     by_status = await db.conversations.aggregate([
-        {"$match": {"task_status": {"$ne": "todo"}}},
+        {"$match": _no_drafts},
         {"$group": {"_id": "$status", "count": {"$sum": 1}}}
     ]).to_list(20)
 
@@ -758,7 +762,7 @@ async def handle_generate_titles(request: web.Request) -> web.Response:
 
     # Find conversations missing title or topic (skip unsent board drafts)
     missing = await db.conversations.find(
-        {"task_status": {"$ne": "todo"},
+        {"$nor": [{"task_status": "todo", "status": None}],
          "$or": [{"title": {"$exists": False}}, {"title": None}, {"title": ""},
                  {"topic": {"$exists": False}}, {"topic": None}, {"topic": ""}]},
         {"conversation_id": 1, "prompt": 1, "final_response": 1, "title": 1, "topic": 1},
@@ -834,7 +838,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             # Check if conversation already exists (resume) or is client-generated (start)
             existing = await db.conversations.find_one(
                 {"conversation_id": existing_conversation_id},
-                {"_id": 1, "task_status": 1, "metadata.user_name": 1},
+                {"_id": 1, "task_status": 1, "started_at": 1, "metadata.user_name": 1},
             )
             observer = ConversationObserver(
                 db, metadata=metadata,
@@ -842,16 +846,18 @@ async def handle_chat(request: web.Request) -> web.Response:
             )
             if existing:
                 if existing.get("task_status") == "todo":
-                    # First send on a staged board task: flip it to active.
-                    # resume() never sets started_at, and Activity sorts by it.
+                    # Sending on a staged board task flips it to active. This
+                    # covers both fresh drafts (set started_at — resume() never
+                    # does, and Activity sorts by it) and parked chats resumed
+                    # from a lane (keep their original timestamps).
                     now = datetime.now(timezone.utc)
+                    flip: dict = {"task_status": "active"}
+                    if not existing.get("started_at"):
+                        flip["started_at"] = now
+                        flip["task_started_at"] = now
                     await db.conversations.update_one(
                         {"conversation_id": existing_conversation_id},
-                        {"$set": {
-                            "task_status": "active",
-                            "task_started_at": now,
-                            "started_at": now,
-                        }},
+                        {"$set": flip},
                     )
                 await observer.resume()
             else:
