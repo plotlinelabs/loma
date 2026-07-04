@@ -7,6 +7,7 @@ import Link from "next/link";
 import { fetchConversations, fetchPinnedConversations, fetchPoolStatus } from "../lib/api";
 import type { Conversation, PoolStatus } from "../lib/api";
 import { useUser } from "../lib/UserContext";
+import { useTaskAttention } from "../lib/TaskAttentionContext";
 import type { SystemRole } from "../lib/governance-api";
 import CrosscutIcon from "./CrosscutIcon";
 import ChatContextMenu from "./ChatContextMenu";
@@ -21,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   RiChat1Line,
+  RiCheckboxLine,
   RiGridLine,
   RiTimeLine,
   RiBookOpenLine,
@@ -42,7 +44,8 @@ type NavItem = {
   name: string;
   href: string;
   icon: React.ReactNode;
-  badgeKey?: never;
+  /** Key into badgeCounts for an attention count shown next to the item */
+  badgeKey?: string;
   /** Minimum system role required to see this nav item */
   minRole?: SystemRole;
 };
@@ -52,6 +55,12 @@ const navigation: NavItem[] = [
     name: "Home",
     href: "/",
     icon: <RiChat1Line size={16} />,
+  },
+  {
+    name: "Tasks",
+    href: "/tasks",
+    badgeKey: "tasks",
+    icon: <RiCheckboxLine size={16} />,
   },
   {
     name: "Activity",
@@ -277,7 +286,8 @@ export default function Sidebar({
   const activeContinueId = pathname === "/chat" ? searchParams.get("continue") : null;
   const [myConversations, setMyConversations] = useState<Conversation[]>([]);
   const [pinnedConversations, setPinnedConversations] = useState<Conversation[]>([]);
-  const [badgeCounts] = useState<Record<string, number>>({});
+  const { needsInputCount } = useTaskAttention();
+  const badgeCounts: Record<string, number> = { tasks: needsInputCount };
   const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
 
   // Filter nav items by role
@@ -391,7 +401,12 @@ export default function Sidebar({
                   )}
                   title={collapsed ? item.name : undefined}
                 >
-                  <span className={cn("transition-colors flex-shrink-0", isActive ? "text-brand-600" : "text-muted-foreground")}>{item.icon}</span>
+                  <span className={cn("relative transition-colors flex-shrink-0", isActive ? "text-brand-600" : "text-muted-foreground")}>
+                    {item.icon}
+                    {collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500" />
+                    )}
+                  </span>
                   {!collapsed && <span>{item.name}</span>}
                   {!collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 ? (
                     <span className="ml-auto min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-md bg-brand-50 text-brand-600 text-[10px] font-semibold ring-1 ring-brand-200/60">
@@ -469,6 +484,7 @@ export default function Sidebar({
                           conversationTitle={title}
                           isPinned={true}
                           projectId={c.project_id}
+                          taskStatus={c.task_status}
                           projects={projects}
                           onRename={async (id, newTitle) => { await renameConversation(id, newTitle); reloadConversations(); }}
                           onDelete={async (id) => { await removeConversation(id); reloadConversations(); }}
@@ -525,6 +541,7 @@ export default function Sidebar({
                             conversationTitle={title}
                             isPinned={false}
                             projectId={c.project_id}
+                            taskStatus={c.task_status}
                             projects={projects}
                             onRename={async (id, newTitle) => { await renameConversation(id, newTitle); reloadConversations(); }}
                             onDelete={async (id) => { await removeConversation(id); reloadConversations(); }}

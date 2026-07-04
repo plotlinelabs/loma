@@ -142,6 +142,7 @@ export default function ConversationDetailPage() {
             conversationTitle={conversation.title || conversation.prompt?.slice(0, 50) || "Untitled"}
             isPinned={isPinned(conversation.conversation_id)}
             projectId={conversation.project_id}
+            taskStatus={conversation.task_status}
             projects={projects}
             onRename={async (cid, newTitle) => {
               await renameConversation(cid, newTitle);

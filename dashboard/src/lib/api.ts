@@ -45,6 +45,7 @@ export interface Conversation {
   project_id?: string | null;
   title_edited?: boolean;
   deleted?: boolean;
+  task_status?: "todo" | "active" | "done" | null;
   messages?: Array<{
     role: "user" | "assistant";
     content: string;
@@ -940,4 +941,116 @@ export async function* streamChat(
       // Ignore cancel errors
     }
   }
+}
+
+// ── Tasks board ──────────────────────────────────────────────────────────────
+
+export interface BoardLane {
+  id: string;
+  name: string;
+  order: number;
+}
+
+export interface Task {
+  conversation_id: string;
+  title: string | null;
+  prompt: string;
+  status: string | null;
+  task_status: "todo" | "active" | "done";
+  task_lane: string | null;
+  task_rank: number | null;
+  /** Derived column: a lane id, "working", "needs_input", or "done". */
+  column: string;
+  total_turns: number;
+  started_at: string | null;
+  finished_at: string | null;
+  task_created_at: string | null;
+  task_staged_at: string | null;
+  task_started_at: string | null;
+  task_done_at: string | null;
+}
+
+export interface TasksBoardResponse {
+  lanes: BoardLane[];
+  tasks: Task[];
+  counts: Record<string, number>;
+}
+
+export interface BoardSettings {
+  prompt: string;
+  lanes: BoardLane[];
+}
+
+export async function fetchTasksBoard(): Promise<TasksBoardResponse> {
+  const res = await fetch(`${API_BASE}/api/tasks`);
+  if (!res.ok) throw new Error(`Failed to fetch tasks: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchNeedsInputCount(): Promise<number> {
+  const res = await fetch(`${API_BASE}/api/tasks/needs-input-count`);
+  if (!res.ok) throw new Error(`Failed to fetch needs-input count: ${res.status}`);
+  const data = await res.json();
+  return data.count ?? 0;
+}
+
+export async function createTask(params: {
+  prompt: string;
+  title?: string;
+  lane?: string;
+}): Promise<{ task: Task }> {
+  const res = await fetch(`${API_BASE}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to create task: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function updateTask(
+  conversationId: string,
+  updates: {
+    task_status?: "todo" | "active" | "done" | null;
+    task_lane?: string;
+    task_rank?: number;
+    prompt?: string;
+    title?: string;
+  },
+): Promise<{ task: Task | null }> {
+  const res = await fetch(`${API_BASE}/api/tasks/${conversationId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to update task: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchBoardSettings(): Promise<BoardSettings> {
+  const res = await fetch(`${API_BASE}/api/tasks/board-settings`);
+  if (!res.ok) throw new Error(`Failed to fetch board settings: ${res.status}`);
+  return res.json();
+}
+
+export async function saveBoardSettings(settings: {
+  prompt: string;
+  lanes: Array<{ id?: string; name: string }>;
+}): Promise<BoardSettings & { migrated: number }> {
+  const res = await fetch(`${API_BASE}/api/tasks/board-settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to save board settings: ${res.status}`);
+  }
+  return res.json();
 }

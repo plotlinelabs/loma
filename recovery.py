@@ -84,8 +84,16 @@ async def _run_recovery_check():
 
     # Mark stale conversations older than recovery window as 'interrupted'
     try:
+        stale_filter = {**stale_query, "started_at": {"$lt": recovery_cutoff}}
+        # Board tasks flipping out of "running" here bypass the observer, so
+        # capture them first to fire their needs-input pushes after the update.
+        stale_task_ids = [
+            doc["conversation_id"]
+            async for doc in db.conversations.find(
+                {**stale_filter, "task_status": "active"}, {"conversation_id": 1})
+        ]
         result = await db.conversations.update_many(
-            {**stale_query, "started_at": {"$lt": recovery_cutoff}},
+            stale_filter,
             {"$set": {
                 "status": "interrupted",
                 "finished_at": now,
@@ -97,6 +105,9 @@ async def _run_recovery_check():
                 "[RECOVERY] Marked %d stale conversation(s) as 'interrupted'",
                 result.modified_count,
             )
+        from observability.push import fire_task_push
+        for conversation_id in stale_task_ids:
+            fire_task_push(db, conversation_id)
     except Exception as e:
         logger.exception("[RECOVERY] Failed to mark stale conversations: %s", e)
 
