@@ -22,6 +22,7 @@ from claude_agent_sdk import (
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
+    UserMessage,
 )
 
 from agent.pool import get_pool
@@ -30,6 +31,12 @@ logger = logging.getLogger(__name__)
 
 # Max times to transparently retry with a different account on rate limit
 MAX_ACCOUNT_RETRIES = 3
+# Idle timeout (seconds) while waiting for pending sub-agent results after the
+# final ResultMessage. Safety net so a tool-result mismatch can never wedge a
+# conversation in "running" forever.
+SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS = int(
+    os.environ.get("SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS", "600")
+)
 DEFAULT_AGENT_MODEL = "opencode-go/deepseek-v4-flash"
 
 CONFIG_PATH = Path(os.environ.get("AGENT_CONFIG_PATH", Path(__file__).parent.parent / "config.yaml"))
@@ -1008,8 +1015,35 @@ async def stream_agent(
 
             streamed_in_turn = False
             streamed_first_chunk = False
+            # True after the final ResultMessage when Agent sub-agent results
+            # are still pending: the stream stays open only to collect them.
+            awaiting_subagents = False
+            message_iter = aiter(client.receive_messages())
 
-            async for message in client.receive_messages():
+            while True:
+                try:
+                    if awaiting_subagents:
+                        # Bounded wait: if no message arrives within the idle
+                        # timeout, finish the run instead of hanging forever.
+                        message = await asyncio.wait_for(
+                            anext(message_iter),
+                            timeout=SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS,
+                        )
+                    else:
+                        message = await anext(message_iter)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[SUBAGENT] Timed out after %ss waiting for %d pending "
+                        "sub-agent result(s) (tool_use_ids=%s); finishing run anyway",
+                        SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS,
+                        len(pending_subagent_tool_ids),
+                        sorted(pending_subagent_tool_ids),
+                    )
+                    pending_subagent_tool_ids.clear()
+                    break
+
                 if isinstance(message, StreamEvent) and include_steps:
                     evt = message.event
                     if evt.get("type") == "content_block_delta":
@@ -1172,67 +1206,78 @@ async def stream_agent(
                     if msg_cost is not None:
                         last_total_cost_usd = msg_cost
                     logger.info("[USAGE] cost=%.6f usage=%s", msg_cost or 0, msg_usage)
-                    content = getattr(message, "content", None)
-                    if content and isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, ToolResultBlock):
-                                pending_subagent_tool_ids.discard(block.tool_use_id)
-                                logger.info("[TOOL RESULT] tool_use_id=%s, is_error=%s",
-                                            block.tool_use_id, getattr(block, "is_error", False))
-                                result_text = _extract_result_text(block)
-                                logger.info("[TOOL OUTPUT] %.500s%s", result_text, "..." if len(result_text) > 500 else "")
-                                if observer:
-                                    await observer.record_tool_result(
-                                        block.tool_use_id,
-                                        getattr(block, "is_error", False),
-                                        result_text,
-                                    )
-                                if include_steps:
-                                    yield {
-                                        "type": "tool_result",
-                                        "tool_use_id": block.tool_use_id,
-                                        "is_error": getattr(block, "is_error", False),
-                                    }
-
-                                # File artifact detection: check if this tool wrote a binary file
-                                if include_steps and source == "dashboard" and not getattr(block, "is_error", False):
-                                    tool_info = pending_tool_inputs.get(block.tool_use_id)
-                                    if tool_info:
-                                        tool_name, tool_input = tool_info
-                                        file_paths = _extract_file_paths_from_tool(
-                                            tool_name, tool_input, result_text
-                                        )
-                                        for fpath in file_paths:
-                                            if fpath in emitted_file_paths:
-                                                continue
-                                            artifact = _detect_file_artifact(fpath)
-                                            if artifact:
-                                                emitted_file_paths.add(fpath)
-                                                logger.info(
-                                                    "[FILE ARTIFACT] %s -> %s (%s)",
-                                                    fpath, artifact["title"],
-                                                    _human_size(artifact["file_size"]),
-                                                )
-                                                if observer:
-                                                    await observer.record_artifact({
-                                                        "artifact_id": artifact["artifact_id"],
-                                                        "title": artifact["title"],
-                                                        "language": artifact.get("language", ""),
-                                                        "version": artifact.get("version", 1),
-                                                        "artifact_type": "file",
-                                                        "file_url": artifact.get("file_url", ""),
-                                                        "file_size": artifact.get("file_size", 0),
-                                                        "file_type": artifact.get("file_type", ""),
-                                                    })
-                                                yield artifact
-                            else:
-                                logger.info("[RESULT BLOCK] type=%s", type(block).__name__)
-                    else:
-                        logger.info("[RESULT] %s", _truncate_json(vars(message) if hasattr(message, '__dict__') else str(message)))
+                    logger.info("[RESULT] %s", _truncate_json(vars(message) if hasattr(message, '__dict__') else str(message)))
                     if not pending_subagent_tool_ids:
                         break
+                    # Sub-agent tool results arrive in UserMessages (handled
+                    # below), never here — keep the stream open to collect
+                    # them, but only with an idle timeout so a mismatch can
+                    # never hang the run forever.
+                    awaiting_subagents = True
                     logger.info("[SUBAGENT] Waiting for %d pending sub-agent(s) before finishing",
                                 len(pending_subagent_tool_ids))
+                elif isinstance(message, UserMessage):
+                    # Tool results (including Agent sub-agent results) arrive
+                    # in UserMessages — ResultMessage has no `content` field in
+                    # claude-agent-sdk, so pending sub-agent calls MUST be
+                    # resolved here or the run would never finish.
+                    content = message.content
+                    if isinstance(content, list):
+                        for block in content:
+                            if not isinstance(block, ToolResultBlock):
+                                continue
+                            pending_subagent_tool_ids.discard(block.tool_use_id)
+                            logger.info("[TOOL RESULT] tool_use_id=%s, is_error=%s",
+                                        block.tool_use_id, getattr(block, "is_error", False))
+                            result_text = _extract_result_text(block)
+                            logger.info("[TOOL OUTPUT] %.500s%s", result_text, "..." if len(result_text) > 500 else "")
+                            if observer:
+                                await observer.record_tool_result(
+                                    block.tool_use_id,
+                                    getattr(block, "is_error", False),
+                                    result_text,
+                                )
+                            if include_steps:
+                                yield {
+                                    "type": "tool_result",
+                                    "tool_use_id": block.tool_use_id,
+                                    "is_error": getattr(block, "is_error", False),
+                                }
+
+                            # File artifact detection: check if this tool wrote a binary file
+                            if include_steps and source == "dashboard" and not getattr(block, "is_error", False):
+                                tool_info = pending_tool_inputs.get(block.tool_use_id)
+                                if tool_info:
+                                    tool_name, tool_input = tool_info
+                                    file_paths = _extract_file_paths_from_tool(
+                                        tool_name, tool_input, result_text
+                                    )
+                                    for fpath in file_paths:
+                                        if fpath in emitted_file_paths:
+                                            continue
+                                        artifact = _detect_file_artifact(fpath)
+                                        if artifact:
+                                            emitted_file_paths.add(fpath)
+                                            logger.info(
+                                                "[FILE ARTIFACT] %s -> %s (%s)",
+                                                fpath, artifact["title"],
+                                                _human_size(artifact["file_size"]),
+                                            )
+                                            if observer:
+                                                await observer.record_artifact({
+                                                    "artifact_id": artifact["artifact_id"],
+                                                    "title": artifact["title"],
+                                                    "language": artifact.get("language", ""),
+                                                    "version": artifact.get("version", 1),
+                                                    "artifact_type": "file",
+                                                    "file_url": artifact.get("file_url", ""),
+                                                    "file_size": artifact.get("file_size", 0),
+                                                    "file_type": artifact.get("file_type", ""),
+                                                })
+                                            yield artifact
+                    if awaiting_subagents and not pending_subagent_tool_ids:
+                        logger.info("[SUBAGENT] All pending sub-agent results received; finishing run")
+                        break
                 else:
                     logger.info("[MESSAGE] type=%s", type(message).__name__)
 
