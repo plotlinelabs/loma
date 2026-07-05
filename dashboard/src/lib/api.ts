@@ -1063,3 +1063,14 @@ export async function saveBoardSettings(settings: {
   }
   return res.json();
 }
+
+// ---------- Dictation (speech-to-text) ----------
+
+export async function transcribeAudio(blob: Blob, filename: string): Promise<string> {
+  const form = new FormData();
+  form.append("audio", blob, filename);
+  const res = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Transcription failed: ${res.status}`);
+  return body.text || "";
+}

@@ -1756,6 +1756,10 @@ def setup_api_routes(app: web.Application):
     from api.push_routes import setup_push_routes
     setup_push_routes(app)
 
+    # Speech-to-text routes (composer dictation)
+    from api.transcribe_routes import setup_transcribe_routes
+    setup_transcribe_routes(app)
+
     # File serving routes (binary artifact previews)
     from api.file_routes import setup_file_routes
     setup_file_routes(app)

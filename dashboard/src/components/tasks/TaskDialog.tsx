@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
 import { fetchAgentModels, type AgentModel, type BoardLane, type Task } from "@/lib/api";
 
 interface TaskDialogProps {
@@ -136,7 +137,13 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="task-details">Details</Label>
+            <div className="flex h-6 items-center justify-between">
+              <Label htmlFor="task-details">Details</Label>
+              <DictationButton
+                onText={(t) => setPrompt((prev) => appendDictation(prev, t))}
+                className="-my-1"
+              />
+            </div>
             <Textarea
               id="task-details"
               value={prompt}

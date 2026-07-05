@@ -9,6 +9,7 @@ import { filesToChatFiles } from "@/lib/chatFiles";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { ModelPicker } from "@/components/composer/ModelPicker";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
+import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
 
 interface QuickAddTaskProps {
   onAdded: () => void;
@@ -103,6 +104,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
             />
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            <DictationButton onText={(t) => setValue((prev) => appendDictation(prev, t))} />
             <Button
               type="button"
               variant="ghost"
