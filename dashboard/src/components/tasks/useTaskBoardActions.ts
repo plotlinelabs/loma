@@ -17,6 +17,9 @@ export const SYSTEM_COLUMNS = [
   { id: "done", name: "Done" },
 ];
 
+const NEEDS_INPUT_COLUMN = SYSTEM_COLUMNS.find((c) => c.id === "needs_input")!;
+const TRAILING_SYSTEM_COLUMNS = SYSTEM_COLUMNS.filter((c) => c.id !== "needs_input");
+
 export interface TaskBoardActionsOptions {
   board: TasksBoardResponse;
   /** Optimistically replace board state; server truth reconciles via polling. */
@@ -38,8 +41,10 @@ export function useTaskBoardActions({
   const router = useRouter();
 
   const laneIds = useMemo(() => board.lanes.map((lane) => lane.id), [board.lanes]);
+  // Needs input sits leftmost — the attention column is the first thing you
+  // see — then the staging lanes, then Working/Done.
   const columns: Array<BoardLane | { id: string; name: string }> = useMemo(
-    () => [...board.lanes, ...SYSTEM_COLUMNS],
+    () => [NEEDS_INPUT_COLUMN, ...board.lanes, ...TRAILING_SYSTEM_COLUMNS],
     [board.lanes],
   );
 
