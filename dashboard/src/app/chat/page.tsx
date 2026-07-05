@@ -177,8 +177,43 @@ function ChatPageContent() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col -mb-3">
-      {/* Header with title and action buttons — hidden for auto-sent prompts until conversation starts */}
-      {showHeader && <div className="pwa-header-offset px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
+      {/* Mobile: no header bar — chat actions live in a floating menu on the
+          right (mirrors the floating hamburger on the left). ChatContextMenu
+          carries pin/rename/board/project/delete. */}
+      {activeConversationId && (
+        <div className="md:hidden fixed right-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30">
+          <ChatContextMenu
+            conversationId={activeConversationId}
+            conversationTitle={conversationTitle || promptPreview || "Untitled"}
+            isPinned={isPinned(activeConversationId)}
+            projectId={projectId}
+            taskStatus={taskStatus}
+            projects={projects}
+            onRename={async (cid, newTitle) => {
+              await renameConversation(cid, newTitle);
+              setConversationTitle(newTitle);
+            }}
+            onDelete={async (cid) => {
+              await removeConversation(cid);
+              router.push(`${basePath}/`);
+            }}
+            onTogglePin={togglePin}
+            onAssignProject={async (cid, pid) => {
+              await assignToProject(cid, pid);
+              setProjectId(pid);
+            }}
+            onRemoveProject={async (cid) => {
+              await unassignFromProject(cid);
+              setProjectId(null);
+            }}
+            onCreateProject={async (name) => { await addProject(name); }}
+            triggerClassName="h-9 w-9 flex items-center justify-center rounded-full border border-border bg-background/80 backdrop-blur text-muted-foreground press-scale"
+          />
+        </div>
+      )}
+
+      {/* Header with title and action buttons — desktop only; hidden for auto-sent prompts until conversation starts */}
+      {showHeader && <div className="hidden md:block px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
         <div className="flex items-center gap-2">
           {/* Title area */}
           <div className="min-w-0 flex-1">

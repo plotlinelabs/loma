@@ -17,6 +17,7 @@ Per-user board config (staging lanes + personal prompt) lives on the users doc
 under `task_board`; tasks reference lanes by id so renames are config-only.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -27,6 +28,25 @@ from observability.db import get_db
 from api.auth_helpers import get_system_role, get_user_email
 
 logger = logging.getLogger(__name__)
+
+
+async def _auto_title_task(db, conversation_id: str, prompt: str):
+    """Generate a short LLM title for a quick-added draft (fire-and-forget).
+
+    Leaves title_edited unset so finish-time enrichment can still improve the
+    title once the agent has actually run. Skips the write if the user has
+    titled the task in the meantime.
+    """
+    try:
+        from api.routes import _generate_title_llm
+        title = await _generate_title_llm(prompt)
+        if title and title != "Untitled conversation":
+            await db.conversations.update_one(
+                {"conversation_id": conversation_id, "title": None},
+                {"$set": {"title": title}},
+            )
+    except Exception as e:
+        logger.warning("Task auto-title failed for %s: %s", conversation_id, e)
 
 # Statuses where the agent is no longer running — the user's turn.
 NEEDS_INPUT_STATUSES = ("completed", "error", "interrupted")
@@ -210,6 +230,11 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_done_at": None,
     }
     await db.conversations.insert_one(doc)
+
+    # Quick-added tasks (no explicit title) get an LLM title from the prompt.
+    if not title:
+        asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
+
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)
 
 

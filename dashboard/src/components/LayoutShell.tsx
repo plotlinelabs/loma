@@ -76,49 +76,26 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         />
       </Suspense>
 
-      {standalone ? (
-        <>
-          {/* Installed PWA: no dedicated bar — a floating menu button keeps
-              every vertical pixel for content. Page headers make room for it
-              via .pwa-header-offset (globals.css). */}
-          <ViewportHeightSync />
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidebar}
-            aria-label="Toggle menu"
-            className="md:hidden fixed left-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30 h-9 w-9 rounded-full border border-border bg-background/80 backdrop-blur text-muted-foreground press-scale"
-          >
-            <RiMenuLine size={18} />
-          </Button>
-        </>
-      ) : (
-        /* Mobile browser top bar — safe-area padding clears the notch */
-        <div className="md:hidden fixed top-0 left-0 right-0 h-[calc(3.5rem+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)] bg-muted border-b border-border flex items-center px-4 z-30">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidebar}
-            className="-ml-2 text-muted-foreground hover:text-foreground press-scale"
-            aria-label="Toggle menu"
-          >
-            <RiMenuLine size={20} />
-          </Button>
-          <div className="ml-3 flex items-center gap-2">
-            <CrosscutIcon size={20} />
-            <span className="font-[family-name:var(--font-logo)] text-[13px] font-black tracking-[0.5px] text-foreground">Loma</span>
-          </div>
-        </div>
-      )}
+      {/* Mobile: no dedicated top bar — a floating menu button keeps every
+          vertical pixel for content. Page headers make room for it via
+          .pwa-header-offset (globals.css). */}
+      {standalone && <ViewportHeightSync />}
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={toggleSidebar}
+        aria-label="Toggle menu"
+        className="md:hidden fixed left-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30 h-9 w-9 rounded-full border border-border bg-background/80 backdrop-blur text-muted-foreground press-scale"
+      >
+        <RiMenuLine size={18} />
+      </Button>
 
       <main className={cn(
         // dvh (not vh) so the iOS Safari URL bar doesn't cause overflow; in
         // the installed PWA, --app-h tracks the visual viewport so the layout
         // shrinks above the on-screen keyboard (dvh ignores it on iOS).
-        "ml-0 flex flex-col transition-all duration-200",
-        standalone
-          ? "h-[var(--app-h,100dvh)] pt-[env(safe-area-inset-top)] md:pt-0"
-          : "h-dvh pt-[calc(3.5rem+env(safe-area-inset-top))] md:pt-0",
+        "ml-0 flex flex-col transition-all duration-200 pt-[env(safe-area-inset-top)] md:pt-0",
+        standalone ? "h-[var(--app-h,100dvh)]" : "h-dvh",
         sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
         <div className={cn(

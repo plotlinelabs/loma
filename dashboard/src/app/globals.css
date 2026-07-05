@@ -402,14 +402,14 @@
   }
 }
 
-@media (display-mode: standalone) and (max-width: 767px) {
+@media (max-width: 767px) {
   /* The floating menu button replaces the top bar — page headers shift right
      so their first row clears it. */
   .pwa-header-offset {
     padding-left: 2.75rem;
   }
 
-  /* Chat reads small on a phone — bump message text in the installed app. */
+  /* Chat reads small on a phone — bump message text. */
   .chat-text {
     font-size: 15px;
     line-height: 1.55;
