@@ -3,8 +3,12 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
-import { streamChat, fetchConversation, fetchAgentModels, basePath } from "../lib/api";
-import type { AgentModel, ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
+import { useAgentModels } from "@/hooks/useAgentModels";
+import { filesToChatFiles } from "@/lib/chatFiles";
+import { ModelPicker } from "./composer/ModelPicker";
+import { PendingFilesStrip } from "./composer/PendingFilesStrip";
+import { streamChat, fetchConversation, basePath } from "../lib/api";
+import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import type { Artifact } from "./ArtifactViewer";
@@ -13,10 +17,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandInput, CommandList, CommandGroup, CommandItem, CommandEmpty } from "@/components/ui/command";
 import { Textarea } from "@/components/ui/textarea";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   RiCloseLine,
   RiArrowDownSLine,
@@ -31,36 +32,6 @@ import {
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
-const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
-const FAVORITE_MODEL_IDS = [
-  "opencode-go/deepseek-v4-flash",
-  "anthropic/claude-opus-4-8",
-  "anthropic/claude-fable-5",
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-6",
-  "openai/gpt-5.5",
-] as const;
-
-function favoriteModelRank(model: AgentModel): number | null {
-  const index = FAVORITE_MODEL_IDS.indexOf(model.id as typeof FAVORITE_MODEL_IDS[number]);
-  return index === -1 ? null : index;
-}
-
-function isFavoriteModel(model: AgentModel): boolean {
-  return favoriteModelRank(model) !== null;
-}
-
-const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-const TEXT_EXTENSIONS = new Set([
-  "txt", "csv", "json", "py", "md", "js", "ts", "tsx", "jsx", "yml", "yaml",
-  "xml", "html", "css", "log", "sh", "sql", "env", "cfg", "ini", "toml",
-]);
-const BINARY_EXTENSIONS = new Set([
-  "xlsx", "xlsm", "xls", "pdf", "docx", "pptx",
-  "zip", "tar", "gz", "7z", "rar", "tgz",       // archives
-]);
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-const MAX_TEXT_SIZE = 50 * 1024; // 50 KB
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]);
 
@@ -224,44 +195,6 @@ function stampLatestAssistantDuration(items: ChatItem[], responseTimeSeconds: nu
 function removeTransientStatusItems(items: ChatItem[]): ChatItem[] {
   const filtered = items.filter((item) => item.role !== "status");
   return filtered.length === items.length ? items : filtered;
-}
-
-/** Read a File into a ChatFile object */
-async function readFileAsChatFile(file: File): Promise<ChatFile | null> {
-  if (file.size > MAX_FILE_SIZE) return null;
-
-  const ext = file.name.split(".").pop()?.toLowerCase() || "";
-  const isImage = IMAGE_TYPES.has(file.type);
-  const isText = TEXT_EXTENSIONS.has(ext) || file.type.startsWith("text/");
-  const isBinary = BINARY_EXTENSIONS.has(ext);
-
-  if (!isImage && !isText && !isBinary) {
-    console.warn(`Unsupported file type: ${file.name} (${file.type})`);
-    return null;
-  }
-
-  if (isImage) {
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-    );
-    return { name: file.name, mimetype: file.type, type: "image", data: base64 };
-  }
-
-  if (isBinary) {
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-    );
-    return { name: file.name, mimetype: file.type || "application/octet-stream", type: "binary", data: base64 };
-  }
-
-  // Text file
-  let text = await file.text();
-  if (text.length > MAX_TEXT_SIZE) {
-    text = text.slice(0, MAX_TEXT_SIZE) + `\n\n... [truncated, file was ${(file.size / 1024).toFixed(0)} KB]`;
-  }
-  return { name: file.name, mimetype: file.type || "text/plain", type: "text", data: text };
 }
 
 /** Extract a :::clarify block from text content */
@@ -476,63 +409,6 @@ function TypingIndicator() {
 }
 
 /** Image thumbnail for pending files */
-function PendingImageThumbnail({
-  file,
-  index,
-  onRemove,
-  onExpand,
-}: {
-  file: ChatFile;
-  index: number;
-  onRemove: (i: number) => void;
-  onExpand: (src: string) => void;
-}) {
-  const src = `data:${file.mimetype};base64,${file.data}`;
-  return (
-    <span className="relative inline-flex group">
-      <button
-        type="button"
-        onClick={() => onExpand(src)}
-        className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 hover:border-gray-300 transition-colors flex-shrink-0"
-      >
-        <img src={src} alt={file.name} className="w-full h-full object-cover" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onRemove(index)}
-        className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-gray-600 hover:bg-gray-800 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-      >
-        <RiCloseLine size={10} />
-      </button>
-    </span>
-  );
-}
-
-/** Pending file badge (non-image) */
-function PendingFileBadge({
-  file,
-  index,
-  onRemove,
-}: {
-  file: ChatFile;
-  index: number;
-  onRemove: (i: number) => void;
-}) {
-  return (
-    <Badge variant="secondary" className="h-auto gap-1.5 px-2.5 py-1 rounded-lg border border-gray-200">
-      <RiAttachmentLine size={12} className="text-muted-foreground" />
-      {file.name}
-      <button
-        type="button"
-        onClick={() => onRemove(index)}
-        className="text-muted-foreground hover:text-foreground ml-0.5"
-      >
-        <RiCloseLine size={12} />
-      </button>
-    </Badge>
-  );
-}
-
 /** Lightbox overlay for expanded image view */
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   useEffect(() => {
@@ -635,6 +511,7 @@ export default function ChatPanel({
   initialArtifacts,
   conversationId: initialConversationId,
   initialPrompt,
+  initialFiles,
   initialModel,
   autoSend,
   systemContext,
@@ -650,6 +527,8 @@ export default function ChatPanel({
   initialArtifacts?: Artifact[];
   conversationId?: string;
   initialPrompt?: string;
+  /** Attachments staged with a board-task draft — seeded as pending files */
+  initialFiles?: ChatFile[];
   /** Model to preselect (e.g. a board task's chosen model) — wins over the saved preference */
   initialModel?: string;
   autoSend?: boolean;
@@ -675,7 +554,7 @@ export default function ChatPanel({
   const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
   const [streamElapsedSeconds, setStreamElapsedSeconds] = useState(0);
   const [isRecovering, setIsRecovering] = useState(false);
-  const [pendingFiles, setPendingFiles] = useState<ChatFile[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<ChatFile[]>(initialFiles || []);
   const [isDragOver, setIsDragOver] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [accountInfo, setAccountInfo] = useState<{
@@ -690,11 +569,12 @@ export default function ChatPanel({
     provider?: string;
     model?: string;
   } | null>(null);
-  const [agentModels, setAgentModels] = useState<AgentModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("");
-  const [modelLoadState, setModelLoadState] = useState<"loading" | "ready" | "error">("loading");
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  const [modelSearch, setModelSearch] = useState("");
+  const {
+    models: agentModels,
+    selectedModel,
+    selectModel,
+    loadState: modelLoadState,
+  } = useAgentModels(initialModel);
   /** Internal artifact store — synced to parent via callbacks */
   const [internalArtifacts, setInternalArtifacts] = useState<Artifact[]>(initialArtifacts || []);
   // Use external artifacts if they have entries, otherwise fall back to internal.
@@ -708,79 +588,6 @@ export default function ChatPanel({
   const abortControllerRef = useRef<AbortController | null>(null);
   const queuedMessagesRef = useRef<{ text: string; files?: ChatFile[] }[]>([]);
   const [queuedCount, setQueuedCount] = useState(0);
-
-  const selectedModelInfo = useMemo(
-    () => agentModels.find((model) => model.id === selectedModel) || null,
-    [agentModels, selectedModel],
-  );
-
-  const filteredAgentModels = useMemo(() => {
-    const query = modelSearch.trim().toLowerCase();
-    if (!query) return agentModels;
-    return agentModels.filter((model) => {
-      const haystack = `${model.label} ${model.id} ${model.provider_id} ${model.model_id}`.toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [agentModels, modelSearch]);
-
-  const recommendedAgentModels = useMemo(
-    () => filteredAgentModels
-      .filter(isFavoriteModel)
-      .sort((a, b) => (favoriteModelRank(a) ?? 99) - (favoriteModelRank(b) ?? 99)),
-    [filteredAgentModels],
-  );
-
-  const groupedAgentModels = useMemo(() => {
-    const groups: Array<{ providerId: string; models: AgentModel[] }> = [];
-    for (const model of filteredAgentModels.filter((item) => !isFavoriteModel(item))) {
-      const group = groups.find((item) => item.providerId === model.provider_id);
-      if (group) {
-        group.models.push(model);
-      } else {
-        groups.push({ providerId: model.provider_id, models: [model] });
-      }
-    }
-    return groups;
-  }, [filteredAgentModels]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadModels() {
-      setModelLoadState("loading");
-      try {
-        const catalog = await fetchAgentModels();
-        if (cancelled) return;
-        const models = catalog.models || [];
-        setAgentModels(models);
-
-        const saved = typeof window !== "undefined"
-          ? window.localStorage.getItem(MODEL_STORAGE_KEY)
-          : null;
-        const savedIsValid = saved && models.some((model) => model.id === saved);
-        const initialIsValid = initialModel && models.some((model) => model.id === initialModel);
-        const nextModel = initialIsValid
-          ? initialModel
-          : savedIsValid
-            ? saved
-            : catalog.default_model || models[0]?.id || "";
-        setSelectedModel(nextModel);
-        setModelLoadState("ready");
-      } catch (e) {
-        if (cancelled) return;
-        console.warn("Failed to load agent models", e);
-        setAgentModels([]);
-        setSelectedModel("");
-        setModelLoadState("error");
-      }
-    }
-
-    loadModels();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialModel]);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -846,21 +653,7 @@ export default function ChatPanel({
   }, [input, adjustTextareaHeight]);
 
   const addFiles = useCallback(async (fileList: FileList | File[]) => {
-    const files = Array.from(fileList);
-    const chatFiles: ChatFile[] = [];
-    const rejected: string[] = [];
-    for (const f of files) {
-      if (f.size > MAX_FILE_SIZE) {
-        rejected.push(`${f.name} (too large — max ${MAX_FILE_SIZE / 1024 / 1024}MB)`);
-        continue;
-      }
-      const cf = await readFileAsChatFile(f);
-      if (cf) {
-        chatFiles.push(cf);
-      } else {
-        rejected.push(f.name);
-      }
-    }
+    const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
     if (chatFiles.length) {
       setPendingFiles((prev) => [...prev, ...chatFiles]);
     }
@@ -953,12 +746,16 @@ export default function ChatPanel({
       setInput("");
       // Call directly — a deferred setTimeout gets cancelled by this effect's
       // own cleanup when setInput triggers a re-render (no dep array), which
-      // made auto-send silently flaky.
-      handleSend(initialPrompt);
+      // made auto-send silently flaky. Include pending files so attachments
+      // staged with a board-task draft ride the auto-sent first message.
+      handleSend(initialPrompt, { includePendingFiles: true });
     }
   });
 
-  const handleSend = async (overrideMessage?: string, { fromQueue }: { fromQueue?: boolean } = {}) => {
+  const handleSend = async (
+    overrideMessage?: string,
+    { fromQueue, includePendingFiles }: { fromQueue?: boolean; includePendingFiles?: boolean } = {},
+  ) => {
     const displayText = overrideMessage ?? input.trim();
     if (!displayText && pendingFiles.length === 0) return;
 
@@ -987,7 +784,9 @@ export default function ChatPanel({
       : displayText;
 
     const isOverride = overrideMessage !== undefined;
-    const filesToSend = !isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined;
+    const filesToSend = (!isOverride || includePendingFiles) && pendingFiles.length > 0
+      ? [...pendingFiles]
+      : undefined;
     const fileNames = filesToSend?.map((f) => f.name);
     const displayMessage = displayText || `[${fileNames?.join(", ")}]`;
 
@@ -1008,6 +807,8 @@ export default function ChatPanel({
       setInput("");
       setPendingFiles([]);
       setAccountInfo(null);
+    } else if (includePendingFiles && filesToSend) {
+      setPendingFiles([]);
     }
     if (!fromQueue) {
       setItems((prev) => [...prev, { role: "user", content: displayMessage, fileNames, files: filesToSend }]);
@@ -1320,178 +1121,6 @@ export default function ChatPanel({
     }
   };
 
-  const handleModelChange = (value: string) => {
-    setSelectedModel(value);
-    if (value) {
-      window.localStorage.setItem(MODEL_STORAGE_KEY, value);
-    } else {
-      window.localStorage.removeItem(MODEL_STORAGE_KEY);
-    }
-    setModelPickerOpen(false);
-    setModelSearch("");
-  };
-
-  const renderModelPicker = (compact = false) => {
-    const disabled = isStreaming || modelLoadState !== "ready" || agentModels.length === 0;
-    const title = modelLoadState === "error"
-      ? "Model list unavailable; backend default will be used"
-      : "Choose model for dashboard chat";
-    const providerLabel = selectedModelInfo?.provider_id || "Backend";
-    const modelLabel = selectedModelInfo
-      ? selectedModelInfo.label.split("·").pop()?.trim() || selectedModelInfo.model_id
-      : modelLoadState === "loading"
-      ? "Loading models"
-      : modelLoadState === "error"
-      ? "Default model"
-      : "Choose model";
-    const isActiveComposer = compact;
-
-    return (
-      <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            disabled={disabled}
-            title={title}
-            className={
-              isActiveComposer
-                ? "group inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-55"
-                : "group inline-flex h-10 max-w-full items-center gap-2 rounded-xl border border-border bg-card px-2.5 text-left text-foreground transition-all hover:bg-muted focus:outline-none focus:ring-2 focus:ring-accent-200 disabled:cursor-not-allowed disabled:opacity-55"
-            }
-          >
-            {isActiveComposer ? (
-              <>
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                <span className="min-w-0 truncate text-xs text-muted-foreground">
-                  {modelLabel}
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#1F1D1A] text-[10px] font-semibold text-white dark:bg-accent-200 dark:text-accent-on">
-                  AI
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-[11px] font-medium leading-3 text-gray-400 dark:text-gray-500">
-                    {providerLabel}
-                  </span>
-                  <span className="block truncate text-[13px] font-semibold leading-4 text-gray-800 dark:text-gray-900">
-                    {modelLabel}
-                  </span>
-                </span>
-              </>
-            )}
-            <RiArrowDownSLine
-              size={isActiveComposer ? 14 : 16}
-              className={cn(
-                "shrink-0 text-gray-400 transition-transform",
-                modelPickerOpen && "rotate-180"
-              )}
-            />
-          </button>
-        </PopoverTrigger>
-
-        <PopoverContent
-          side="top"
-          align="start"
-          className="w-[min(80vw,280px)] p-0 overflow-hidden rounded-xl"
-        >
-          <Command shouldFilter={false}>
-            <div className="border-b border-border p-1.5">
-              <CommandInput
-                value={modelSearch}
-                onValueChange={setModelSearch}
-                placeholder="Search models"
-              />
-            </div>
-            <CommandList>
-              <ScrollArea className="max-h-64">
-                <CommandEmpty className="px-3 py-6 text-center text-[13px] text-muted-foreground">
-                  No models match that search.
-                </CommandEmpty>
-
-                {recommendedAgentModels.length > 0 && (
-                  <CommandGroup heading="Favorites">
-                    {recommendedAgentModels.map((model) => {
-                      const isSelected = model.id === selectedModel;
-                      const itemModelLabel = model.label.split("·").pop()?.trim() || model.model_id;
-                      return (
-                        <CommandItem
-                          key={model.id}
-                          value={model.id}
-                          onSelect={() => handleModelChange(model.id)}
-                          data-checked={isSelected}
-                          className={cn(
-                            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px]",
-                            isSelected ? "text-foreground font-medium" : "text-muted-foreground"
-                          )}
-                        >
-                          <span className="min-w-0 flex-1 truncate">{itemModelLabel}</span>
-                          {model.supports_reasoning && (
-                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-500/60" title="reasoning" />
-                          )}
-                          {isSelected && <RiCheckLine size={14} className="shrink-0 text-foreground" />}
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                )}
-                {groupedAgentModels.map((group) => (
-                  <CommandGroup key={group.providerId} heading={group.providerId}>
-                    {group.models.map((model) => {
-                      const isSelected = model.id === selectedModel;
-                      const itemModelLabel = model.label.split("·").pop()?.trim() || model.model_id;
-                      return (
-                        <CommandItem
-                          key={model.id}
-                          value={model.id}
-                          onSelect={() => handleModelChange(model.id)}
-                          data-checked={isSelected}
-                          className={cn(
-                            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px]",
-                            isSelected ? "text-foreground font-medium" : "text-muted-foreground"
-                          )}
-                        >
-                          <span className="min-w-0 flex-1 truncate">{itemModelLabel}</span>
-                          {model.supports_reasoning && (
-                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-500/60" title="reasoning" />
-                          )}
-                          {isSelected && <RiCheckLine size={14} className="shrink-0 text-foreground" />}
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                ))}
-              </ScrollArea>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-    );
-  };
-
-  /** Render the pending files strip (shared between empty state and normal chat input) */
-  const renderPendingFiles = () => {
-    if (pendingFiles.length === 0) return null;
-    return (
-      <div className="flex flex-wrap items-end gap-1.5 mb-2">
-        {pendingFiles.map((f, i) =>
-          f.type === "image" ? (
-            <PendingImageThumbnail
-              key={i}
-              file={f}
-              index={i}
-              onRemove={removeFile}
-              onExpand={setExpandedImage}
-            />
-          ) : (
-            <PendingFileBadge key={i} file={f} index={i} onRemove={removeFile} />
-          )
-        )}
-      </div>
-    );
-  };
-
   const isEmptyState = items.length === 0 && !isStreaming;
 
   return (
@@ -1546,7 +1175,7 @@ export default function ChatPanel({
                 handleSend();
               }}
             >
-              {renderPendingFiles()}
+              <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
               <div className="relative flex flex-col bg-card border border-border rounded-2xl shadow-sm focus-within:border-gray-300 transition-colors">
                 <Textarea
@@ -1567,7 +1196,7 @@ export default function ChatPanel({
                 />
                 <div className="flex items-center justify-between gap-2 px-3 pb-3">
                   <div className="flex min-w-0 items-center">
-                    {renderModelPicker(true)}
+                    <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
@@ -1798,7 +1427,7 @@ export default function ChatPanel({
               }}
               className="max-w-3xl mx-auto"
             >
-              {renderPendingFiles()}
+              <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
               <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">
                 <Textarea
@@ -1819,7 +1448,7 @@ export default function ChatPanel({
                 />
                 <div className="flex items-center justify-between gap-2 px-2 pb-2">
                   <div className="flex min-w-0 items-center">
-                    {renderModelPicker(true)}
+                    <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button

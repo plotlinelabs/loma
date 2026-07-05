@@ -1,10 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { RiSendPlaneLine, RiLoader4Line } from "@remixicon/react";
+import { useRef, useState } from "react";
+import { RiSendPlaneLine, RiLoader4Line, RiAttachmentLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { createTask } from "@/lib/api";
+import { createTask, type ChatFile } from "@/lib/api";
+import { filesToChatFiles } from "@/lib/chatFiles";
+import { useAgentModels } from "@/hooks/useAgentModels";
+import { ModelPicker } from "@/components/composer/ModelPicker";
+import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 
 interface QuickAddTaskProps {
   /** Lane new tasks land in (the board's first staging lane). */
@@ -12,20 +16,36 @@ interface QuickAddTaskProps {
   onAdded: () => void;
 }
 
-/** Bottom-pinned capture box on the mobile tasks board: type what you need
- * done and it becomes a staged task immediately — the backend titles it from
- * the prompt with an LLM. */
+/** Bottom-pinned capture box on the mobile tasks board — the same composer
+ * controls as chat (model picker, attachments): type what you need done and
+ * it becomes a staged task; the backend titles it from the prompt with an
+ * LLM, and the model/attachments ride along when the task starts. */
 export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
+  const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { models, selectedModel, selectModel, loadState } = useAgentModels();
+
+  const addFiles = async (fileList: FileList | File[]) => {
+    const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
+    if (chatFiles.length) setFiles((prev) => [...prev, ...chatFiles]);
+    if (rejected.length) console.warn("Unsupported files skipped:", rejected);
+  };
 
   const submit = async () => {
     const prompt = value.trim();
-    if (!prompt || busy) return;
+    if ((!prompt && files.length === 0) || busy) return;
     setBusy(true);
     try {
-      await createTask({ prompt, lane: laneId });
+      await createTask({
+        prompt: prompt || files.map((f) => f.name).join(", "),
+        lane: laneId,
+        model: selectedModel || undefined,
+        files: files.length > 0 ? files : undefined,
+      });
       setValue("");
+      setFiles([]);
       onAdded();
     } catch {
       // Keep the text so nothing is lost; the user can retry.
@@ -36,7 +56,20 @@ export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
 
   return (
     <div className="shrink-0 border-t border-border bg-background px-3 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-      <div className="flex items-end gap-2 rounded-2xl border border-border bg-muted px-3 py-1.5">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files?.length) {
+            void addFiles(e.target.files);
+            e.target.value = "";
+          }
+        }}
+      />
+      <PendingFilesStrip files={files} onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))} />
+      <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">
         <Textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -46,22 +79,52 @@ export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
               void submit();
             }
           }}
+          onPaste={(e) => {
+            const pasted = Array.from(e.clipboardData?.files ?? []);
+            if (pasted.length) {
+              e.preventDefault();
+              void addFiles(pasted);
+            }
+          }}
           placeholder="What do you need done?"
           rows={1}
-          className="min-h-0 flex-1 resize-none overflow-hidden border-0 bg-transparent p-0 py-1.5 focus-visible:ring-0 focus-visible:border-transparent rounded-none"
+          className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
           style={{ maxHeight: "120px" }}
         />
-        <Button
-          size="icon-sm"
-          onClick={() => void submit()}
-          disabled={!value.trim() || busy}
-          aria-label="Add task"
-          className="mb-0.5 shrink-0 rounded-lg"
-        >
-          {busy
-            ? <RiLoader4Line size={16} className="animate-spin" />
-            : <RiSendPlaneLine size={16} />}
-        </Button>
+        <div className="flex items-center justify-between gap-2 px-2 pb-2">
+          <div className="flex min-w-0 items-center">
+            <ModelPicker
+              models={models}
+              selectedModel={selectedModel}
+              onSelect={selectModel}
+              loadState={loadState}
+            />
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach files"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RiAttachmentLine size={16} />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              onClick={() => void submit()}
+              disabled={(!value.trim() && files.length === 0) || busy}
+              aria-label="Add task"
+              className="bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
+            >
+              {busy
+                ? <RiLoader4Line size={16} className="animate-spin" />
+                : <RiSendPlaneLine size={16} />}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

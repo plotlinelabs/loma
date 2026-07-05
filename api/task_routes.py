@@ -59,6 +59,10 @@ DEFAULT_BOARD = {
 MAX_LANE_NAME_LEN = 40
 MAX_LANES = 10
 MAX_BOARD_PROMPT_LEN = 10000
+# Attachments staged with a draft (base64 in the doc until the task starts).
+# Mongo caps documents at 16MB — keep well under it.
+MAX_DRAFT_FILES = 8
+MAX_DRAFT_FILES_BYTES = 8 * 1024 * 1024
 
 
 def _serialize(doc):
@@ -187,6 +191,21 @@ async def handle_create_task(request: web.Request) -> web.Response:
 
     title = (body.get("title") or "").strip() or None
     model = (body.get("model") or "").strip()
+
+    files = body.get("files") or []
+    if files:
+        if not isinstance(files, list) or len(files) > MAX_DRAFT_FILES:
+            return web.json_response(
+                {"error": f"At most {MAX_DRAFT_FILES} attachments"}, status=400)
+        total = 0
+        for f in files:
+            if not isinstance(f, dict) or not f.get("name") or "data" not in f:
+                return web.json_response({"error": "Invalid attachment"}, status=400)
+            total += len(f.get("data") or "")
+        if total > MAX_DRAFT_FILES_BYTES:
+            return web.json_response(
+                {"error": "Attachments too large (max 8MB total)"}, status=400)
+
     board = await _get_board_config_for(db, user_email)
     lane_ids = [lane["id"] for lane in board["lanes"]]
     lane = body.get("lane") or lane_ids[0]
@@ -222,6 +241,9 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "title_edited": bool(title),
         "task_status": "todo",
         "task_lane": lane,
+        # Attachments staged with the draft — sent with the first message on
+        # start (handle_chat clears them once the task flips to active).
+        **({"draft_files": files} if files else {}),
         # Newest first when sorted ascending; reorder uses neighbor midpoints.
         "task_rank": -now.timestamp(),
         "task_created_at": now,

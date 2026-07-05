@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from "react";
 import ChatPanel from "./ChatPanel";
 import type { ChatItem } from "./ChatPanel";
+import type { ChatFile } from "../lib/api";
 import ArtifactViewer from "./ArtifactViewer";
 import type { Artifact } from "./ArtifactViewer";
 
@@ -75,6 +76,7 @@ export default function ChatWithArtifacts({
   initialArtifacts,
   conversationId,
   initialPrompt,
+  initialFiles,
   initialModel,
   autoSend,
   systemContext,
@@ -85,6 +87,7 @@ export default function ChatWithArtifacts({
   initialArtifacts?: Artifact[];
   conversationId?: string;
   initialPrompt?: string;
+  initialFiles?: ChatFile[];
   initialModel?: string;
   autoSend?: boolean;
   systemContext?: string;
@@ -152,6 +155,7 @@ export default function ChatWithArtifacts({
           initialArtifacts={initialArtifacts}
           conversationId={conversationId}
           initialPrompt={initialPrompt}
+          initialFiles={initialFiles}
           initialModel={initialModel}
           autoSend={autoSend}
           systemContext={systemContext}

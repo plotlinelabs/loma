@@ -857,7 +857,9 @@ async def handle_chat(request: web.Request) -> web.Response:
                         flip["task_started_at"] = now
                     await db.conversations.update_one(
                         {"conversation_id": existing_conversation_id},
-                        {"$set": flip},
+                        # Draft attachments ride the first message (the client
+                        # seeds them as pending files) — drop the staged copy.
+                        {"$set": flip, "$unset": {"draft_files": ""}},
                     )
                 await observer.resume()
             else:

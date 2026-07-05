@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { ChatItem } from "../../components/ChatPanel";
 import type { Artifact } from "../../components/ArtifactViewer";
+import type { ChatFile } from "../../lib/api";
 import { rebuildItemsFromConversation } from "../../components/ChatPanel";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
@@ -47,8 +48,9 @@ function ChatPageContent() {
   const [titleValue, setTitleValue] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Draft prompt for staged board tasks — prefills the composer (or auto-sends with ?start=1)
+  // Draft prompt/files for staged board tasks — prefill the composer (or auto-send with ?start=1)
   const [taskDraftPrompt, setTaskDraftPrompt] = useState<string | null>(null);
+  const [taskDraftFiles, setTaskDraftFiles] = useState<ChatFile[] | null>(null);
   const [taskModel, setTaskModel] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
 
@@ -110,6 +112,7 @@ function ChatPageContent() {
           // chats (staged after running) fall through to the normal rebuild.
           setInitialItems([]);
           setTaskDraftPrompt(data.conversation.prompt);
+          setTaskDraftFiles(data.conversation.draft_files || null);
           setTaskModel(data.conversation.model || null);
           setConversationTitle(data.conversation.title || null);
           setPromptPreview(
@@ -396,6 +399,7 @@ function ChatPageContent() {
         conversationId={activeConversationId || undefined}
 
         initialPrompt={taskDraftPrompt || promptParam || undefined}
+        initialFiles={taskDraftFiles || undefined}
         initialModel={taskModel || undefined}
         autoSend={autoSendParam || (startParam && !!taskDraftPrompt)}
         systemContext={skillContextParam || undefined}
