@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
+import { useStandalone } from "@/hooks/useStandalone";
 import { streamChat, fetchConversation, fetchAgentModels, basePath } from "../lib/api";
 import type { AgentModel, ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
@@ -666,6 +667,7 @@ export default function ChatPanel({
   onConversationCreated?: (conversationId: string) => void;
 } = {}) {
   const { data: session } = useSession();
+  const standalone = useStandalone();
   const [items, setItems] = useState<ChatItem[]>(initialItems || []);
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const [input, setInput] = useState(initialPrompt || "");
@@ -791,6 +793,14 @@ export default function ChatPanel({
       setItems(initialItems);
     }
   }, [initialItems]);
+
+  // Opening an existing conversation lands at the latest message, not the top.
+  const didInitialScrollRef = useRef(false);
+  useEffect(() => {
+    if (didInitialScrollRef.current || items.length === 0) return;
+    didInitialScrollRef.current = true;
+    messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [items]);
 
   useEffect(() => {
     if (initialConversationId) {
@@ -1545,6 +1555,11 @@ export default function ChatPanel({
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
+                  onFocus={() => {
+                    // Installed PWA: the keyboard shrinks --app-h; keep the
+                    // latest message in view above the composer.
+                    if (standalone) scrollToBottom();
+                  }}
                   placeholder={isStreaming ? "Type your next message..." : "What do you need to get done?"}
                   rows={2}
                   className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
@@ -1635,7 +1650,7 @@ export default function ChatPanel({
                   return (
                     <div key={i} className="flex justify-start items-start animate-message-in gap-2">
                       <CrosscutIcon size={16} className="shrink-0 mt-px" />
-                      <div className="min-w-0 flex-1 text-[13px] leading-relaxed break-words">
+                      <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words">
                         {item.content && (
                           <div className="mb-3 [&>*:first-child]:mt-0">
                             <MarkdownContent content={item.content} />
@@ -1658,7 +1673,7 @@ export default function ChatPanel({
                   return (
                     <div key={i} className="flex justify-end animate-message-in">
                       <div className={cn(
-                        "rounded-xl px-3 py-2 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
+                        "chat-text rounded-xl px-3 py-2 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
                         item.queued ? "bg-muted/60 border border-dashed border-border" : "bg-muted"
                       )}>
                         {item.content || <TypingIndicator />}
@@ -1703,7 +1718,7 @@ export default function ChatPanel({
                 return (
                   <div key={i} className="flex justify-start items-start animate-message-in gap-2">
                     <CrosscutIcon size={16} className="shrink-0 mt-px" />
-                    <div className="min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
+                    <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
                       {item.content ? (
                         <MarkdownContent content={item.content} />
                       ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (
@@ -1792,6 +1807,11 @@ export default function ChatPanel({
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
+                  onFocus={() => {
+                    // Installed PWA: the keyboard shrinks --app-h; keep the
+                    // latest message in view above the composer.
+                    if (standalone) scrollToBottom();
+                  }}
                   placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : "Type a follow-up while agent is working...") : "Ask the agent something..."}
                   rows={1}
                   className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
