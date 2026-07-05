@@ -17,8 +17,27 @@ from observability.db import get_db
 logger = logging.getLogger(__name__)
 
 
+def _parse_timezone(request: web.Request) -> str | None:
+    """Validate an IANA timezone from ?tz= so daily buckets match the
+    user's local days (Mongo groups in UTC otherwise)."""
+    tz_param = request.query.get("tz", "").strip()
+    if not tz_param:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(tz_param)
+        return tz_param
+    except Exception:
+        return None
+
+
 async def handle_my_usage(request: web.Request) -> web.Response:
-    """GET /api/usage/me?days=30 — the caller's spend, tokens, and top chats."""
+    """GET /api/usage/me?days=30 — the caller's spend, tokens, and top chats.
+
+    ?since=<ISO> overrides days for exact windows (e.g. "today" starting at
+    the user's local midnight); ?tz=<IANA> aligns the daily buckets.
+    """
     user_email = get_user_email(request)
     if not user_email:
         return web.json_response({"error": "Not authenticated"}, status=401)
@@ -26,8 +45,21 @@ async def handle_my_usage(request: web.Request) -> web.Response:
     if db is None:
         return web.json_response({"error": "Observability not configured"}, status=503)
 
-    days = min(max(int(request.query.get("days", 30)), 1), 365)
+    days: int | None = min(max(int(request.query.get("days", 30)), 1), 365)
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    since_param = request.query.get("since", "").strip()
+    if since_param:
+        try:
+            parsed = datetime.fromisoformat(since_param.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            # Sanity-bound custom windows the same way as ?days.
+            floor = datetime.now(timezone.utc) - timedelta(days=365)
+            since = max(parsed, floor)
+            days = None
+        except ValueError:
+            return web.json_response({"error": "Invalid since timestamp"}, status=400)
+    tz_name = _parse_timezone(request)
     # Deleted chats still cost money — no deleted filter, the number is honest.
     match = {
         "started_at": {"$gte": since},
@@ -50,7 +82,11 @@ async def handle_my_usage(request: web.Request) -> web.Response:
             ],
             "daily": [
                 {"$group": {
-                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$started_at"}},
+                    "_id": {"$dateToString": {
+                        "format": "%Y-%m-%d",
+                        "date": "$started_at",
+                        **({"timezone": tz_name} if tz_name else {}),
+                    }},
                     "total_cost_usd": {"$sum": {"$ifNull": ["$cost.total_cost_usd", 0]}},
                     "input_tokens": {"$sum": {"$ifNull": ["$cost.input_tokens", 0]}},
                     "output_tokens": {"$sum": {"$ifNull": ["$cost.output_tokens", 0]}},
@@ -93,6 +129,7 @@ async def handle_my_usage(request: web.Request) -> web.Response:
 
     return web.json_response({
         "days": days,
+        "since": since.isoformat(),
         "totals": {
             "total_cost_usd": totals.get("total_cost_usd", 0),
             "input_tokens": totals.get("input_tokens", 0),

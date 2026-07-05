@@ -36,22 +36,34 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
   );
 }
 
+type Range = "today" | "7" | "30" | "90";
+
 /** "My usage" — the signed-in user's own AI spend. Org-wide numbers live on
  * Analytics (and Claude-subscription limits on /usage); this page is
  * deliberately me-only so it needs no special role. */
 export default function MyUsagePage() {
-  const [days, setDays] = useState(30);
+  const [range, setRange] = useState<Range>("today");
   const [data, setData] = useState<MyUsageResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Stale data stays visible while a new range loads — no skeleton flash.
   useEffect(() => {
     let cancelled = false;
-    fetchMyUsage(days)
+    // Daily buckets (and "today") follow the browser's timezone.
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    let opts: Parameters<typeof fetchMyUsage>[0];
+    if (range === "today") {
+      const midnight = new Date();
+      midnight.setHours(0, 0, 0, 0);
+      opts = { since: midnight.toISOString(), tz };
+    } else {
+      opts = { days: Number(range), tz };
+    }
+    fetchMyUsage(opts)
       .then((d) => { if (!cancelled) setData(d); })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load"); });
     return () => { cancelled = true; };
-  }, [days]);
+  }, [range]);
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
@@ -60,8 +72,9 @@ export default function MyUsagePage() {
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">My usage</h1>
           <p className="text-[13px] text-muted-foreground">What your chats and tasks have spent</p>
         </div>
-        <Tabs value={String(days)} onValueChange={(v) => setDays(Number(v))}>
+        <Tabs value={range} onValueChange={(v) => setRange(v as Range)}>
           <TabsList>
+            <TabsTrigger value="today">Today</TabsTrigger>
             <TabsTrigger value="7">7d</TabsTrigger>
             <TabsTrigger value="30">30d</TabsTrigger>
             <TabsTrigger value="90">90d</TabsTrigger>
@@ -102,7 +115,8 @@ export default function MyUsagePage() {
             />
           </div>
 
-          {data.daily.length > 0 && (
+          {/* A one-bar chart says nothing — Today skips it */}
+          {data.daily.length > 1 && (
             <Card className="mt-3 p-3">
               <div className="mb-2 text-xs text-muted-foreground">Daily spend</div>
               <div className="h-40">

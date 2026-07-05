@@ -1097,7 +1097,8 @@ export interface MyUsageTopChat {
 }
 
 export interface MyUsageResponse {
-  days: number;
+  days: number | null;
+  since: string;
   totals: {
     total_cost_usd: number;
     input_tokens: number;
@@ -1108,8 +1109,19 @@ export interface MyUsageResponse {
   top_chats: MyUsageTopChat[];
 }
 
-export async function fetchMyUsage(days: number): Promise<MyUsageResponse> {
-  const res = await fetch(`${API_BASE}/api/usage/me?days=${days}`);
+export async function fetchMyUsage(opts: {
+  /** Rolling window in days (ignored when `since` is set) */
+  days?: number;
+  /** Exact window start (ISO) — e.g. local midnight for "today" */
+  since?: string;
+  /** IANA timezone so daily buckets match the user's local days */
+  tz?: string;
+}): Promise<MyUsageResponse> {
+  const params = new URLSearchParams();
+  if (opts.since) params.set("since", opts.since);
+  else if (opts.days) params.set("days", String(opts.days));
+  if (opts.tz) params.set("tz", opts.tz);
+  const res = await fetch(`${API_BASE}/api/usage/me?${params}`);
   if (!res.ok) throw new Error(`Failed to fetch usage: ${res.status}`);
   return res.json();
 }
