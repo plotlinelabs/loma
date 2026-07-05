@@ -7,6 +7,7 @@ import { useAgentModels } from "@/hooks/useAgentModels";
 import { filesToChatFiles } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
+import { DictationButton, appendDictation } from "./composer/DictationButton";
 import { streamChat, fetchConversation, basePath } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
@@ -1199,6 +1200,7 @@ export default function ChatPanel({
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    <DictationButton onText={(t) => setInput((prev) => appendDictation(prev, t))} />
                     <Button
                       type="button"
                       variant="ghost"
@@ -1451,6 +1453,7 @@ export default function ChatPanel({
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    <DictationButton onText={(t) => setInput((prev) => appendDictation(prev, t))} />
                     <Button
                       type="button"
                       variant="ghost"
