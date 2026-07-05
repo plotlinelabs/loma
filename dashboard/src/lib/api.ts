@@ -1103,6 +1103,9 @@ export interface MyUsageResponse {
     total_cost_usd: number;
     input_tokens: number;
     output_tokens: number;
+    /** 0 on conversations recorded before cache capture */
+    cache_read_tokens: number;
+    cache_creation_tokens: number;
     conversations: number;
   };
   daily: MyUsageDay[];
@@ -1130,6 +1133,9 @@ export interface ConversationCost {
   total_cost_usd: number;
   input_tokens: number;
   output_tokens: number;
+  /** 0 on conversations recorded before cache capture */
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   total_turns: number;
   status: string | null;
 }

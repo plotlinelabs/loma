@@ -79,6 +79,20 @@ export function CostChip({ conversationId, className }: {
             <dt>Tokens out</dt>
             <dd className="tabular-nums">{formatTokens(cost.output_tokens)}</dd>
           </div>
+          {/* Cache traffic is billed too — without it the totals above can't
+              explain the $ figure. Zero (hidden) on pre-capture chats. */}
+          {cost.cache_read_tokens > 0 && (
+            <div className="flex justify-between">
+              <dt>Cache read</dt>
+              <dd className="tabular-nums">{formatTokens(cost.cache_read_tokens)}</dd>
+            </div>
+          )}
+          {cost.cache_creation_tokens > 0 && (
+            <div className="flex justify-between">
+              <dt>Cache write</dt>
+              <dd className="tabular-nums">{formatTokens(cost.cache_creation_tokens)}</dd>
+            </div>
+          )}
           <div className="flex justify-between">
             <dt>Turns</dt>
             <dd className="tabular-nums">{cost.total_turns}</dd>

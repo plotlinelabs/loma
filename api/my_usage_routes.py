@@ -77,6 +77,9 @@ async def handle_my_usage(request: web.Request) -> web.Response:
                     "total_cost_usd": {"$sum": {"$ifNull": ["$cost.total_cost_usd", 0]}},
                     "input_tokens": {"$sum": {"$ifNull": ["$cost.input_tokens", 0]}},
                     "output_tokens": {"$sum": {"$ifNull": ["$cost.output_tokens", 0]}},
+                    # Absent on conversations recorded before cache capture.
+                    "cache_read_tokens": {"$sum": {"$ifNull": ["$cost.cache_read_tokens", 0]}},
+                    "cache_creation_tokens": {"$sum": {"$ifNull": ["$cost.cache_creation_tokens", 0]}},
                     "conversations": {"$sum": 1},
                 }},
             ],
@@ -134,6 +137,8 @@ async def handle_my_usage(request: web.Request) -> web.Response:
             "total_cost_usd": totals.get("total_cost_usd", 0),
             "input_tokens": totals.get("input_tokens", 0),
             "output_tokens": totals.get("output_tokens", 0),
+            "cache_read_tokens": totals.get("cache_read_tokens", 0),
+            "cache_creation_tokens": totals.get("cache_creation_tokens", 0),
             "conversations": totals.get("conversations", 0),
         },
         "daily": daily,
@@ -174,6 +179,8 @@ async def handle_conversation_cost(request: web.Request) -> web.Response:
         "total_cost_usd": cost.get("total_cost_usd", 0),
         "input_tokens": cost.get("input_tokens", 0),
         "output_tokens": cost.get("output_tokens", 0),
+        "cache_read_tokens": cost.get("cache_read_tokens", 0),
+        "cache_creation_tokens": cost.get("cache_creation_tokens", 0),
         "total_turns": doc.get("total_turns", 0),
         "status": doc.get("status"),
     })

@@ -24,14 +24,22 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function StatCard({ icon, label, value, sub }: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  sub?: string;
+}) {
   return (
     <Card className="p-3">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         {icon}
         {label}
       </div>
-      <div className="mt-1 text-lg font-heading font-semibold tabular-nums">{value}</div>
+      <div className="mt-1 text-lg font-heading font-semibold tabular-nums">
+        {value}
+        {sub && <span className="ml-1.5 text-xs font-normal text-muted-foreground">{sub}</span>}
+      </div>
     </Card>
   );
 }
@@ -107,6 +115,13 @@ export default function MyUsagePage() {
               icon={<RiUploadLine size={14} />}
               label="Tokens in"
               value={formatTokens(data.totals.input_tokens)}
+              // Cache reads/writes are billed too — the $ figure doesn't add
+              // up from fresh tokens alone on long agentic runs.
+              sub={
+                data.totals.cache_read_tokens + data.totals.cache_creation_tokens > 0
+                  ? `+${formatTokens(data.totals.cache_read_tokens + data.totals.cache_creation_tokens)} cached`
+                  : undefined
+              }
             />
             <StatCard
               icon={<RiDownloadLine size={14} />}
