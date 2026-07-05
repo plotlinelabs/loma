@@ -1254,14 +1254,31 @@ async def stream_agent(
                         for block in content:
                             if not isinstance(block, ToolResultBlock):
                                 continue
-                            # Foreground Agent calls resolve here. Background
-                            # Agent calls do NOT: their tool result is just the
-                            # launch ack, so they stay pending until a terminal
-                            # task lifecycle message arrives.
-                            pending_subagent_tool_ids.discard(block.tool_use_id)
                             logger.info("[TOOL RESULT] tool_use_id=%s, is_error=%s",
                                         block.tool_use_id, getattr(block, "is_error", False))
                             result_text = _extract_result_text(block)
+                            # Foreground Agent calls resolve here. Background
+                            # Agent calls do NOT: their tool result is just the
+                            # launch ack, so they stay pending until a terminal
+                            # task lifecycle message arrives. The harness can
+                            # auto-background an Agent call even when the model
+                            # never passed run_in_background=true, so background
+                            # status must be inferred from the RESULT (launch
+                            # ack), not from the tool input.
+                            if block.tool_use_id in pending_subagent_tool_ids:
+                                if (
+                                    not getattr(block, "is_error", False)
+                                    and _is_async_agent_launch_ack(result_text)
+                                ):
+                                    pending_subagent_tool_ids.discard(block.tool_use_id)
+                                    pending_background_tool_ids.add(block.tool_use_id)
+                                    logger.info(
+                                        "[SUBAGENT] Agent call %s was auto-backgrounded by the "
+                                        "harness (launch ack received); awaiting task lifecycle "
+                                        "completion", block.tool_use_id,
+                                    )
+                                else:
+                                    pending_subagent_tool_ids.discard(block.tool_use_id)
                             logger.info("[TOOL OUTPUT] %.500s%s", result_text, "..." if len(result_text) > 500 else "")
                             if observer:
                                 await observer.record_tool_result(
@@ -1309,6 +1326,19 @@ async def stream_agent(
                                             yield artifact
                 elif isinstance(message, TaskStartedMessage):
                     tool_use_id = message.tool_use_id or ""
+                    # Authoritative background signal: a task started for one of
+                    # our Agent calls. If the call is still tracked as
+                    # foreground (auto-backgrounded without run_in_background
+                    # in the input, and the launch ack not yet seen or not
+                    # recognized), promote it to background tracking so the run
+                    # cannot finish before the task completes.
+                    if tool_use_id in pending_subagent_tool_ids:
+                        pending_subagent_tool_ids.discard(tool_use_id)
+                        pending_background_tool_ids.add(tool_use_id)
+                        logger.info(
+                            "[SUBAGENT] Task %s started for Agent call %s — reclassified as background",
+                            message.task_id, tool_use_id,
+                        )
                     if tool_use_id in pending_background_tool_ids:
                         background_task_to_tool[message.task_id] = tool_use_id
                         logger.info(
@@ -1536,6 +1566,24 @@ def _truncate_json(obj, max_len: int = 500) -> str:
     if len(s) > max_len:
         return s[:max_len] + "..."
     return s
+
+
+def _is_async_agent_launch_ack(text: str) -> bool:
+    """Detect the harness's launch acknowledgment for a backgrounded Agent call.
+
+    The CLI may run an Agent call asynchronously EVEN WHEN the model did not
+    pass run_in_background=true (auto-backgrounding). In that case the tool
+    result is only a launch ack, not the sub-agent's report, and completion
+    arrives later via task lifecycle messages. Request-time classification by
+    tool input is therefore unreliable; this result-shape check (plus
+    TaskStartedMessage.tool_use_id) is what actually distinguishes the two.
+    """
+    if not text:
+        return False
+    head = text[:400]
+    if "Async agent launched" in head:
+        return True
+    return "agentId:" in head and "background" in head
 
 
 def _extract_result_text(block) -> str:
