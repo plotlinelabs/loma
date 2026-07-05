@@ -86,11 +86,12 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
     };
   }, [open]);
 
+  // A task needs at least a title to exist, and details to be startable.
+  const canSave = !!(title.trim() || prompt.trim());
+  const canStart = !!prompt.trim();
+
   const submit = async (start: boolean) => {
-    if (!prompt.trim()) {
-      setError("Details are required");
-      return;
-    }
+    if (start ? !canStart : !canSave) return;
     setBusy(true);
     setError(null);
     try {
@@ -144,12 +145,14 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               rows={6}
             />
           </div>
-          <div className="flex gap-3">
+          {/* Stacked on phones — side by side the long model label forces a
+              horizontal overflow; min-w-0 lets the triggers truncate. */}
+          <div className="flex gap-3 max-md:flex-col">
             {lanes.length > 1 && (
-              <div className="flex-1 space-y-1.5">
+              <div className="flex-1 min-w-0 space-y-1.5">
                 <Label>Lane</Label>
                 <Select value={lane} onValueChange={setLane}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full max-w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -161,10 +164,10 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               </div>
             )}
             {models.length > 0 && (
-              <div className="flex-1 space-y-1.5">
+              <div className="flex-1 min-w-0 space-y-1.5">
                 <Label>Model</Label>
                 <Select value={model} onValueChange={setModel}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full max-w-full">
                     <SelectValue placeholder="Default" />
                   </SelectTrigger>
                   <SelectContent>
@@ -182,11 +185,15 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="outline" onClick={() => submit(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => submit(false)} disabled={busy || !canSave}>
             {task ? "Save" : "Add"}
             <Kbd>{"\u23CE"}</Kbd>
           </Button>
-          <Button onClick={() => submit(true)} disabled={busy}>
+          <Button
+            onClick={() => submit(true)}
+            disabled={busy || !canStart}
+            title={canStart ? undefined : "Add details to start the agent"}
+          >
             {task ? "Save & start" : "Add & start"}
             <Kbd>{modKey} {"\u23CE"}</Kbd>
           </Button>

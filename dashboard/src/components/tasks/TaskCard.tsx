@@ -82,7 +82,7 @@ export function TaskCard({
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {isDraft && (
+          {isDraft && !!task.prompt.trim() && (
             <Button
               variant="ghost" size="icon" className="h-6 w-6"
               title="Start"
