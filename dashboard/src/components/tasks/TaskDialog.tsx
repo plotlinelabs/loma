@@ -145,12 +145,14 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               rows={6}
             />
           </div>
-          <div className="flex gap-3">
+          {/* Stacked on phones — side by side the long model label forces a
+              horizontal overflow; min-w-0 lets the triggers truncate. */}
+          <div className="flex gap-3 max-md:flex-col">
             {lanes.length > 1 && (
-              <div className="flex-1 space-y-1.5">
+              <div className="flex-1 min-w-0 space-y-1.5">
                 <Label>Lane</Label>
                 <Select value={lane} onValueChange={setLane}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full max-w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -162,10 +164,10 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               </div>
             )}
             {models.length > 0 && (
-              <div className="flex-1 space-y-1.5">
+              <div className="flex-1 min-w-0 space-y-1.5">
                 <Label>Model</Label>
                 <Select value={model} onValueChange={setModel}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full max-w-full">
                     <SelectValue placeholder="Default" />
                   </SelectTrigger>
                   <SelectContent>
