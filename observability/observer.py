@@ -274,6 +274,10 @@ class ConversationObserver:
 
         input_tokens = usage.get("input_tokens", 0) if usage else 0
         output_tokens = usage.get("output_tokens", 0) if usage else 0
+        # Cache tokens dominate long agentic runs and are billed — without
+        # them the stored token counts can't explain total_cost_usd.
+        cache_read_tokens = usage.get("cache_read_input_tokens", 0) if usage else 0
+        cache_creation_tokens = usage.get("cache_creation_input_tokens", 0) if usage else 0
         agent_cost = round(total_cost_usd, 6) if total_cost_usd is not None else 0
 
         if self.turn_offset > 0:
@@ -284,6 +288,8 @@ class ConversationObserver:
                     {"$inc": {
                         "cost.input_tokens": input_tokens,
                         "cost.output_tokens": output_tokens,
+                        "cost.cache_read_tokens": cache_read_tokens,
+                        "cost.cache_creation_tokens": cache_creation_tokens,
                         "cost.agent_cost_usd": agent_cost,
                         "cost.total_cost_usd": agent_cost,
                     }},
@@ -300,6 +306,8 @@ class ConversationObserver:
             cost_data = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_creation_tokens": cache_creation_tokens,
                 "agent_cost_usd": agent_cost,
                 "confidence_cost_usd": 0,
                 "total_cost_usd": agent_cost,
