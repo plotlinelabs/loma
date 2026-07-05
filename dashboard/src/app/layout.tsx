@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Red_Hat_Display, Roboto, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 import Providers from "../components/Providers";
 import LayoutShell from "../components/LayoutShell";
+import ServiceWorkerRegistrar from "../components/ServiceWorkerRegistrar";
 import { cn } from "@/lib/utils";
 
 const instrumentSerifHeading = Instrument_Serif({subsets:['latin'],weight:['400'],variable:'--font-heading'});
@@ -25,7 +26,26 @@ export const metadata: Metadata = {
   description: "Self-hosted AI agent factory for company teams",
   icons: {
     icon: "/favicon.svg",
+    apple: "/icons/apple-touch-icon.png",
   },
+  // Installed-PWA behavior on iOS (Add to Home Screen).
+  appleWebApp: {
+    capable: true,
+    title: "Loma",
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // Extend under the iPhone notch/home indicator; safe-area insets are
+  // handled with env(safe-area-inset-*) padding where needed.
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#F5F5F4" },
+    { media: "(prefers-color-scheme: dark)", color: "#292524" },
+  ],
 };
 
 export default function RootLayout({
@@ -46,6 +66,7 @@ export default function RootLayout({
         className="antialiased min-h-screen"
       >
         <Providers>
+          <ServiceWorkerRegistrar />
           <LayoutShell>{children}</LayoutShell>
         </Providers>
       </body>

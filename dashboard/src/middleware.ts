@@ -7,13 +7,18 @@ const PUBLIC_API_PREFIXES = ["/api/auth", "/api/signup", "/api/whoami"];
 // Backend-only paths the dashboard never needs to gate (also routed straight to
 // the backend by the reverse proxy).
 const BYPASS_PREFIXES = ["/webhook", "/metrics"];
+// PWA/browser assets fetched WITHOUT cookies (manifest requests are
+// uncredentialed; icon fetches during install too). Auth-gating these would
+// 307 them to /login and silently break Add to Home Screen on iOS.
+const PUBLIC_ASSET_PREFIXES = ["/manifest.webmanifest", "/icons/", "/sw.js", "/favicon"];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
 
   if (
     BYPASS_PREFIXES.some((p) => pathname.startsWith(p)) ||
-    PUBLIC_API_PREFIXES.some((p) => pathname.startsWith(p))
+    PUBLIC_API_PREFIXES.some((p) => pathname.startsWith(p)) ||
+    PUBLIC_ASSET_PREFIXES.some((p) => pathname.startsWith(p))
   ) {
     return NextResponse.next();
   }

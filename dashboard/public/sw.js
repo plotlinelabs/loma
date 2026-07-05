@@ -21,7 +21,7 @@ self.addEventListener("push", (event) => {
       body: payload.body || "",
       tag: payload.tag,
       data: { url: payload.url },
-      icon: "/favicon.png",
+      icon: "/icons/icon-192.png",
     }),
   );
 });
