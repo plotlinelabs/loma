@@ -236,10 +236,10 @@ async def handle_create_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     prompt = (body.get("prompt") or "").strip()
-    if not prompt:
-        return web.json_response({"error": "prompt is required"}, status=400)
-
     title = (body.get("title") or "").strip() or None
+    if not prompt and not title:
+        return web.json_response({"error": "A title or details are required"}, status=400)
+
     model = (body.get("model") or "").strip()
 
     files = body.get("files") or []
@@ -263,8 +263,10 @@ async def handle_create_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "Unknown lane"}, status=400)
 
     # start=true (quick-add): the task fires immediately in the background
-    # instead of waiting as a staged draft.
+    # instead of waiting as a staged draft. Starting needs actual details.
     start = bool(body.get("start"))
+    if start and not prompt:
+        return web.json_response({"error": "Details are required to start"}, status=400)
 
     now = datetime.now(timezone.utc)
     # Draft doc mirrors observer.start()'s shape, but the run hasn't begun:
@@ -494,8 +496,14 @@ async def handle_update_task(request: web.Request) -> web.Response:
         if current != "todo" or has_run:
             return web.json_response({"error": "Only drafts can be edited"}, status=400)
         prompt = (body["prompt"] or "").strip()
-        if not prompt:
-            return web.json_response({"error": "prompt cannot be empty"}, status=400)
+        # Details are optional as long as the task keeps a title.
+        effective_title = (
+            (body.get("title") or "").strip()
+            if "title" in body else (conversation.get("title") or "")
+        )
+        if not prompt and not effective_title:
+            return web.json_response(
+                {"error": "A title or details are required"}, status=400)
         updates["prompt"] = prompt
 
     if "model" in body:

@@ -75,7 +75,7 @@ export function MobileTaskCard({
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {isDraft && (
+          {isDraft && !!task.prompt.trim() && (
             <Button
               variant="ghost" size="icon" className="h-8 w-8"
               title="Start"

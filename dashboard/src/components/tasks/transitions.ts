@@ -23,7 +23,9 @@ export function canMove(task: Task, from: string, to: string, laneIds: string[])
 
   if (fromStaged) {
     if (toStaged) return true;
-    if (to === "working") return isDraft; // parked chats restart by replying in the chat
+    // Starting sends the draft's details — a title-only draft has nothing to
+    // send. Parked chats restart by replying in the chat.
+    if (to === "working") return isDraft && !!task.prompt.trim();
     if (to === "done") return !isDraft;
     return false;
   }
