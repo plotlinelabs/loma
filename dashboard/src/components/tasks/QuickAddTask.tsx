@@ -11,7 +11,7 @@ import { ModelPicker } from "@/components/composer/ModelPicker";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 
 interface QuickAddTaskProps {
-  /** Lane new tasks land in (the board's first staging lane). */
+  /** Lane new tasks land in. */
   laneId: string;
   onAdded: () => void;
 }
@@ -24,6 +24,7 @@ export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { models, selectedModel, selectModel, loadState } = useAgentModels();
 
@@ -37,6 +38,7 @@ export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
     const prompt = value.trim();
     if ((!prompt && files.length === 0) || busy) return;
     setBusy(true);
+    setError(null);
     try {
       await createTask({
         prompt: prompt || files.map((f) => f.name).join(", "),
@@ -47,8 +49,9 @@ export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
       setValue("");
       setFiles([]);
       onAdded();
-    } catch {
+    } catch (e) {
       // Keep the text so nothing is lost; the user can retry.
+      setError(e instanceof Error ? e.message : "Failed to add task");
     } finally {
       setBusy(false);
     }
@@ -68,6 +71,7 @@ export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
           }
         }}
       />
+      {error && <p className="mb-1 text-xs text-destructive">{error}</p>}
       <PendingFilesStrip files={files} onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))} />
       <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">
         <Textarea

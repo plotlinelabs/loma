@@ -28,7 +28,6 @@ import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { AddChatDialog } from "@/components/tasks/AddChatDialog";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
-import { QuickAddTask } from "@/components/tasks/QuickAddTask";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
@@ -197,20 +196,14 @@ export default function TasksPage() {
 
       {board ? (
         isMobile ? (
-          <>
-            <MobileTaskBoard
-              board={board}
-              onBoardChange={setBoard}
-              onRefresh={refresh}
-              onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
-              onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
-              onError={setError}
-            />
-            <QuickAddTask
-              laneId={board.lanes[0]?.id ?? "todo"}
-              onAdded={refresh}
-            />
-          </>
+          <MobileTaskBoard
+            board={board}
+            onBoardChange={setBoard}
+            onRefresh={refresh}
+            onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
+            onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+            onError={setError}
+          />
         ) : (
           <TaskBoard
             board={board}

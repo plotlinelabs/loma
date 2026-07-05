@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import type { Task, TasksBoardResponse } from "@/lib/api";
 import { useTaskBoardActions } from "./useTaskBoardActions";
 import { MobileTaskCard } from "./MobileTaskCard";
+import { QuickAddTask } from "./QuickAddTask";
 
 interface MobileTaskBoardProps {
   board: TasksBoardResponse;
@@ -63,6 +64,14 @@ export function MobileTaskBoard({
     selected && columns.some((c) => c.id === selected) ? selected : "needs_input";
   const tasks = tasksByColumn[selectedId] ?? [];
   const isLane = laneIds.includes(selectedId);
+
+  // Quick-add targets the lane being viewed, else the first lane — and
+  // switches to it so the new task is immediately visible.
+  const quickAddLane = isLane ? selectedId : laneIds[0] ?? "todo";
+  const handleQuickAdded = () => {
+    setSelected(quickAddLane);
+    onRefresh();
+  };
 
   return (
     <div className="flex flex-1 flex-col gap-3 min-h-0">
@@ -125,6 +134,8 @@ export function MobileTaskBoard({
           </button>
         )}
       </div>
+
+      <QuickAddTask laneId={quickAddLane} onAdded={handleQuickAdded} />
     </div>
   );
 }
