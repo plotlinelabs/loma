@@ -18,6 +18,9 @@ export function useDictation(onText: (text: string) => void) {
   const [state, setState] = useState<DictationState>("idle");
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Feature-detect after mount — SSR must render the same "no mic" markup
+  // as the client's first pass or hydration fails.
+  const [supported, setSupported] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -26,10 +29,11 @@ export function useDictation(onText: (text: string) => void) {
   const onTextRef = useRef(onText);
   onTextRef.current = onText;
 
-  const supported =
-    typeof window !== "undefined" &&
-    typeof MediaRecorder !== "undefined" &&
-    !!navigator.mediaDevices?.getUserMedia;
+  useEffect(() => {
+    setSupported(
+      typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia,
+    );
+  }, []);
 
   const cleanup = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);

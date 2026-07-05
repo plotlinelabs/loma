@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, Suspense } from "react";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import Sidebar from "./Sidebar";
+import BottomNav from "./BottomNav";
 import CrosscutIcon from "./CrosscutIcon";
 import ViewportHeightSync from "./ViewportHeightSync";
 import { useUser } from "../lib/UserContext";
@@ -102,6 +103,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
           "flex-1 w-full flex flex-col min-h-0",
           pathname.startsWith("/skills") ? "overflow-hidden" : "px-3 md:px-3 lg:px-4 py-3"
         )}>{children}</div>
+        <BottomNav />
       </main>
     </>
   );
