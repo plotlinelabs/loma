@@ -57,7 +57,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
   };
 
   return (
-    <div className="shrink-0 border-t border-border bg-background px-3 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+    <div className="shrink-0 border-t border-border bg-background px-3 pt-2 pb-2">
       <input
         ref={fileInputRef}
         type="file"
