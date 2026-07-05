@@ -1074,3 +1074,56 @@ export async function transcribeAudio(blob: Blob, filename: string): Promise<str
   if (!res.ok) throw new Error(body.error || `Transcription failed: ${res.status}`);
   return body.text || "";
 }
+
+// ---------- Personal AI usage ----------
+
+export interface MyUsageDay {
+  date: string;
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  conversations: number;
+}
+
+export interface MyUsageTopChat {
+  conversation_id: string;
+  title?: string | null;
+  prompt: string;
+  started_at?: string;
+  status?: string;
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface MyUsageResponse {
+  days: number;
+  totals: {
+    total_cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    conversations: number;
+  };
+  daily: MyUsageDay[];
+  top_chats: MyUsageTopChat[];
+}
+
+export async function fetchMyUsage(days: number): Promise<MyUsageResponse> {
+  const res = await fetch(`${API_BASE}/api/usage/me?days=${days}`);
+  if (!res.ok) throw new Error(`Failed to fetch usage: ${res.status}`);
+  return res.json();
+}
+
+export interface ConversationCost {
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_turns: number;
+  status: string | null;
+}
+
+export async function fetchConversationCost(conversationId: string): Promise<ConversationCost> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/cost`);
+  if (!res.ok) throw new Error(`Failed to fetch cost: ${res.status}`);
+  return res.json();
+}

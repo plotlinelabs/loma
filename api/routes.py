@@ -1760,6 +1760,10 @@ def setup_api_routes(app: web.Application):
     from api.transcribe_routes import setup_transcribe_routes
     setup_transcribe_routes(app)
 
+    # Personal AI-usage routes (my spend + per-chat cost)
+    from api.my_usage_routes import setup_my_usage_routes
+    setup_my_usage_routes(app)
+
     # File serving routes (binary artifact previews)
     from api.file_routes import setup_file_routes
     setup_file_routes(app)
