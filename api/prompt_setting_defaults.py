@@ -11,6 +11,10 @@ DEFAULT_PROMPT_SETTINGS = {
         "Add your company's product context, terminology, repositories, support "
         "processes, and operating guidelines here from the Loma dashboard."
     ),
+    "dictation_vocabulary": (
+        "Loma, OpenCode, Claude, Anthropic, MongoDB, aiohttp, Next.js, PWA, "
+        "Slack, webhook, kanban, repo, PR, API, MCP, agent, prompt, dashboard."
+    ),
 }
 
 

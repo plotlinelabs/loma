@@ -12,7 +12,9 @@ import os
 import aiohttp
 from aiohttp import web
 
+from agent.prompt import get_prompt_setting
 from api.auth_helpers import get_user_email
+from api.prompt_setting_defaults import get_default_prompt_setting
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +27,15 @@ MAX_AUDIO_BYTES = 20 * 1024 * 1024
 # not worth an API call.
 MIN_AUDIO_BYTES = 1024
 
-# Vocabulary hint — biases the model toward product names and the jargon
-# that on-device dictation reliably mangles.
-VOCAB_PROMPT = (
-    "Loma, Plotline, OpenCode, Claude, Anthropic, MongoDB, Atlas, aiohttp, "
-    "Next.js, PWA, Slack, Linear, HubSpot, Grain, webhook, kanban, repo, PR, "
-    "API, MCP, VAPID, STT, agent, prompt, dashboard."
-)
+
+def _vocab_prompt() -> str:
+    """Vocabulary hint — biases the model toward product names and the jargon
+    that on-device dictation reliably mangles. Admin-edited via the dashboard
+    ("Dictation Vocabulary" prompt setting); generic tech terms by default."""
+    return (
+        get_prompt_setting("dictation_vocabulary").strip()
+        or get_default_prompt_setting("dictation_vocabulary")
+    )
 
 
 async def handle_transcribe(request: web.Request) -> web.Response:
@@ -68,7 +72,9 @@ async def handle_transcribe(request: web.Request) -> web.Response:
     form = aiohttp.FormData()
     form.add_field("file", audio, filename=filename, content_type=content_type)
     form.add_field("model", TRANSCRIBE_MODEL)
-    form.add_field("prompt", VOCAB_PROMPT)
+    vocab = _vocab_prompt()
+    if vocab:
+        form.add_field("prompt", vocab)
 
     try:
         timeout = aiohttp.ClientTimeout(total=60)

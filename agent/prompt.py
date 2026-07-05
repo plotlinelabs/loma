@@ -4,11 +4,16 @@ from config.app_config import APP_NAME
 
 logger = logging.getLogger(__name__)
 
-PROMPT_SETTING_KEYS = ("identity_guidelines", "company_information")
+PROMPT_SETTING_KEYS = ("identity_guidelines", "company_information", "dictation_vocabulary")
 PROMPT_SETTING_TITLES = {
     "identity_guidelines": "Identity & Guidelines",
     "company_information": "Company Information",
+    "dictation_vocabulary": "Dictation Vocabulary",
 }
+
+# Settings injected into the agent system prompt. dictation_vocabulary is
+# admin-edited through the same UI but only feeds the /api/transcribe hint.
+RULEBOOK_KEYS = ("identity_guidelines", "company_information")
 
 _prompt_settings_cache: dict[str, str] = {}
 _loma_skill_index_cache = "No Loma skills are configured yet."
@@ -21,6 +26,11 @@ def set_prompt_settings_cache(settings: dict[str, str]) -> None:
         key: (settings.get(key) or "").strip()
         for key in PROMPT_SETTING_KEYS
     }
+
+
+def get_prompt_setting(key: str) -> str:
+    """Read one prompt setting from the in-memory cache ("" if unset)."""
+    return _prompt_settings_cache.get(key, "")
 
 
 def set_loma_skill_index_cache(skill_index_text: str) -> None:
@@ -163,7 +173,7 @@ SYSTEM_PROMPT_WRAPPER = """
 def load_rulebook() -> str:
     """Load core prompt settings from the Mongo-backed in-memory cache."""
     sections = []
-    for key in PROMPT_SETTING_KEYS:
+    for key in RULEBOOK_KEYS:
         content = (_prompt_settings_cache.get(key) or "").strip()
         if content:
             title = PROMPT_SETTING_TITLES[key]
