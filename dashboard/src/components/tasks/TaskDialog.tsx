@@ -86,11 +86,12 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
     };
   }, [open]);
 
+  // A task needs at least a title to exist, and details to be startable.
+  const canSave = !!(title.trim() || prompt.trim());
+  const canStart = !!prompt.trim();
+
   const submit = async (start: boolean) => {
-    if (!prompt.trim()) {
-      setError("Details are required");
-      return;
-    }
+    if (start ? !canStart : !canSave) return;
     setBusy(true);
     setError(null);
     try {
@@ -182,11 +183,15 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="outline" onClick={() => submit(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => submit(false)} disabled={busy || !canSave}>
             {task ? "Save" : "Add"}
             <Kbd>{"\u23CE"}</Kbd>
           </Button>
-          <Button onClick={() => submit(true)} disabled={busy}>
+          <Button
+            onClick={() => submit(true)}
+            disabled={busy || !canStart}
+            title={canStart ? undefined : "Add details to start the agent"}
+          >
             {task ? "Save & start" : "Add & start"}
             <Kbd>{modKey} {"\u23CE"}</Kbd>
           </Button>
