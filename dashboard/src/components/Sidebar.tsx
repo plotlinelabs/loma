@@ -24,6 +24,7 @@ import {
   RiChat1Line,
   RiCheckboxLine,
   RiGridLine,
+  RiMoneyDollarCircleLine,
   RiTimeLine,
   RiBookOpenLine,
   RiDownloadLine,
@@ -66,6 +67,11 @@ const navigation: NavItem[] = [
     name: "Activity",
     href: "/conversations",
     icon: <RiGridLine size={16} />,
+  },
+  {
+    name: "My Usage",
+    href: "/my-usage",
+    icon: <RiMoneyDollarCircleLine size={16} />,
   },
   {
     name: "Flows",
