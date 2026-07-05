@@ -24,15 +24,19 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TaskBoard } from "@/components/tasks/TaskBoard";
+import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { AddChatDialog } from "@/components/tasks/AddChatDialog";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
+import { InstallHint } from "@/components/tasks/InstallHint";
+import { useIsMobile } from "@/hooks/useIsMobile";
 
 const POLL_INTERVAL_MS = 5000;
 
 export default function TasksPage() {
   const { status: sessionStatus } = useSession();
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [board, setBoard] = useState<TasksBoardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
@@ -186,21 +190,34 @@ export default function TasksPage() {
         </div>
       </div>
 
+      <InstallHint />
+
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       {board ? (
-        <TaskBoard
-          board={board}
-          onBoardChange={setBoard}
-          onRefresh={refresh}
-          onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
-          onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
-          onError={setError}
-        />
+        isMobile ? (
+          <MobileTaskBoard
+            board={board}
+            onBoardChange={setBoard}
+            onRefresh={refresh}
+            onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
+            onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+            onError={setError}
+          />
+        ) : (
+          <TaskBoard
+            board={board}
+            onBoardChange={setBoard}
+            onRefresh={refresh}
+            onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
+            onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+            onError={setError}
+          />
+        )
       ) : (
         <div className="flex gap-4">
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="w-64 space-y-2">
+          {(isMobile ? [0] : [0, 1, 2, 3]).map((i) => (
+            <div key={i} className={isMobile ? "flex-1 space-y-2" : "w-64 space-y-2"}>
               <Skeleton className="h-4 w-20" />
               <Skeleton className="h-14 w-full" />
               <Skeleton className="h-14 w-full" />

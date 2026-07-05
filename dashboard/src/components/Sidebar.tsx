@@ -690,7 +690,7 @@ export default function Sidebar({
 
       <aside
         className={cn(
-          "fixed top-0 left-0 h-screen flex flex-col z-50 transition-all duration-200 ease-out bg-muted",
+          "fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] flex flex-col z-50 transition-all duration-200 ease-out bg-muted",
           isOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
           collapsed ? "w-[56px]" : "w-[220px]"

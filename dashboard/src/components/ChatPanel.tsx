@@ -1774,8 +1774,8 @@ export default function ChatPanel({
             </div>
           </div>
 
-          {/* Input */}
-          <div className="sticky bottom-0 border-t border-border bg-muted/30 px-3 py-2.5 shrink-0">
+          {/* Input — bottom safe-area padding clears the iPhone home indicator */}
+          <div className="sticky bottom-0 border-t border-border bg-muted/30 px-3 pt-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] shrink-0">
             <form
               onSubmit={(e) => {
                 e.preventDefault();

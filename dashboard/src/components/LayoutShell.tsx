@@ -73,8 +73,8 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         />
       </Suspense>
 
-      {/* Mobile top bar */}
-      <div className="md:hidden fixed top-0 left-0 right-0 h-14 bg-muted border-b border-border flex items-center px-4 z-30">
+      {/* Mobile top bar — safe-area padding clears the notch in the installed PWA */}
+      <div className="md:hidden fixed top-0 left-0 right-0 h-[calc(3.5rem+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)] bg-muted border-b border-border flex items-center px-4 z-30">
         <Button
           variant="ghost"
           size="icon"
@@ -91,7 +91,8 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
       </div>
 
       <main className={cn(
-        "ml-0 h-screen pt-14 md:pt-0 flex flex-col transition-all duration-200",
+        // dvh (not vh) so the iOS Safari URL bar / keyboard don't cause overflow
+        "ml-0 h-dvh pt-[calc(3.5rem+env(safe-area-inset-top))] md:pt-0 flex flex-col transition-all duration-200",
         sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
         <div className={cn(
