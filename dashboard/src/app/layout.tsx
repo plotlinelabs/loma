@@ -42,6 +42,9 @@ export const viewport: Viewport = {
   // Extend under the iPhone notch/home indicator; safe-area insets are
   // handled with env(safe-area-inset-*) padding where needed.
   viewportFit: "cover",
+  // Where supported, resize the layout viewport when the on-screen keyboard
+  // opens (ViewportHeightSync's --app-h covers browsers that ignore this).
+  interactiveWidget: "resizes-content",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#F5F5F4" },
     { media: "(prefers-color-scheme: dark)", color: "#292524" },

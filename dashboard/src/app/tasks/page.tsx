@@ -136,7 +136,7 @@ export default function TasksPage() {
 
   return (
     <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
-      <div className="flex items-center justify-between">
+      <div className="pwa-header-offset flex items-center justify-between">
         <h1 className="text-lg font-semibold">Tasks</h1>
         <div className="flex items-center gap-1">
           <Button size="sm" onClick={() => { setEditingTask(null); setNewTaskLane(undefined); setTaskDialogOpen(true); }}>

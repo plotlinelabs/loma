@@ -222,7 +222,7 @@ export default function ConversationsPage() {
     <TooltipProvider delayDuration={300}>
       <div className="space-y-2 animate-fade-in-up">
         {/* Page header */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="pwa-header-offset flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Conversations</h1>
           {isAdmin && (
             <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">

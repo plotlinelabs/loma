@@ -46,6 +46,8 @@ export interface Conversation {
   title_edited?: boolean;
   deleted?: boolean;
   task_status?: "todo" | "active" | "done" | null;
+  /** Attachments staged with a board-task draft (cleared once started) */
+  draft_files?: ChatFile[];
   messages?: Array<{
     role: "user" | "assistant";
     content: string;
@@ -1000,6 +1002,10 @@ export async function createTask(params: {
   title?: string;
   lane?: string;
   model?: string;
+  /** Attachments staged with the draft; sent with the first message on start */
+  files?: ChatFile[];
+  /** Fire immediately: the agent starts running in the background */
+  start?: boolean;
 }): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: "POST",

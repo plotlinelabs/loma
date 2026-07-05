@@ -391,10 +391,12 @@ export default function Sidebar({
                   prefetch
                   onClick={onClose}
                   className={cn(
+                    // Roomier on phones (Claude-app scale), compact on desktop
                     "flex items-center rounded-lg text-xs font-medium transition-all duration-150",
+                    "max-md:text-[16px] max-md:[&_svg]:h-5 max-md:[&_svg]:w-5",
                     collapsed
                       ? "justify-center px-0 py-1.5 mx-auto w-10"
-                      : "px-2 py-1 gap-2",
+                      : "px-2 py-1 gap-2 max-md:px-3 max-md:py-2.5 max-md:gap-3",
                     isActive
                       ? "bg-brand-100/80 text-brand-700"
                       : "text-muted-foreground hover:bg-accent-200/15 hover:text-foreground hover:translate-x-0.5"
@@ -424,7 +426,7 @@ export default function Sidebar({
           {!collapsed && projects.length > 0 && (
             <div className="mt-2 flex flex-col">
               <div className="px-2.5 pb-1">
-                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   Projects
                 </span>
               </div>
@@ -435,7 +437,7 @@ export default function Sidebar({
                     href={`/conversations?project=${p.project_id}`}
                     prefetch
                     onClick={onClose}
-                    className="group flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
+                    className="group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
                   >
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
                     <span className="truncate flex-1 min-w-0">{p.name}</span>
@@ -450,7 +452,7 @@ export default function Sidebar({
           {!collapsed && pinnedConversations.length > 0 && (
             <div className="mt-2 flex flex-col">
               <div className="px-2.5 pb-1">
-                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   Pinned
                 </span>
               </div>
@@ -463,7 +465,7 @@ export default function Sidebar({
                     <div
                       key={c.conversation_id}
                       className={cn(
-                        "group flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-all duration-150",
+                        "group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                         isConvoActive
                           ? "text-brand-700 bg-brand-100/80 font-medium"
                           : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -506,7 +508,7 @@ export default function Sidebar({
           {!collapsed && myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
             <div className="mt-1 flex-1 min-h-0 flex flex-col">
               <div className="px-2.5 pb-1">
-                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   Recents
                 </span>
               </div>
@@ -520,7 +522,7 @@ export default function Sidebar({
                       <div
                         key={c.conversation_id}
                         className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-all duration-150",
+                          "group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
                             ? "text-brand-700 bg-brand-100/80 font-medium"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -693,7 +695,7 @@ export default function Sidebar({
           "fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] flex flex-col z-50 transition-all duration-200 ease-out bg-muted",
           isOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
-          collapsed ? "w-[56px]" : "w-[220px]"
+          collapsed ? "w-[56px]" : "w-[300px] md:w-[220px]"
         )}
       >
         {sidebarContent}

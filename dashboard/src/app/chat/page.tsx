@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { ChatItem } from "../../components/ChatPanel";
 import type { Artifact } from "../../components/ArtifactViewer";
+import type { ChatFile } from "../../lib/api";
 import { rebuildItemsFromConversation } from "../../components/ChatPanel";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
@@ -47,8 +48,9 @@ function ChatPageContent() {
   const [titleValue, setTitleValue] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Draft prompt for staged board tasks — prefills the composer (or auto-sends with ?start=1)
+  // Draft prompt/files for staged board tasks — prefill the composer (or auto-send with ?start=1)
   const [taskDraftPrompt, setTaskDraftPrompt] = useState<string | null>(null);
+  const [taskDraftFiles, setTaskDraftFiles] = useState<ChatFile[] | null>(null);
   const [taskModel, setTaskModel] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
 
@@ -110,6 +112,7 @@ function ChatPageContent() {
           // chats (staged after running) fall through to the normal rebuild.
           setInitialItems([]);
           setTaskDraftPrompt(data.conversation.prompt);
+          setTaskDraftFiles(data.conversation.draft_files || null);
           setTaskModel(data.conversation.model || null);
           setConversationTitle(data.conversation.title || null);
           setPromptPreview(
@@ -177,8 +180,43 @@ function ChatPageContent() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col -mb-3">
-      {/* Header with title and action buttons — hidden for auto-sent prompts until conversation starts */}
-      {showHeader && <div className="px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
+      {/* Mobile: no header bar — chat actions live in a floating menu on the
+          right (mirrors the floating hamburger on the left). ChatContextMenu
+          carries pin/rename/board/project/delete. */}
+      {activeConversationId && (
+        <div className="md:hidden fixed right-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30">
+          <ChatContextMenu
+            conversationId={activeConversationId}
+            conversationTitle={conversationTitle || promptPreview || "Untitled"}
+            isPinned={isPinned(activeConversationId)}
+            projectId={projectId}
+            taskStatus={taskStatus}
+            projects={projects}
+            onRename={async (cid, newTitle) => {
+              await renameConversation(cid, newTitle);
+              setConversationTitle(newTitle);
+            }}
+            onDelete={async (cid) => {
+              await removeConversation(cid);
+              router.push(`${basePath}/`);
+            }}
+            onTogglePin={togglePin}
+            onAssignProject={async (cid, pid) => {
+              await assignToProject(cid, pid);
+              setProjectId(pid);
+            }}
+            onRemoveProject={async (cid) => {
+              await unassignFromProject(cid);
+              setProjectId(null);
+            }}
+            onCreateProject={async (name) => { await addProject(name); }}
+            triggerClassName="h-9 w-9 flex items-center justify-center rounded-full border border-border bg-background/80 backdrop-blur text-muted-foreground press-scale"
+          />
+        </div>
+      )}
+
+      {/* Header with title and action buttons — desktop only; hidden for auto-sent prompts until conversation starts */}
+      {showHeader && <div className="hidden md:block px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
         <div className="flex items-center gap-2">
           {/* Title area */}
           <div className="min-w-0 flex-1">
@@ -361,6 +399,7 @@ function ChatPageContent() {
         conversationId={activeConversationId || undefined}
 
         initialPrompt={taskDraftPrompt || promptParam || undefined}
+        initialFiles={taskDraftFiles || undefined}
         initialModel={taskModel || undefined}
         autoSend={autoSendParam || (startParam && !!taskDraftPrompt)}
         systemContext={skillContextParam || undefined}

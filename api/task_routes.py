@@ -17,7 +17,9 @@ Per-user board config (staging lanes + personal prompt) lives on the users doc
 under `task_board`; tasks reference lanes by id so renames are config-only.
 """
 
+import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -27,6 +29,73 @@ from observability.db import get_db
 from api.auth_helpers import get_system_role, get_user_email
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_task_headless(db, conversation_id: str, prompt: str,
+                             model: str, files: list, owner: str):
+    """Run a task's first agent turn in the background — no client stream.
+
+    Powers quick-add: the task fires immediately and keeps running even if
+    the user navigates away or locks their phone. Mirrors handle_chat's
+    setup (observer resume, board-prompt injection, files, model); the
+    observer records everything, so opening the chat later shows the run.
+    """
+    try:
+        from agent.client import stream_agent
+        from observability.observer import ConversationObserver
+
+        # Same per-task context block handle_chat injects for board tasks.
+        owner_doc = await db.users.find_one({"email": owner}, {"task_board": 1})
+        board_prompt = ((owner_doc or {}).get("task_board") or {}).get("prompt", "").strip()
+        conversation_context = (
+            f"## User's role & working context (apply to this task)\n{board_prompt}"
+            if board_prompt else ""
+        )
+
+        observer = ConversationObserver(
+            db,
+            metadata={
+                "source": "dashboard",
+                "prompt": prompt,
+                "model": model or os.environ.get("AGENT_DEFAULT_MODEL", ""),
+                "user_name": owner,
+            },
+            conversation_id=conversation_id,
+        )
+        await observer.resume()
+
+        async for _ in stream_agent(
+            prompt=prompt,
+            conversation_context=conversation_context,
+            files=files or None,
+            observer=observer,
+            include_steps=True,
+            source="dashboard",
+            user_email=owner,
+            selected_model=model or None,
+        ):
+            pass  # observer records; nobody is watching the stream
+    except Exception as e:
+        logger.warning("Headless task run failed for %s: %s", conversation_id, e)
+
+
+async def _auto_title_task(db, conversation_id: str, prompt: str):
+    """Generate a short LLM title for a quick-added draft (fire-and-forget).
+
+    Leaves title_edited unset so finish-time enrichment can still improve the
+    title once the agent has actually run. Skips the write if the user has
+    titled the task in the meantime.
+    """
+    try:
+        from api.routes import _generate_title_llm
+        title = await _generate_title_llm(prompt)
+        if title and title != "Untitled conversation":
+            await db.conversations.update_one(
+                {"conversation_id": conversation_id, "title": None},
+                {"$set": {"title": title}},
+            )
+    except Exception as e:
+        logger.warning("Task auto-title failed for %s: %s", conversation_id, e)
 
 # Statuses where the agent is no longer running — the user's turn.
 NEEDS_INPUT_STATUSES = ("completed", "error", "interrupted")
@@ -39,6 +108,10 @@ DEFAULT_BOARD = {
 MAX_LANE_NAME_LEN = 40
 MAX_LANES = 10
 MAX_BOARD_PROMPT_LEN = 10000
+# Attachments staged with a draft (base64 in the doc until the task starts).
+# Mongo caps documents at 16MB — keep well under it.
+MAX_DRAFT_FILES = 8
+MAX_DRAFT_FILES_BYTES = 8 * 1024 * 1024
 
 
 def _serialize(doc):
@@ -87,8 +160,9 @@ def derive_column(task: dict, lane_ids: list[str]) -> str:
         return lane if lane in lane_ids else (lane_ids[0] if lane_ids else "todo")
     if task_status == "done":
         return "done"
-    # active
-    if task.get("status") == "running":
+    # active — status None means a quick-added task whose headless run is
+    # spinning up (observer.resume() sets "running" moments later).
+    if task.get("status") in (None, "running"):
         return "working"
     return "needs_input"
 
@@ -167,11 +241,30 @@ async def handle_create_task(request: web.Request) -> web.Response:
 
     title = (body.get("title") or "").strip() or None
     model = (body.get("model") or "").strip()
+
+    files = body.get("files") or []
+    if files:
+        if not isinstance(files, list) or len(files) > MAX_DRAFT_FILES:
+            return web.json_response(
+                {"error": f"At most {MAX_DRAFT_FILES} attachments"}, status=400)
+        total = 0
+        for f in files:
+            if not isinstance(f, dict) or not f.get("name") or "data" not in f:
+                return web.json_response({"error": "Invalid attachment"}, status=400)
+            total += len(f.get("data") or "")
+        if total > MAX_DRAFT_FILES_BYTES:
+            return web.json_response(
+                {"error": "Attachments too large (max 8MB total)"}, status=400)
+
     board = await _get_board_config_for(db, user_email)
     lane_ids = [lane["id"] for lane in board["lanes"]]
     lane = body.get("lane") or lane_ids[0]
     if lane not in lane_ids:
         return web.json_response({"error": "Unknown lane"}, status=400)
+
+    # start=true (quick-add): the task fires immediately in the background
+    # instead of waiting as a staged draft.
+    start = bool(body.get("start"))
 
     now = datetime.now(timezone.utc)
     # Draft doc mirrors observer.start()'s shape, but the run hasn't begun:
@@ -181,7 +274,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
     doc = {
         "conversation_id": str(uuid.uuid4()),
         "source": "dashboard",
-        "started_at": None,
+        "started_at": now if start else None,
         "finished_at": None,
         "duration_ms": None,
         "status": None,
@@ -200,16 +293,30 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "title": title,
         # Guard user-provided titles against finish-time LLM enrichment.
         "title_edited": bool(title),
-        "task_status": "todo",
+        "task_status": "active" if start else "todo",
         "task_lane": lane,
+        # Attachments staged with the draft — sent with the first message on
+        # start (immediately for quick-add; handle_chat clears them when a
+        # staged draft flips to active).
+        **({"draft_files": files} if files and not start else {}),
         # Newest first when sorted ascending; reorder uses neighbor midpoints.
         "task_rank": -now.timestamp(),
         "task_created_at": now,
         "task_staged_at": now,
-        "task_started_at": None,
+        "task_started_at": now if start else None,
         "task_done_at": None,
     }
     await db.conversations.insert_one(doc)
+
+    # Quick-added tasks (no explicit title) get an LLM title from the prompt.
+    if not title:
+        asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
+
+    if start:
+        asyncio.create_task(_run_task_headless(
+            db, doc["conversation_id"], prompt, model, files, user_email,
+        ))
+
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)
 
 

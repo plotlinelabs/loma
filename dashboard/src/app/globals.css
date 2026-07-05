@@ -392,6 +392,30 @@
   .mobile-cards { display: none !important; }
 }
 
+/* ── Installed PWA (standalone) ─────────────────────────────────────────── */
+
+@media (max-width: 767px) {
+  /* iOS Safari auto-zooms into inputs with font-size < 16px, which is the
+     "zooms out and hides the send button" chat bug. 16px kills the zoom. */
+  textarea, input[type="text"], input[type="email"], input[type="password"], input:not([type]) {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 767px) {
+  /* The floating menu button replaces the top bar — page headers shift right
+     so their first row clears it. */
+  .pwa-header-offset {
+    padding-left: 2.75rem;
+  }
+
+  /* Chat reads small on a phone — bump message text. */
+  .chat-text {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+}
+
 /* ── Agent Graph ───────────────────────────────────────────────────── */
 
 /* Loma breathing glow — yellow energy */
