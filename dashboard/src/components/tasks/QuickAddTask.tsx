@@ -11,16 +11,14 @@ import { ModelPicker } from "@/components/composer/ModelPicker";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 
 interface QuickAddTaskProps {
-  /** Lane new tasks land in. */
-  laneId: string;
   onAdded: () => void;
 }
 
 /** Bottom-pinned capture box on the mobile tasks board — the same composer
- * controls as chat (model picker, attachments): type what you need done and
- * it becomes a staged task; the backend titles it from the prompt with an
- * LLM, and the model/attachments ride along when the task starts. */
-export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
+ * controls as chat (model picker, attachments). Typing here fires the task
+ * immediately: the agent starts running in the background (survives closing
+ * the app) and the backend titles the task from the prompt with an LLM. */
+export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -42,9 +40,9 @@ export function QuickAddTask({ laneId, onAdded }: QuickAddTaskProps) {
     try {
       await createTask({
         prompt: prompt || files.map((f) => f.name).join(", "),
-        lane: laneId,
         model: selectedModel || undefined,
         files: files.length > 0 ? files : undefined,
+        start: true,
       });
       setValue("");
       setFiles([]);

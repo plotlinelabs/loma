@@ -65,11 +65,9 @@ export function MobileTaskBoard({
   const tasks = tasksByColumn[selectedId] ?? [];
   const isLane = laneIds.includes(selectedId);
 
-  // Quick-add targets the lane being viewed, else the first lane — and
-  // switches to it so the new task is immediately visible.
-  const quickAddLane = isLane ? selectedId : laneIds[0] ?? "todo";
+  // Quick-added tasks fire immediately — show them where they land.
   const handleQuickAdded = () => {
-    setSelected(quickAddLane);
+    setSelected("working");
     onRefresh();
   };
 
@@ -135,7 +133,7 @@ export function MobileTaskBoard({
         )}
       </div>
 
-      <QuickAddTask laneId={quickAddLane} onAdded={handleQuickAdded} />
+      <QuickAddTask onAdded={handleQuickAdded} />
     </div>
   );
 }

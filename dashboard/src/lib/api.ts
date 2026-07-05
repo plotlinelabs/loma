@@ -1004,6 +1004,8 @@ export async function createTask(params: {
   model?: string;
   /** Attachments staged with the draft; sent with the first message on start */
   files?: ChatFile[];
+  /** Fire immediately: the agent starts running in the background */
+  start?: boolean;
 }): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: "POST",
