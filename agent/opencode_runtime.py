@@ -695,9 +695,13 @@ def _usage_from_info(info: dict) -> tuple[dict | None, float | None]:
     tokens = info.get("tokens") or {}
     if not tokens and info.get("cost") is None:
         return None, None
+    cache = tokens.get("cache") or {}
+    # Anthropic-API key names so downstream (observer) sees one shape.
     return {
         "input_tokens": tokens.get("input", 0),
         "output_tokens": tokens.get("output", 0),
+        "cache_read_input_tokens": cache.get("read", 0),
+        "cache_creation_input_tokens": cache.get("write", 0),
     }, info.get("cost")
 
 
@@ -746,8 +750,8 @@ def _tool_display_input(tool_name: str, state: dict) -> str:
 
 def _merge_usage(total_usage: dict, usage: dict | None, cost: float | None) -> float:
     if usage:
-        total_usage["input_tokens"] = total_usage.get("input_tokens", 0) + int(usage.get("input_tokens") or 0)
-        total_usage["output_tokens"] = total_usage.get("output_tokens", 0) + int(usage.get("output_tokens") or 0)
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            total_usage[key] = total_usage.get(key, 0) + int(usage.get(key) or 0)
     return float(cost or 0)
 
 

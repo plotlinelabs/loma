@@ -1074,3 +1074,74 @@ export async function transcribeAudio(blob: Blob, filename: string): Promise<str
   if (!res.ok) throw new Error(body.error || `Transcription failed: ${res.status}`);
   return body.text || "";
 }
+
+// ---------- Personal AI usage ----------
+
+export interface MyUsageDay {
+  date: string;
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  conversations: number;
+}
+
+export interface MyUsageTopChat {
+  conversation_id: string;
+  title?: string | null;
+  prompt: string;
+  started_at?: string;
+  status?: string;
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface MyUsageResponse {
+  days: number | null;
+  since: string;
+  totals: {
+    total_cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    /** 0 on conversations recorded before cache capture */
+    cache_read_tokens: number;
+    cache_creation_tokens: number;
+    conversations: number;
+  };
+  daily: MyUsageDay[];
+  top_chats: MyUsageTopChat[];
+}
+
+export async function fetchMyUsage(opts: {
+  /** Rolling window in days (ignored when `since` is set) */
+  days?: number;
+  /** Exact window start (ISO) — e.g. local midnight for "today" */
+  since?: string;
+  /** IANA timezone so daily buckets match the user's local days */
+  tz?: string;
+}): Promise<MyUsageResponse> {
+  const params = new URLSearchParams();
+  if (opts.since) params.set("since", opts.since);
+  else if (opts.days) params.set("days", String(opts.days));
+  if (opts.tz) params.set("tz", opts.tz);
+  const res = await fetch(`${API_BASE}/api/usage/me?${params}`);
+  if (!res.ok) throw new Error(`Failed to fetch usage: ${res.status}`);
+  return res.json();
+}
+
+export interface ConversationCost {
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** 0 on conversations recorded before cache capture */
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_turns: number;
+  status: string | null;
+}
+
+export async function fetchConversationCost(conversationId: string): Promise<ConversationCost> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/cost`);
+  if (!res.ok) throw new Error(`Failed to fetch cost: ${res.status}`);
+  return res.json();
+}

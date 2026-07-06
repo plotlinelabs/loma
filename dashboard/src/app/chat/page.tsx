@@ -19,6 +19,7 @@ import type { Artifact } from "../../components/ArtifactViewer";
 import type { ChatFile } from "../../lib/api";
 import { rebuildItemsFromConversation } from "../../components/ChatPanel";
 import ChatContextMenu from "../../components/ChatContextMenu";
+import { CostChip } from "../../components/CostChip";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
 import { fetchConversation, fetchFlow, basePath } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
@@ -184,7 +185,8 @@ function ChatPageContent() {
           right (mirrors the floating hamburger on the left). ChatContextMenu
           carries pin/rename/board/project/delete. */}
       {activeConversationId && (
-        <div className="md:hidden fixed right-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30">
+        <div className="md:hidden fixed right-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30 flex items-center gap-2">
+          <CostChip conversationId={activeConversationId} />
           <ChatContextMenu
             conversationId={activeConversationId}
             conversationTitle={conversationTitle || promptPreview || "Untitled"}
@@ -286,6 +288,8 @@ function ChatPageContent() {
           {/* Action buttons — visible once a conversation exists */}
           {activeConversationId && (
             <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Live chat cost */}
+              <CostChip conversationId={activeConversationId} className="h-8 mr-1" />
               {/* Pin / Unpin */}
               <Tooltip>
                 <TooltipTrigger asChild>
