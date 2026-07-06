@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TaskBoard } from "@/components/tasks/TaskBoard";
 import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
+import { QuickAddTask } from "@/components/tasks/QuickAddTask";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { AddChatDialog } from "@/components/tasks/AddChatDialog";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
@@ -205,14 +206,20 @@ export default function TasksPage() {
             onError={setError}
           />
         ) : (
-          <TaskBoard
-            board={board}
-            onBoardChange={setBoard}
-            onRefresh={refresh}
-            onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
-            onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
-            onError={setError}
-          />
+          <>
+            <TaskBoard
+              board={board}
+              onBoardChange={setBoard}
+              onRefresh={refresh}
+              onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
+              onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+              onError={setError}
+            />
+            {/* Desktop capture box — mirrors the PWA. Mobile renders its own
+                inside MobileTaskBoard, so only add it here. Fires the task
+                immediately (start: true); it lands in Working on refresh. */}
+            <QuickAddTask onAdded={refresh} />
+          </>
         )
       ) : (
         <div className="flex gap-4">
