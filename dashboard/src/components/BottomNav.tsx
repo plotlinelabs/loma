@@ -27,9 +27,9 @@ export default function BottomNav() {
     },
     {
       name: "New",
-      href: "/",
+      href: "/chat",
       icon: RiAddLine,
-      active: pathname === "/",
+      active: pathname.startsWith("/chat"),
     },
     {
       name: "Usage",

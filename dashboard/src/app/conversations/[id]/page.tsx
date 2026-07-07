@@ -128,7 +128,7 @@ export default function ConversationDetailPage() {
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
-              <BreadcrumbLink href={`${basePath}/`}>Conversations</BreadcrumbLink>
+              <BreadcrumbLink href={`${basePath}/conversations`}>Conversations</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
@@ -173,7 +173,7 @@ export default function ConversationDetailPage() {
             </Button>
           )}
           <Button asChild size="sm" variant="outline">
-            <a href={`${basePath}/`}>
+            <a href={`${basePath}/chat`}>
               <RiAddLine size={14} />
               New
             </a>
