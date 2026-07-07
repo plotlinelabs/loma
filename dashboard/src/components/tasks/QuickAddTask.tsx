@@ -15,10 +15,11 @@ interface QuickAddTaskProps {
   onAdded: () => void;
 }
 
-/** Bottom-pinned capture box on the mobile tasks board — the same composer
- * controls as chat (model picker, attachments). Typing here fires the task
- * immediately: the agent starts running in the background (survives closing
- * the app) and the backend titles the task from the prompt with an LLM. */
+/** Bottom-pinned capture box on the tasks board (mobile and desktop) — the
+ * same composer controls as chat (model picker, attachments). Typing here
+ * fires the task immediately: the agent starts running in the background
+ * (survives closing the app) and the backend titles the task from the prompt
+ * with an LLM. */
 export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
@@ -70,6 +71,9 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
           }
         }}
       />
+      {/* Centered + width-capped so the composer stays readable on the wide
+          desktop board; on a phone max-w-3xl is simply full width. */}
+      <div className="mx-auto w-full max-w-3xl">
       {error && <p className="mb-1 text-xs text-destructive">{error}</p>}
       <PendingFilesStrip files={files} onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))} />
       <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">
@@ -129,6 +133,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
             </Button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
