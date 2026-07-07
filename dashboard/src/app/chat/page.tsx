@@ -200,7 +200,7 @@ function ChatPageContent() {
             }}
             onDelete={async (cid) => {
               await removeConversation(cid);
-              router.push(`${basePath}/`);
+              router.push(`${basePath}/tasks`);
             }}
             onTogglePin={togglePin}
             onAssignProject={async (cid, pid) => {
@@ -327,7 +327,7 @@ function ChatPageContent() {
                 }}
                 onDelete={async (cid) => {
                   await removeConversation(cid);
-                  router.push(`${basePath}/`);
+                  router.push(`${basePath}/tasks`);
                 }}
                 onTogglePin={togglePin}
                 onAssignProject={async (cid, pid) => {
@@ -367,7 +367,7 @@ function ChatPageContent() {
                         size="sm"
                         onClick={async () => {
                           await removeConversation(activeConversationId);
-                          router.push(`${basePath}/`);
+                          router.push(`${basePath}/tasks`);
                         }}
                         className="flex-1 bg-red-600 hover:bg-red-700 text-white"
                       >

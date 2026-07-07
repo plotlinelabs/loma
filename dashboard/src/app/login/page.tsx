@@ -48,7 +48,7 @@ function LoginContent() {
       password,
       setupToken,
       redirect: false,
-      callbackUrl: "/",
+      callbackUrl: "/tasks",
     });
     setIsSubmitting(false);
 
@@ -81,11 +81,11 @@ function LoginContent() {
         email,
         password,
         redirect: false,
-        callbackUrl: "/",
+        callbackUrl: "/tasks",
       });
       setIsSubmitting(false);
       if (result?.ok) {
-        router.push("/");
+        router.push("/tasks");
         router.refresh();
         return;
       }
@@ -257,7 +257,7 @@ function LoginContent() {
               variant="outline"
               className="w-full"
               size="lg"
-              onClick={() => signIn("google", { callbackUrl: "/" })}
+              onClick={() => signIn("google", { callbackUrl: "/tasks" })}
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path
