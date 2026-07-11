@@ -1453,7 +1453,7 @@ export default function ChatPanel({
           </div>
 
           {/* Input — the bottom nav below it owns the home-indicator safe area */}
-          <div className="sticky bottom-0 border-t border-border bg-muted/30 px-3 pt-2.5 pb-2.5 shrink-0">
+          <div className="sticky bottom-0 px-3 pt-2.5 pb-2.5 shrink-0">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
