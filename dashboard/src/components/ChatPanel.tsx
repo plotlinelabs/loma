@@ -182,6 +182,31 @@ function formatResponseTime(seconds: number): string {
   return `${Math.round(seconds)}s`;
 }
 
+function WorkingIndicator({ elapsedSeconds }: { elapsedSeconds: number }) {
+  const display = elapsedSeconds < 10
+    ? `${elapsedSeconds.toFixed(1)}s`
+    : elapsedSeconds < 60
+      ? `${elapsedSeconds.toFixed(0)}s`
+      : `${Math.floor(elapsedSeconds / 60)}m ${Math.floor(elapsedSeconds % 60).toString().padStart(2, "0")}s`;
+
+  return (
+    <div className="working-indicator flex items-center gap-2 py-1.5 text-[12px] text-muted-foreground/70">
+      <span className="grid grid-cols-3 gap-[3px]">
+        {Array.from({ length: 9 }, (_, i) => (
+          <span
+            key={i}
+            className="working-grid-dot block w-[3px] h-[3px] rounded-full bg-current"
+            style={{ animationDelay: `${(i % 3) * 0.15 + Math.floor(i / 3) * 0.1}s` }}
+          />
+        ))}
+      </span>
+      <span className="tabular-nums font-mono text-[12px]">
+        {display}
+      </span>
+    </div>
+  );
+}
+
 function stampLatestAssistantDuration(items: ChatItem[], responseTimeSeconds: number): ChatItem[] {
   const updated = [...items];
   for (let i = updated.length - 1; i >= 0; i--) {
@@ -633,10 +658,11 @@ export default function ChatPanel({
     }
 
     const tick = () => {
-      setStreamElapsedSeconds(Math.max(0, Math.floor((performance.now() - streamStartedAt) / 1000)));
+      const raw = (performance.now() - streamStartedAt) / 1000;
+      setStreamElapsedSeconds(Math.max(0, Math.round(raw * 10) / 10));
     };
     tick();
-    const interval = window.setInterval(tick, 1000);
+    const interval = window.setInterval(tick, 100);
     return () => window.clearInterval(interval);
   }, [isStreaming, streamStartedAt]);
 
@@ -1422,6 +1448,11 @@ export default function ChatPanel({
 
           {/* Input — the bottom nav below it owns the home-indicator safe area */}
           <div className="sticky bottom-0 border-t border-border bg-muted/30 px-3 pt-2.5 pb-2.5 shrink-0">
+            {isStreaming && (
+              <div className="max-w-3xl mx-auto">
+                <WorkingIndicator elapsedSeconds={streamElapsedSeconds} />
+              </div>
+            )}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
