@@ -95,7 +95,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         // dvh (not vh) so the iOS Safari URL bar doesn't cause overflow; in
         // the installed PWA, --app-h tracks the visual viewport so the layout
         // shrinks above the on-screen keyboard (dvh ignores it on iOS).
-        "ml-0 flex flex-col transition-all duration-200 pt-[env(safe-area-inset-top)] md:pt-0",
+        "ml-0 flex flex-col transition-all duration-200 pt-[env(safe-area-inset-top)] md:pt-0 bg-background",
         standalone ? "h-[var(--app-h,100dvh)]" : "h-dvh",
         sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
