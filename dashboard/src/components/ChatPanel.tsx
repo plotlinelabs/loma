@@ -593,6 +593,7 @@ export default function ChatPanel({
   const [queuedCount, setQueuedCount] = useState(0);
   const [editingQueuedIndex, setEditingQueuedIndex] = useState<number | null>(null);
   const [editingQueuedText, setEditingQueuedText] = useState("");
+  const editingQueuedIndexRef = useRef<number | null>(null);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -1034,17 +1035,40 @@ export default function ChatPanel({
 
       const queued = queuedMessagesRef.current;
       if (queued.length > 0 && !enteredRecovery) {
-        queuedMessagesRef.current = [];
-        setQueuedCount(0);
-        setItems((prev) => prev.map((item) =>
-          item.queued ? { ...item, queued: false } : item
-        ));
-        const combinedText = queued.map((q) => q.text).join("\n\n");
-        const combinedFiles = queued.flatMap((q) => q.files || []);
-        if (combinedFiles.length) {
-          setPendingFiles(combinedFiles);
+        const editingIdx = editingQueuedIndexRef.current;
+        if (editingIdx !== null) {
+          let editQIdx = 0;
+          for (let j = 0; j < editingIdx; j++) {
+            if (items[j].queued) editQIdx++;
+          }
+          const kept = queued[editQIdx];
+          const toSend = queued.filter((_, qi) => qi !== editQIdx);
+          queuedMessagesRef.current = kept ? [kept] : [];
+          setQueuedCount(queuedMessagesRef.current.length);
+          setItems((prev) => prev.map((item, idx) =>
+            item.queued && idx !== editingIdx ? { ...item, queued: false } : item
+          ));
+          if (toSend.length > 0) {
+            const combinedText = toSend.map((q) => q.text).join("\n\n");
+            const combinedFiles = toSend.flatMap((q) => q.files || []);
+            if (combinedFiles.length) {
+              setPendingFiles(combinedFiles);
+            }
+            requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+          }
+        } else {
+          queuedMessagesRef.current = [];
+          setQueuedCount(0);
+          setItems((prev) => prev.map((item) =>
+            item.queued ? { ...item, queued: false } : item
+          ));
+          const combinedText = queued.map((q) => q.text).join("\n\n");
+          const combinedFiles = queued.flatMap((q) => q.files || []);
+          if (combinedFiles.length) {
+            setPendingFiles(combinedFiles);
+          }
+          requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
         }
-        requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
       } else if (!enteredRecovery) {
         requestAnimationFrame(() => {
           inputRef.current?.focus();
@@ -1087,12 +1111,14 @@ export default function ChatPanel({
     setItems((prev) => prev.filter((_, i) => i !== itemIndex));
     if (editingQueuedIndex === itemIndex) {
       setEditingQueuedIndex(null);
+      editingQueuedIndexRef.current = null;
       setEditingQueuedText("");
     }
   };
 
   const handleStartEditQueued = (itemIndex: number) => {
     setEditingQueuedIndex(itemIndex);
+    editingQueuedIndexRef.current = itemIndex;
     setEditingQueuedText(items[itemIndex].content);
   };
 
@@ -1108,11 +1134,13 @@ export default function ChatPanel({
       prev.map((item, i) => (i === itemIndex ? { ...item, content: trimmed } : item))
     );
     setEditingQueuedIndex(null);
+    editingQueuedIndexRef.current = null;
     setEditingQueuedText("");
   };
 
   const handleCancelEditQueued = () => {
     setEditingQueuedIndex(null);
+    editingQueuedIndexRef.current = null;
     setEditingQueuedText("");
   };
 
