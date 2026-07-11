@@ -620,7 +620,21 @@ export default function ChatPanel({
   const [editingQueuedText, setEditingQueuedText] = useState("");
   const editingQueuedIndexRef = useRef<number | null>(null);
 
-  const scrollToBottom = useCallback(() => {
+  // Tracks whether the user is pinned to (near) the bottom of the message list.
+  // When they scroll up to read earlier messages, streaming auto-scroll is
+  // suppressed so the view doesn't yank them back down.
+  const isAtBottomRef = useRef(true);
+  const handleMessagesScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isAtBottomRef.current = distanceFromBottom < 120;
+  }, []);
+
+  // By default auto-scroll only follows when the user is already at the bottom.
+  // Pass { force: true } for user-initiated actions (e.g. sending a message)
+  // that should always snap to the latest content.
+  const scrollToBottom = useCallback((opts?: { force?: boolean }) => {
+    if (!opts?.force && !isAtBottomRef.current) return;
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, 50);
@@ -821,7 +835,9 @@ export default function ChatPanel({
           if (inputRef.current) inputRef.current.style.height = "auto";
         });
       }
-      scrollToBottom();
+      // User sent a message — always snap down and resume following the stream.
+      isAtBottomRef.current = true;
+      scrollToBottom({ force: true });
       return;
     }
     const message = systemContext && overrideMessage
@@ -857,6 +873,9 @@ export default function ChatPanel({
     }
     if (!fromQueue) {
       setItems((prev) => [...prev, { role: "user", content: displayMessage, fileNames, files: filesToSend }]);
+      // User sent a message — always snap down and resume following the stream.
+      isAtBottomRef.current = true;
+      scrollToBottom({ force: true });
     }
     setIsStreaming(true);
     setStreamStartedAt(performance.now());
@@ -1381,7 +1400,7 @@ export default function ChatPanel({
             </div>
           )}
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 py-4">
+          <div className="flex-1 overflow-y-auto px-3 py-4" onScroll={handleMessagesScroll}>
             <div className="space-y-3 max-w-3xl mx-auto">
               {items.map((item, i) => {
                 if (item.role === "steps") {
