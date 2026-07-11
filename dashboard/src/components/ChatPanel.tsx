@@ -702,8 +702,12 @@ export default function ChatPanel({
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+    } else if (isRecovering) {
+      setIsRecovering(false);
+      setIsStreaming(false);
+      setStreamStartedAt(null);
     }
-  }, []);
+  }, [isRecovering]);
 
   useEffect(() => {
     const handleEscapeKey = (e: KeyboardEvent) => {
@@ -728,20 +732,29 @@ export default function ChatPanel({
         const data = await fetchConversation(conversationId);
         if (stopped) return;
 
-        // Rebuild items from turns on every poll so new steps appear
+        // Rebuild items from turns on every poll so new steps appear,
+        // but preserve any locally-queued messages the user added.
         const { items: rebuilt } = rebuildItemsFromConversation(
           data.conversation.messages,
           data.conversation.prompt,
           data.conversation.final_response,
           data.turns,
         );
-        setItems(rebuilt);
+        setItems((prev) => {
+          const queued = prev.filter((item) => item.queued);
+          return queued.length > 0 ? [...rebuilt, ...queued] : rebuilt;
+        });
         scrollToBottom();
 
         if (data.conversation.status !== "running") {
           setIsRecovering(false);
           setIsStreaming(false);
-          if (data.conversation.status === "error" && !data.conversation.final_response) {
+          if (data.conversation.status === "interrupted") {
+            setItems((prev) => [
+              ...prev,
+              { role: "assistant", content: "The server restarted while processing your request. You can send a follow-up to continue." },
+            ]);
+          } else if (data.conversation.status === "error" && !data.conversation.final_response) {
             setItems((prev) => [
               ...prev,
               { role: "assistant", content: `Error: ${data.conversation.error || "Unknown error"}` },

@@ -25,6 +25,34 @@ RECOVERY_WINDOW_MINUTES = int(os.environ.get("RECOVERY_WINDOW_MINUTES", "10"))
 HEARTBEAT_STALE_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 2
 
 
+async def mark_all_running_interrupted():
+    """Mark all currently-running conversations as interrupted.
+
+    Called during graceful shutdown so the next server instance doesn't
+    have to wait for heartbeats to go stale.
+    """
+    db = get_db()
+    if db is None:
+        return
+    now = datetime.now(timezone.utc)
+    try:
+        result = await db.conversations.update_many(
+            {"status": "running"},
+            {"$set": {
+                "status": "interrupted",
+                "finished_at": now,
+                "error": "Server shutting down",
+            }},
+        )
+        if result.modified_count > 0:
+            logger.info(
+                "[RECOVERY] Graceful shutdown: marked %d running conversation(s) as interrupted",
+                result.modified_count,
+            )
+    except Exception:
+        logger.exception("[RECOVERY] Failed to mark conversations during shutdown")
+
+
 def start_recovery_loop():
     """Start a background task that periodically checks for interrupted conversations.
 
@@ -176,6 +204,19 @@ async def _resume_conversation(convo: dict):
         )
         await observer.resume()
 
+    # Dashboard chats don't need auto-resume — the user is already watching
+    # the chat and the frontend recovery poll will show the interrupted state.
+    # Resuming would re-run the agent silently, which is confusing.
+    if source == "dashboard":
+        logger.info(
+            "[RECOVERY] Skipping resume for dashboard conversation %s — marking interrupted",
+            conversation_id,
+        )
+        if observer:
+            observer._stop_heartbeat()
+            await observer.mark_interrupted("Server restarted during chat")
+        return
+
     # Map stored source to the agent's expected source parameter
     agent_source = "dashboard" if source == "dashboard" else "slack"
 
@@ -211,3 +252,6 @@ async def _resume_conversation(convo: dict):
         logger.exception(
             "[RECOVERY] Failed to resume conversation %s", conversation_id
         )
+        if observer:
+            observer._stop_heartbeat()
+            await observer.record_error("Recovery failed")
