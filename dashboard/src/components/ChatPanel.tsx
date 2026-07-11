@@ -30,6 +30,8 @@ import {
   RiDownloadLine,
   RiStopLine,
   RiTimeLine,
+  RiEditLine,
+  RiDeleteBinLine,
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
@@ -589,6 +591,8 @@ export default function ChatPanel({
   const abortControllerRef = useRef<AbortController | null>(null);
   const queuedMessagesRef = useRef<{ text: string; files?: ChatFile[] }[]>([]);
   const [queuedCount, setQueuedCount] = useState(0);
+  const [editingQueuedIndex, setEditingQueuedIndex] = useState<number | null>(null);
+  const [editingQueuedText, setEditingQueuedText] = useState("");
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -1068,6 +1072,50 @@ export default function ChatPanel({
     [items, conversationId, session, isStreaming, selectedModel],
   );
 
+  const getQueueIndex = (itemIndex: number): number => {
+    let qIdx = 0;
+    for (let j = 0; j < itemIndex; j++) {
+      if (items[j].queued) qIdx++;
+    }
+    return qIdx;
+  };
+
+  const handleDeleteQueued = (itemIndex: number) => {
+    const qIdx = getQueueIndex(itemIndex);
+    queuedMessagesRef.current.splice(qIdx, 1);
+    setQueuedCount(queuedMessagesRef.current.length);
+    setItems((prev) => prev.filter((_, i) => i !== itemIndex));
+    if (editingQueuedIndex === itemIndex) {
+      setEditingQueuedIndex(null);
+      setEditingQueuedText("");
+    }
+  };
+
+  const handleStartEditQueued = (itemIndex: number) => {
+    setEditingQueuedIndex(itemIndex);
+    setEditingQueuedText(items[itemIndex].content);
+  };
+
+  const handleSaveEditQueued = (itemIndex: number) => {
+    const trimmed = editingQueuedText.trim();
+    if (!trimmed) {
+      handleDeleteQueued(itemIndex);
+      return;
+    }
+    const qIdx = getQueueIndex(itemIndex);
+    queuedMessagesRef.current[qIdx] = { ...queuedMessagesRef.current[qIdx], text: trimmed };
+    setItems((prev) =>
+      prev.map((item, i) => (i === itemIndex ? { ...item, content: trimmed } : item))
+    );
+    setEditingQueuedIndex(null);
+    setEditingQueuedText("");
+  };
+
+  const handleCancelEditQueued = () => {
+    setEditingQueuedIndex(null);
+    setEditingQueuedText("");
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1302,13 +1350,69 @@ export default function ChatPanel({
 
                 if (item.role === "user") {
                   return (
-                    <div key={i} className="flex justify-end animate-message-in">
+                    <div key={i} className="flex justify-end animate-message-in group/msg">
+                      {item.queued && editingQueuedIndex !== i && (
+                        <div className="flex items-center gap-0.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditQueued(i)}
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            title="Edit queued message"
+                          >
+                            <RiEditLine size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteQueued(i)}
+                            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            title="Delete queued message"
+                          >
+                            <RiDeleteBinLine size={14} />
+                          </button>
+                        </div>
+                      )}
                       <div className={cn(
                         "chat-text rounded-xl px-3 py-2 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
                         item.queued ? "bg-muted/60 border border-dashed border-border" : "bg-muted"
                       )}>
-                        {item.content || <TypingIndicator />}
-                        {item.queued && (
+                        {editingQueuedIndex === i ? (
+                          <div className="flex flex-col gap-1.5">
+                            <textarea
+                              value={editingQueuedText}
+                              onChange={(e) => setEditingQueuedText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  handleSaveEditQueued(i);
+                                }
+                                if (e.key === "Escape") {
+                                  handleCancelEditQueued();
+                                }
+                              }}
+                              className="w-full bg-transparent border-none outline-none resize-none text-[13px] leading-relaxed min-h-[2em]"
+                              autoFocus
+                            />
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={handleCancelEditQueued}
+                                className="text-[11px] text-muted-foreground hover:text-foreground px-2 py-0.5 rounded transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveEditQueued(i)}
+                                className="text-[11px] text-primary hover:text-primary/80 px-2 py-0.5 rounded transition-colors font-medium"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          item.content || <TypingIndicator />
+                        )}
+                        {item.queued && editingQueuedIndex !== i && (
                           <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground">
                             <RiTimeLine size={12} />
                             <span>Queued — will send when agent finishes</span>
