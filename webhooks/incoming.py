@@ -101,7 +101,18 @@ def verify_webhook_auth(
     Returns True if auth passes (or method is ``none``).
     """
     method = webhook_config.get("auth_method", "none")
-    secret = webhook_config.get("auth_secret", "")
+
+    # Decrypt secret if stored encrypted; fall back to plaintext for pre-migration flows
+    secret_encrypted = webhook_config.get("auth_secret_encrypted", "")
+    if secret_encrypted:
+        try:
+            from api.oauth_helpers import decrypt_token
+            secret = decrypt_token(secret_encrypted)
+        except (ValueError, Exception):
+            logger.error("[WEBHOOK] Failed to decrypt auth secret")
+            return False
+    else:
+        secret = webhook_config.get("auth_secret", "")
 
     if method == "none":
         return True

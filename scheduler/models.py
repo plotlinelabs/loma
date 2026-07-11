@@ -2,7 +2,19 @@ import uuid
 import logging
 from datetime import datetime, timezone
 
+from api.oauth_helpers import encrypt_token
+
 logger = logging.getLogger(__name__)
+
+
+def _encrypt_webhook_secret(webhook_config: dict) -> dict:
+    """Encrypt auth_secret in webhook_config, replacing it with auth_secret_encrypted."""
+    if not webhook_config or not webhook_config.get("auth_secret"):
+        return webhook_config
+    config = dict(webhook_config)
+    config["auth_secret_encrypted"] = encrypt_token(config["auth_secret"])
+    config.pop("auth_secret", None)
+    return config
 
 
 async def create_flow(db, data: dict) -> dict:
@@ -38,7 +50,7 @@ async def create_flow(db, data: dict) -> dict:
 
         # Webhook config (used by webhook flows)
         "prompt_template": data.get("prompt_template", ""),
-        "webhook_config": data.get("webhook_config", {}),
+        "webhook_config": _encrypt_webhook_secret(data.get("webhook_config", {})),
 
         # Slack-triggered config (used by slack flows). allow_bot_messages lets the
         # flow respond to messages from bots/automations (e.g. alert channels).
@@ -74,6 +86,8 @@ async def create_flow(db, data: dict) -> dict:
 
 async def update_flow(db, flow_id: str, updates: dict) -> dict | None:
     """Update specific fields on a flow. Returns updated doc or None."""
+    if "webhook_config" in updates:
+        updates["webhook_config"] = _encrypt_webhook_secret(updates["webhook_config"])
     updates["updated_at"] = datetime.now(timezone.utc)
     result = await db.flows.find_one_and_update(
         {"flow_id": flow_id},
