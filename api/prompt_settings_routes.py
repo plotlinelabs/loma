@@ -89,6 +89,12 @@ async def handle_update_prompt_setting(request: web.Request) -> web.Response:
         await get_pool().reload_prompt()
     except RuntimeError:
         pass
+    try:
+        from agent.codex_pool import get_codex_pool
+
+        await get_codex_pool().reload_prompt()
+    except RuntimeError:
+        pass
     doc = await db.prompt_settings.find_one({"setting_key": setting_key})
     return web.json_response({"setting": _serialize(doc)})
 

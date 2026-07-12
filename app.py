@@ -35,6 +35,7 @@ from api.env_routes import setup_env_routes
 from api.usage_routes import setup_usage_routes
 from api.terminal_routes import setup_terminal_routes
 from api.claude_auth_routes import setup_claude_auth_routes
+from api.codex_auth_routes import setup_codex_auth_routes
 from api.file_routes import setup_file_routes
 from api.integration_routes import setup_integration_routes
 from api.prompt_settings_routes import setup_prompt_settings_routes
@@ -42,6 +43,7 @@ from recovery import start_recovery_loop, mark_all_running_interrupted
 from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
 from agent.pool import init_pool
+from agent.codex_pool import codex_pool_enabled, init_codex_pool
 from agent.prompt import refresh_loma_skill_index_from_db, refresh_prompt_settings_from_db
 from config.app_config import APP_NAME, LOMA_ENABLE_SCHEDULER, LOMA_ENABLE_WEBHOOKS, LOMA_ENABLE_SLACK
 
@@ -80,6 +82,13 @@ async def main():
     agent_config = load_config()
     agent_config = await merge_db_integrations(agent_config)
     await init_pool(config=agent_config)
+
+    # Pre-warm Codex (ChatGPT subscription) worker pool — feature-flagged off
+    # by default until rollout sign-off (set CODEX_POOL_ENABLED=1).
+    if codex_pool_enabled():
+        await init_codex_pool(config=agent_config)
+    else:
+        logger.info("Codex pool disabled (set CODEX_POOL_ENABLED=1 to enable)")
 
     # Start periodic recovery loop for interrupted conversations
     start_recovery_loop()
@@ -124,6 +133,7 @@ async def main():
     setup_usage_routes(webhook_app)
     setup_terminal_routes(webhook_app)
     setup_claude_auth_routes(webhook_app)
+    setup_codex_auth_routes(webhook_app)
     setup_file_routes(webhook_app)
     setup_integration_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
