@@ -289,3 +289,105 @@ def test_status_shape(tmp_path, monkeypatch):
     assert status["available"] == 0
     assert sorted(status["accounts"]) == ["a@example.com", "b@example.com"]
     assert status["accounts_on_cooldown"] == ["a@example.com"]
+
+
+# ── Read loop: oversized single-line notifications (regression) ──────────
+#
+# codex app-server embeds full command output in one ``item/completed`` JSON
+# line; a ~100 KB command output arrives as a single ~130 KB line, which
+# exceeds asyncio's 64 KiB readline() limit. The read loop must consume it
+# without dying (a dead read loop is reported as a mid-turn worker exit).
+
+
+class _FakeProc:
+    def __init__(self, stdout, returncode=None, stderr=None):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stdin = None
+        self.returncode = returncode
+
+
+def test_read_loop_survives_lines_over_64kib():
+    import asyncio
+    from agent.codex_runtime import CodexWorker
+
+    async def scenario():
+        reader = asyncio.StreamReader(limit=2**16)  # the default readline limit
+        big_output = "x" * 200_000  # > 3x the 64 KiB limit
+        notification = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "item/completed",
+            "params": {"item": {"id": "call_1", "type": "commandExecution",
+                                 "exitCode": 0, "aggregatedOutput": big_output}},
+        })
+        reader.feed_data((notification + "\n").encode())
+        reader.feed_data(b'{"jsonrpc": "2.0", "method": "turn/completed", "params": {"turn": {"status": "completed"}}}\n')
+        reader.feed_eof()
+
+        worker = CodexWorker.__new__(CodexWorker)
+        worker.account = {"email": "dev@example.com"}
+        worker._pending = {}
+        worker._events = asyncio.Queue()
+        worker._proc = _FakeProc(stdout=reader)
+
+        await worker._read_loop()
+
+        first = worker._events.get_nowait()
+        assert first["method"] == "item/completed"
+        assert first["params"]["item"]["aggregatedOutput"] == big_output
+        second = worker._events.get_nowait()
+        assert second["method"] == "turn/completed"
+        closed = worker._events.get_nowait()
+        assert closed["method"] == "__closed"
+
+    import asyncio as _asyncio
+    _asyncio.run(scenario())
+
+
+def test_read_loop_drops_pathological_line_and_recovers(monkeypatch):
+    import asyncio
+    import agent.codex_runtime as codex_runtime
+    from agent.codex_runtime import CodexWorker
+
+    monkeypatch.setattr(codex_runtime, "CODEX_MAX_LINE_BYTES", 1024)
+
+    async def scenario():
+        reader = asyncio.StreamReader()
+        reader.feed_data(b'{"pathological": "' + b"y" * 5000 + b'"')  # no newline yet
+        reader.feed_data(b'"}\n')  # pathological line ends
+        reader.feed_data(b'{"jsonrpc": "2.0", "method": "turn/completed", "params": {}}\n')
+        reader.feed_eof()
+
+        worker = CodexWorker.__new__(CodexWorker)
+        worker.account = {"email": "dev@example.com"}
+        worker._pending = {}
+        worker._events = asyncio.Queue()
+        worker._proc = _FakeProc(stdout=reader)
+
+        await worker._read_loop()
+
+        # The oversized line is dropped; the next line still routes.
+        event = worker._events.get_nowait()
+        assert event["method"] == "turn/completed"
+        closed = worker._events.get_nowait()
+        assert closed["method"] == "__closed"
+
+    asyncio.run(scenario())
+
+
+def test_closed_error_distinguishes_exit_from_reader_failure():
+    from agent.codex_runtime import CodexWorker
+
+    worker = CodexWorker.__new__(CodexWorker)
+    worker._stderr_tail = b"thread panicked at 'oh no'"
+
+    # Process really exited: message carries the exit code + stderr tail.
+    worker._proc = _FakeProc(stdout=None, returncode=137)
+    err = worker._closed_error()
+    assert "exit code 137" in str(err)
+    assert "oh no" in str(err)
+
+    # Process still running: the reader failed client-side.
+    worker._proc = _FakeProc(stdout=None, returncode=None)
+    err = worker._closed_error()
+    assert "still running" in str(err)
