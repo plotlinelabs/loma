@@ -11,7 +11,7 @@ def _fake_jwt(claims: dict) -> str:
     return f"{header}.{payload}."
 
 
-def _write_auth(config_dir, email="dev@plotline.so", plan="pro"):
+def _write_auth(config_dir, email="dev@example.com", plan="pro"):
     config_dir.mkdir(parents=True, exist_ok=True)
     token = _fake_jwt({
         "email": email,
@@ -29,10 +29,10 @@ def _write_auth(config_dir, email="dev@plotline.so", plan="pro"):
 def test_read_codex_auth_parses_email_and_plan(tmp_path):
     from agent.codex_runtime import read_codex_auth
 
-    _write_auth(tmp_path / "dev@plotline.so", email="dev@plotline.so", plan="pro")
-    auth = read_codex_auth(tmp_path / "dev@plotline.so")
+    _write_auth(tmp_path / "dev@example.com", email="dev@example.com", plan="pro")
+    auth = read_codex_auth(tmp_path / "dev@example.com")
     assert auth is not None
-    assert auth["email"] == "dev@plotline.so"
+    assert auth["email"] == "dev@example.com"
     assert auth["auth_method"] == "chatgpt"
     assert auth["plan"] == "pro"
 
@@ -119,7 +119,7 @@ def test_rate_limit_cooldown_from_event():
 # ── pool: account scan / round-robin / cooldowns ─────────────────────────
 
 
-def _make_pool(tmp_path, monkeypatch, emails=("a@plotline.so", "b@plotline.so")):
+def _make_pool(tmp_path, monkeypatch, emails=("a@example.com", "b@example.com")):
     from agent.codex_pool import CodexClientPool
 
     monkeypatch.setenv("CODEX_USERS_DIR", str(tmp_path))
@@ -132,65 +132,65 @@ def _make_pool(tmp_path, monkeypatch, emails=("a@plotline.so", "b@plotline.so"))
 
 def test_scan_accounts_finds_valid_dirs(tmp_path, monkeypatch):
     pool = _make_pool(tmp_path, monkeypatch)
-    (tmp_path / "empty@plotline.so").mkdir()  # no auth.json — excluded
+    (tmp_path / "empty@example.com").mkdir()  # no auth.json — excluded
     pool._scan_accounts()
-    assert sorted(a["email"] for a in pool._accounts) == ["a@plotline.so", "b@plotline.so"]
+    assert sorted(a["email"] for a in pool._accounts) == ["a@example.com", "b@example.com"]
 
 
 def test_scan_accounts_respects_disabled(tmp_path, monkeypatch):
     pool = _make_pool(tmp_path, monkeypatch)
-    pool._scan_accounts(disabled_emails={"a@plotline.so"})
-    assert [a["email"] for a in pool._accounts] == ["b@plotline.so"]
+    pool._scan_accounts(disabled_emails={"a@example.com"})
+    assert [a["email"] for a in pool._accounts] == ["b@example.com"]
 
 
 def test_round_robin_skips_cooldown(tmp_path, monkeypatch):
     pool = _make_pool(tmp_path, monkeypatch)
     first = pool._next_account()["email"]
     second = pool._next_account()["email"]
-    assert {first, second} == {"a@plotline.so", "b@plotline.so"}
+    assert {first, second} == {"a@example.com", "b@example.com"}
 
-    pool.mark_account_exhausted("a@plotline.so")
+    pool.mark_account_exhausted("a@example.com")
     for _ in range(4):
-        assert pool._next_account()["email"] == "b@plotline.so"
+        assert pool._next_account()["email"] == "b@example.com"
 
-    pool.mark_account_exhausted("b@plotline.so")
+    pool.mark_account_exhausted("b@example.com")
     assert pool._next_account() is None
 
 
 def test_cooldown_expires(tmp_path, monkeypatch):
-    pool = _make_pool(tmp_path, monkeypatch, emails=("a@plotline.so",))
-    pool._account_cooldowns["a@plotline.so"] = time.time() - 1  # already expired
-    assert pool._next_account()["email"] == "a@plotline.so"
+    pool = _make_pool(tmp_path, monkeypatch, emails=("a@example.com",))
+    pool._account_cooldowns["a@example.com"] = time.time() - 1  # already expired
+    assert pool._next_account()["email"] == "a@example.com"
 
 
 def test_adaptive_cooldown_override(tmp_path, monkeypatch):
-    pool = _make_pool(tmp_path, monkeypatch, emails=("a@plotline.so",))
-    pool.mark_account_exhausted("a@plotline.so", cooldown_override=42)
-    remaining = pool._account_cooldowns["a@plotline.so"] - time.time()
+    pool = _make_pool(tmp_path, monkeypatch, emails=("a@example.com",))
+    pool.mark_account_exhausted("a@example.com", cooldown_override=42)
+    remaining = pool._account_cooldowns["a@example.com"] - time.time()
     assert 40 < remaining <= 42
 
 
 def test_auth_failure_readmit_on_auth_json_change(tmp_path, monkeypatch):
-    pool = _make_pool(tmp_path, monkeypatch, emails=("a@plotline.so",))
-    pool.mark_account_exhausted("a@plotline.so", auth_error=True)
+    pool = _make_pool(tmp_path, monkeypatch, emails=("a@example.com",))
+    pool.mark_account_exhausted("a@example.com", auth_error=True)
     assert pool._next_account() is None  # 1h cooldown
 
     # Simulate token refresh: auth.json rewritten with a new mtime
-    auth_path = tmp_path / "a@plotline.so" / "auth.json"
+    auth_path = tmp_path / "a@example.com" / "auth.json"
     import os
     os.utime(auth_path, (time.time() + 10, time.time() + 10))
 
     account = pool._next_account()
-    assert account is not None and account["email"] == "a@plotline.so"
-    assert "a@plotline.so" not in pool._auth_failed_mtimes
+    assert account is not None and account["email"] == "a@example.com"
+    assert "a@example.com" not in pool._auth_failed_mtimes
 
 
 def test_status_shape(tmp_path, monkeypatch):
     pool = _make_pool(tmp_path, monkeypatch)
-    pool.mark_account_exhausted("a@plotline.so")
+    pool.mark_account_exhausted("a@example.com")
     status = pool.status()
     assert status["enabled"] is True
     assert status["pool_size"] == 3
     assert status["available"] == 0
-    assert sorted(status["accounts"]) == ["a@plotline.so", "b@plotline.so"]
-    assert status["accounts_on_cooldown"] == ["a@plotline.so"]
+    assert sorted(status["accounts"]) == ["a@example.com", "b@example.com"]
+    assert status["accounts_on_cooldown"] == ["a@example.com"]
