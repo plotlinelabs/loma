@@ -1018,8 +1018,10 @@ async def handle_agent_models(request: web.Request) -> web.Response:
         from agent.codex_pool import get_codex_pool
         from agent.codex_runtime import supported_codex_model_ids
 
-        if get_codex_pool().status().get("accounts"):
-            codex_models = [_codex_entry(mid) for mid in supported_codex_model_ids()]
+        codex_status = get_codex_pool().status()
+        if codex_status.get("accounts"):
+            live_ids = [m["id"] for m in (codex_status.get("models") or []) if m.get("id")]
+            codex_models = [_codex_entry(mid) for mid in supported_codex_model_ids(live_ids)]
     except RuntimeError:
         pass
 

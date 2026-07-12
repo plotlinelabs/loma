@@ -51,11 +51,11 @@ def test_read_codex_auth_missing_or_invalid(tmp_path):
 def test_selected_model_is_codex():
     from agent.codex_runtime import normalize_codex_model, selected_model_is_codex
 
-    assert selected_model_is_codex("codex/gpt-5.6-codex")
-    assert normalize_codex_model("codex/gpt-5.6-codex") == "gpt-5.6-codex"
+    assert selected_model_is_codex("codex/gpt-5.6-sol")
+    assert normalize_codex_model("codex/gpt-5.6-sol") == "gpt-5.6-sol"
     assert not selected_model_is_codex("anthropic/claude-opus-4-8")
     assert not selected_model_is_codex("openai/gpt-5.5")
-    assert not selected_model_is_codex("gpt-5.6-codex")  # no provider prefix
+    assert not selected_model_is_codex("gpt-5.6-sol")  # no provider prefix
     assert not selected_model_is_codex(None)
 
 
@@ -88,19 +88,114 @@ def test_claude_mcp_to_codex_toml_stdio_and_http():
 # ── event normalization ──────────────────────────────────────────────────
 
 
-def test_extract_codex_event_shapes():
-    from agent.codex_runtime import _extract_codex_event
+def test_normalize_v2_agent_message_events():
+    from agent.codex_runtime import _normalize_v2_event
 
-    inner = {"type": "agent_message_delta", "delta": "hi"}
-    assert _extract_codex_event(
-        {"method": "codex/event", "params": {"msg": inner}}
-    ) == inner
-    namespaced = _extract_codex_event(
-        {"method": "codex/event/task_complete", "params": {"last_agent_message": "done"}}
+    tid = "t-1"
+    assert _normalize_v2_event(
+        {"method": "item/agentMessage/delta", "params": {"threadId": tid, "delta": "hi"}}, tid
+    ) == [{"type": "agent_message_delta", "delta": "hi"}]
+
+    done = _normalize_v2_event(
+        {"method": "item/completed", "params": {"threadId": tid, "item": {
+            "type": "agentMessage", "id": "i1",
+            "content": [{"type": "text", "text": "hello "}, {"type": "text", "text": "world"}],
+        }}}, tid
     )
-    assert namespaced["type"] == "task_complete"
-    assert namespaced["last_agent_message"] == "done"
-    assert _extract_codex_event({"method": "somethingElse", "params": {}}) is None
+    assert done == [{"type": "agent_message", "message": "hello world"}]
+
+    # events for another thread are dropped
+    assert _normalize_v2_event(
+        {"method": "item/agentMessage/delta", "params": {"threadId": "other", "delta": "x"}}, tid
+    ) == []
+    assert _normalize_v2_event({"method": "somethingElse", "params": {}}, tid) == []
+
+
+def test_normalize_v2_tool_events():
+    from agent.codex_runtime import _normalize_v2_event
+
+    tid = "t-1"
+    begin = _normalize_v2_event(
+        {"method": "item/started", "params": {"threadId": tid, "item": {
+            "type": "commandExecution", "id": "c1", "command": "ls -la"}}}, tid
+    )
+    assert begin == [{"type": "exec_command_begin", "call_id": "c1", "command": "ls -la"}]
+
+    end = _normalize_v2_event(
+        {"method": "item/completed", "params": {"threadId": tid, "item": {
+            "type": "commandExecution", "id": "c1", "exitCode": 1,
+            "aggregatedOutput": "boom"}}}, tid
+    )
+    assert end == [{"type": "exec_command_end", "call_id": "c1",
+                    "exit_code": 1, "aggregated_output": "boom"}]
+
+    mcp = _normalize_v2_event(
+        {"method": "item/started", "params": {"threadId": tid, "item": {
+            "type": "mcpToolCall", "id": "m1", "server": "mongodb", "tool": "find"}}}, tid
+    )
+    assert mcp[0]["type"] == "mcp_tool_call_begin"
+    assert mcp[0]["invocation"]["server"] == "mongodb"
+
+    mcp_end = _normalize_v2_event(
+        {"method": "item/completed", "params": {"threadId": tid, "item": {
+            "type": "mcpToolCall", "id": "m1", "status": "failed"}}}, tid
+    )
+    assert mcp_end == [{"type": "mcp_tool_call_end", "call_id": "m1",
+                        "is_error": True, "result": ""}]
+
+
+def test_normalize_v2_usage_rate_limits_and_completion():
+    from agent.codex_runtime import _normalize_v2_event
+
+    tid = "t-1"
+    usage = _normalize_v2_event(
+        {"method": "thread/tokenUsage/updated", "params": {"threadId": tid, "tokenUsage": {
+            "total": {"inputTokens": 100, "cachedInputTokens": 40, "outputTokens": 7}}}}, tid
+    )
+    assert usage == [{"type": "token_count", "info": {"total_token_usage": {
+        "input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 7}}}]
+
+    limits = _normalize_v2_event(
+        {"method": "account/rateLimits/updated", "params": {"rateLimits": {
+            "primary": {"usedPercent": 100, "resetsInSeconds": 900},
+            "secondary": {"usedPercent": 10, "resetsInSeconds": 500000}}}}, tid
+    )
+    assert limits[0]["rate_limits"]["primary"] == {"used_percent": 100, "resets_in_seconds": 900}
+
+    ok = _normalize_v2_event(
+        {"method": "turn/completed", "params": {"threadId": tid,
+         "turn": {"id": "u1", "status": "completed"}}}, tid
+    )
+    assert ok == [{"type": "task_complete"}]
+
+    failed = _normalize_v2_event(
+        {"method": "turn/completed", "params": {"threadId": tid,
+         "turn": {"id": "u1", "status": "failed", "error": {"message": "nope"}}}}, tid
+    )
+    assert failed == [{"type": "error", "message": "nope"}]
+
+
+def test_normalize_v2_error_events():
+    from agent.codex_runtime import _normalize_v2_event
+
+    tid = "t-1"
+    # transient reconnects are swallowed — codex retries internally
+    assert _normalize_v2_event(
+        {"method": "error", "params": {"threadId": tid, "willRetry": True,
+         "error": {"message": "Reconnecting... 2/5"}}}, tid
+    ) == []
+
+    fatal = _normalize_v2_event(
+        {"method": "error", "params": {"threadId": tid, "willRetry": False, "error": {
+            "message": "stream disconnected",
+            "codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": 401}}}}}, tid
+    )
+    assert fatal[0]["type"] == "error"
+    assert "HTTP 401" in fatal[0]["message"]
+
+    # a 401-tagged message classifies as an auth error downstream
+    from agent.codex_runtime import CodexAuthError, _classify_rpc_error
+    assert isinstance(_classify_rpc_error({"message": fatal[0]["message"]}), CodexAuthError)
 
 
 def test_rate_limit_cooldown_from_event():

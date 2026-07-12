@@ -11,11 +11,25 @@ contract used by the Claude SDK and OpenCode paths (text deltas, tool_call /
 tool_result, turn, account_info), so agent/client.py and the dashboard need no
 new event handling.
 
-Protocol: ``codex app-server`` speaks newline-delimited JSON-RPC over stdio.
-The client sends ``initialize`` -> ``newConversation`` -> ``sendUserTurn`` and
-consumes ``codex/event`` notifications (agent_message_delta, exec_command_*,
-mcp_tool_call_*, token_count, task_complete, error). The CLI version should be
-pinned in the image — the app-server protocol is not yet stability-guaranteed.
+Protocol: ``codex app-server`` speaks newline-delimited JSON-RPC over stdio
+using the **v2 (thread/turn) API** — verified against the pinned CLI
+(0.144.1):
+
+    initialize -> thread/start -> turn/start
+
+and streams server notifications:
+
+    item/agentMessage/delta        assistant text deltas
+    item/started / item/completed  items: agentMessage, commandExecution,
+                                   mcpToolCall, webSearch, reasoning, ...
+    thread/tokenUsage/updated      token usage
+    account/rateLimits/updated     usage-window rate limits
+    turn/started / turn/completed  turn lifecycle (completed carries status)
+    error                          fatal or transient (willRetry) errors
+
+The older v1 surface (``newConversation`` / ``sendUserTurn`` / ``codex/event``)
+was removed from the CLI and is NOT supported here. The CLI version must stay
+pinned in the image — the app-server protocol is not stability-guaranteed.
 """
 
 from __future__ import annotations
@@ -34,13 +48,17 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 CODEX_PROVIDER_PREFIX = "codex"
-DEFAULT_CODEX_MODEL = "gpt-5.6-codex"
-# Codex model family exposed by ChatGPT-plan auth (subscription models only —
-# arbitrary OpenAI API models stay on the OpenCode/API-billing path).
+DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
+# Fallback Codex model family exposed by ChatGPT-plan auth (subscription
+# models only — arbitrary OpenAI API models stay on the OpenCode/API-billing
+# path). The live list is fetched from ``model/list`` at worker warm time and
+# preferred over this tuple; override order: $CODEX_MODELS > model/list > this.
 DEFAULT_CODEX_MODEL_IDS = (
-    "gpt-5.6-codex",
-    "gpt-5.6",
-    "gpt-5.5-codex-mini",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4-mini",
 )
 
 CODEX_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("CODEX_CONNECT_TIMEOUT", "90"))
@@ -52,10 +70,17 @@ def default_codex_model() -> str:
     return os.environ.get("CODEX_MODEL", DEFAULT_CODEX_MODEL)
 
 
-def supported_codex_model_ids() -> tuple[str, ...]:
+def supported_codex_model_ids(dynamic: list[str] | tuple[str, ...] | None = None) -> tuple[str, ...]:
+    """Model ids for the dashboard catalog.
+
+    Precedence: $CODEX_MODELS env override > ``dynamic`` (the live
+    ``model/list`` result cached by the pool) > the static fallback tuple.
+    """
     raw = os.environ.get("CODEX_MODELS", "")
     if raw.strip():
         return tuple(m.strip() for m in raw.split(",") if m.strip())
+    if dynamic:
+        return tuple(dynamic)
     return DEFAULT_CODEX_MODEL_IDS
 
 
@@ -218,7 +243,8 @@ class CodexWorker:
         self._pending: dict[int, asyncio.Future] = {}
         self._events: asyncio.Queue[dict] = asyncio.Queue()
         self._reader_task: asyncio.Task | None = None
-        self.conversation_id: str | None = None
+        self.thread_id: str | None = None
+        self.available_models: list[dict] = []
         self.last_rate_limits: dict | None = None
         # Pool bookkeeping (mirrors client._pool_account on ClaudeSDKClient)
         self._pool_account = account
@@ -228,6 +254,11 @@ class CodexWorker:
     @property
     def pid(self) -> int | None:
         return self._proc.pid if self._proc else None
+
+    @property
+    def conversation_id(self) -> str | None:
+        """Back-compat alias for the v2 thread id."""
+        return self.thread_id
 
     # ── Wire protocol ────────────────────────────────────────────────
 
@@ -279,9 +310,12 @@ class CodexWorker:
 
                 method = msg.get("method") or ""
                 if "id" in msg:
-                    # Server -> client request (approval prompts). approval_policy
-                    # is "never", but auto-approve defensively if one arrives.
-                    if method in ("execCommandApproval", "applyPatchApproval"):
+                    # Server -> client request. approval_policy is "never", but
+                    # auto-approve defensively if an approval request arrives.
+                    # v2 decisions use accept/decline; legacy uses approved.
+                    if method.endswith("requestApproval"):
+                        await self._respond(msg["id"], {"decision": "accept"})
+                    elif method in ("execCommandApproval", "applyPatchApproval"):
                         await self._respond(msg["id"], {"decision": "approved"})
                     else:
                         await self._respond(msg["id"], {})
@@ -299,9 +333,9 @@ class CodexWorker:
     # ── Lifecycle ────────────────────────────────────────────────────
 
     async def connect(self, mcp_servers: dict | None = None, system_prompt: str | None = None) -> None:
-        """Spawn app-server, initialize, and pre-create the conversation.
+        """Spawn app-server, initialize, and pre-create the thread.
 
-        The conversation (which boots MCP servers) is created at warm time so
+        The thread (which boots MCP servers) is created at warm time so
         acquire -> first token is near-instant, mirroring the Claude pool's
         pre-warmed MCP handshake.
         """
@@ -324,35 +358,34 @@ class CodexWorker:
             {"clientInfo": {"name": "loma", "title": "Loma agent", "version": "1.0"}},
             timeout=30,
         )
-        await self._send({"jsonrpc": "2.0", "method": "initialized"})
 
         params: dict = {
             "model": self.model,
             "cwd": str(PROJECT_ROOT),
             "approvalPolicy": "never",
-            "sandbox": "danger-full-access",
+            "sandboxPolicy": {"mode": "danger-full-access"},
         }
         if system_prompt:
             params["baseInstructions"] = system_prompt
-        result = await self._request("newConversation", params, timeout=CODEX_CONNECT_TIMEOUT_SECONDS)
-        self.conversation_id = result.get("conversationId") or result.get("conversation_id")
-        if not self.conversation_id:
-            raise CodexError(f"Codex newConversation returned no conversationId: {result}")
+        result = await self._request("thread/start", params, timeout=CODEX_CONNECT_TIMEOUT_SECONDS)
+        self.thread_id = ((result or {}).get("thread") or {}).get("id")
+        if not self.thread_id:
+            raise CodexError(f"Codex thread/start returned no thread id: {result}")
 
-        # Subscribe to this conversation's event stream (newer app-server
-        # protocol versions require an explicit listener; older ones don't).
+        # Best-effort live model catalog (surfaced in the dashboard picker).
         try:
-            await self._request(
-                "addConversationListener",
-                {"conversationId": self.conversation_id},
-                timeout=15,
-            )
-        except CodexError as e:
-            logger.debug("addConversationListener unsupported/failed (ok on older CLIs): %s", e)
+            models = await self._request("model/list", {}, timeout=15)
+            self.available_models = [
+                {"id": m.get("id") or m.get("model"), "label": m.get("displayName") or m.get("id")}
+                for m in (models.get("data") or [])
+                if not m.get("hidden") and (m.get("id") or m.get("model"))
+            ]
+        except (CodexError, asyncio.TimeoutError) as e:
+            logger.debug("Codex model/list unavailable (using fallback ids): %s", e)
 
         logger.info(
-            "Codex worker connected (account=%s, model=%s, conversation=%s)",
-            self.account.get("email"), self.model, self.conversation_id,
+            "Codex worker connected (account=%s, model=%s, thread=%s)",
+            self.account.get("email"), self.model, self.thread_id,
         )
 
     async def disconnect(self) -> None:
@@ -371,34 +404,18 @@ class CodexWorker:
     # ── Turn streaming ───────────────────────────────────────────────
 
     async def run_turn(self, prompt: str) -> AsyncGenerator[dict, None]:
-        """Send one user turn and yield raw codex event msgs until completion."""
-        if not self.conversation_id:
-            raise CodexError("Codex worker has no conversation")
+        """Send one user turn and yield normalized event dicts until completion."""
+        if not self.thread_id:
+            raise CodexError("Codex worker has no thread")
 
-        items = [{"type": "text", "text": prompt, "data": {"text": prompt}}]
-        try:
-            await self._request(
-                "sendUserTurn",
-                {
-                    "conversationId": self.conversation_id,
-                    "items": items,
-                    "cwd": str(PROJECT_ROOT),
-                    "approvalPolicy": "never",
-                    "sandboxPolicy": {"mode": "danger-full-access"},
-                    "model": self.model,
-                    "summary": "auto",
-                },
-                timeout=60,
-            )
-        except CodexError as e:
-            if "method" in str(e).lower() and "not found" in str(e).lower():
-                await self._request(
-                    "sendUserMessage",
-                    {"conversationId": self.conversation_id, "items": items},
-                    timeout=60,
-                )
-            else:
-                raise
+        await self._request(
+            "turn/start",
+            {
+                "threadId": self.thread_id,
+                "input": [{"type": "text", "text": prompt}],
+            },
+            timeout=60,
+        )
 
         deadline = time.monotonic() + CODEX_TURN_TIMEOUT_SECONDS
         while True:
@@ -417,12 +434,10 @@ class CodexWorker:
             if msg.get("method") == "__closed":
                 raise CodexError("Codex worker process exited mid-turn")
 
-            event = _extract_codex_event(msg)
-            if event is None:
-                continue
-            yield event
-            if event.get("type") in ("task_complete", "error", "turn_aborted"):
-                return
+            for event in _normalize_v2_event(msg, self.thread_id):
+                yield event
+                if event.get("type") in ("task_complete", "error", "turn_aborted"):
+                    return
 
 
 def _classify_rpc_error(error: dict) -> CodexError:
@@ -435,20 +450,158 @@ def _classify_rpc_error(error: dict) -> CodexError:
     return CodexError(message)
 
 
-def _extract_codex_event(msg: dict) -> dict | None:
-    """Normalize a codex/event notification to its inner msg dict."""
+# ── v2 notification normalization ────────────────────────────────────────
+
+_SNAKE_USAGE_KEYS = {
+    "inputTokens": "input_tokens",
+    "cachedInputTokens": "cached_input_tokens",
+    "outputTokens": "output_tokens",
+    "reasoningOutputTokens": "reasoning_output_tokens",
+    "totalTokens": "total_tokens",
+}
+
+_SNAKE_WINDOW_KEYS = {
+    "usedPercent": "used_percent",
+    "resetsInSeconds": "resets_in_seconds",
+    "windowMinutes": "window_minutes",
+}
+
+
+def _snake_usage(usage: dict) -> dict:
+    out = {}
+    for key, value in (usage or {}).items():
+        if isinstance(value, (int, float)):
+            out[_SNAKE_USAGE_KEYS.get(key, key)] = value
+    return out
+
+
+def _snake_rate_limits(rate_limits: dict) -> dict:
+    out = {}
+    for window in ("primary", "secondary"):
+        info = (rate_limits or {}).get(window)
+        if isinstance(info, dict):
+            out[window] = {_SNAKE_WINDOW_KEYS.get(k, k): v for k, v in info.items()}
+    return out
+
+
+def _item_text(item: dict) -> str:
+    """Extract text from a v2 item (``text`` field or ``content`` parts)."""
+    if item.get("text"):
+        return str(item["text"])
+    parts = item.get("content") or []
+    if isinstance(parts, list):
+        return "".join(
+            str(p.get("text") or "") for p in parts if isinstance(p, dict)
+        )
+    return ""
+
+
+def _normalize_v2_event(msg: dict, thread_id: str | None) -> list[dict]:
+    """Translate app-server v2 notifications into the internal event contract.
+
+    Internal vocabulary (consumed by run_codex_agent): agent_message_delta,
+    agent_message, exec_command_begin/end, mcp_tool_call_begin/end,
+    web_search_begin, token_count, task_complete, turn_aborted, error.
+    """
     method = msg.get("method") or ""
     params = msg.get("params") or {}
-    if method == "codex/event":
-        inner = params.get("msg") or {}
-        if isinstance(inner, dict) and inner.get("type"):
-            return inner
-        return None
-    if method.startswith("codex/event/"):
-        event = dict(params.get("msg") or params)
-        event.setdefault("type", method.rsplit("/", 1)[1])
-        return event
-    return None
+
+    # Events for other threads (shouldn't happen — one thread per worker).
+    event_thread = params.get("threadId")
+    if thread_id and event_thread and event_thread != thread_id:
+        return []
+
+    if method == "item/agentMessage/delta":
+        delta = params.get("delta") or params.get("text") or ""
+        return [{"type": "agent_message_delta", "delta": delta}] if delta else []
+
+    if method in ("item/started", "item/completed"):
+        item = params.get("item") or {}
+        itype = item.get("type") or ""
+        call_id = item.get("id") or ""
+        if method == "item/started":
+            if itype == "commandExecution":
+                return [{"type": "exec_command_begin", "call_id": call_id,
+                         "command": item.get("command")}]
+            if itype == "mcpToolCall":
+                return [{"type": "mcp_tool_call_begin", "call_id": call_id,
+                         "invocation": {"server": item.get("server"),
+                                        "tool": item.get("tool"),
+                                        "arguments": item.get("arguments")}}]
+            if itype == "webSearch":
+                return [{"type": "web_search_begin", "call_id": call_id,
+                         "query": item.get("query")}]
+            return []
+        # item/completed
+        if itype == "agentMessage":
+            text = _item_text(item)
+            return [{"type": "agent_message", "message": text}] if text else []
+        if itype == "commandExecution":
+            exit_code = item.get("exitCode")
+            return [{"type": "exec_command_end", "call_id": call_id,
+                     "exit_code": exit_code if exit_code is not None else 0,
+                     "aggregated_output": item.get("aggregatedOutput") or ""}]
+        if itype == "mcpToolCall":
+            status = str(item.get("status") or "").lower()
+            return [{"type": "mcp_tool_call_end", "call_id": call_id,
+                     "is_error": status in ("failed", "error"),
+                     "result": item.get("result") or ""}]
+        return []
+
+    if method == "thread/tokenUsage/updated":
+        usage = params.get("tokenUsage") or params.get("usage") or {}
+        total = usage.get("total") or usage.get("totalTokenUsage") or usage
+        if not isinstance(total, dict):
+            return []
+        return [{"type": "token_count",
+                 "info": {"total_token_usage": _snake_usage(total)}}]
+
+    if method == "account/rateLimits/updated":
+        rate_limits = params.get("rateLimits") or params
+        normalized = _snake_rate_limits(rate_limits)
+        if not normalized:
+            return []
+        return [{"type": "token_count", "info": {}, "rate_limits": normalized}]
+
+    if method == "turn/completed":
+        turn = params.get("turn") or {}
+        events: list[dict] = []
+        usage = turn.get("usage") or params.get("usage")
+        if isinstance(usage, dict):
+            events.append({"type": "token_count",
+                           "info": {"total_token_usage": _snake_usage(usage)}})
+        status = str(turn.get("status") or "").lower()
+        if status == "failed":
+            error = turn.get("error") or {}
+            message = (error.get("message") if isinstance(error, dict) else str(error)) or "Codex turn failed"
+            events.append({"type": "error", "message": message})
+        elif status in ("interrupted", "aborted", "cancelled"):
+            events.append({"type": "turn_aborted"})
+        else:
+            events.append({"type": "task_complete"})
+        return events
+
+    if method == "error":
+        error = params.get("error") if isinstance(params.get("error"), dict) else {}
+        message = error.get("message") or params.get("message") or "Codex error"
+        if params.get("willRetry"):
+            # Transient (e.g. stream reconnect) — codex retries internally.
+            logger.debug("Codex transient error (retrying): %s", message)
+            return []
+        # Surface the HTTP status so _classify_rpc_error can route
+        # auth (401) vs rate-limit (429) handling from the message text.
+        info = error.get("codexErrorInfo")
+        if isinstance(info, dict):
+            for detail in info.values():
+                if isinstance(detail, dict) and detail.get("httpStatusCode"):
+                    message = f"{message} (HTTP {detail['httpStatusCode']})"
+                    break
+        details = error.get("additionalDetails")
+        if details:
+            message = f"{message}: {details}"
+        return [{"type": "error", "message": message}]
+
+    return []
 
 
 def _rate_limit_cooldown_seconds(event: dict) -> int | None:
@@ -567,9 +720,6 @@ async def run_codex_agent(
                     await observer.record_tool_result(call_id, is_error, str(output))
                 if include_steps:
                     yield {"type": "tool_result", "tool_use_id": call_id, "is_error": is_error}
-
-            elif etype == "agent_reasoning_delta":
-                continue  # reasoning stays hidden behind status updates
 
             elif etype == "token_count":
                 info = event.get("info") or {}

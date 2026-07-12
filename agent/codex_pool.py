@@ -105,6 +105,7 @@ class CodexClientPool:
         # account is re-admitted early once the file is rewritten (refresh or
         # re-login).
         self._auth_failed_mtimes: dict[str, float] = {}
+        self._available_models: list[dict] = []
 
     def set_config(self, config: dict):
         self._config = config
@@ -320,6 +321,8 @@ class CodexClientPool:
             )
             if model_override:
                 worker._pool_ephemeral = True
+            if worker.available_models:
+                self._available_models = worker.available_models
             return worker
         except (asyncio.TimeoutError, Exception) as e:
             if isinstance(e, asyncio.TimeoutError):
@@ -473,6 +476,7 @@ class CodexClientPool:
             ],
             "accounts_auth_failed": sorted(self._auth_failed_mtimes.keys()),
             "account_distribution": self._account_distribution(),
+            "models": self._available_models,
         }
 
     @property
