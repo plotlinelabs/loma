@@ -781,6 +781,18 @@ export interface PoolStatus {
       warming: number;
     }>;
   };
+  codex?: {
+    enabled: boolean;
+    pool_size?: number;
+    available?: number;
+    in_use?: number;
+    warming?: number;
+    queue_depth?: number;
+    accounts?: string[];
+    accounts_on_cooldown?: string[];
+    accounts_auth_failed?: string[];
+    account_distribution?: Record<string, number>;
+  };
 }
 
 export async function fetchPoolStatus(): Promise<PoolStatus> {

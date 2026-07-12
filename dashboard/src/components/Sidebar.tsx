@@ -153,6 +153,17 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
   const cooldownCount = poolStatus.accounts_on_cooldown?.length || 0;
   const distribution = poolStatus.account_distribution || {};
   const opencode = poolStatus.opencode;
+  const codex = poolStatus.codex;
+  const codexAccountCount = codex?.accounts?.length || 0;
+  const codexColor = !codex?.enabled || codexAccountCount === 0
+    ? "bg-gray-300"
+    : (codex.queue_depth || 0) > 0
+      ? "bg-red-500"
+      : (codex.available || 0) > 0
+        ? "bg-emerald-500"
+        : (codex.warming || 0) > 0
+          ? "bg-amber-400 animate-pulse"
+          : "bg-red-500";
   const opencodeColor = !opencode?.enabled
     ? "bg-gray-300"
     : opencode.total_available > 0
@@ -175,6 +186,9 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
         <span className={cn("w-2 h-2 rounded-full flex-shrink-0", statusColor)} />
         {opencode && (
           <span className={cn("w-2 h-2 rounded-full flex-shrink-0", opencodeColor)} />
+        )}
+        {codex?.enabled && (
+          <span className={cn("w-2 h-2 rounded-full flex-shrink-0", codexColor)} />
         )}
       </div>
     );
@@ -214,6 +228,18 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
             </span>
           </div>
         )}
+        {codex?.enabled && (
+          <div className="flex items-center gap-2">
+            <span className={cn("w-2 h-2 rounded-full flex-shrink-0", codexColor)} />
+            <span className="text-[11px] text-muted-foreground flex-1 truncate">
+              {codexAccountCount === 0
+                ? "Codex · no accounts"
+                : (codex.queue_depth || 0) > 0
+                  ? `Codex · queued (${codex.queue_depth})`
+                  : `Codex · ${codex.available}/${codex.pool_size} available`}
+            </span>
+          </div>
+        )}
       </Button>
       {expanded && (
         <div className="mt-2 pl-4 space-y-2">
@@ -239,6 +265,39 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
                     )}
                     <span className={onCooldown ? "text-amber-600 line-through" : "text-muted-foreground"}>
                       {displayEmail}
+                    </span>
+                    {count > 0 && (
+                      <span className="text-muted-foreground ml-auto">{count}</span>
+                    )}
+                    {onCooldown && (
+                      <span className="text-[9px] text-amber-500 ml-auto">cooldown</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {codex?.enabled && codexAccountCount > 0 && (
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-muted-foreground mb-1">
+                Codex · {codexAccountCount} account{codexAccountCount !== 1 ? "s" : ""} · {codex.in_use || 0} busy{(codex.warming || 0) > 0 ? ` · ${codex.warming} warming` : ""}
+              </div>
+              {(codex.accounts || []).map((email) => {
+                const count = (codex.account_distribution || {})[email] || 0;
+                const onCooldown = codex.accounts_on_cooldown?.includes(email);
+                return (
+                  <div key={email} className="flex items-center gap-1.5 text-[10px]">
+                    {onCooldown ? (
+                      <span className="text-amber-500" title="Usage limit — cooldown">!</span>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        {Array.from({ length: count }, (_, i) => (
+                          <span key={i} className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-0.5" />
+                        ))}
+                      </span>
+                    )}
+                    <span className={onCooldown ? "text-amber-600 line-through" : "text-muted-foreground"}>
+                      {email}
                     </span>
                     {count > 0 && (
                       <span className="text-muted-foreground ml-auto">{count}</span>

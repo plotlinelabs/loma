@@ -461,6 +461,7 @@ class CodexClientPool:
         """Return pool status for the /api/pool-status endpoint."""
         now = time.time()
         return {
+            "enabled": True,
             "pool_size": self._pool_size,
             "available": self._available.qsize(),
             "in_use": self._in_use,

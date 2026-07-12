@@ -189,6 +189,7 @@ def test_status_shape(tmp_path, monkeypatch):
     pool = _make_pool(tmp_path, monkeypatch)
     pool.mark_account_exhausted("a@plotline.so")
     status = pool.status()
+    assert status["enabled"] is True
     assert status["pool_size"] == 3
     assert status["available"] == 0
     assert sorted(status["accounts"]) == ["a@plotline.so", "b@plotline.so"]
