@@ -240,6 +240,11 @@ async def handle_update_user(request: web.Request) -> web.Response:
             return web.json_response({"error": "claude_pool_enabled must be a boolean"}, status=400)
         updates["claude_pool_enabled"] = body["claude_pool_enabled"]
 
+    if "codex_pool_enabled" in body:
+        if not isinstance(body["codex_pool_enabled"], bool):
+            return web.json_response({"error": "codex_pool_enabled must be a boolean"}, status=400)
+        updates["codex_pool_enabled"] = body["codex_pool_enabled"]
+
     result = await db.users.update_one({"email": email}, {"$set": updates})
     if result.matched_count == 0:
         return web.json_response({"error": "User not found"}, status=404)
@@ -250,6 +255,13 @@ async def handle_update_user(request: web.Request) -> web.Response:
             from agent.pool import get_pool
             pool = get_pool()
             pool.refresh_accounts()
+        except RuntimeError:
+            pass
+
+    if "codex_pool_enabled" in updates:
+        try:
+            from agent.codex_pool import get_codex_pool
+            get_codex_pool().refresh_accounts()
         except RuntimeError:
             pass
 
@@ -281,10 +293,15 @@ async def handle_delete_user(request: web.Request) -> web.Response:
 
     await db.users.delete_one({"email": email})
 
-    # The removed user may have been a Claude pool account — refresh the list.
+    # The removed user may have been a Claude/Codex pool account — refresh the lists.
     try:
         from agent.pool import get_pool
         get_pool().refresh_accounts()
+    except RuntimeError:
+        pass
+    try:
+        from agent.codex_pool import get_codex_pool
+        get_codex_pool().refresh_accounts()
     except RuntimeError:
         pass
 

@@ -874,6 +874,42 @@ async def stream_agent(
     if user_email:
         user_mcp_overrides = await build_user_mcp_overrides(user_email)
 
+    # Codex (ChatGPT subscription) selections route through the Codex account
+    # pool — same round-robin architecture as the Claude pool.
+    from agent.codex_runtime import selected_model_is_codex
+
+    if selected_model and selected_model_is_codex(selected_model):
+        try:
+            from agent.codex_runtime import run_codex_agent
+
+            async for event in run_codex_agent(
+                full_prompt=full_prompt,
+                selected_model=selected_model,
+                observer=observer,
+                include_steps=include_steps,
+                source=source,
+                user_email=user_email,
+            ):
+                yield event
+        except Exception as e:
+            logger.exception("Codex agent error")
+            if observer:
+                await observer.record_error(str(e))
+            if raise_on_opencode_error:
+                raise
+            yield f"Sorry, I encountered a Codex error: {e}"
+        finally:
+            for tmp_path in temp_files:
+                try:
+                    if os.path.isdir(tmp_path):
+                        shutil.rmtree(tmp_path)
+                    else:
+                        os.unlink(tmp_path)
+                    logger.info("[AGENT] Cleaned up temp: %s", tmp_path)
+                except OSError:
+                    pass
+        return
+
     # OpenCode is the default runtime for OSS installs. Claude family selections
     # stay on the Claude Agent SDK runtime when explicitly selected/configured.
     if selected_model and not selected_claude_model:

@@ -997,9 +997,37 @@ async def handle_agent_models(request: web.Request) -> web.Response:
 
     claude_models = [_claude_entry(mid) for mid in SUPPORTED_CLAUDE_MODEL_IDS]
 
+    def _codex_entry(model_id: str) -> dict:
+        return {
+            "id": f"codex/{model_id}",
+            "provider_id": "codex",
+            "model_id": model_id,
+            "label": f"Codex (subscription) · {model_id}",
+            "context_limit": None,
+            "supports_attachments": False,
+            "supports_reasoning": True,
+            "status": "active",
+            "cost": {},
+            "recommended": True,
+        }
+
+    # Codex (ChatGPT subscription) models — only surfaced when the Codex pool
+    # is enabled and at least one account is connected.
+    codex_models: list[dict] = []
+    try:
+        from agent.codex_pool import get_codex_pool
+        from agent.codex_runtime import supported_codex_model_ids
+
+        codex_status = get_codex_pool().status()
+        if codex_status.get("accounts"):
+            live_ids = [m["id"] for m in (codex_status.get("models") or []) if m.get("id")]
+            codex_models = [_codex_entry(mid) for mid in supported_codex_model_ids(live_ids)]
+    except RuntimeError:
+        pass
+
     try:
         catalog = await get_agent_models()
-        filtered_models = list(claude_models)
+        filtered_models = list(claude_models) + list(codex_models)
         for model in catalog.get("models", []):
             model_id = model.get("model_id") or ""
             provider_id = model.get("provider_id") or ""
@@ -1024,7 +1052,7 @@ async def handle_agent_models(request: web.Request) -> web.Response:
         logger.exception("Failed to load OpenCode model catalog")
         return web.json_response({
             "default_model": default_agent_model,
-            "models": _order_agent_models(_ensure_favorite_models(claude_models)),
+            "models": _order_agent_models(_ensure_favorite_models(claude_models + codex_models)),
             "warning": str(e),
         })
 
@@ -1051,6 +1079,11 @@ async def _refresh_skill_prompt_cache() -> None:
             await get_pool().reload_prompt()
         except RuntimeError:
             logger.info("Skipping prompt reload: client pool is not initialized")
+        try:
+            from agent.codex_pool import get_codex_pool
+            await get_codex_pool().reload_prompt()
+        except RuntimeError:
+            pass
     except Exception:
         logger.exception("Failed to refresh Loma skill prompt cache")
 
@@ -1483,6 +1516,11 @@ async def handle_pool_status(request):
         logger.debug("OpenCode model catalog unavailable while polling pool status", exc_info=True)
     status = pool.status()
     status["opencode"] = get_opencode_pool_status()
+    try:
+        from agent.codex_pool import get_codex_pool
+        status["codex"] = get_codex_pool().status()
+    except RuntimeError:
+        pass
     return web.json_response(status)
 
 

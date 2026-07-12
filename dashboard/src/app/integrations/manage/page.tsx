@@ -18,6 +18,12 @@ import {
   type ClaudeAuthStatus,
 } from "../../../lib/claude-auth-api";
 import {
+  fetchCodexAuthStatus,
+  disconnectCodex,
+  getCodexLoginTerminalToken,
+  type CodexAuthStatus,
+} from "../../../lib/codex-auth-api";
+import {
   fetchIntegrations,
   connectIntegration,
   disconnectIntegration,
@@ -152,6 +158,14 @@ function SlackLogo() {
 function ClaudeLogo() {
   return (
     <img src="/claude.png" alt="Claude" className="w-8 h-8 rounded" />
+  );
+}
+
+function CodexLogo() {
+  return (
+    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor" aria-label="Codex">
+      <path d="M22.28 9.82a5.99 5.99 0 0 0-.52-4.91 6.05 6.05 0 0 0-6.51-2.9A6.07 6.07 0 0 0 4.98 4.18a5.99 5.99 0 0 0-4 2.9 6.05 6.05 0 0 0 .74 7.1 5.99 5.99 0 0 0 .51 4.91 6.05 6.05 0 0 0 6.51 2.9A5.98 5.98 0 0 0 13.26 24a6.06 6.06 0 0 0 5.77-4.21 5.99 5.99 0 0 0 4-2.9 6.06 6.06 0 0 0-.75-7.07zM13.26 22.43a4.48 4.48 0 0 1-2.88-1.04l.14-.08 4.78-2.76a.78.78 0 0 0 .39-.68v-6.74l2.02 1.17a.07.07 0 0 1 .04.05v5.58a4.5 4.5 0 0 1-4.49 4.5zm-9.66-4.13a4.47 4.47 0 0 1-.54-3.01l.14.09 4.78 2.76a.78.78 0 0 0 .78 0l5.84-3.37v2.33a.08.08 0 0 1-.03.06l-4.83 2.79a4.5 4.5 0 0 1-6.14-1.65zM2.34 7.9a4.48 4.48 0 0 1 2.34-1.97v5.68a.78.78 0 0 0 .39.68l5.83 3.37-2.02 1.16a.08.08 0 0 1-.07.01l-4.83-2.79A4.5 4.5 0 0 1 2.34 7.9zm16.6 3.86-5.83-3.37 2.02-1.16a.08.08 0 0 1 .07-.01l4.83 2.79a4.49 4.49 0 0 1-.68 8.1v-5.68a.78.78 0 0 0-.41-.67zm2.01-3.02-.14-.09-4.78-2.76a.78.78 0 0 0-.78 0L9.41 9.26V6.94a.07.07 0 0 1 .03-.06l4.83-2.79a4.5 4.5 0 0 1 6.68 4.66zM8.31 12.86l-2.02-1.16a.08.08 0 0 1-.04-.06V6.07a4.5 4.5 0 0 1 7.38-3.45l-.14.08-4.78 2.76a.78.78 0 0 0-.39.68zm1.1-2.37 2.6-1.5 2.6 1.5v3l-2.6 1.5-2.6-1.5z" />
+    </svg>
   );
 }
 
@@ -325,15 +339,22 @@ export default function IntegrationsPage() {
   const [claudeAutoCommand, setClaudeAutoCommand] = useState<string | undefined>();
   const [disconnectingClaude, setDisconnectingClaude] = useState(false);
 
+  const [codexAuth, setCodexAuth] = useState<CodexAuthStatus | null>(null);
+  const [showCodexTerminal, setShowCodexTerminal] = useState(false);
+  const [codexAutoCommand, setCodexAutoCommand] = useState<string | undefined>();
+  const [disconnectingCodex, setDisconnectingCodex] = useState(false);
+
   const loadConnections = useCallback(async () => {
     try {
-      const [conns, claude, orgInteg] = await Promise.all([
+      const [conns, claude, codex, orgInteg] = await Promise.all([
         fetchOAuthConnections().catch(() => []),
         fetchClaudeAuthStatus().catch(() => null),
+        fetchCodexAuthStatus().catch(() => null),
         fetchIntegrations().catch(() => []),
       ]);
       setConnections(conns);
       if (claude) setClaudeAuth(claude);
+      if (codex) setCodexAuth(codex);
       setOrgIntegrations(orgInteg);
 
       const urls: Record<string, string> = {};
@@ -375,6 +396,22 @@ export default function IntegrationsPage() {
     }, 3000);
     return () => clearInterval(interval);
   }, [showClaudeTerminal]);
+
+  useEffect(() => {
+    if (!showCodexTerminal) return;
+    const interval = setInterval(async () => {
+      try {
+        const status = await fetchCodexAuthStatus();
+        if (status.connected) {
+          setCodexAuth(status);
+          setShowCodexTerminal(false);
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [showCodexTerminal]);
 
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
@@ -499,6 +536,32 @@ export default function IntegrationsPage() {
       setError(e instanceof Error ? e.message : "Failed to disconnect Claude");
     } finally {
       setDisconnectingClaude(false);
+    }
+  };
+
+  const handleConnectCodex = async () => {
+    setError(null);
+    try {
+      const { autoCommand } = await getCodexLoginTerminalToken();
+      setCodexAutoCommand(autoCommand);
+      setShowCodexTerminal(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start Codex login");
+    }
+  };
+
+  const handleDisconnectCodex = async () => {
+    if (!confirm("Disconnect your Codex account? Your ChatGPT subscription will leave the shared pool.")) return;
+    setDisconnectingCodex(true);
+    setError(null);
+    try {
+      await disconnectCodex();
+      setCodexAuth({ connected: false });
+      setShowCodexTerminal(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to disconnect Codex");
+    } finally {
+      setDisconnectingCodex(false);
     }
   };
 
@@ -644,6 +707,11 @@ export default function IntegrationsPage() {
 
   const handleClaudeTerminalDone = () => {
     setShowClaudeTerminal(false);
+    loadConnections();
+  };
+
+  const handleCodexTerminalDone = () => {
+    setShowCodexTerminal(false);
     loadConnections();
   };
 
@@ -1490,6 +1558,120 @@ export default function IntegrationsPage() {
                           <Badge
                             key={perm}
                             className="bg-amber-50 text-amber-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Codex (ChatGPT subscription) Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <CodexLogo />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-[13px] font-semibold text-foreground">
+                            Codex
+                          </h2>
+                          <StatusBadge status={codexAuth?.connected ? "connected" : "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Your ChatGPT subscription joins the shared round-robin pool
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {codexAuth?.connected ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnectCodex}
+                          disabled={disconnectingCodex}
+                        >
+                          {disconnectingCodex ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="bg-emerald-700 text-white hover:bg-emerald-800 whitespace-nowrap"
+                          onClick={handleConnectCodex}
+                          disabled={showCodexTerminal}
+                        >
+                          {showCodexTerminal ? "Logging in..." : "Login with ChatGPT"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {codexAuth?.connected && (
+                    <>
+                      <Separator className="my-5" />
+                      <div className="flex items-center gap-3 text-[13px]">
+                        {codexAuth.email && (
+                          <div>
+                            <span className="text-muted-foreground">Account: </span>
+                            <span className="text-foreground">{codexAuth.email}</span>
+                          </div>
+                        )}
+                        {codexAuth.plan && (
+                          <div>
+                            <span className="text-muted-foreground">Plan: </span>
+                            <span className="text-foreground">{codexAuth.plan}</span>
+                          </div>
+                        )}
+                        {codexAuth.pool_enabled === false ? (
+                          <Badge className="bg-amber-50 text-amber-600 border-transparent">
+                            Pool disabled on server
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
+                            In round-robin pool
+                          </Badge>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {showCodexTerminal && (
+                    <>
+                      <Separator className="my-5" />
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[13px] text-muted-foreground">
+                          Approve the device code at chatgpt.com, then finish in the terminal below:
+                        </p>
+                        <Button variant="link" size="xs" onClick={handleCodexTerminalDone}>
+                          Done
+                        </Button>
+                      </div>
+                      <WebTerminal
+                        autoCommand={codexAutoCommand}
+                        tokenEndpoint="/api/terminal/token"
+                      />
+                    </>
+                  )}
+
+                  {!codexAuth?.connected && !showCodexTerminal && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-[13px] text-muted-foreground">
+                        Connect your ChatGPT subscription (Plus, Pro, or Team) to make GPT-5.6 Codex
+                        models available in chat via the shared round-robin pool — no API billing.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Shared pool", "Round-robin usage", "Usage-window rotation"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-emerald-50 text-emerald-700 border-transparent"
                           >
                             {perm}
                           </Badge>

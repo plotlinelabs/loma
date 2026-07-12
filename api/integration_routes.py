@@ -406,6 +406,16 @@ async def _reload_pool():
     except Exception:
         logger.exception("[INTEGRATIONS] Failed to reload MCP pool")
 
+    try:
+        from agent.codex_pool import get_codex_pool
+
+        await get_codex_pool().reload_config(config)
+        logger.info("[INTEGRATIONS] Codex pool reloaded")
+    except RuntimeError:
+        pass  # Codex pool not enabled
+    except Exception:
+        logger.exception("[INTEGRATIONS] Failed to reload Codex pool")
+
 
 def setup_integration_routes(app: web.Application):
     """Register integration API routes."""

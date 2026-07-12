@@ -9,6 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
     && opencode --version \
     && npm install -g @anthropic-ai/claude-code \
     && claude --version \
+    # Codex CLI pinned: the app-server protocol is not stability-guaranteed,
+    # so version bumps must go through CI (see agent/codex_runtime.py)
+    && npm install -g @openai/codex@0.144.1 \
+    && codex --version \
     && pip install --no-cache-dir uv \
     && uv --version \
     && npm install -g \
