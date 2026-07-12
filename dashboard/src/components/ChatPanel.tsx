@@ -1388,7 +1388,7 @@ export default function ChatPanel({
                           {accountInfo.model ? `${accountInfo.model} via ` : ""}
                           {accountInfo.account_email || "unknown"}
                         </strong>
-                        &apos;s Claude subscription for this task
+                        &apos;s {accountInfo.runtime === "codex" ? "ChatGPT" : "Claude"} subscription for this task
                         {typeof accountInfo.pool_available === "number" && typeof accountInfo.pool_size === "number"
                           ? <> &middot; {accountInfo.pool_available}/{accountInfo.pool_size} available</>
                           : null}

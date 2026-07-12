@@ -65,6 +65,15 @@ CODEX_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("CODEX_CONNECT_TIMEOUT", "90"
 CODEX_TURN_TIMEOUT_SECONDS = int(os.environ.get("CODEX_TURN_TIMEOUT", "1800"))
 CODEX_EVENT_IDLE_TIMEOUT_SECONDS = int(os.environ.get("CODEX_EVENT_IDLE_TIMEOUT", "300"))
 
+# codex app-server embeds full command/tool output in single JSON lines
+# (a 100 KB command output arrives as one ~130 KB ``item/completed`` line),
+# so the read loop splits lines manually instead of using readline() with
+# asyncio's 64 KiB default limit. This is only a safety valve for truly
+# pathological lines.
+CODEX_MAX_LINE_BYTES = int(os.environ.get("CODEX_MAX_LINE_BYTES", str(64 * 1024 * 1024)))
+_READ_CHUNK_BYTES = 65536
+_STDERR_TAIL_BYTES = 16384
+
 
 def default_codex_model() -> str:
     return os.environ.get("CODEX_MODEL", DEFAULT_CODEX_MODEL)
@@ -243,6 +252,8 @@ class CodexWorker:
         self._pending: dict[int, asyncio.Future] = {}
         self._events: asyncio.Queue[dict] = asyncio.Queue()
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._stderr_tail = b""
         self.thread_id: str | None = None
         self.available_models: list[dict] = []
         self.last_rate_limits: dict | None = None
@@ -282,46 +293,77 @@ class CodexWorker:
     async def _respond(self, req_id, result: dict) -> None:
         await self._send({"jsonrpc": "2.0", "id": req_id, "result": result})
 
+    async def _handle_line(self, raw: bytes) -> None:
+        line = raw.decode("utf-8", errors="ignore").strip()
+        if not line:
+            return
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            logger.debug("Codex worker non-JSON line: %.200s", line)
+            return
+
+        if "id" in msg and ("result" in msg or "error" in msg):
+            future = self._pending.get(msg["id"])
+            if future is not None and not future.done():
+                if "error" in msg:
+                    future.set_exception(_classify_rpc_error(msg["error"]))
+                else:
+                    future.set_result(msg.get("result") or {})
+            return
+
+        method = msg.get("method") or ""
+        if "id" in msg:
+            # Server -> client request. approval_policy is "never", but
+            # auto-approve defensively if an approval request arrives.
+            # v2 decisions use accept/decline; legacy uses approved.
+            if method.endswith("requestApproval"):
+                await self._respond(msg["id"], {"decision": "accept"})
+            elif method in ("execCommandApproval", "applyPatchApproval"):
+                await self._respond(msg["id"], {"decision": "approved"})
+            else:
+                await self._respond(msg["id"], {})
+            return
+
+        await self._events.put(msg)
+
     async def _read_loop(self) -> None:
-        """Route stdout lines to pending request futures or the event queue."""
+        """Route stdout lines to pending request futures or the event queue.
+
+        Reads in chunks and splits lines manually: ``readline()`` enforces
+        asyncio's 64 KiB stream limit and raises on longer lines, but codex
+        routinely emits ``item/completed`` notifications far larger than that
+        (the full command/tool output is embedded in one JSON line). A crashed
+        read loop here is indistinguishable from a dead worker to run_turn(),
+        so it must only exit on real EOF.
+        """
         assert self._proc is not None and self._proc.stdout is not None
         try:
+            buf = b""
+            drop_until_newline = False
             while True:
-                raw = await self._proc.stdout.readline()
-                if not raw:
+                chunk = await self._proc.stdout.read(_READ_CHUNK_BYTES)
+                if not chunk:
+                    if not drop_until_newline and buf.strip():
+                        await self._handle_line(buf)
                     break
-                line = raw.decode("utf-8", errors="ignore").strip()
-                if not line:
-                    continue
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.debug("Codex worker non-JSON line: %.200s", line)
-                    continue
-
-                if "id" in msg and ("result" in msg or "error" in msg):
-                    future = self._pending.get(msg["id"])
-                    if future is not None and not future.done():
-                        if "error" in msg:
-                            future.set_exception(_classify_rpc_error(msg["error"]))
-                        else:
-                            future.set_result(msg.get("result") or {})
-                    continue
-
-                method = msg.get("method") or ""
-                if "id" in msg:
-                    # Server -> client request. approval_policy is "never", but
-                    # auto-approve defensively if an approval request arrives.
-                    # v2 decisions use accept/decline; legacy uses approved.
-                    if method.endswith("requestApproval"):
-                        await self._respond(msg["id"], {"decision": "accept"})
-                    elif method in ("execCommandApproval", "applyPatchApproval"):
-                        await self._respond(msg["id"], {"decision": "approved"})
-                    else:
-                        await self._respond(msg["id"], {})
-                    continue
-
-                await self._events.put(msg)
+                buf += chunk
+                while True:
+                    newline = buf.find(b"\n")
+                    if newline == -1:
+                        break
+                    line, buf = buf[:newline], buf[newline + 1:]
+                    if drop_until_newline:
+                        drop_until_newline = False
+                        continue
+                    await self._handle_line(line)
+                if len(buf) > CODEX_MAX_LINE_BYTES:
+                    logger.error(
+                        "Codex worker line exceeded %d bytes; dropping it (account=%s)",
+                        CODEX_MAX_LINE_BYTES, self.account.get("email"),
+                    )
+                    buf = b""
+                    drop_until_newline = True
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -329,6 +371,42 @@ class CodexWorker:
         finally:
             # Unblock any waiter
             await self._events.put({"method": "__closed"})
+
+    async def _stderr_loop(self) -> None:
+        """Drain stderr into a bounded tail buffer for crash diagnostics.
+
+        stderr used to go to DEVNULL, which made worker deaths undiagnosable
+        in production (the app-server's panic/error output was discarded).
+        """
+        assert self._proc is not None and self._proc.stderr is not None
+        try:
+            while True:
+                chunk = await self._proc.stderr.read(8192)
+                if not chunk:
+                    break
+                self._stderr_tail = (self._stderr_tail + chunk)[-_STDERR_TAIL_BYTES:]
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - diagnostics only
+            pass
+
+    def stderr_tail_text(self) -> str:
+        return self._stderr_tail.decode("utf-8", errors="ignore").strip()
+
+    def _closed_error(self) -> CodexError:
+        """Build an accurate error for the read loop ending mid-turn."""
+        returncode = self._proc.returncode if self._proc else None
+        if returncode is None:
+            message = (
+                "Codex worker stream reader failed mid-turn "
+                "(app-server process is still running — client-side read error)"
+            )
+        else:
+            message = f"Codex worker process exited mid-turn (exit code {returncode})"
+        tail = self.stderr_tail_text()
+        if tail:
+            message = f"{message}; stderr tail: {tail[-500:]}"
+        return _classify_rpc_error({"message": message})
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -349,9 +427,10 @@ class CodexWorker:
             env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         self._reader_task = asyncio.create_task(self._read_loop())
+        self._stderr_task = asyncio.create_task(self._stderr_loop())
 
         await self._request(
             "initialize",
@@ -392,6 +471,9 @@ class CodexWorker:
         if self._reader_task is not None:
             self._reader_task.cancel()
             self._reader_task = None
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            self._stderr_task = None
         if self._proc is not None and self._proc.returncode is None:
             self._proc.terminate()
             try:
@@ -432,7 +514,7 @@ class CodexWorker:
                 )
 
             if msg.get("method") == "__closed":
-                raise CodexError("Codex worker process exited mid-turn")
+                raise self._closed_error()
 
             for event in _normalize_v2_event(msg, self.thread_id):
                 yield event
