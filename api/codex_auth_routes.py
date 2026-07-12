@@ -2,12 +2,12 @@
 
 Mirrors api/claude_auth_routes.py: each user connects their own Codex
 subscription from the Integrations page; credentials land in an isolated
-``CODEX_HOME`` dir (``$CODEX_USERS_DIR/<email>/auth.json``) via a device-code
+``CODEX_HOME`` dir (``$CODEX_USERS_DIR/<email>/auth.json``) via a device-auth
 login run inside the dashboard web terminal. Connected accounts join the
 round-robin Codex pool (agent/codex_pool.py).
 
 The browser-redirect OAuth flow (localhost:1455) cannot work through the
-server-side PTY, so the auto-command uses the device-code flow: the CLI prints
+server-side PTY, so the auto-command uses the device-auth flow: the CLI prints
 a code the user approves at chatgpt.com from their own browser. The exact flag
 is configurable via CODEX_LOGIN_ARGS to track CLI changes without a deploy.
 """
@@ -35,8 +35,8 @@ def _get_codex_users_dir() -> Path:
 
 
 def _codex_login_args() -> str:
-    """Extra args for `codex login` (device-code flow for headless PTY)."""
-    return os.environ.get("CODEX_LOGIN_ARGS", "--device-code")
+    """Extra args for `codex login` (device-auth flow for headless PTY)."""
+    return os.environ.get("CODEX_LOGIN_ARGS", "--device-auth")
 
 
 # One-time tokens for codex-login terminal sessions: token -> {expiry, auto_command}
