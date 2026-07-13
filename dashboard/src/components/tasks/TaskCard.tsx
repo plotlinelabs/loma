@@ -1,27 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   RiPlayLine,
   RiCheckLine,
   RiMoreLine,
-  RiArrowGoBackLine,
-  RiDeleteBinLine,
-  RiLogoutBoxRLine,
 } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { AgentModel, BoardLane, Task, TaskTag } from "@/lib/api";
 import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
@@ -51,6 +39,7 @@ export function TaskCard({
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
   const isParked = isStaged && !isDraft;
+  const [menuOpen, setMenuOpen] = useState(false);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: task.conversation_id, data: { task } });
 
@@ -59,15 +48,16 @@ export function TaskCard({
 
   const assignedTags = tags.filter((tag) => (task.task_tag_ids || []).includes(tag.id));
   return (
-    <TaskCardMenu task={task} lanes={lanes} tags={tags} models={models}
-      onMoveToLane={onMoveToLane} onSetModel={onSetModel}
-      onSetTags={onSetTags} onCreateTag={onCreateTag}>
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       {...attributes}
       {...listeners}
       onClick={() => onOpen(task)}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenuOpen(true);
+      }}
       className={cn(
         "group rounded-md border bg-card px-3 py-2 cursor-pointer",
         "hover:bg-muted/50 touch-none select-none",
@@ -116,58 +106,17 @@ export function TaskCard({
               <RiCheckLine className="h-3.5 w-3.5" />
             </Button>
           )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          <TaskCardMenu task={task} lanes={lanes} tags={tags} models={models}
+            open={menuOpen} onOpenChange={setMenuOpen}
+            onMoveToLane={onMoveToLane} onReopen={onReopen}
+            onRemoveFromBoard={onRemoveFromBoard} onDeleteDraft={onDeleteDraft}
+            onSetModel={onSetModel} onSetTags={onSetTags} onCreateTag={onCreateTag}>
               <Button variant="ghost" size="icon" className="h-6 w-6">
                 <RiMoreLine className="h-3.5 w-3.5" />
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {(() => {
-                // Staged cards move between other lanes; needs-input and
-                // done cards park into any lane to be recontinued later.
-                const targetLanes = isStaged
-                  ? lanes.filter((lane) => lane.id !== task.task_lane)
-                  : task.column === "needs_input" || task.column === "done" ? lanes : [];
-                return targetLanes.length > 0 && (
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>Move to</DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      {targetLanes.map((lane) => (
-                        <DropdownMenuItem key={lane.id} onClick={() => onMoveToLane(task, lane.id)}>
-                          {lane.name}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                );
-              })()}
-              {task.column === "done" && (
-                <DropdownMenuItem onClick={() => onReopen(task)}>
-                  <RiArrowGoBackLine className="h-3.5 w-3.5" />
-                  Reopen
-                </DropdownMenuItem>
-              )}
-              {!isDraft && (
-                <DropdownMenuItem onClick={() => onRemoveFromBoard(task)}>
-                  <RiLogoutBoxRLine className="h-3.5 w-3.5" />
-                  Remove from board
-                </DropdownMenuItem>
-              )}
-              {isDraft && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onClick={() => onDeleteDraft(task)}>
-                    <RiDeleteBinLine className="h-3.5 w-3.5" />
-                    Delete
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          </TaskCardMenu>
         </div>
       </div>
     </div>
-    </TaskCardMenu>
   );
 }
