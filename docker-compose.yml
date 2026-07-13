@@ -17,6 +17,10 @@ services:
       # Persist connected Claude Code accounts (CLAUDE_USERS_DIR) across container
       # recreation — otherwise `claude login` creds are lost on every rebuild/redeploy.
       - loma-claude-users:/opt/claude-users
+      # Same persistence for connected Codex (ChatGPT subscription) accounts
+      # (CODEX_USERS_DIR) — otherwise `codex login` creds are lost on every
+      # rebuild/redeploy while Claude logins survive.
+      - loma-codex-users:/opt/codex-users
       - loma-workspace:/opt/loma-workspace
       - ${LOMA_SECRETS_DIR:-/home/ubuntu/secrets}:/home/ubuntu/secrets:ro
       # Host SSH key dir (key authorized on 98.83.133.237), mounted read-only at a
@@ -75,4 +79,5 @@ services:
 volumes:
   loma-skill-assets:
   loma-claude-users:
+  loma-codex-users:
   loma-workspace:
