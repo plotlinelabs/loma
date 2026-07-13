@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiNotification3Line, RiNotificationOffLine, RiSettings3Line } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSettings3Line } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TaskBoard } from "@/components/tasks/TaskBoard";
 import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
 import { QuickAddTask } from "@/components/tasks/QuickAddTask";
@@ -45,6 +46,7 @@ export default function TasksPage() {
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
   const [pushState, setPushState] = useState<PushState | null>(null);
   // Pause polling while a mutation is in flight to avoid clobbering optimistic state.
@@ -140,6 +142,24 @@ export default function TasksPage() {
       <div className="pwa-header-offset flex items-center justify-between">
         <h1 className="text-lg font-semibold">Tasks</h1>
         <div className="flex items-center gap-1">
+          {board && board.tags.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant={selectedTagIds.length ? "secondary" : "ghost"} size="sm">
+                  <RiFilter3Line className="h-4 w-4" /> Tags{selectedTagIds.length ? ` (${selectedTagIds.length})` : ""}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {board.tags.map((tag) => (
+                  <DropdownMenuCheckboxItem key={tag.id} checked={selectedTagIds.includes(tag.id)}
+                    onCheckedChange={(checked) => setSelectedTagIds((ids) => checked ? [...ids, tag.id] : ids.filter((id) => id !== tag.id))}
+                    onSelect={(e) => e.preventDefault()}>
+                    {tag.name}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Button size="sm" onClick={() => { setEditingTask(null); setNewTaskLane(undefined); setTaskDialogOpen(true); }}>
             <RiAddLine className="h-4 w-4" />
             New task
@@ -204,6 +224,7 @@ export default function TasksPage() {
             onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
             onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
             onError={setError}
+            selectedTagIds={selectedTagIds}
           />
         ) : (
           <>
@@ -214,6 +235,7 @@ export default function TasksPage() {
               onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
               onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
               onError={setError}
+              selectedTagIds={selectedTagIds}
             />
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task

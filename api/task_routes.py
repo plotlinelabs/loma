@@ -103,11 +103,16 @@ NEEDS_INPUT_STATUSES = ("completed", "error", "interrupted")
 DEFAULT_BOARD = {
     "prompt": "",
     "lanes": [{"id": "todo", "name": "Todo", "order": 0}],
+    "tags": [],
 }
 
 MAX_LANE_NAME_LEN = 40
 MAX_LANES = 10
 MAX_BOARD_PROMPT_LEN = 10000
+MAX_TAGS = 50
+MAX_TAGS_PER_TASK = 10
+MAX_TAG_NAME_LEN = 30
+TAG_COLORS = ("slate", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink")
 # Attachments staged with a draft (base64 in the doc until the task starts).
 # Mongo caps documents at 16MB — keep well under it.
 MAX_DRAFT_FILES = 8
@@ -144,7 +149,7 @@ def get_board_config(user_doc: dict | None) -> dict:
     if not lanes:
         lanes = [dict(lane) for lane in DEFAULT_BOARD["lanes"]]
     lanes = sorted(lanes, key=lambda lane: lane.get("order", 0))
-    return {"prompt": board.get("prompt", ""), "lanes": lanes}
+    return {"prompt": board.get("prompt", ""), "lanes": lanes, "tags": board.get("tags") or []}
 
 
 async def _get_board_config_for(db, user_email: str) -> dict:
@@ -208,6 +213,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "task_staged_at": _serialize(task.get("task_staged_at")),
         "task_started_at": _serialize(task.get("task_started_at")),
         "task_done_at": _serialize(task.get("task_done_at")),
+        "task_tag_ids": task.get("task_tag_ids") or [],
     }
 
 
@@ -217,6 +223,7 @@ _TASK_PROJECTION = {
     "total_turns": 1, "started_at": 1, "finished_at": 1,
     "task_created_at": 1, "task_staged_at": 1, "task_started_at": 1,
     "task_done_at": 1,
+    "task_tag_ids": 1,
 }
 
 
@@ -307,6 +314,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_staged_at": now,
         "task_started_at": now if start else None,
         "task_done_at": None,
+        "task_tag_ids": [],
     }
     await db.conversations.insert_one(doc)
 
@@ -358,6 +366,7 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
 
     return web.json_response({
         "lanes": board["lanes"],
+        "tags": board["tags"],
         "tasks": ordered,
         "counts": counts,
     })
@@ -385,7 +394,7 @@ async def handle_needs_input_count(request: web.Request) -> web.Response:
 async def handle_update_task(request: web.Request) -> web.Response:
     """PATCH /api/tasks/{conversation_id} — board moves, edits, add/remove.
 
-    Accepts any of: task_status, task_lane, task_rank, prompt, title.
+    Accepts any of: task_status, task_lane, task_rank, prompt, title, model, task_tag_ids.
     task_status: null removes the conversation from the board.
     """
     db = get_db()
@@ -507,9 +516,20 @@ async def handle_update_task(request: web.Request) -> web.Response:
         updates["prompt"] = prompt
 
     if "model" in body:
-        if current != "todo" or has_run:
-            return web.json_response({"error": "Only drafts can be edited"}, status=400)
+        if conversation.get("status") == "running":
+            return web.json_response({"error": "The model cannot be changed while a task is running"}, status=400)
         updates["model"] = (body["model"] or "").strip()
+
+    if "task_tag_ids" in body:
+        tag_ids = body["task_tag_ids"]
+        if not isinstance(tag_ids, list) or len(tag_ids) > MAX_TAGS_PER_TASK or len(tag_ids) != len(set(tag_ids)):
+            return web.json_response({"error": f"Use at most {MAX_TAGS_PER_TASK} unique tags"}, status=400)
+        owner = (conversation.get("metadata") or {}).get("user_name") or user_email
+        board = await _get_board_config_for(db, owner)
+        allowed = {tag["id"] for tag in board["tags"]}
+        if any(not isinstance(tag_id, str) or tag_id not in allowed for tag_id in tag_ids):
+            return web.json_response({"error": "Unknown tag"}, status=400)
+        updates["task_tag_ids"] = tag_ids
 
     if "title" in body:
         title = (body["title"] or "").strip() or None
@@ -595,7 +615,7 @@ async def handle_put_board_settings(request: web.Request) -> web.Response:
 
     await db.users.update_one(
         {"email": user_email},
-        {"$set": {"task_board": {"prompt": prompt, "lanes": lanes}}},
+        {"$set": {"task_board.prompt": prompt, "task_board.lanes": lanes}},
     )
 
     migrated = 0
@@ -613,12 +633,49 @@ async def handle_put_board_settings(request: web.Request) -> web.Response:
     return web.json_response({"prompt": prompt, "lanes": lanes, "migrated": migrated})
 
 
+async def handle_create_tag(request: web.Request) -> web.Response:
+    db = get_db()
+    user_email = get_user_email(request)
+    if db is None or not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name or len(name) > MAX_TAG_NAME_LEN:
+        return web.json_response({"error": f"Tag names must be 1-{MAX_TAG_NAME_LEN} characters"}, status=400)
+    board = await _get_board_config_for(db, user_email)
+    if len(board["tags"]) >= MAX_TAGS:
+        return web.json_response({"error": f"At most {MAX_TAGS} tags allowed"}, status=400)
+    if any(tag["name"].casefold() == name.casefold() for tag in board["tags"]):
+        return web.json_response({"error": "A tag with that name already exists"}, status=409)
+    tag = {"id": str(uuid.uuid4())[:8], "name": name,
+           "color": TAG_COLORS[len(board["tags"]) % len(TAG_COLORS)],
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.users.update_one({"email": user_email}, {"$push": {"task_board.tags": tag}})
+    return web.json_response({"tag": tag}, status=201)
+
+
+async def handle_delete_tag(request: web.Request) -> web.Response:
+    db = get_db()
+    user_email = get_user_email(request)
+    if db is None or not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    tag_id = request.match_info["tag_id"]
+    board = await _get_board_config_for(db, user_email)
+    if tag_id not in {tag["id"] for tag in board["tags"]}:
+        return web.json_response({"error": "Not found"}, status=404)
+    await db.users.update_one({"email": user_email}, {"$pull": {"task_board.tags": {"id": tag_id}}})
+    await db.conversations.update_many({"metadata.user_name": user_email}, {"$pull": {"task_tag_ids": tag_id}})
+    return web.json_response({"deleted": True})
+
+
 def setup_task_routes(app: web.Application):
     """Register tasks-board routes on the aiohttp app."""
     # Static paths must be registered before the {conversation_id} route.
     app.router.add_get("/api/tasks/board-settings", handle_get_board_settings)
     app.router.add_put("/api/tasks/board-settings", handle_put_board_settings)
     app.router.add_get("/api/tasks/needs-input-count", handle_needs_input_count)
+    app.router.add_post("/api/tasks/tags", handle_create_tag)
+    app.router.add_delete("/api/tasks/tags/{tag_id}", handle_delete_tag)
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_get("/api/tasks", handle_list_tasks)
     app.router.add_patch("/api/tasks/{conversation_id}", handle_update_task)

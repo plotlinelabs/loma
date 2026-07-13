@@ -10,6 +10,7 @@ import {
   RiDeleteBinLine,
   RiLogoutBoxRLine,
 } from "@remixicon/react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,12 +24,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ClientTimestamp from "@/components/ClientTimestamp";
-import type { BoardLane, Task } from "@/lib/api";
+import type { AgentModel, BoardLane, Task, TaskTag } from "@/lib/api";
 import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
+import { TaskCardMenu } from "./TaskCardMenu";
 
 interface TaskCardProps {
   task: Task;
   lanes: BoardLane[];
+  tags: TaskTag[];
+  models: AgentModel[];
   onOpen: (task: Task) => void;
   onStart: (task: Task) => void;
   onMarkDone: (task: Task) => void;
@@ -36,12 +40,16 @@ interface TaskCardProps {
   onMoveToLane: (task: Task, laneId: string) => void;
   onRemoveFromBoard: (task: Task) => void;
   onDeleteDraft: (task: Task) => void;
+  onSetModel: (task: Task, model: string) => void;
+  onSetTags: (task: Task, tagIds: string[]) => void;
+  onCreateTag: (task: Task, name: string) => void;
 }
 
 export function TaskCard({
-  task, lanes, onOpen, onStart, onMarkDone, onReopen,
-  onMoveToLane, onRemoveFromBoard, onDeleteDraft,
+  task, lanes, tags, models, onOpen, onStart, onMarkDone, onReopen,
+  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetModel, onSetTags, onCreateTag,
 }: TaskCardProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
   const isParked = isStaged && !isDraft;
@@ -51,13 +59,18 @@ export function TaskCard({
   const dot = taskDot(task);
   const timestamp = taskTimestamp(task);
 
+  const assignedTags = tags.filter((tag) => (task.task_tag_ids || []).includes(tag.id));
   return (
+    <TaskCardMenu task={task} lanes={lanes} tags={tags} models={models}
+      open={settingsOpen} onOpenChange={setSettingsOpen} onMoveToLane={onMoveToLane}
+      onSetModel={onSetModel} onSetTags={onSetTags} onCreateTag={onCreateTag}>
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       {...attributes}
       {...listeners}
       onClick={() => onOpen(task)}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSettingsOpen(true); }}
       className={cn(
         "group rounded-md border bg-card px-3 py-2 cursor-pointer",
         "hover:bg-muted/50 touch-none select-none",
@@ -74,6 +87,12 @@ export function TaskCard({
             <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
           </div>
+          {assignedTags.length > 0 && (
+            <div className="mt-1 flex gap-1 overflow-hidden">
+              {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag.name}</span>)}
+              {assignedTags.length > 2 && <span className="text-[10px] text-muted-foreground">+{assignedTags.length - 2}</span>}
+            </div>
+          )}
         </div>
         <div
           // Hover-revealed on pointer devices; always visible on touch
@@ -152,5 +171,6 @@ export function TaskCard({
         </div>
       </div>
     </div>
+    </TaskCardMenu>
   );
 }
