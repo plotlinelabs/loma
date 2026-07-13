@@ -53,15 +53,15 @@ type NavItem = {
 
 const navigation: NavItem[] = [
   {
-    name: "Home",
-    href: "/",
-    icon: <RiChat1Line size={16} />,
-  },
-  {
     name: "Tasks",
     href: "/tasks",
     badgeKey: "tasks",
     icon: <RiCheckboxLine size={16} />,
+  },
+  {
+    name: "Chat",
+    href: "/chat",
+    icon: <RiChat1Line size={16} />,
   },
   {
     name: "Activity",
@@ -409,7 +409,7 @@ export default function Sidebar({
     <>
       {/* Logo + collapse toggle + close button */}
       <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-3 pt-3 pb-2")}>
-        <Link href="/" prefetch onClick={onClose} className={cn("flex items-center gap-2", collapsed && "justify-center")}>
+        <Link href="/tasks" prefetch onClick={onClose} className={cn("flex items-center gap-2", collapsed && "justify-center")}>
           <CrosscutIcon size={collapsed ? 22 : 20} />
           {!collapsed && (
             <span className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">

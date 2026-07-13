@@ -1,13 +1,21 @@
 "use client";
 
-import ChatWithArtifacts from "../components/ChatWithArtifacts";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { RiLoader4Line } from "@remixicon/react";
+import { basePath } from "../lib/api";
 
-export default function Home() {
+/** The tasks board is the app's home now — send the root there. The chat
+ * experience lives at /chat (the sidebar "Chat" item). router.replace in the
+ * app router doesn't prepend basePath, so we add it explicitly. */
+export default function RootRedirect() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(`${basePath}/tasks`);
+  }, [router]);
   return (
-    // Phones: fill the layout's flex slot — the bottom nav takes real height,
-    // so a 100dvh-based height overflows. Desktop keeps the original sizing.
-    <div className="h-[calc(100dvh-3rem)] max-md:h-auto max-md:flex-1 max-md:min-h-0 flex flex-col -mx-6 lg:-mx-8 -my-6 max-md:-my-3">
-      <ChatWithArtifacts />
+    <div className="flex flex-1 items-center justify-center">
+      <RiLoader4Line className="h-5 w-5 animate-spin text-muted-foreground" />
     </div>
   );
 }
