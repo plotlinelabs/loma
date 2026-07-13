@@ -15,6 +15,7 @@ import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/a
 import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
+import { TaskDeadlineBadge } from "./TaskDeadline";
 
 interface TaskCardProps {
   task: Task;
@@ -30,13 +31,14 @@ interface TaskCardProps {
   onDeleteDraft: (task: Task) => void;
   onSetModel: (task: Task, model: string) => void;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
+  onSetDeadline: (task: Task, deadline: string | null) => void;
   onSetTags: (task: Task, tagIds: string[]) => void;
   onCreateTag: (task: Task, name: string) => void;
 }
 
 export function TaskCard({
   task, lanes, tags, models, onOpen, onStart, onMarkDone, onReopen,
-  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetModel, onSetPriority, onSetTags, onCreateTag,
+  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag,
 }: TaskCardProps) {
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
@@ -78,6 +80,7 @@ export function TaskCard({
           </div>
           <div className="mt-1 flex items-center gap-1 overflow-hidden">
             <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
+            <TaskDeadlineBadge task={task} />
             {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag.name}</span>)}
             {assignedTags.length > 2 && <span className="text-[10px] text-muted-foreground">+{assignedTags.length - 2}</span>}
           </div>
@@ -111,7 +114,7 @@ export function TaskCard({
             open={menuOpen} onOpenChange={setMenuOpen}
             onMoveToLane={onMoveToLane} onReopen={onReopen}
             onRemoveFromBoard={onRemoveFromBoard} onDeleteDraft={onDeleteDraft}
-            onSetModel={onSetModel} onSetPriority={onSetPriority} onSetTags={onSetTags} onCreateTag={onCreateTag}>
+            onSetModel={onSetModel} onSetPriority={onSetPriority} onSetDeadline={onSetDeadline} onSetTags={onSetTags} onCreateTag={onCreateTag}>
               <Button variant="ghost" size="icon" className="h-6 w-6">
                 <RiMoreLine className="h-3.5 w-3.5" />
               </Button>

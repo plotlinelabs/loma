@@ -22,7 +22,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from aiohttp import web
 
@@ -113,6 +113,8 @@ MAX_BOARD_PROMPT_LEN = 10000
 MAX_TAGS = 50
 MAX_TAGS_PER_TASK = 10
 TASK_PRIORITIES = ("low", "medium", "high", "urgent")
+# Deadlines are date-only, stored as "YYYY-MM-DD" strings (timezone-agnostic).
+DEADLINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MAX_TAG_NAME_LEN = 30
 TAG_COLORS = ("slate", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink")
 # Attachments staged with a draft (base64 in the doc until the task starts).
@@ -217,6 +219,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "task_done_at": _serialize(task.get("task_done_at")),
         "task_tag_ids": task.get("task_tag_ids") or [],
         "task_priority": task.get("task_priority") or None,
+        "task_deadline": task.get("task_deadline") or None,
     }
 
 
@@ -228,6 +231,7 @@ _TASK_PROJECTION = {
     "task_done_at": 1,
     "task_tag_ids": 1,
     "task_priority": 1,
+    "task_deadline": 1,
 }
 
 
@@ -320,6 +324,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_done_at": None,
         "task_tag_ids": [],
         "task_priority": None,
+        "task_deadline": None,
     }
     await db.conversations.insert_one(doc)
 
@@ -411,7 +416,7 @@ async def handle_update_task(request: web.Request) -> web.Response:
     """PATCH /api/tasks/{conversation_id} — board moves, edits, add/remove.
 
     Accepts any of: task_status, task_lane, task_rank, prompt, title, model,
-    task_tag_ids, task_priority.
+    task_tag_ids, task_priority, task_deadline.
     task_status: null removes the conversation from the board.
     """
     db = get_db()
@@ -555,6 +560,21 @@ async def handle_update_task(request: web.Request) -> web.Response:
                 {"error": "task_priority must be low, medium, high, urgent or null"},
                 status=400)
         updates["task_priority"] = priority
+
+    if "task_deadline" in body:
+        deadline = body["task_deadline"]
+        if deadline is not None:
+            if not isinstance(deadline, str) or not DEADLINE_RE.match(deadline):
+                return web.json_response(
+                    {"error": "task_deadline must be a YYYY-MM-DD date or null"},
+                    status=400)
+            try:
+                date.fromisoformat(deadline)
+            except ValueError:
+                return web.json_response(
+                    {"error": "task_deadline must be a valid calendar date"},
+                    status=400)
+        updates["task_deadline"] = deadline
 
     if "title" in body:
         title = (body["title"] or "").strip() or None

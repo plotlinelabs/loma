@@ -994,6 +994,8 @@ export interface Task {
   task_done_at: string | null;
   task_tag_ids: string[];
   task_priority: TaskPriority | null;
+  /** Optional deadline as a date-only "YYYY-MM-DD" string. */
+  task_deadline: string | null;
 }
 
 export interface TasksBoardResponse {
@@ -1055,6 +1057,7 @@ export async function updateTask(
     model?: string;
     task_tag_ids?: string[];
     task_priority?: TaskPriority | null;
+    task_deadline?: string | null;
   },
 ): Promise<{ task: Task | null }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}`, {
