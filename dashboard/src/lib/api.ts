@@ -1005,8 +1005,9 @@ export interface BoardSettings {
   lanes: BoardLane[];
 }
 
-export async function fetchTasksBoard(): Promise<TasksBoardResponse> {
-  const res = await fetch(`${API_BASE}/api/tasks`);
+export async function fetchTasksBoard(query = ""): Promise<TasksBoardResponse> {
+  const params = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+  const res = await fetch(`${API_BASE}/api/tasks${params}`);
   if (!res.ok) throw new Error(`Failed to fetch tasks: ${res.status}`);
   return res.json();
 }

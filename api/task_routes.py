@@ -20,6 +20,7 @@ under `task_board`; tasks reference lanes by id so renames are config-only.
 import asyncio
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -343,12 +344,23 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
     board = await _get_board_config_for(db, user_email)
     lane_ids = [lane["id"] for lane in board["lanes"]]
 
+    query = {
+        "metadata.user_name": user_email,
+        "task_status": {"$in": ["todo", "active", "done"]},
+        "deleted": {"$ne": True},
+    }
+    search = request.query.get("q", "").strip()
+    if search:
+        pattern = re.compile(re.escape(search), re.IGNORECASE)
+        query["$or"] = [
+            {"title": pattern},
+            {"prompt": pattern},
+            {"messages.content": pattern},
+            {"final_response": pattern},
+        ]
+
     tasks = await db.conversations.find(
-        {
-            "metadata.user_name": user_email,
-            "task_status": {"$in": ["todo", "active", "done"]},
-            "deleted": {"$ne": True},
-        },
+        query,
         _TASK_PROJECTION,
     ).to_list(500)
 

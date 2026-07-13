@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSettings3Line } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -21,6 +21,7 @@ import {
   type TasksBoardResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -47,6 +48,8 @@ export default function TasksPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
   const [pushState, setPushState] = useState<PushState | null>(null);
   // Pause polling while a mutation is in flight to avoid clobbering optimistic state.
@@ -70,18 +73,23 @@ export default function TasksPage() {
   };
 
   const hasBoardRef = useRef(false);
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedSearchQuery(searchQuery), 250);
+    return () => clearTimeout(timeout);
+  }, [searchQuery]);
+
   const refresh = useCallback(async () => {
     // Pause polling when the tab is hidden — but always allow the initial
     // load (a background/occluded tab would otherwise show skeletons forever).
     if (busyRef.current || (document.hidden && hasBoardRef.current)) return;
     try {
-      const data = await fetchTasksBoard();
+      const data = await fetchTasksBoard(debouncedSearchQuery);
       hasBoardRef.current = true;
       setBoard(data);
     } catch {
       // Transient poll failures are fine — keep showing the last board.
     }
-  }, []);
+  }, [debouncedSearchQuery]);
 
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
@@ -125,7 +133,7 @@ export default function TasksPage() {
         router.push(`${basePath}/chat?continue=${conversationId}&start=1`);
         return;
       }
-      const data = await fetchTasksBoard();
+      const data = await fetchTasksBoard(debouncedSearchQuery);
       setBoard(data);
     } finally {
       busyRef.current = false;
@@ -212,6 +220,30 @@ export default function TasksPage() {
       </div>
 
       <InstallHint />
+
+      <div className="relative w-full sm:max-w-sm">
+        <RiSearchLine className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          type="text"
+          aria-label="Search tasks"
+          placeholder="Search task titles and conversations..."
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          className="h-9 pl-9 pr-9"
+        />
+        {searchQuery && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Clear task search"
+            className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground"
+            onClick={() => setSearchQuery("")}
+          >
+            <RiCloseLine className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
