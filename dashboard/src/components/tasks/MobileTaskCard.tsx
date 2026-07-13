@@ -21,8 +21,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ClientTimestamp from "@/components/ClientTimestamp";
-import type { BoardLane, Task } from "@/lib/api";
-import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
+import type { BoardLane, Task, TaskPriority } from "@/lib/api";
+import { isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
+import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 
 interface MobileTaskCardProps {
   task: Task;
@@ -34,13 +35,14 @@ interface MobileTaskCardProps {
   onMoveToLane: (task: Task, laneId: string) => void;
   onRemoveFromBoard: (task: Task) => void;
   onDeleteDraft: (task: Task) => void;
+  onSetPriority: (task: Task, priority: TaskPriority | null) => void;
 }
 
 /** Touch-first card for the mobile inbox: no drag, actions always visible,
  * larger tap targets. Menus replace drag for moves. */
 export function MobileTaskCard({
   task, lanes, onOpen, onStart, onMarkDone, onReopen,
-  onMoveToLane, onRemoveFromBoard, onDeleteDraft,
+  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetPriority,
 }: MobileTaskCardProps) {
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
@@ -62,12 +64,15 @@ export function MobileTaskCard({
       <div className="flex items-start gap-2">
         {dot && <span className={cn("mt-2 h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1 py-0.5">
-          <div className="truncate text-[13px]">
+          <div className="line-clamp-2 break-words text-[13px]">
             {task.title || task.prompt}
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
             <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
+          </div>
+          <div className="mt-1 flex items-center gap-1 overflow-hidden">
+            <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
           </div>
         </div>
         <div
@@ -100,6 +105,15 @@ export function MobileTaskCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <span className="flex-1">Priority</span>
+                  <span className="text-xs text-muted-foreground">{priorityDisplay(task.task_priority)?.label ?? "None"}</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-40">
+                  <PriorityMenuItems task={task} onSetPriority={onSetPriority} />
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
               {targetLanes.length > 0 && (
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>Move to</DropdownMenuSubTrigger>

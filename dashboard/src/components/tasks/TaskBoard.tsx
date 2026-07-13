@@ -44,7 +44,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
   const {
     laneIds, columns, tasksByColumn,
     startTask, markDone, reopen, moveToLane, reorderInColumn,
-    removeFromBoard, deleteDraft, openTask, setTaskModel, setTaskTags, createAndAssignTag,
+    removeFromBoard, deleteDraft, openTask, setTaskModel, setTaskPriority, setTaskTags, createAndAssignTag,
   } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, selectedTagIds });
 
   const resolveColumn = (overId: string): string | null => {
@@ -138,6 +138,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 onRemoveFromBoard={removeFromBoard}
                 onDeleteDraft={deleteDraft}
                 onSetModel={setTaskModel}
+                onSetPriority={setTaskPriority}
                 onSetTags={setTaskTags}
                 onCreateTag={createAndAssignTag}
               />
@@ -148,7 +149,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       <DragOverlay>
         {activeTask && (
           <div className="rounded-md border bg-card px-3 py-2 text-[13px] shadow-md">
-            {activeTask.title || activeTask.prompt}
+            <div className="line-clamp-2 break-words">{activeTask.title || activeTask.prompt}</div>
           </div>
         )}
       </DragOverlay>

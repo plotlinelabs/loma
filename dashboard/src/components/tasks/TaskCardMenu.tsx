@@ -13,8 +13,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { AgentModel, BoardLane, Task, TaskTag } from "@/lib/api";
-import { isDraft as isDraftTask, isStaged as isStagedTask } from "./taskDisplay";
+import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
+import { isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay } from "./taskDisplay";
+import { PriorityMenuItems } from "./TaskPriority";
 
 export interface TaskCardMenuProps {
   task: Task; lanes: BoardLane[]; tags: TaskTag[]; models: AgentModel[];
@@ -25,6 +26,7 @@ export interface TaskCardMenuProps {
   onRemoveFromBoard: (task: Task) => void;
   onDeleteDraft: (task: Task) => void;
   onSetModel: (task: Task, model: string) => void;
+  onSetPriority: (task: Task, priority: TaskPriority | null) => void;
   onSetTags: (task: Task, tagIds: string[]) => void;
   onCreateTag: (task: Task, name: string) => void;
   children: React.ReactNode;
@@ -33,7 +35,7 @@ export interface TaskCardMenuProps {
 /** One task actions menu shared by the overflow button and card right-click. */
 export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft,
-  onSetModel, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
+  onSetModel, onSetPriority, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
   const isDraft = isDraftTask(task);
   const isStaged = isStagedTask(task);
@@ -73,6 +75,15 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
                 <span className="flex-1 truncate">{model.label}</span>{task.model === model.id && <RiCheckLine />}
               </DropdownMenuItem>
             ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <span className="flex-1">Priority</span>
+            <span className="text-xs text-muted-foreground">{priorityDisplay(task.task_priority)?.label ?? "None"}</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-40">
+            <PriorityMenuItems task={task} onSetPriority={onSetPriority} />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSub>
