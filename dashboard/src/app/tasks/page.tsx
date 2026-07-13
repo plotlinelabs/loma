@@ -49,7 +49,6 @@ export default function TasksPage() {
   const [addChatOpen, setAddChatOpen] = useState(false);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
   const [pushState, setPushState] = useState<PushState | null>(null);
   // Pause polling while a mutation is in flight to avoid clobbering optimistic state.
@@ -73,23 +72,18 @@ export default function TasksPage() {
   };
 
   const hasBoardRef = useRef(false);
-  useEffect(() => {
-    const timeout = setTimeout(() => setDebouncedSearchQuery(searchQuery), 250);
-    return () => clearTimeout(timeout);
-  }, [searchQuery]);
-
   const refresh = useCallback(async () => {
     // Pause polling when the tab is hidden — but always allow the initial
     // load (a background/occluded tab would otherwise show skeletons forever).
     if (busyRef.current || (document.hidden && hasBoardRef.current)) return;
     try {
-      const data = await fetchTasksBoard(debouncedSearchQuery);
+      const data = await fetchTasksBoard(searchQuery);
       hasBoardRef.current = true;
       setBoard(data);
     } catch {
       // Transient poll failures are fine — keep showing the last board.
     }
-  }, [debouncedSearchQuery]);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
@@ -133,7 +127,7 @@ export default function TasksPage() {
         router.push(`${basePath}/chat?continue=${conversationId}&start=1`);
         return;
       }
-      const data = await fetchTasksBoard(debouncedSearchQuery);
+      const data = await fetchTasksBoard(searchQuery);
       setBoard(data);
     } finally {
       busyRef.current = false;
