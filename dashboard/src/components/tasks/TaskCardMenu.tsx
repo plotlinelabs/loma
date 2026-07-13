@@ -5,14 +5,13 @@ import { RiCheckLine, RiMoreLine, RiPriceTag3Line } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub,
-  DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub,
+  ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import type { AgentModel, BoardLane, Task, TaskTag } from "@/lib/api";
 
 export interface TaskCardMenuProps {
   task: Task; lanes: BoardLane[]; tags: TaskTag[]; models: AgentModel[];
-  open?: boolean; onOpenChange?: (open: boolean) => void;
   onMoveToLane: (task: Task, laneId: string) => void;
   onSetModel: (task: Task, model: string) => void;
   onSetTags: (task: Task, tagIds: string[]) => void;
@@ -20,7 +19,7 @@ export interface TaskCardMenuProps {
   children: React.ReactNode;
 }
 
-export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange, onMoveToLane,
+export function TaskCardMenu({ task, lanes, tags, models, onMoveToLane,
   onSetModel, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
   const currentTags = task.task_tag_ids || [];
@@ -30,49 +29,49 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange, on
     currentTags.includes(id) ? currentTags.filter((tagId) => tagId !== id) : [...currentTags, id]);
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Lane</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56">
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Lane</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
             {lanes.map((lane) => (
-              <DropdownMenuItem key={lane.id} onClick={() => onMoveToLane(task, lane.id)}>
+              <ContextMenuItem key={lane.id} onClick={() => onMoveToLane(task, lane.id)}>
                 <span className="flex-1">{lane.name}</span>{task.column === lane.id && <RiCheckLine />}
-              </DropdownMenuItem>
+              </ContextMenuItem>
             ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger disabled={task.status === "running"} title={task.status === "running" ? "Model cannot change while running" : undefined}>Model</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="max-h-72 w-64 overflow-y-auto">
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger disabled={task.status === "running"} title={task.status === "running" ? "Model cannot change while running" : undefined}>Model</ContextMenuSubTrigger>
+          <ContextMenuSubContent className="max-h-72 w-64 overflow-y-auto">
             {models.map((model) => (
-              <DropdownMenuItem key={model.id} onClick={() => onSetModel(task, model.id)}>
+              <ContextMenuItem key={model.id} onClick={() => onSetModel(task, model.id)}>
                 <span className="flex-1 truncate">{model.label}</span>{task.model === model.id && <RiCheckLine />}
-              </DropdownMenuItem>
+              </ContextMenuItem>
             ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger><RiPriceTag3Line /> Tags</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-60" onKeyDown={(e) => e.stopPropagation()}>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger><RiPriceTag3Line /> Tags</ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-60" onKeyDown={(e) => e.stopPropagation()}>
             <div className="p-1" onClick={(e) => e.stopPropagation()}>
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search or create tag" className="h-8" />
             </div>
             {matching.map((tag) => (
-              <DropdownMenuItem key={tag.id} onSelect={(e) => { e.preventDefault(); toggleTag(tag.id); }}>
+              <ContextMenuItem key={tag.id} onSelect={(e) => { e.preventDefault(); toggleTag(tag.id); }}>
                 <span className="flex-1">{tag.name}</span>{currentTags.includes(tag.id) && <RiCheckLine />}
-              </DropdownMenuItem>
+              </ContextMenuItem>
             ))}
             {canCreate && (
-              <DropdownMenuItem onClick={() => { onCreateTag(task, query.trim()); setQuery(""); }}>
+              <ContextMenuItem onClick={() => { onCreateTag(task, query.trim()); setQuery(""); }}>
                 Create “{query.trim()}”
-              </DropdownMenuItem>
+              </ContextMenuItem>
             )}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

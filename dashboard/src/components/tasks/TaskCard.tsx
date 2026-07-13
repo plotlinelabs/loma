@@ -10,7 +10,6 @@ import {
   RiDeleteBinLine,
   RiLogoutBoxRLine,
 } from "@remixicon/react";
-import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,7 +48,6 @@ export function TaskCard({
   task, lanes, tags, models, onOpen, onStart, onMarkDone, onReopen,
   onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetModel, onSetTags, onCreateTag,
 }: TaskCardProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
   const isParked = isStaged && !isDraft;
@@ -62,7 +60,7 @@ export function TaskCard({
   const assignedTags = tags.filter((tag) => (task.task_tag_ids || []).includes(tag.id));
   return (
     <TaskCardMenu task={task} lanes={lanes} tags={tags} models={models}
-      open={settingsOpen} onOpenChange={setSettingsOpen} onMoveToLane={onMoveToLane}
+      onMoveToLane={onMoveToLane}
       onSetModel={onSetModel} onSetTags={onSetTags} onCreateTag={onCreateTag}>
     <div
       ref={setNodeRef}
@@ -70,7 +68,6 @@ export function TaskCard({
       {...attributes}
       {...listeners}
       onClick={() => onOpen(task)}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSettingsOpen(true); }}
       className={cn(
         "group rounded-md border bg-card px-3 py-2 cursor-pointer",
         "hover:bg-muted/50 touch-none select-none",
