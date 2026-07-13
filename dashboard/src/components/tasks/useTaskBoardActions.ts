@@ -156,6 +156,12 @@ export function useTaskBoardActions({
       () => updateTask(task.conversation_id, { task_priority }),
     );
 
+  const setTaskDeadline = (task: Task, task_deadline: string | null) =>
+    mutate(
+      (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_deadline } : t),
+      () => updateTask(task.conversation_id, { task_deadline }),
+    );
+
   const setTaskTags = (task: Task, task_tag_ids: string[]) =>
     mutate(
       (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_tag_ids } : t),
@@ -211,6 +217,7 @@ export function useTaskBoardActions({
     deleteDraft,
     setTaskModel,
     setTaskPriority,
+    setTaskDeadline,
     setTaskTags,
     createAndAssignTag,
     openTask,

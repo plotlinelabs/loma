@@ -22,8 +22,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { BoardLane, Task, TaskPriority } from "@/lib/api";
-import { isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
+import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
+import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
 
 interface MobileTaskCardProps {
   task: Task;
@@ -36,13 +37,14 @@ interface MobileTaskCardProps {
   onRemoveFromBoard: (task: Task) => void;
   onDeleteDraft: (task: Task) => void;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
+  onSetDeadline: (task: Task, deadline: string | null) => void;
 }
 
 /** Touch-first card for the mobile inbox: no drag, actions always visible,
  * larger tap targets. Menus replace drag for moves. */
 export function MobileTaskCard({
   task, lanes, onOpen, onStart, onMarkDone, onReopen,
-  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetPriority,
+  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetPriority, onSetDeadline,
 }: MobileTaskCardProps) {
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
@@ -73,6 +75,7 @@ export function MobileTaskCard({
           </div>
           <div className="mt-1 flex items-center gap-1 overflow-hidden">
             <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
+            <TaskDeadlineBadge task={task} />
           </div>
         </div>
         <div
@@ -112,6 +115,15 @@ export function MobileTaskCard({
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="w-40">
                   <PriorityMenuItems task={task} onSetPriority={onSetPriority} />
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <span className="flex-1">Deadline</span>
+                  <span className="text-xs text-muted-foreground">{deadlineDisplay(task.task_deadline)?.dateLabel ?? "None"}</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DeadlineMenuItems task={task} onSetDeadline={onSetDeadline} />
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
               {targetLanes.length > 0 && (

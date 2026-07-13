@@ -26,7 +26,7 @@ export function MobileTaskBoard({
   const {
     laneIds, tasksByColumn,
     startTask, markDone, reopen, moveToLane,
-    removeFromBoard, deleteDraft, openTask, setTaskPriority,
+    removeFromBoard, deleteDraft, openTask, setTaskPriority, setTaskDeadline,
   } = useTaskBoardActions({
     board, onBoardChange, onRefresh, onEditDraft, onError,
     openActiveInNewTab: false, selectedTagIds, // window.open is hostile in the standalone PWA
@@ -119,6 +119,7 @@ export function MobileTaskBoard({
             onRemoveFromBoard={removeFromBoard}
             onDeleteDraft={deleteDraft}
             onSetPriority={setTaskPriority}
+            onSetDeadline={setTaskDeadline}
           />
         ))}
         {tasks.length === 0 && (

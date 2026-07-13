@@ -14,8 +14,9 @@ import {
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
-import { isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay } from "./taskDisplay";
+import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay } from "./taskDisplay";
 import { PriorityMenuItems } from "./TaskPriority";
+import { DeadlineMenuItems } from "./TaskDeadline";
 
 export interface TaskCardMenuProps {
   task: Task; lanes: BoardLane[]; tags: TaskTag[]; models: AgentModel[];
@@ -27,6 +28,7 @@ export interface TaskCardMenuProps {
   onDeleteDraft: (task: Task) => void;
   onSetModel: (task: Task, model: string) => void;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
+  onSetDeadline: (task: Task, deadline: string | null) => void;
   onSetTags: (task: Task, tagIds: string[]) => void;
   onCreateTag: (task: Task, name: string) => void;
   children: React.ReactNode;
@@ -35,7 +37,7 @@ export interface TaskCardMenuProps {
 /** One task actions menu shared by the overflow button and card right-click. */
 export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft,
-  onSetModel, onSetPriority, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
+  onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
   const isDraft = isDraftTask(task);
   const isStaged = isStagedTask(task);
@@ -84,6 +86,15 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-40">
             <PriorityMenuItems task={task} onSetPriority={onSetPriority} />
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <span className="flex-1">Deadline</span>
+            <span className="text-xs text-muted-foreground">{deadlineDisplay(task.task_deadline)?.dateLabel ?? "None"}</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DeadlineMenuItems task={task} onSetDeadline={onSetDeadline} onPicked={() => onOpenChange(false)} />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSub>
