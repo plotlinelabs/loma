@@ -15,12 +15,13 @@ interface MobileTaskBoardProps {
   onEditDraft: (task: Task) => void;
   onAddTask: (laneId: string) => void;
   onError: (message: string | null) => void;
+  selectedTagIds: string[];
 }
 
 /** Inbox-style single-column board for phones: a chip scroller switches
  * columns, tap actions replace drag. Desktop keeps the kanban. */
 export function MobileTaskBoard({
-  board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError,
+  board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, selectedTagIds,
 }: MobileTaskBoardProps) {
   const {
     laneIds, tasksByColumn,
@@ -28,7 +29,7 @@ export function MobileTaskBoard({
     removeFromBoard, deleteDraft, openTask,
   } = useTaskBoardActions({
     board, onBoardChange, onRefresh, onEditDraft, onError,
-    openActiveInNewTab: false, // window.open is hostile in the standalone PWA
+    openActiveInNewTab: false, selectedTagIds, // window.open is hostile in the standalone PWA
   });
 
   // Attention-first column order: Needs input, Working, lanes, Done.

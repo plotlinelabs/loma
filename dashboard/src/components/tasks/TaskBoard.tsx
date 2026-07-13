@@ -18,6 +18,7 @@ import { canMove, rankBetween } from "./transitions";
 import { useTaskBoardActions } from "./useTaskBoardActions";
 import { TaskColumn } from "./TaskColumn";
 import { TaskCard } from "./TaskCard";
+import { useAgentModels } from "@/hooks/useAgentModels";
 
 interface TaskBoardProps {
   board: TasksBoardResponse;
@@ -28,10 +29,12 @@ interface TaskBoardProps {
   /** Open the new-task dialog with a lane preselected. */
   onAddTask: (laneId: string) => void;
   onError: (message: string | null) => void;
+  selectedTagIds: string[];
 }
 
-export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError }: TaskBoardProps) {
+export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, selectedTagIds }: TaskBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const { models } = useAgentModels();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -41,8 +44,8 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
   const {
     laneIds, columns, tasksByColumn,
     startTask, markDone, reopen, moveToLane, reorderInColumn,
-    removeFromBoard, deleteDraft, openTask,
-  } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError });
+    removeFromBoard, deleteDraft, openTask, setTaskModel, setTaskTags, createAndAssignTag,
+  } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, selectedTagIds });
 
   const resolveColumn = (overId: string): string | null => {
     if (tasksByColumn[overId] !== undefined) return overId;
@@ -125,6 +128,8 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 key={task.conversation_id}
                 task={task}
                 lanes={board.lanes}
+                tags={board.tags}
+                models={models}
                 onOpen={openTask}
                 onStart={startTask}
                 onMarkDone={markDone}
@@ -132,6 +137,9 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 onMoveToLane={moveToLane}
                 onRemoveFromBoard={removeFromBoard}
                 onDeleteDraft={deleteDraft}
+                onSetModel={setTaskModel}
+                onSetTags={setTaskTags}
+                onCreateTag={createAndAssignTag}
               />
             ))}
           </TaskColumn>

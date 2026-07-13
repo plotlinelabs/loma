@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiNotification3Line, RiNotificationOffLine, RiSettings3Line } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -21,8 +21,10 @@ import {
   type TasksBoardResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TaskBoard } from "@/components/tasks/TaskBoard";
 import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
 import { QuickAddTask } from "@/components/tasks/QuickAddTask";
@@ -45,6 +47,8 @@ export default function TasksPage() {
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
   const [pushState, setPushState] = useState<PushState | null>(null);
   // Pause polling while a mutation is in flight to avoid clobbering optimistic state.
@@ -73,13 +77,13 @@ export default function TasksPage() {
     // load (a background/occluded tab would otherwise show skeletons forever).
     if (busyRef.current || (document.hidden && hasBoardRef.current)) return;
     try {
-      const data = await fetchTasksBoard();
+      const data = await fetchTasksBoard(searchQuery);
       hasBoardRef.current = true;
       setBoard(data);
     } catch {
       // Transient poll failures are fine — keep showing the last board.
     }
-  }, []);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
@@ -123,7 +127,7 @@ export default function TasksPage() {
         router.push(`${basePath}/chat?continue=${conversationId}&start=1`);
         return;
       }
-      const data = await fetchTasksBoard();
+      const data = await fetchTasksBoard(searchQuery);
       setBoard(data);
     } finally {
       busyRef.current = false;
@@ -140,6 +144,24 @@ export default function TasksPage() {
       <div className="pwa-header-offset flex items-center justify-between">
         <h1 className="text-lg font-semibold">Tasks</h1>
         <div className="flex items-center gap-1">
+          {board && board.tags.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant={selectedTagIds.length ? "secondary" : "ghost"} size="sm">
+                  <RiFilter3Line className="h-4 w-4" /> Tags{selectedTagIds.length ? ` (${selectedTagIds.length})` : ""}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {board.tags.map((tag) => (
+                  <DropdownMenuCheckboxItem key={tag.id} checked={selectedTagIds.includes(tag.id)}
+                    onCheckedChange={(checked) => setSelectedTagIds((ids) => checked ? [...ids, tag.id] : ids.filter((id) => id !== tag.id))}
+                    onSelect={(e) => e.preventDefault()}>
+                    {tag.name}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Button size="sm" onClick={() => { setEditingTask(null); setNewTaskLane(undefined); setTaskDialogOpen(true); }}>
             <RiAddLine className="h-4 w-4" />
             New task
@@ -193,6 +215,30 @@ export default function TasksPage() {
 
       <InstallHint />
 
+      <div className="relative w-full sm:max-w-sm">
+        <RiSearchLine className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          type="text"
+          aria-label="Search tasks"
+          placeholder="Search task titles and conversations..."
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          className="h-9 pl-9 pr-9"
+        />
+        {searchQuery && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Clear task search"
+            className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground"
+            onClick={() => setSearchQuery("")}
+          >
+            <RiCloseLine className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       {board ? (
@@ -204,6 +250,7 @@ export default function TasksPage() {
             onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
             onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
             onError={setError}
+            selectedTagIds={selectedTagIds}
           />
         ) : (
           <>
@@ -214,6 +261,7 @@ export default function TasksPage() {
               onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
               onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
               onError={setError}
+              selectedTagIds={selectedTagIds}
             />
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task

@@ -6,6 +6,7 @@ import {
   basePath,
   deleteConversation,
   updateTask,
+  createTaskTag,
   type BoardLane,
   type Task,
   type TasksBoardResponse,
@@ -30,13 +31,14 @@ export interface TaskBoardActionsOptions {
   /** Desktop opens active cards in a new tab; the mobile/standalone PWA
    * navigates in place (window.open opens an in-app browser there). */
   openActiveInNewTab?: boolean;
+  selectedTagIds?: string[];
 }
 
 /** Shared board state derivations + optimistic mutations, used by both the
  * desktop kanban (TaskBoard) and the mobile inbox (MobileTaskBoard). */
 export function useTaskBoardActions({
   board, onBoardChange, onRefresh, onEditDraft, onError,
-  openActiveInNewTab = true,
+  openActiveInNewTab = true, selectedTagIds = [],
 }: TaskBoardActionsOptions) {
   const router = useRouter();
 
@@ -52,6 +54,7 @@ export function useTaskBoardActions({
     const map: Record<string, Task[]> = {};
     for (const column of columns) map[column.id] = [];
     for (const task of board.tasks) {
+      if (selectedTagIds.length > 0 && !selectedTagIds.some((id) => (task.task_tag_ids || []).includes(id))) continue;
       (map[task.column] ??= []).push(task);
     }
     // Rank-sort client-side so optimistic reorders move cards immediately
@@ -60,7 +63,7 @@ export function useTaskBoardActions({
       list.sort((a, b) => (a.task_rank ?? 0) - (b.task_rank ?? 0));
     }
     return map;
-  }, [board.tasks, columns]);
+  }, [board.tasks, columns, selectedTagIds]);
 
   const startTask = (task: Task) => {
     router.push(`${basePath}/chat?continue=${task.conversation_id}&start=1`);
@@ -140,6 +143,35 @@ export function useTaskBoardActions({
       () => deleteConversation(task.conversation_id),
     );
 
+  const setTaskModel = (task: Task, model: string) =>
+    mutate(
+      (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, model } : t),
+      () => updateTask(task.conversation_id, { model }),
+    );
+
+  const setTaskTags = (task: Task, task_tag_ids: string[]) =>
+    mutate(
+      (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_tag_ids } : t),
+      () => updateTask(task.conversation_id, { task_tag_ids }),
+    );
+
+  const createAndAssignTag = async (task: Task, name: string) => {
+    const snapshot = board;
+    try {
+      const { tag } = await createTaskTag(name);
+      const nextIds = [...(task.task_tag_ids || []), tag.id];
+      onBoardChange({
+        ...board, tags: [...board.tags, tag],
+        tasks: board.tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_tag_ids: nextIds } : t),
+      });
+      await updateTask(task.conversation_id, { task_tag_ids: nextIds });
+      onRefresh();
+    } catch (e) {
+      onBoardChange(snapshot);
+      onError(e instanceof Error ? e.message : "Could not create tag");
+    }
+  };
+
   const openTask = (task: Task) => {
     // Only unstarted drafts open the details editor; anything with history
     // (including chats parked in a lane) opens the conversation.
@@ -170,6 +202,9 @@ export function useTaskBoardActions({
     reorderInColumn,
     removeFromBoard,
     deleteDraft,
+    setTaskModel,
+    setTaskTags,
+    createAndAssignTag,
     openTask,
   };
 }

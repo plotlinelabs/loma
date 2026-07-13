@@ -965,6 +965,13 @@ export interface BoardLane {
   order: number;
 }
 
+export interface TaskTag {
+  id: string;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
 export interface Task {
   conversation_id: string;
   title: string | null;
@@ -983,10 +990,12 @@ export interface Task {
   task_staged_at: string | null;
   task_started_at: string | null;
   task_done_at: string | null;
+  task_tag_ids: string[];
 }
 
 export interface TasksBoardResponse {
   lanes: BoardLane[];
+  tags: TaskTag[];
   tasks: Task[];
   counts: Record<string, number>;
 }
@@ -996,8 +1005,9 @@ export interface BoardSettings {
   lanes: BoardLane[];
 }
 
-export async function fetchTasksBoard(): Promise<TasksBoardResponse> {
-  const res = await fetch(`${API_BASE}/api/tasks`);
+export async function fetchTasksBoard(query = ""): Promise<TasksBoardResponse> {
+  const params = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+  const res = await fetch(`${API_BASE}/api/tasks${params}`);
   if (!res.ok) throw new Error(`Failed to fetch tasks: ${res.status}`);
   return res.json();
 }
@@ -1040,6 +1050,7 @@ export async function updateTask(
     prompt?: string;
     title?: string;
     model?: string;
+    task_tag_ids?: string[];
   },
 ): Promise<{ task: Task | null }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}`, {
@@ -1050,6 +1061,17 @@ export async function updateTask(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Failed to update task: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function createTaskTag(name: string): Promise<{ tag: TaskTag }> {
+  const res = await fetch(`${API_BASE}/api/tasks/tags`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to create tag: ${res.status}`);
   }
   return res.json();
 }
