@@ -9,6 +9,7 @@ import {
   createTaskTag,
   type BoardLane,
   type Task,
+  type TaskPriority,
   type TasksBoardResponse,
 } from "@/lib/api";
 
@@ -149,6 +150,12 @@ export function useTaskBoardActions({
       () => updateTask(task.conversation_id, { model }),
     );
 
+  const setTaskPriority = (task: Task, task_priority: TaskPriority | null) =>
+    mutate(
+      (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_priority } : t),
+      () => updateTask(task.conversation_id, { task_priority }),
+    );
+
   const setTaskTags = (task: Task, task_tag_ids: string[]) =>
     mutate(
       (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_tag_ids } : t),
@@ -203,6 +210,7 @@ export function useTaskBoardActions({
     removeFromBoard,
     deleteDraft,
     setTaskModel,
+    setTaskPriority,
     setTaskTags,
     createAndAssignTag,
     openTask,

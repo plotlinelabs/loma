@@ -972,6 +972,8 @@ export interface TaskTag {
   created_at: string;
 }
 
+export type TaskPriority = "low" | "medium" | "high" | "urgent";
+
 export interface Task {
   conversation_id: string;
   title: string | null;
@@ -991,6 +993,7 @@ export interface Task {
   task_started_at: string | null;
   task_done_at: string | null;
   task_tag_ids: string[];
+  task_priority: TaskPriority | null;
 }
 
 export interface TasksBoardResponse {
@@ -1051,6 +1054,7 @@ export async function updateTask(
     title?: string;
     model?: string;
     task_tag_ids?: string[];
+    task_priority?: TaskPriority | null;
   },
 ): Promise<{ task: Task | null }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}`, {

@@ -112,6 +112,7 @@ MAX_LANES = 10
 MAX_BOARD_PROMPT_LEN = 10000
 MAX_TAGS = 50
 MAX_TAGS_PER_TASK = 10
+TASK_PRIORITIES = ("low", "medium", "high", "urgent")
 MAX_TAG_NAME_LEN = 30
 TAG_COLORS = ("slate", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink")
 # Attachments staged with a draft (base64 in the doc until the task starts).
@@ -215,6 +216,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "task_started_at": _serialize(task.get("task_started_at")),
         "task_done_at": _serialize(task.get("task_done_at")),
         "task_tag_ids": task.get("task_tag_ids") or [],
+        "task_priority": task.get("task_priority") or None,
     }
 
 
@@ -225,6 +227,7 @@ _TASK_PROJECTION = {
     "task_created_at": 1, "task_staged_at": 1, "task_started_at": 1,
     "task_done_at": 1,
     "task_tag_ids": 1,
+    "task_priority": 1,
 }
 
 
@@ -316,6 +319,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_started_at": now if start else None,
         "task_done_at": None,
         "task_tag_ids": [],
+        "task_priority": None,
     }
     await db.conversations.insert_one(doc)
 
@@ -406,7 +410,8 @@ async def handle_needs_input_count(request: web.Request) -> web.Response:
 async def handle_update_task(request: web.Request) -> web.Response:
     """PATCH /api/tasks/{conversation_id} — board moves, edits, add/remove.
 
-    Accepts any of: task_status, task_lane, task_rank, prompt, title, model, task_tag_ids.
+    Accepts any of: task_status, task_lane, task_rank, prompt, title, model,
+    task_tag_ids, task_priority.
     task_status: null removes the conversation from the board.
     """
     db = get_db()
@@ -542,6 +547,14 @@ async def handle_update_task(request: web.Request) -> web.Response:
         if any(not isinstance(tag_id, str) or tag_id not in allowed for tag_id in tag_ids):
             return web.json_response({"error": "Unknown tag"}, status=400)
         updates["task_tag_ids"] = tag_ids
+
+    if "task_priority" in body:
+        priority = body["task_priority"]
+        if priority is not None and priority not in TASK_PRIORITIES:
+            return web.json_response(
+                {"error": "task_priority must be low, medium, high, urgent or null"},
+                status=400)
+        updates["task_priority"] = priority
 
     if "title" in body:
         title = (body["title"] or "").strip() or None

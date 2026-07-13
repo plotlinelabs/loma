@@ -1,4 +1,4 @@
-import type { Task } from "@/lib/api";
+import type { Task, TaskPriority } from "@/lib/api";
 
 // Shared card display derivations for the desktop TaskCard and MobileTaskCard.
 
@@ -19,6 +19,19 @@ export function taskDot(task: Task): string | undefined {
   if (isError) return "bg-red-500";
   if (isParked(task)) return "bg-muted-foreground/40"; // paused, not demanding attention
   return columnDotStyles[task.column];
+}
+
+/** Priority levels in menu order (most urgent first). Text + symbol only —
+ * no color coding by design. */
+export const TASK_PRIORITIES: Array<{ id: TaskPriority; symbol: string; label: string }> = [
+  { id: "urgent", symbol: "\u203c", label: "Urgent" },
+  { id: "high", symbol: "\u2191", label: "High" },
+  { id: "medium", symbol: "\u2192", label: "Medium" },
+  { id: "low", symbol: "\u2193", label: "Low" },
+];
+
+export function priorityDisplay(priority: TaskPriority | null | undefined) {
+  return TASK_PRIORITIES.find((p) => p.id === priority) ?? null;
 }
 
 export function taskTimestamp(task: Task): string | null {
