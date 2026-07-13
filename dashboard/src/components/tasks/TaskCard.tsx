@@ -60,8 +60,8 @@ export function TaskCard({
   const assignedTags = tags.filter((tag) => (task.task_tag_ids || []).includes(tag.id));
   return (
     <TaskCardMenu task={task} lanes={lanes} tags={tags} models={models}
-      onMoveToLane={onMoveToLane}
-      onSetModel={onSetModel} onSetTags={onSetTags} onCreateTag={onCreateTag}>
+      onMoveToLane={onMoveToLane} onSetModel={onSetModel}
+      onSetTags={onSetTags} onCreateTag={onCreateTag}>
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}

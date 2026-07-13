@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { RiCheckLine, RiMoreLine, RiPriceTag3Line } from "@remixicon/react";
-import { Button } from "@/components/ui/button";
+import { RiCheckLine, RiPriceTag3Line } from "@remixicon/react";
 import { Input } from "@/components/ui/input";
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub,
@@ -19,6 +18,9 @@ export interface TaskCardMenuProps {
   children: React.ReactNode;
 }
 
+/** Right-click settings menu for a task card. A Radix ContextMenu (not a
+ * DropdownMenu) so it only opens on contextmenu events — a plain left click
+ * falls through to the card's own onClick, which opens the conversation. */
 export function TaskCardMenu({ task, lanes, tags, models, onMoveToLane,
   onSetModel, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
@@ -29,7 +31,7 @@ export function TaskCardMenu({ task, lanes, tags, models, onMoveToLane,
     currentTags.includes(id) ? currentTags.filter((tagId) => tagId !== id) : [...currentTags, id]);
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={(open) => { if (!open) setQuery(""); }}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-56">
         <ContextMenuSub>
@@ -73,8 +75,4 @@ export function TaskCardMenu({ task, lanes, tags, models, onMoveToLane,
       </ContextMenuContent>
     </ContextMenu>
   );
-}
-
-export function TaskMenuButton() {
-  return <Button variant="ghost" size="icon" className="h-6 w-6"><RiMoreLine className="h-3.5 w-3.5" /></Button>;
 }
