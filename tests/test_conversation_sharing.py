@@ -9,7 +9,7 @@ from api.routes import (
 )
 
 
-def conversation(owner="owner@plotline.so", visibility="private"):
+def conversation(owner="owner@example.com", visibility="private"):
     return {
         "conversation_id": "conv-1",
         "source": "dashboard",
@@ -39,10 +39,10 @@ async def test_owner_can_share_and_unshare_conversation():
 
     with patch("api.routes.get_db", return_value=db):
         shared = await handle_share_conversation(FakeRequest(
-            user_email="owner@plotline.so", body={"shared": True},
+            user_email="owner@example.com", body={"shared": True},
         ))
         private = await handle_share_conversation(FakeRequest(
-            user_email="owner@plotline.so", body={"shared": False},
+            user_email="owner@example.com", body={"shared": False},
         ))
 
     assert shared.status == 200
@@ -65,7 +65,7 @@ async def test_non_owner_cannot_change_sharing_even_if_admin():
 
     with patch("api.routes.get_db", return_value=db):
         response = await handle_share_conversation(FakeRequest(
-            user_email="admin@plotline.so", role="admin", body={"shared": True},
+            user_email="admin@example.com", role="admin", body={"shared": True},
         ))
 
     assert response.status == 403
@@ -75,17 +75,17 @@ async def test_non_owner_cannot_change_sharing_even_if_admin():
 @pytest.mark.parametrize("role", ["chatter", "analyst", "operator", "maintainer", "admin"])
 def test_shared_conversation_is_accessible_to_every_authenticated_role(role):
     assert _check_conversation_access(
-        conversation(visibility="shared"), "teammate@plotline.so", role
+        conversation(visibility="shared"), "teammate@example.com", role
     )
 
 
 @pytest.mark.parametrize("role", ["chatter", "analyst", "operator", "maintainer"])
 def test_private_dashboard_conversation_remains_owner_only(role):
     assert not _check_conversation_access(
-        conversation(visibility="private"), "teammate@plotline.so", role
+        conversation(visibility="private"), "teammate@example.com", role
     )
     assert _check_conversation_access(
-        conversation(visibility="private"), "owner@plotline.so", role
+        conversation(visibility="private"), "owner@example.com", role
     )
 
 
