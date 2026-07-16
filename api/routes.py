@@ -447,6 +447,7 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
         isolation_condition = {
             "$or": [
                 {"metadata.user_name": user_email},
+                {"metadata.visibility": "shared"},
                 {"source": "task_step"},
                 {
                     "source": {"$in": ["flow", "webhook"]},
@@ -461,6 +462,7 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
         isolation_condition = {
             "$or": [
                 {"metadata.user_name": user_email},
+                {"metadata.visibility": "shared"},
                 {"source": "task_step"},
                 {
                     "source": {"$in": ["flow", "webhook"]},
@@ -469,8 +471,13 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
             ]
         }
     else:
-        # operator / chatter — own conversations only
-        query["metadata.user_name"] = user_email
+        # operator / chatter can also open conversations explicitly shared by an owner
+        isolation_condition = {
+            "$or": [
+                {"metadata.user_name": user_email},
+                {"metadata.visibility": "shared"},
+            ]
+        }
 
     if source:
         query["source"] = source
@@ -535,22 +542,10 @@ async def handle_get_conversation(request: web.Request) -> web.Response:
     if not conversation:
         return web.json_response({"error": "Not found"}, status=404)
 
-    # ── Chat isolation ──
     user_email = get_user_email(request)
     system_role = get_system_role(request)
-    owner = (conversation.get("metadata") or {}).get("user_name", "")
-    conv_source = conversation.get("source", "")
-
-    if system_role == "admin":
-        pass  # admin sees everything
-    elif system_role in ("maintainer", "analyst"):
-        # maintainer/analyst can see own conversations + flow/task-spawned
-        if owner != user_email and conv_source not in ("flow", "task_step"):
-            return web.json_response({"error": "Not found"}, status=404)
-    else:
-        # operator / chatter — own conversations only
-        if owner != user_email:
-            return web.json_response({"error": "Not found"}, status=404)
+    if not user_email or not _check_conversation_access(conversation, user_email, system_role):
+        return web.json_response({"error": "Not found"}, status=404)
 
     turns = await db.turns.find({"conversation_id": cid}) \
         .sort("turn_number", 1) \
@@ -838,8 +833,12 @@ async def handle_chat(request: web.Request) -> web.Response:
             # Check if conversation already exists (resume) or is client-generated (start)
             existing = await db.conversations.find_one(
                 {"conversation_id": existing_conversation_id},
-                {"_id": 1, "task_status": 1, "started_at": 1, "metadata.user_name": 1},
+                {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1},
             )
+            if existing and not _check_conversation_access(
+                existing, user_email, get_system_role(request)
+            ):
+                return web.json_response({"error": "Not found"}, status=404)
             observer = ConversationObserver(
                 db, metadata=metadata,
                 conversation_id=existing_conversation_id,
@@ -1533,6 +1532,9 @@ def _check_conversation_access(conversation: dict, user_email: str, system_role:
     """Return True if the user has access to this conversation."""
     owner = (conversation.get("metadata") or {}).get("user_name", "")
     conv_source = conversation.get("source", "")
+    visibility = (conversation.get("metadata") or {}).get("visibility")
+    if user_email and visibility == "shared":
+        return True
     if system_role == "admin":
         return True
     if system_role in ("maintainer", "analyst"):
@@ -1543,6 +1545,49 @@ def _check_conversation_access(conversation: dict, user_email: str, system_role:
             return visibility != "private"
         return conv_source == "task_step"
     return owner == user_email
+
+
+def _check_conversation_manage_access(conversation: dict, user_email: str, system_role: str) -> bool:
+    """Return True for users allowed to mutate a conversation."""
+    owner = (conversation.get("metadata") or {}).get("user_name", "")
+    return owner == user_email or system_role == "admin"
+
+
+async def handle_share_conversation(request: web.Request) -> web.Response:
+    """PUT /api/conversations/{conversation_id}/share -- owner toggles link sharing."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Observability not configured"}, status=503)
+
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    cid = request.match_info["conversation_id"]
+    conversation = await db.conversations.find_one({
+        "conversation_id": cid,
+        "deleted": {"$ne": True},
+    })
+    if not conversation:
+        return web.json_response({"error": "Not found"}, status=404)
+
+    owner = (conversation.get("metadata") or {}).get("user_name", "")
+    if owner != user_email:
+        return web.json_response({"error": "Only the conversation owner can change sharing"}, status=403)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(body.get("shared"), bool):
+        return web.json_response({"error": "shared must be a boolean"}, status=400)
+
+    visibility = "shared" if body["shared"] else "private"
+    await db.conversations.update_one(
+        {"conversation_id": cid},
+        {"$set": {"metadata.visibility": visibility}},
+    )
+    return web.json_response({"shared": body["shared"], "conversation_id": cid})
 
 
 async def handle_pin_conversation(request: web.Request) -> web.Response:
@@ -1625,7 +1670,7 @@ async def handle_update_conversation(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not found"}, status=404)
 
     system_role = get_system_role(request)
-    if not _check_conversation_access(conversation, user_email, system_role):
+    if not _check_conversation_manage_access(conversation, user_email, system_role):
         return web.json_response({"error": "Not found"}, status=404)
 
     try:
@@ -1674,7 +1719,7 @@ async def handle_delete_conversation(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not found"}, status=404)
 
     system_role = get_system_role(request)
-    if not _check_conversation_access(conversation, user_email, system_role):
+    if not _check_conversation_manage_access(conversation, user_email, system_role):
         return web.json_response({"error": "Not found"}, status=404)
 
     now = datetime.now(timezone.utc)
@@ -1753,6 +1798,7 @@ def setup_api_routes(app: web.Application):
     app.router.add_delete("/api/conversations/{conversation_id}", handle_delete_conversation)
     app.router.add_post("/api/conversations/{conversation_id}/pin", handle_pin_conversation)
     app.router.add_delete("/api/conversations/{conversation_id}/pin", handle_unpin_conversation)
+    app.router.add_put("/api/conversations/{conversation_id}/share", handle_share_conversation)
     app.router.add_get("/api/stats", handle_get_stats)
     app.router.add_get("/api/cost-stats", handle_cost_stats)
     app.router.add_get("/api/token-usage", handle_token_usage)

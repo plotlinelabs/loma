@@ -269,8 +269,8 @@ async def handle_assign_conversation_to_project(request: web.Request) -> web.Res
         return web.json_response({"error": "Conversation not found"}, status=404)
 
     # Access check: reuse same logic as pin
-    from api.routes import _check_conversation_access
-    if not _check_conversation_access(conversation, user_email, system_role):
+    from api.routes import _check_conversation_manage_access
+    if not _check_conversation_manage_access(conversation, user_email, system_role):
         return web.json_response({"error": "Conversation not found"}, status=404)
 
     try:
@@ -318,8 +318,8 @@ async def handle_remove_conversation_from_project(request: web.Request) -> web.R
     if not conversation:
         return web.json_response({"error": "Conversation not found"}, status=404)
 
-    from api.routes import _check_conversation_access
-    if not _check_conversation_access(conversation, user_email, system_role):
+    from api.routes import _check_conversation_manage_access
+    if not _check_conversation_manage_access(conversation, user_email, system_role):
         return web.json_response({"error": "Conversation not found"}, status=404)
 
     await db.conversations.update_one(

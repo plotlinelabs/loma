@@ -33,8 +33,10 @@ import {
   RiAddLine,
   RiDeleteBinLine,
   RiLoader4Line,
+  RiShareLine,
+  RiFileCopyLine,
 } from "@remixicon/react";
-import { updateTask } from "@/lib/api";
+import { basePath, setConversationShared, updateTask } from "@/lib/api";
 
 interface ChatContextMenuProps {
   conversationId: string;
@@ -50,6 +52,9 @@ interface ChatContextMenuProps {
   onAssignProject: (conversationId: string, projectId: string) => Promise<void>;
   onRemoveProject: (conversationId: string) => Promise<void>;
   onCreateProject: (name: string) => Promise<void>;
+  canShare?: boolean;
+  isShared?: boolean;
+  onSharingChange?: (shared: boolean) => void;
   triggerClassName?: string;
 }
 
@@ -66,11 +71,17 @@ export default function ChatContextMenu({
   onAssignProject,
   onRemoveProject,
   onCreateProject,
+  canShare = false,
+  isShared = false,
+  onSharingChange,
   triggerClassName,
 }: ChatContextMenuProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shared, setShared] = useState(isShared);
+  const [copied, setCopied] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [renameValue, setRenameValue] = useState(conversationTitle);
   const [newProjectName, setNewProjectName] = useState("");
@@ -81,6 +92,46 @@ export default function ChatContextMenu({
   useEffect(() => {
     setOnBoard(!!taskStatus);
   }, [taskStatus]);
+
+  useEffect(() => setShared(isShared), [isShared]);
+
+  const shareUrl = typeof window === "undefined"
+    ? ""
+    : `${window.location.origin}${basePath}/chat?continue=${conversationId}`;
+
+  async function handleShare() {
+    setLoading(true);
+    try {
+      await setConversationShared(conversationId, true);
+      setShared(true);
+      onSharingChange?.(true);
+      setShareDialogOpen(true);
+    } catch (e) {
+      console.error("Failed to share conversation:", e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleStopSharing() {
+    setLoading(true);
+    try {
+      await setConversationShared(conversationId, false);
+      setShared(false);
+      onSharingChange?.(false);
+      setShareDialogOpen(false);
+    } catch (e) {
+      console.error("Failed to stop sharing:", e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyShareLink() {
+    await navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   async function handleToggleBoard() {
     const next = !onBoard;
@@ -205,6 +256,20 @@ export default function ChatContextMenu({
               </>
             )}
           </DropdownMenuItem>
+
+          {canShare && (
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                setDropdownOpen(false);
+                if (shared) setShareDialogOpen(true);
+                else handleShare();
+              }}
+            >
+              <RiShareLine size={16} className="text-muted-foreground" />
+              {shared ? "Manage sharing" : "Share conversation"}
+            </DropdownMenuItem>
+          )}
 
           {/* Rename */}
           <DropdownMenuItem
@@ -373,6 +438,30 @@ export default function ChatContextMenu({
                 "Save"
               )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Share conversation</DialogTitle>
+            <DialogDescription>
+              Anyone on your team with access to Loma can open this conversation and continue the chat.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2">
+            <Input value={shareUrl} readOnly aria-label="Conversation share link" />
+            <Button onClick={copyShareLink} disabled={!shareUrl}>
+              {copied ? <RiCheckLine size={16} /> : <RiFileCopyLine size={16} />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleStopSharing} disabled={loading}>
+              Stop sharing
+            </Button>
+            <Button onClick={() => setShareDialogOpen(false)}>Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
