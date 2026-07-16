@@ -29,7 +29,7 @@ import { useUser } from "../../lib/UserContext";
 function ChatPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject } = useUser();
+  const { user, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject } = useUser();
   const continueId = searchParams.get("continue");
   const flowId = searchParams.get("flow");
   const taskId = null; // Tasks system removed
@@ -54,6 +54,8 @@ function ChatPageContent() {
   const [taskDraftFiles, setTaskDraftFiles] = useState<ChatFile[] | null>(null);
   const [taskModel, setTaskModel] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
+  const [conversationOwner, setConversationOwner] = useState<string | null>(null);
+  const [conversationShared, setConversationShared] = useState(false);
 
   // Track the active conversation ID — starts from URL param but also updates
   // when a fresh chat creates a new conversation (via onConversationCreated callback)
@@ -67,7 +69,8 @@ function ChatPageContent() {
   // Callback for ChatPanel to notify us when a new conversation is created
   const handleConversationCreated = useCallback((newId: string) => {
     setActiveConversationId(newId);
-  }, []);
+    setConversationOwner(user?.email || null);
+  }, [user?.email]);
 
   useEffect(() => {
     if (flowId) {
@@ -105,6 +108,8 @@ function ChatPageContent() {
     async function loadConversation() {
       try {
         const data = await fetchConversation(continueId!);
+        setConversationOwner(data.conversation.metadata?.user_name || null);
+        setConversationShared(data.conversation.metadata?.visibility === "shared");
         setTaskStatus(data.conversation.task_status || null);
         if (data.conversation.task_status === "todo" && !data.conversation.status) {
           // Unstarted board draft: nothing has been sent yet. Don't rebuild
@@ -184,7 +189,7 @@ function ChatPageContent() {
       {/* Mobile: no header bar — chat actions live in a floating menu on the
           right (mirrors the floating hamburger on the left). ChatContextMenu
           carries pin/rename/board/project/delete. */}
-      {activeConversationId && (
+      {activeConversationId && user?.email === conversationOwner && (
         <div className="md:hidden fixed right-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30 flex items-center gap-2">
           <CostChip conversationId={activeConversationId} />
           <ChatContextMenu
@@ -212,6 +217,9 @@ function ChatPageContent() {
               setProjectId(null);
             }}
             onCreateProject={async (name) => { await addProject(name); }}
+            canShare={!!user?.email && user.email === conversationOwner}
+            isShared={conversationShared}
+            onSharingChange={setConversationShared}
             triggerClassName="h-9 w-9 flex items-center justify-center rounded-full border border-border bg-background/80 backdrop-blur text-muted-foreground press-scale"
           />
         </div>
@@ -251,19 +259,19 @@ function ChatPageContent() {
                 <h1
                   className={cn(
                     "text-base font-heading font-semibold text-foreground truncate",
-                    activeConversationId && "cursor-pointer hover:text-brand-600 transition-colors"
+                    activeConversationId && user?.email === conversationOwner && "cursor-pointer hover:text-brand-600 transition-colors"
                   )}
                   onClick={() => {
-                    if (activeConversationId) {
+                    if (activeConversationId && user?.email === conversationOwner) {
                       setTitleValue(conversationTitle || promptPreview || "");
                       setEditingTitle(true);
                     }
                   }}
-                  title={activeConversationId ? "Click to rename" : undefined}
+                  title={activeConversationId && user?.email === conversationOwner ? "Click to rename" : undefined}
                 >
                   {headerTitle}
                 </h1>
-                {activeConversationId && (
+                {activeConversationId && user?.email === conversationOwner && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -314,7 +322,7 @@ function ChatPageContent() {
               </Tooltip>
 
               {/* More actions (project, etc.) */}
-              <ChatContextMenu
+              {user?.email === conversationOwner && <ChatContextMenu
                 conversationId={activeConversationId}
                 conversationTitle={conversationTitle || promptPreview || "Untitled"}
                 isPinned={isPinned(activeConversationId)}
@@ -339,11 +347,14 @@ function ChatPageContent() {
                   setProjectId(null);
                 }}
                 onCreateProject={async (name) => { await addProject(name); }}
+                canShare={!!user?.email && user.email === conversationOwner}
+                isShared={conversationShared}
+                onSharingChange={setConversationShared}
                 triggerClassName="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              />
+              />}
 
               {/* Delete */}
-              <div className="relative">
+              {user?.email === conversationOwner && <div className="relative">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -384,7 +395,7 @@ function ChatPageContent() {
                     </div>
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           )}
         </div>

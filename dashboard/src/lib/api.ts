@@ -621,6 +621,22 @@ export async function updateConversation(
   return res.json();
 }
 
+export async function setConversationShared(
+  id: string,
+  shared: boolean,
+): Promise<{ shared: boolean; conversation_id: string }> {
+  const res = await fetch(`${API_BASE}/api/conversations/${id}/share`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shared }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to update sharing: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteConversation(id: string): Promise<{ deleted: boolean }> {
   const res = await fetch(`${API_BASE}/api/conversations/${id}`, {
     method: "DELETE",
