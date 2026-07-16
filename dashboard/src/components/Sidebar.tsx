@@ -74,6 +74,11 @@ const navigation: NavItem[] = [
     icon: <RiMoneyDollarCircleLine size={16} />,
   },
   {
+    name: "Integrations",
+    href: "/integrations/manage",
+    icon: <RiSettings3Line size={16} />,
+  },
+  {
     name: "Flows",
     href: "/flows",
     minRole: "analyst",
@@ -99,12 +104,6 @@ const userMenuNav: NavItem[] = [
     href: "/analytics",
     minRole: "analyst",
     icon: <RiBarChartBoxLine size={16} />,
-  },
-  {
-    name: "Integrations",
-    href: "/integrations/manage",
-    minRole: "maintainer",
-    icon: <RiSettings3Line size={16} />,
   },
   {
     name: "Admin",

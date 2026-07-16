@@ -317,8 +317,7 @@ export default function IntegrationsPage() {
   const [disconnectingOrg, setDisconnectingOrg] = useState<string | null>(null);
   const [webhookUrls, setWebhookUrls] = useState<Record<string, string>>({});
 
-  const { hasRole, isAdmin } = useUser();
-  const canManageOrgIntegrations = hasRole("maintainer");
+  const { isAdmin } = useUser();
 
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [customForm, setCustomForm] = useState({
@@ -963,7 +962,7 @@ export default function IntegrationsPage() {
 
           {/* Org Integrations */}
           <TabsContent value="org">
-            {canManageOrgIntegrations && userManagedIntegrations.length > 0 ? (
+            {userManagedIntegrations.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {userManagedIntegrations.map((integ) => {
                 const isOrgConnected = integ.status === "connected";
@@ -1097,7 +1096,7 @@ export default function IntegrationsPage() {
 
           {/* System-Managed Integrations */}
           <TabsContent value="system">
-            {canManageOrgIntegrations && systemManagedIntegrations.length > 0 ? (
+            {systemManagedIntegrations.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {systemManagedIntegrations.map((integ) => {
                 const Logo = PROVIDER_LOGOS[integ.provider];
