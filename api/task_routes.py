@@ -256,6 +256,11 @@ async def handle_create_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "A title or details are required"}, status=400)
 
     model = (body.get("model") or "").strip()
+    priority = body.get("task_priority")
+    if priority is not None and priority not in TASK_PRIORITIES:
+        return web.json_response(
+            {"error": "task_priority must be low, medium, high, urgent or null"},
+            status=400)
 
     files = body.get("files") or []
     if files:
@@ -323,7 +328,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_started_at": now if start else None,
         "task_done_at": None,
         "task_tag_ids": [],
-        "task_priority": None,
+        "task_priority": priority,
         "task_deadline": None,
     }
     await db.conversations.insert_one(doc)

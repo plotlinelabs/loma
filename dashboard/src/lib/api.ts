@@ -1045,6 +1045,7 @@ export async function createTask(params: {
   title?: string;
   lane?: string;
   model?: string;
+  task_priority?: TaskPriority | null;
   /** Attachments staged with the draft; sent with the first message on start */
   files?: ChatFile[];
   /** Fire immediately: the agent starts running in the background */

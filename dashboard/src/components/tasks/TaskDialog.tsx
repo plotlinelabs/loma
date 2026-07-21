@@ -20,7 +20,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
-import { fetchAgentModels, type AgentModel, type BoardLane, type Task } from "@/lib/api";
+import { fetchAgentModels, type AgentModel, type BoardLane, type Task, type TaskPriority } from "@/lib/api";
+import { TASK_PRIORITIES } from "./taskDisplay";
 
 interface TaskDialogProps {
   open: boolean;
@@ -30,7 +31,7 @@ interface TaskDialogProps {
   task?: Task | null;
   defaultLane?: string;
   onSubmit: (
-    values: { title: string; prompt: string; lane: string; model: string },
+    values: { title: string; prompt: string; lane: string; model: string; priority: TaskPriority | null },
     start: boolean,
   ) => Promise<void>;
 }
@@ -51,6 +52,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
   const [prompt, setPrompt] = useState("");
   const [lane, setLane] = useState(lanes[0]?.id ?? "todo");
   const [model, setModel] = useState("");
+  const [priority, setPriority] = useState<TaskPriority | "none">("none");
   const [models, setModels] = useState<AgentModel[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +63,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
       setPrompt(task?.prompt ?? "");
       setLane(task?.task_lane ?? defaultLane ?? lanes[0]?.id ?? "todo");
       setModel(task?.model ?? "");
+      setPriority(task?.task_priority ?? "none");
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,7 +99,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ title: title.trim(), prompt: prompt.trim(), lane, model }, start);
+      await onSubmit({ title: title.trim(), prompt: prompt.trim(), lane, model, priority: priority === "none" ? null : priority }, start);
       onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
@@ -185,6 +188,22 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
                 </Select>
               </div>
             )}
+          </div>
+          <div className="space-y-1.5">
+            <Label>Priority</Label>
+            <Select value={priority} onValueChange={(value) => setPriority(value as TaskPriority | "none")}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No priority</SelectItem>
+                {TASK_PRIORITIES.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.symbol} {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
