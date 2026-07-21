@@ -283,6 +283,14 @@ async def handle_create_task(request: web.Request) -> web.Response:
     if start and not prompt:
         return web.json_response({"error": "Details are required to start"}, status=400)
 
+    # Priority is optional at creation; validate against the same set the PATCH
+    # route enforces so the New Task dialog and the board tag stay in sync.
+    priority = body.get("task_priority")
+    if priority is not None and priority not in TASK_PRIORITIES:
+        return web.json_response(
+            {"error": "task_priority must be low, medium, high, urgent or null"},
+            status=400)
+
     now = datetime.now(timezone.utc)
     # Draft doc mirrors observer.start()'s shape, but the run hasn't begun:
     # status/started_at stay None and messages stays [] — observer.resume()
@@ -323,7 +331,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_started_at": now if start else None,
         "task_done_at": None,
         "task_tag_ids": [],
-        "task_priority": None,
+        "task_priority": priority,
         "task_deadline": None,
     }
     await db.conversations.insert_one(doc)
