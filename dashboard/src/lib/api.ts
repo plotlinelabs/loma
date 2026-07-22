@@ -181,6 +181,7 @@ export async function fetchConversations(params: {
   search?: string;
   person?: string;
   topic?: string;
+  project?: string;
 } = {}): Promise<ConversationListResponse> {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set("page", String(params.page));
@@ -190,6 +191,7 @@ export async function fetchConversations(params: {
   if (params.search) searchParams.set("search", params.search);
   if (params.person) searchParams.set("person", params.person);
   if (params.topic) searchParams.set("topic", params.topic);
+  if (params.project) searchParams.set("project", params.project);
 
   const res = await fetch(`${API_BASE}/api/conversations?${searchParams}`);
   if (!res.ok) throw new Error(`Failed to fetch conversations: ${res.status}`);

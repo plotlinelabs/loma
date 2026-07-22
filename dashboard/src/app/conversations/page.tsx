@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { fetchConversations, fetchStats, fetchPersons } from "../../lib/api";
 import type { Conversation, StatsResponse } from "../../lib/api";
@@ -129,10 +129,13 @@ function MobileSkeletonCard() {
   );
 }
 
-export default function ConversationsPage() {
+function ConversationsPageContent() {
   const router = useRouter();
   const { data: session } = useSession();
   const { isAdmin, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
+  const searchParams = useSearchParams();
+  const projectFilter = searchParams.get("project") || "";
+  const activeProject = projects.find((p) => p.project_id === projectFilter);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [page, setPage] = useState(1);
@@ -171,9 +174,13 @@ export default function ConversationsPage() {
   }, [viewMode, session?.user?.email]);
 
   useEffect(() => {
+    setPage(1);
+  }, [projectFilter]);
+
+  useEffect(() => {
     if (viewMode === "mine" && !personFilter) return;
     loadData();
-  }, [page, sourceFilter, categoryFilter, debouncedSearch, personFilter, topicFilter]);
+  }, [page, sourceFilter, categoryFilter, debouncedSearch, personFilter, topicFilter, projectFilter]);
 
   async function loadData() {
     setLoading(true);
@@ -186,6 +193,7 @@ export default function ConversationsPage() {
           search: debouncedSearch || undefined,
           person: personFilter || undefined,
           topic: topicFilter || undefined,
+          project: projectFilter || undefined,
         }),
         page === 1 ? fetchStats() : Promise.resolve(null),
       ]);
@@ -223,7 +231,17 @@ export default function ConversationsPage() {
       <div className="space-y-2 animate-fade-in-up">
         {/* Page header */}
         <div className="pwa-header-offset flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Conversations</h1>
+          <div className="flex items-center gap-2 min-w-0">
+            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Conversations</h1>
+            {activeProject && (
+              <Badge variant="secondary" className="gap-1 text-xs max-w-[220px]">
+                <span className="truncate">{activeProject.name}</span>
+                <Link href="/conversations" className="hover:text-foreground shrink-0" aria-label="Clear project filter">
+                  <RiCloseLine size={12} />
+                </Link>
+              </Badge>
+            )}
+          </div>
           {isAdmin && (
             <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
               <Button
@@ -633,5 +651,20 @@ export default function ConversationsPage() {
         )}
       </div>
     </TooltipProvider>
+  );
+}
+
+export default function ConversationsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="space-y-2 animate-fade-in-up">
+          <Skeleton className="h-7 w-40" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      }
+    >
+      <ConversationsPageContent />
+    </Suspense>
   );
 }
