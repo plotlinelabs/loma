@@ -422,6 +422,7 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
     search = request.query.get("search", "").strip()
     person = request.query.get("person", "").strip()
     topic = request.query.get("topic", "").strip()
+    project = request.query.get("project", "").strip()
     page = int(request.query.get("page", 1))
     per_page = min(int(request.query.get("per_page", 50)), 100)
 
@@ -487,6 +488,8 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
         query["status"] = status
     if topic and topic in _VALID_TOPICS:
         query["topic"] = topic
+    if project:
+        query["project_id"] = project
 
     # Full-text search
     if search:
