@@ -7,6 +7,7 @@ import {
   RiArrowGoBackLine,
   RiDeleteBinLine,
   RiLogoutBoxRLine,
+  RiGitBranchLine,
 } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,7 @@ interface MobileTaskCardProps {
   onMoveToLane: (task: Task, laneId: string) => void;
   onRemoveFromBoard: (task: Task) => void;
   onDeleteDraft: (task: Task) => void;
+  onFork: (task: Task) => void;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
   onSetDeadline: (task: Task, deadline: string | null) => void;
 }
@@ -44,7 +46,7 @@ interface MobileTaskCardProps {
  * larger tap targets. Menus replace drag for moves. */
 export function MobileTaskCard({
   task, lanes, onOpen, onStart, onMarkDone, onReopen,
-  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetPriority, onSetDeadline,
+  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onFork, onSetPriority, onSetDeadline,
 }: MobileTaskCardProps) {
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
@@ -144,6 +146,10 @@ export function MobileTaskCard({
                   Reopen
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem onClick={() => onFork(task)}>
+                <RiGitBranchLine className="h-3.5 w-3.5" />
+                Fork
+              </DropdownMenuItem>
               {!isDraft && (
                 <DropdownMenuItem onClick={() => onRemoveFromBoard(task)}>
                   <RiLogoutBoxRLine className="h-3.5 w-3.5" />

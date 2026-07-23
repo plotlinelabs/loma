@@ -45,7 +45,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
   const {
     laneIds, columns, tasksByColumn,
     startTask, markDone, reopen, moveToLane, reorderInColumn,
-    removeFromBoard, deleteDraft, openTask, setTaskModel, setTaskPriority, setTaskDeadline, setTaskTags, createAndAssignTag,
+    removeFromBoard, deleteDraft, forkTask, openTask, setTaskModel, setTaskPriority, setTaskDeadline, setTaskTags, createAndAssignTag,
   } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, includedTagIds, excludedTagIds });
 
   const resolveColumn = (overId: string): string | null => {
@@ -138,6 +138,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 onMoveToLane={moveToLane}
                 onRemoveFromBoard={removeFromBoard}
                 onDeleteDraft={deleteDraft}
+                onFork={forkTask}
                 onSetModel={setTaskModel}
                 onSetPriority={setTaskPriority}
                 onSetDeadline={setTaskDeadline}

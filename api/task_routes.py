@@ -18,6 +18,7 @@ under `task_board`; tasks reference lanes by id so renames are config-only.
 """
 
 import asyncio
+import copy
 import logging
 import os
 import re
@@ -220,6 +221,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "task_tag_ids": task.get("task_tag_ids") or [],
         "task_priority": task.get("task_priority") or None,
         "task_deadline": task.get("task_deadline") or None,
+        "forked_from_conversation_id": task.get("forked_from_conversation_id") or None,
     }
 
 
@@ -232,6 +234,7 @@ _TASK_PROJECTION = {
     "task_tag_ids": 1,
     "task_priority": 1,
     "task_deadline": 1,
+    "forked_from_conversation_id": 1,
 }
 
 
@@ -337,6 +340,90 @@ async def handle_create_task(request: web.Request) -> web.Response:
             db, doc["conversation_id"], prompt, model, files, user_email,
         ))
 
+    return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)
+
+
+async def handle_fork_task(request: web.Request) -> web.Response:
+    """POST /api/tasks/{conversation_id}/fork — copy a task as an independent draft."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Observability not configured"}, status=503)
+
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    cid = request.match_info["conversation_id"]
+    source = await db.conversations.find_one({
+        "conversation_id": cid,
+        "deleted": {"$ne": True},
+    })
+    if not source:
+        return web.json_response({"error": "Not found"}, status=404)
+
+    from api.routes import _check_conversation_access
+    if not _check_conversation_access(source, user_email, get_system_role(request)):
+        return web.json_response({"error": "Not found"}, status=404)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    board = await _get_board_config_for(db, user_email)
+    lane_ids = [lane["id"] for lane in board["lanes"]]
+    source_owner = (source.get("metadata") or {}).get("user_name")
+    default_lane = source.get("task_lane") if source_owner == user_email else None
+    lane = body.get("lane") or (default_lane if default_lane in lane_ids else lane_ids[0])
+    if lane not in lane_ids:
+        return web.json_response({"error": "Unknown lane"}, status=400)
+
+    source_title = source.get("title") or None
+    title = (body.get("title") or "").strip() if "title" in body else (
+        f"{source_title} (fork)" if source_title else None
+    )
+    if "title" in body and not title:
+        return web.json_response({"error": "title must not be empty"}, status=400)
+
+    now = datetime.now(timezone.utc)
+    doc = {
+        "conversation_id": str(uuid.uuid4()),
+        "source": source.get("source") or "dashboard",
+        "started_at": source.get("started_at"),
+        "finished_at": source.get("finished_at"),
+        "duration_ms": None,
+        "status": "interrupted" if source.get("status") == "running" else source.get("status"),
+        "metadata": {**copy.deepcopy(source.get("metadata") or {}), "user_name": user_email},
+        "prompt": source.get("prompt") or "",
+        "model": source.get("model") or "",
+        "total_turns": source.get("total_turns", 0),
+        "final_response": source.get("final_response") or "",
+        "messages": copy.deepcopy(source.get("messages") or []),
+        "confidence": None,
+        "cost": None,
+        "savings": None,
+        "claude_account": None,
+        "error": None,
+        "deleted": False,
+        "title": title,
+        "title_edited": bool(title),
+        "task_status": "todo",
+        "task_lane": lane,
+        "task_rank": -now.timestamp(),
+        "task_created_at": now,
+        "task_staged_at": now,
+        "task_started_at": None,
+        "task_done_at": None,
+        "task_tag_ids": copy.deepcopy(source.get("task_tag_ids") or [])
+        if source_owner == user_email else [],
+        "task_priority": source.get("task_priority"),
+        "task_deadline": source.get("task_deadline"),
+        "forked_from_conversation_id": cid,
+        "forked_at": now,
+        **({"draft_files": copy.deepcopy(source["draft_files"])}
+           if source.get("draft_files") else {}),
+    }
+    await db.conversations.insert_one(doc)
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)
 
 
@@ -723,4 +810,5 @@ def setup_task_routes(app: web.Application):
     app.router.add_delete("/api/tasks/tags/{tag_id}", handle_delete_tag)
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_get("/api/tasks", handle_list_tasks)
+    app.router.add_post("/api/tasks/{conversation_id}/fork", handle_fork_task)
     app.router.add_patch("/api/tasks/{conversation_id}", handle_update_task)

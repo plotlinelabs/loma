@@ -1012,6 +1012,7 @@ export interface Task {
   task_priority: TaskPriority | null;
   /** Optional deadline as a date-only "YYYY-MM-DD" string. */
   task_deadline: string | null;
+  forked_from_conversation_id: string | null;
 }
 
 export interface TasksBoardResponse {
@@ -1084,6 +1085,22 @@ export async function updateTask(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Failed to update task: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function forkTask(
+  conversationId: string,
+  options: { lane?: string; title?: string } = {},
+): Promise<{ task: Task }> {
+  const res = await fetch(`${API_BASE}/api/tasks/${conversationId}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to fork task: ${res.status}`);
   }
   return res.json();
 }

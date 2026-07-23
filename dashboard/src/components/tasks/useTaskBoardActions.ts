@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   basePath,
   deleteConversation,
+  forkTask as forkTaskRequest,
   updateTask,
   createTaskTag,
   type BoardLane,
@@ -147,6 +148,17 @@ export function useTaskBoardActions({
       () => deleteConversation(task.conversation_id),
     );
 
+  const forkTask = async (task: Task) => {
+    onError(null);
+    try {
+      const { task: forked } = await forkTaskRequest(task.conversation_id);
+      onBoardChange({ ...board, tasks: [forked, ...board.tasks] });
+      onRefresh();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Could not fork task");
+    }
+  };
+
   const setTaskModel = (task: Task, model: string) =>
     mutate(
       (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, model } : t),
@@ -218,6 +230,7 @@ export function useTaskBoardActions({
     reorderInColumn,
     removeFromBoard,
     deleteDraft,
+    forkTask,
     setTaskModel,
     setTaskPriority,
     setTaskDeadline,

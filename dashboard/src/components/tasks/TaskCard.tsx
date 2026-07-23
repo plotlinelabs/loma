@@ -29,6 +29,7 @@ interface TaskCardProps {
   onMoveToLane: (task: Task, laneId: string) => void;
   onRemoveFromBoard: (task: Task) => void;
   onDeleteDraft: (task: Task) => void;
+  onFork: (task: Task) => void;
   onSetModel: (task: Task, model: string) => void;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
   onSetDeadline: (task: Task, deadline: string | null) => void;
@@ -38,7 +39,7 @@ interface TaskCardProps {
 
 export function TaskCard({
   task, lanes, tags, models, onOpen, onStart, onMarkDone, onReopen,
-  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag,
+  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onFork, onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag,
 }: TaskCardProps) {
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
@@ -114,6 +115,7 @@ export function TaskCard({
             open={menuOpen} onOpenChange={setMenuOpen}
             onMoveToLane={onMoveToLane} onReopen={onReopen}
             onRemoveFromBoard={onRemoveFromBoard} onDeleteDraft={onDeleteDraft}
+            onFork={onFork}
             onSetModel={onSetModel} onSetPriority={onSetPriority} onSetDeadline={onSetDeadline} onSetTags={onSetTags} onCreateTag={onCreateTag}>
               <Button variant="ghost" size="icon" className="h-6 w-6">
                 <RiMoreLine className="h-3.5 w-3.5" />
