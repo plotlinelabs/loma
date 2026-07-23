@@ -24,7 +24,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TaskBoard } from "@/components/tasks/TaskBoard";
 import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
 import { QuickAddTask } from "@/components/tasks/QuickAddTask";
@@ -47,7 +55,8 @@ export default function TasksPage() {
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
-  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [includedTagIds, setIncludedTagIds] = useState<string[]>([]);
+  const [excludedTagIds, setExcludedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
   const [pushState, setPushState] = useState<PushState | null>(null);
@@ -138,6 +147,7 @@ export default function TasksPage() {
   if (board) {
     for (const lane of board.lanes) laneCounts[lane.id] = board.counts[lane.id] ?? 0;
   }
+  const activeTagFilterCount = includedTagIds.length + excludedTagIds.length;
 
   return (
     <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
@@ -147,18 +157,42 @@ export default function TasksPage() {
           {board && board.tags.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant={selectedTagIds.length ? "secondary" : "ghost"} size="sm">
-                  <RiFilter3Line className="h-4 w-4" /> Tags{selectedTagIds.length ? ` (${selectedTagIds.length})` : ""}
+                <Button variant={activeTagFilterCount ? "secondary" : "ghost"} size="sm">
+                  <RiFilter3Line className="h-4 w-4" /> Tags{activeTagFilterCount ? ` (${activeTagFilterCount})` : ""}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align="end" className="min-w-48">
+                <DropdownMenuLabel>Include</DropdownMenuLabel>
                 {board.tags.map((tag) => (
-                  <DropdownMenuCheckboxItem key={tag.id} checked={selectedTagIds.includes(tag.id)}
-                    onCheckedChange={(checked) => setSelectedTagIds((ids) => checked ? [...ids, tag.id] : ids.filter((id) => id !== tag.id))}
+                  <DropdownMenuCheckboxItem key={`include-${tag.id}`} checked={includedTagIds.includes(tag.id)}
+                    onCheckedChange={(checked) => {
+                      setIncludedTagIds((ids) => checked ? [...ids, tag.id] : ids.filter((id) => id !== tag.id));
+                      if (checked) setExcludedTagIds((ids) => ids.filter((id) => id !== tag.id));
+                    }}
                     onSelect={(e) => e.preventDefault()}>
                     {tag.name}
                   </DropdownMenuCheckboxItem>
                 ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Exclude</DropdownMenuLabel>
+                {board.tags.map((tag) => (
+                  <DropdownMenuCheckboxItem key={`exclude-${tag.id}`} checked={excludedTagIds.includes(tag.id)}
+                    onCheckedChange={(checked) => {
+                      setExcludedTagIds((ids) => checked ? [...ids, tag.id] : ids.filter((id) => id !== tag.id));
+                      if (checked) setIncludedTagIds((ids) => ids.filter((id) => id !== tag.id));
+                    }}
+                    onSelect={(e) => e.preventDefault()}>
+                    {tag.name}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                {activeTagFilterCount > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => { setIncludedTagIds([]); setExcludedTagIds([]); }}>
+                      Clear filters
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -250,7 +284,8 @@ export default function TasksPage() {
             onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
             onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
             onError={setError}
-            selectedTagIds={selectedTagIds}
+            includedTagIds={includedTagIds}
+            excludedTagIds={excludedTagIds}
           />
         ) : (
           <>
@@ -261,7 +296,8 @@ export default function TasksPage() {
               onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
               onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
               onError={setError}
-              selectedTagIds={selectedTagIds}
+              includedTagIds={includedTagIds}
+              excludedTagIds={excludedTagIds}
             />
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task

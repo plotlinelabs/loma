@@ -32,14 +32,15 @@ export interface TaskBoardActionsOptions {
   /** Desktop opens active cards in a new tab; the mobile/standalone PWA
    * navigates in place (window.open opens an in-app browser there). */
   openActiveInNewTab?: boolean;
-  selectedTagIds?: string[];
+  includedTagIds?: string[];
+  excludedTagIds?: string[];
 }
 
 /** Shared board state derivations + optimistic mutations, used by both the
  * desktop kanban (TaskBoard) and the mobile inbox (MobileTaskBoard). */
 export function useTaskBoardActions({
   board, onBoardChange, onRefresh, onEditDraft, onError,
-  openActiveInNewTab = true, selectedTagIds = [],
+  openActiveInNewTab = true, includedTagIds = [], excludedTagIds = [],
 }: TaskBoardActionsOptions) {
   const router = useRouter();
 
@@ -55,7 +56,9 @@ export function useTaskBoardActions({
     const map: Record<string, Task[]> = {};
     for (const column of columns) map[column.id] = [];
     for (const task of board.tasks) {
-      if (selectedTagIds.length > 0 && !selectedTagIds.some((id) => (task.task_tag_ids || []).includes(id))) continue;
+      const taskTagIds = task.task_tag_ids || [];
+      if (excludedTagIds.some((id) => taskTagIds.includes(id))) continue;
+      if (includedTagIds.length > 0 && !includedTagIds.some((id) => taskTagIds.includes(id))) continue;
       (map[task.column] ??= []).push(task);
     }
     // Rank-sort client-side so optimistic reorders move cards immediately
@@ -64,7 +67,7 @@ export function useTaskBoardActions({
       list.sort((a, b) => (a.task_rank ?? 0) - (b.task_rank ?? 0));
     }
     return map;
-  }, [board.tasks, columns, selectedTagIds]);
+  }, [board.tasks, columns, includedTagIds, excludedTagIds]);
 
   const startTask = (task: Task) => {
     router.push(`${basePath}/chat?continue=${task.conversation_id}&start=1`);

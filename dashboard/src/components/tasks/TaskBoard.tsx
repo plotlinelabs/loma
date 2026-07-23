@@ -29,10 +29,11 @@ interface TaskBoardProps {
   /** Open the new-task dialog with a lane preselected. */
   onAddTask: (laneId: string) => void;
   onError: (message: string | null) => void;
-  selectedTagIds: string[];
+  includedTagIds: string[];
+  excludedTagIds: string[];
 }
 
-export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, selectedTagIds }: TaskBoardProps) {
+export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, includedTagIds, excludedTagIds }: TaskBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const { models } = useAgentModels();
 
@@ -45,7 +46,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
     laneIds, columns, tasksByColumn,
     startTask, markDone, reopen, moveToLane, reorderInColumn,
     removeFromBoard, deleteDraft, openTask, setTaskModel, setTaskPriority, setTaskDeadline, setTaskTags, createAndAssignTag,
-  } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, selectedTagIds });
+  } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, includedTagIds, excludedTagIds });
 
   const resolveColumn = (overId: string): string | null => {
     if (tasksByColumn[overId] !== undefined) return overId;
