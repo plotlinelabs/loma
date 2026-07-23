@@ -6,6 +6,7 @@ import {
   RiCheckLine,
   RiDeleteBinLine,
   RiLogoutBoxRLine,
+  RiGitBranchLine,
   RiPriceTag3Line,
 } from "@remixicon/react";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,7 @@ export interface TaskCardMenuProps {
   onReopen: (task: Task) => void;
   onRemoveFromBoard: (task: Task) => void;
   onDeleteDraft: (task: Task) => void;
+  onFork: (task: Task) => void;
   onSetModel: (task: Task, model: string) => void;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
   onSetDeadline: (task: Task, deadline: string | null) => void;
@@ -36,7 +38,7 @@ export interface TaskCardMenuProps {
 
 /** One task actions menu shared by the overflow button and card right-click. */
 export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
-  onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft,
+  onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft, onFork,
   onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
   const isDraft = isDraftTask(task);
@@ -120,6 +122,9 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
             <RiArrowGoBackLine className="h-3.5 w-3.5" /> Reopen
           </DropdownMenuItem>
         )}
+        <DropdownMenuItem onClick={() => onFork(task)}>
+          <RiGitBranchLine className="h-3.5 w-3.5" /> Fork
+        </DropdownMenuItem>
         {!isDraft && (
           <DropdownMenuItem onClick={() => onRemoveFromBoard(task)}>
             <RiLogoutBoxRLine className="h-3.5 w-3.5" /> Remove from board
