@@ -8,6 +8,7 @@ import {
   IntegrationAccountInput, updateIntegrationAccount,
 } from "@/lib/integration-hub-api";
 import AccountForm from "@/components/integration-hub/AccountForm";
+import OnboardingWorkspace from "@/components/integration-hub/OnboardingWorkspace";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -61,6 +62,7 @@ export default function IntegrationAccountPage() {
           </Card>
         </div>
       </div>
+      <OnboardingWorkspace account={account} onChange={setAccount} />
     </div>
   );
 }

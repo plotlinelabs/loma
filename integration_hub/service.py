@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from integration_hub.models import normalize_create, normalize_update
+from integration_hub.models import normalize_create, normalize_update, normalize_work_item
 
 
 class AccountService:
@@ -45,3 +45,26 @@ class AccountService:
             "version": account.get("version", 1) + 1,
         })
         return await self.repository.update(account["account_id"], updates)
+
+    async def create_work_item(self, account_id, data, actor):
+        now = datetime.now(timezone.utc)
+        item = {
+            "item_id": f"item_{uuid.uuid4()}",
+            **normalize_work_item(data),
+            "created_at": now,
+            "created_by": actor,
+            "updated_at": now,
+            "updated_by": actor,
+        }
+        return await self.repository.add_work_item(account_id, item)
+
+    async def update_work_item(self, account_id, item, data, actor):
+        merged = {**item, **data}
+        updates = normalize_work_item(merged)
+        updates.update({
+            "updated_at": datetime.now(timezone.utc),
+            "updated_by": actor,
+        })
+        return await self.repository.update_work_item(
+            account_id, item["item_id"], updates
+        )

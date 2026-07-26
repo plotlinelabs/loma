@@ -26,11 +26,40 @@ export interface IntegrationAccount {
   created_at: string;
   updated_at: string;
   version: number;
+  platforms: string[];
+  environments: string[];
+  stakeholders: string[];
+  go_live_criteria: string | null;
+  completion_percentage: number;
+  work_items: IntegrationWorkItem[];
 }
+
+export type IntegrationWorkItemType = "milestone" | "task" | "risk" | "blocker";
+export type IntegrationWorkItemStatus = "not_started" | "in_progress" | "blocked" | "completed";
+export interface IntegrationWorkItem {
+  item_id: string;
+  type: IntegrationWorkItemType;
+  title: string;
+  description: string | null;
+  status: IntegrationWorkItemStatus;
+  owner_email: string | null;
+  due_at: string | null;
+  severity: "low" | "medium" | "high" | "critical" | null;
+  dependency: string | null;
+  resolution: string | null;
+  escalated: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export type IntegrationWorkItemInput = Omit<
+  IntegrationWorkItem, "item_id" | "created_at" | "updated_at"
+>;
 
 export type IntegrationAccountInput = Pick<IntegrationAccount, "name"> &
   Partial<Pick<IntegrationAccount, "owner_email" | "stage" | "health" |
-    "health_reason" | "target_go_live_at" | "current_blocker" | "next_action">>;
+    "health_reason" | "target_go_live_at" | "current_blocker" | "next_action" |
+    "platforms" | "environments" | "stakeholders" | "go_live_criteria" |
+    "completion_percentage">>;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${basePath}${url}`, init);
@@ -72,6 +101,29 @@ export function updateIntegrationAccount(accountId: string, input: IntegrationAc
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     },
+  );
+}
+
+export function createIntegrationWorkItem(accountId: string, input: IntegrationWorkItemInput) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/work-items`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function updateIntegrationWorkItem(
+  accountId: string, itemId: string, input: Partial<IntegrationWorkItemInput>,
+) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/work-items/${itemId}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function deleteIntegrationWorkItem(accountId: string, itemId: string) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/work-items/${itemId}`,
+    { method: "DELETE" },
   );
 }
 

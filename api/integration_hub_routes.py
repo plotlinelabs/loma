@@ -92,8 +92,65 @@ async def handle_update_account(request):
     return web.json_response({"account": _serialize(updated)})
 
 
+def _find_work_item(account, item_id):
+    return next(
+        (item for item in account.get("work_items", []) if item["item_id"] == item_id),
+        None,
+    )
+
+
+async def handle_create_work_item(request):
+    service, actor = _context(request)
+    account_id = request.match_info["account_id"]
+    if not await service.repository.get(account_id):
+        return web.json_response({"error": "Not found"}, status=404)
+    try:
+        account = await service.create_work_item(account_id, await _json(request), actor)
+    except ValidationError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"account": _serialize(account)}, status=201)
+
+
+async def handle_update_work_item(request):
+    service, actor = _context(request)
+    account_id = request.match_info["account_id"]
+    account = await service.repository.get(account_id)
+    item = _find_work_item(account or {}, request.match_info["item_id"])
+    if not item:
+        return web.json_response({"error": "Not found"}, status=404)
+    try:
+        updated = await service.update_work_item(
+            account_id, item, await _json(request), actor
+        )
+    except ValidationError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"account": _serialize(updated)})
+
+
+async def handle_delete_work_item(request):
+    service, _ = _context(request)
+    account = await service.repository.delete_work_item(
+        request.match_info["account_id"], request.match_info["item_id"]
+    )
+    if not account:
+        return web.json_response({"error": "Not found"}, status=404)
+    return web.json_response({"account": _serialize(account)})
+
+
 def setup_integration_hub_routes(app):
     app.router.add_post("/api/integration-hub/accounts", handle_create_account)
     app.router.add_get("/api/integration-hub/accounts", handle_list_accounts)
     app.router.add_get("/api/integration-hub/accounts/{account_id}", handle_get_account)
     app.router.add_patch("/api/integration-hub/accounts/{account_id}", handle_update_account)
+    app.router.add_post(
+        "/api/integration-hub/accounts/{account_id}/work-items",
+        handle_create_work_item,
+    )
+    app.router.add_patch(
+        "/api/integration-hub/accounts/{account_id}/work-items/{item_id}",
+        handle_update_work_item,
+    )
+    app.router.add_delete(
+        "/api/integration-hub/accounts/{account_id}/work-items/{item_id}",
+        handle_delete_work_item,
+    )
