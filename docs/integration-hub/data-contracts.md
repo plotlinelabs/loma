@@ -539,6 +539,14 @@ names. In this table, **assigned access** means the caller has the named
 permission and an active `integration_account_access` grant for the target
 account. `view_all` and `manage_all` do not require an account grant.
 
+The authorization service computes an effective permission set before applying
+this matrix. `manage_assigned` implies `view_assigned`. `manage_all` implies
+`view_all`, `manage_assigned`, and `view_assigned`. As a result, a custom role
+with a management permission can also read the resources it is allowed to
+mutate without being assigned the corresponding view permission separately.
+The active-grant requirement still applies to assigned access. These
+implications do not grant `audit_all`.
+
 | Operation | Required authorization |
 | --- | --- |
 | List or read accounts, projects, milestones, tasks, risks, and actions | `view_assigned` plus an active account grant, or `view_all` |

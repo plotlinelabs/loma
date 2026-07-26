@@ -150,6 +150,20 @@ must check permissions, not role names. `integration_hub:admin` does not
 implicitly replace permission checks: the admin role is configured with all
 permissions above, including `integration_hub:audit_all`.
 
+Management permissions include the corresponding read permission:
+
+- `integration_hub:manage_assigned` implies
+  `integration_hub:view_assigned`;
+- `integration_hub:manage_all` implies `integration_hub:view_all`,
+  `integration_hub:manage_assigned`, and
+  `integration_hub:view_assigned`.
+
+This implication is evaluated by the server when it computes effective
+permissions. A custom role therefore does not need a duplicate view permission
+to read resources it can manage. Assigned operations still require an active
+account access grant. Neither management permission implies
+`integration_hub:audit_all`.
+
 ### Account access grants
 
 Access is granted by `integration_account_access`, not inferred from task
