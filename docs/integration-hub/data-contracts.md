@@ -7,8 +7,12 @@
 - All timestamps are UTC BSON datetimes.
 - Mutable records include `created_at`, `created_by`, `updated_at`, and
   `updated_by`.
+- Archivable records include `archived_at` and `archived_by`; APIs do not
+  hard-delete operational records.
 - Records use optimistic concurrency through an integer `version`.
 - Source payloads are not copied unless required for a documented workflow.
+- `account_id` is canonical. The term `customer_id` is not used in storage or
+  API contracts.
 
 ## Collections
 
@@ -26,18 +30,12 @@ Canonical customer identity and ownership.
     "technical_email": "engineer@plotline.so",
     "backup_email": "manager@plotline.so"
   },
-  "source_mappings": [
-    {
-      "source": "slack",
-      "tenant_id": "T123",
-      "external_id": "C123",
-      "status": "confirmed"
-    }
-  ],
   "created_at": "BSON datetime",
   "created_by": "user@plotline.so",
   "updated_at": "BSON datetime",
   "updated_by": "user@plotline.so",
+  "archived_at": null,
+  "archived_by": null,
   "version": 1
 }
 ```
@@ -45,9 +43,87 @@ Canonical customer identity and ownership.
 Indexes:
 
 - Unique: `account_id`
-- Unique partial: `source_mappings.source`, `source_mappings.tenant_id`,
-  `source_mappings.external_id` where mapping status is confirmed
 - `owners.primary_email`, `status`
+
+### `integration_source_mappings`
+
+Source identifiers, approval history, and synchronization health are normalized
+outside the account record.
+
+```json
+{
+  "mapping_id": "map_uuid",
+  "account_id": "acc_uuid",
+  "source": "slack",
+  "tenant_id": "T123",
+  "external_id": "C123",
+  "status": "confirmed",
+  "proposed_by": "resolver:domain-v1",
+  "confirmed_by": "user@plotline.so",
+  "confirmed_at": "BSON datetime",
+  "exception_reason": null,
+  "source_metadata": {},
+  "sync": {
+    "cursor": "opaque provider cursor",
+    "last_success_at": null,
+    "last_error_at": null,
+    "last_error_code": null
+  },
+  "archived_at": null,
+  "archived_by": null,
+  "version": 1
+}
+```
+
+Indexes:
+
+- Unique: `mapping_id`
+- Unique partial: `source`, `tenant_id`, `external_id` where `status` is
+  `confirmed` and `archived_at` is null
+- `account_id`, `source`, `status`
+
+Raw API keys and credentials are prohibited. Only safe provider identifiers or
+irreversible, versioned fingerprints may be stored.
+
+### `integration_account_access`
+
+Explicit access grants are separate from operational ownership fields so access
+can be delegated, expired, and revoked deterministically.
+
+```json
+{
+  "grant_id": "grt_uuid",
+  "account_id": "acc_uuid",
+  "principal_type": "user",
+  "principal_id": "user@plotline.so",
+  "scope": "manage",
+  "source": "account_technical_owner",
+  "source_id": "acc_uuid",
+  "reason": "Technical onboarding owner",
+  "starts_at": "BSON datetime",
+  "expires_at": null,
+  "revoked_at": null,
+  "revoked_by": null,
+  "created_at": "BSON datetime",
+  "created_by": "user@plotline.so",
+  "version": 1
+}
+```
+
+Enums:
+
+- `principal_type`: `user`, `team`
+- `scope`: `view`, `manage`, `audit`
+- `source`: `account_primary_owner`, `account_technical_owner`,
+  `account_backup_owner`, `project_owner`, `team_membership`, `explicit_acl`,
+  `temporary_delegation`
+
+Indexes:
+
+- Unique: `grant_id`
+- `account_id`, `principal_type`, `principal_id`, `revoked_at`, `expires_at`
+- Unique partial: `account_id`, `principal_type`, `principal_id`, `scope`,
+  `source`, `source_id` where `revoked_at` is null
 
 ### `integration_projects`
 
@@ -58,20 +134,26 @@ One onboarding project per account and implementation scope.
   "project_id": "prj_uuid",
   "account_id": "acc_uuid",
   "name": "Mobile SDK onboarding",
+  "owner_emails": ["owner@plotline.so"],
   "stage": "kickoff",
+  "status": "active",
   "health": "on_track",
+  "health_reason": "Kickoff completed and no overdue actions",
+  "health_source": "manual",
+  "health_updated_at": "BSON datetime",
+  "health_updated_by": "user@plotline.so",
   "target_go_live_at": "BSON datetime",
-  "next_action": {
-    "summary": "Confirm Android SDK installation",
-    "owner_type": "customer",
-    "owner": "Customer engineering",
-    "due_at": "BSON datetime"
-  },
+  "target_date_change_reason": null,
+  "next_action_task_id": "tsk_uuid",
   "playbook_key": "android_standard",
+  "playbook_version": 3,
+  "instantiated_at": "BSON datetime",
   "created_at": "BSON datetime",
   "created_by": "user@plotline.so",
   "updated_at": "BSON datetime",
   "updated_by": "user@plotline.so",
+  "archived_at": null,
+  "archived_by": null,
   "version": 1
 }
 ```
@@ -79,8 +161,13 @@ One onboarding project per account and implementation scope.
 Indexes:
 
 - Unique: `project_id`
-- `account_id`, `stage`, `health`, `target_go_live_at`
-- `next_action.owner`, `next_action.due_at`
+- `account_id`, `stage`, `status`, `health`, `target_go_live_at`
+- `next_action_task_id`
+
+`next_action_task_id` is optional and must reference an open task in the same
+project. Its display owner and due date are always derived from that task. A
+future executive narrative, if needed, must be named `next_action_summary` and
+must not represent task state.
 
 ### `integration_milestones`
 
@@ -99,6 +186,7 @@ Indexes:
   },
   "owner_type": "customer",
   "owner": "Customer engineering",
+  "depends_on_milestone_ids": [],
   "due_at": "BSON datetime",
   "completed_at": null,
   "version": 1
@@ -124,6 +212,7 @@ Indexes:
   "owner": "user@plotline.so",
   "due_at": "BSON datetime",
   "source_references": [],
+  "assignee_emails": ["user@plotline.so"],
   "version": 1
 }
 ```
@@ -143,7 +232,6 @@ Indexes:
   "title": "Infosec approval pending",
   "severity": "high",
   "status": "open",
-  "owner": "user@plotline.so",
   "mitigation": "Schedule security review",
   "source_references": [],
   "version": 1
@@ -286,11 +374,26 @@ Introduced in Phase 4. Stores metadata, not unrestricted source content.
 
 `kickoff`, `sdk_installation`, `identification`, `events_attributes`,
 `pages_elements`, `test_validation`, `production_deployment`,
-`first_campaign`, `handover`, `complete`, `paused`, `cancelled`
+`first_campaign`, `handover`
+
+### Project lifecycle status
+
+`active`, `paused`, `completed`, `cancelled`, `archived`
 
 ### Project health
 
 `on_track`, `needs_attention`, `blocked`, `silent`, `at_risk`, `escalated`
+
+Health is explained state, never a bare label. `health_source` is `manual`,
+`rule`, or `ai`; AI health remains advisory until human confirmation.
+
+### Account status
+
+`active`, `inactive`, `archived`
+
+### Source mapping status
+
+`proposed`, `confirmed`, `rejected`, `archived`
 
 ### Conversation state
 
@@ -301,14 +404,63 @@ Introduced in Phase 4. Stores metadata, not unrestricted source content.
 
 `not_started`, `in_progress`, `blocked`, `complete`, `skipped`
 
+### Task status
+
+`open`, `in_progress`, `blocked`, `done`, `cancelled`
+
+### Risk status
+
+`open`, `mitigated`, `accepted`, `closed`
+
+### Commitment status
+
+`proposed`, `confirmed`, `rejected`, `in_progress`, `fulfilled`, `cancelled`
+
 ### Verification state
 
 `unverified`, `verified`, `partial`, `conflicting`, `stale`, `unavailable`
 
+## Transition and archival rules
+
+- Project stage may move forward or backward while status is `active`; every
+  backward move requires a reason in the audit record.
+- `active -> paused -> active` preserves the last stage.
+- `active|paused -> completed|cancelled`; reopening either terminal status
+  requires `manage_all`, a reason, and an audit entry.
+- `completed|cancelled -> archived`; archive is reversible by an administrator.
+- Archiving an account hides all children from normal queries but does not
+  mutate their lifecycle status. Restore restores visibility, not prior task
+  state.
+- Completed projects are read-only except for archive, restore, and authorized
+  reopen operations.
+- `task: open -> in_progress|blocked|done|cancelled`; blocked tasks may return to
+  open or in progress; done and cancelled require an authorized reopen.
+- `risk: open -> mitigated|accepted|closed`; terminal risks require an
+  authorized reopen to become open.
+- `commitment: proposed -> confirmed|rejected`; confirmed may move to in
+  progress, fulfilled, or cancelled. Rejected commitments are immutable.
+- Confirming or rejecting a source mapping requires an authorized human actor.
+- Hard delete is not exposed. Retention cleanup is a separately approved,
+  audited administrative process.
+
 ## Initial REST API contract
 
-All routes are under `/api/integration-hub` and return JSON. Mutations require an
-`If-Match` version or a version in the request body to prevent lost updates.
+All routes are under `/api/integration-hub` and return JSON.
+
+- Lists use opaque cursor pagination, default 50, maximum 100.
+- Sorting is stable and ends with the resource public ID as a tie-breaker.
+- Unknown filters return `400`; multiple values for one filter use OR, while
+  different filter fields use AND.
+- `ETag` is the quoted integer record version. `PATCH` requires `If-Match`;
+  stale versions return `412`.
+- `POST` requires an `Idempotency-Key`. A key is scoped to actor, route, and
+  account for 24 hours; replay returns the original result.
+- `PATCH` uses JSON Merge Patch semantics. Immutable IDs, audit fields, and
+  derived fields cannot be patched.
+- Initial limits are 120 reads and 30 mutations per user per minute, returning
+  `429` with `Retry-After`.
+- Bulk playbook instantiation is one atomic endpoint with a maximum of 100 child
+  records. General bulk mutation is out of scope for Phase 1.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
@@ -316,10 +468,13 @@ All routes are under `/api/integration-hub` and return JSON. Mutations require a
 | `POST` | `/accounts` | Create an account |
 | `GET` | `/accounts/{account_id}` | Get Customer 360 foundation |
 | `PATCH` | `/accounts/{account_id}` | Update identity or ownership |
+| `POST` | `/accounts/{account_id}/archive` | Archive account |
+| `POST` | `/accounts/{account_id}/restore` | Restore account |
 | `GET` | `/projects` | List portfolio projects |
 | `POST` | `/projects` | Create onboarding project |
 | `GET` | `/projects/{project_id}` | Get project and summary counts |
-| `PATCH` | `/projects/{project_id}` | Update stage, target, or next action |
+| `PATCH` | `/projects/{project_id}` | Update stage, target, health, or next-action reference |
+| `POST` | `/projects/{project_id}/instantiate-playbook` | Create versioned milestones and tasks atomically |
 | `GET` | `/projects/{project_id}/milestones` | List milestones |
 | `POST` | `/projects/{project_id}/milestones` | Add milestone |
 | `PATCH` | `/milestones/{milestone_id}` | Update milestone |
@@ -350,7 +505,9 @@ Expected status codes:
 - `401` unauthenticated
 - `403` feature disabled or unauthorized
 - `404` not found or not visible to the caller
-- `409` duplicate or optimistic concurrency conflict
+- `409` duplicate or idempotency conflict
+- `412` ETag/version precondition failed
+- `429` rate limit exceeded
 - `422` valid JSON with invalid domain transition
 - `503` dependency unavailable
 
@@ -363,6 +520,7 @@ Expected status codes:
   active stage.
 - Completion timestamps are server-generated.
 - Account-scoped resources must reference an account visible to the caller.
-- Audit entries are written in the same service operation as each mutation.
+- Resource, access-grant, audit, and optional outbox writes use one MongoDB
+  transaction. Any failure aborts the mutation.
 - AI proposals cannot directly change official project, task, milestone, risk, or
   commitment state.

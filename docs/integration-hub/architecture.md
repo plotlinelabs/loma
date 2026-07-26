@@ -101,15 +101,38 @@ must not share mutable workflow state.
 The backend must enforce flags and permissions independently of UI visibility.
 An empty allowlist denies access unless a future admin-configured role grants it.
 
+## Authentication trust boundary
+
+Integration Hub authorization must not rely on a client-controlled
+`X-User-Email` header. Before PR 0 is deployed, the platform must satisfy this
+contract:
+
+1. A named, trusted edge proxy authenticates the user and injects the canonical
+   identity header.
+2. The proxy strips identity headers supplied by the client before injecting its
+   own value.
+3. Network policy prevents direct public access to the backend.
+4. Production backend requests without verified proxy identity fail closed with
+   `401`.
+5. The proxy-to-backend hop is authenticated, for example through a signed
+   assertion or private network plus a rotating shared credential. Network
+   location alone is not treated as user identity.
+6. Tests cover a spoofed identity header, a missing identity, an invalid proxy
+   assertion, and direct backend access.
+
+The trusted proxy, assertion format, key rotation, clock-skew policy, and local
+development exception must be recorded in the authentication prerequisite PR.
+The Integration Hub remains disabled until that PR is deployed.
+
 ## Authorization model
 
-Phase 1 uses defense in depth:
+Integration Hub uses defense in depth:
 
-1. The existing authentication middleware resolves the user and system role.
+1. Trusted authentication middleware resolves a verified user identity.
 2. The Integration Hub route guard verifies the feature flag.
 3. The route guard verifies explicit access through an allowlist or stored
    permission.
-4. Customer-scoped authorization limits non-manager users to assigned accounts.
+4. Account-scoped authorization evaluates an explicit access grant.
 5. Every mutation records actor, timestamp, request ID, action, target, and a
    redacted before/after summary.
 
@@ -124,22 +147,66 @@ Proposed permissions:
 Roles must map to permissions in configuration or governance data. API handlers
 must check permissions, not role names.
 
-## Customer identity
+### Account access grants
 
-Every record resolves to a canonical `customer_id`. Source mappings support
-multiple identifiers per customer, including:
+Access is granted by `integration_account_access`, not inferred from task
+assignment. A grant may originate from:
+
+- account ownership: primary, technical, or backup owner;
+- project ownership;
+- team membership;
+- explicit permanent ACL;
+- explicit time-bounded delegation.
+
+Task assignment alone does not grant access to the full account. Task assignees
+receive access only when a separate account or project grant is created.
+Reassignment updates grants in the same transaction as the ownership change, so
+revocation is immediate. Administrators may create a time-bounded delegation
+with a reason and expiry. Audit access is account-scoped unless the caller has
+`integration_hub:audit_all`.
+
+Authorization checks occur on every request and never depend only on cached UI
+state. Any permission cache must support explicit invalidation and a short,
+documented maximum TTL.
+
+## Account identity
+
+Every record resolves to a canonical `account_id`. An account can include
+multiple legal entities, products, environments, and onboarding projects.
+Source mappings support multiple identifiers per account, including:
 
 - HubSpot company IDs and related company IDs
 - Email domains
 - Slack workspace and channel IDs
 - Pylon organization IDs
-- Plotline organization, environment, and API keys
+- Plotline organization and environment IDs
 - Linear project or label IDs
 - Drive folder IDs
 
 Automatic matching may propose mappings, but a human must confirm ambiguous
 matches. A source identifier cannot be actively mapped to two customers unless
 an administrator records an explicit exception.
+
+Raw Plotline API keys and connector secrets are never identity mappings. If a
+legacy workflow requires API-key correlation, it stores an irreversible,
+versioned fingerprint and never the key itself.
+
+## Atomic mutations and audit
+
+Every restricted resource mutation and its audit entry must commit atomically in
+one MongoDB transaction. PR 0 must verify that every deployed MongoDB
+environment supports transactions and uses a replica set or sharded-cluster
+configuration compatible with them.
+
+- If the resource write, audit write, or access-grant update fails, the
+  transaction aborts and the API returns an error.
+- Mutations fail closed when audit persistence is unavailable.
+- External side effects are not executed inside the transaction. Future source
+  notifications use a transactional outbox written in the same transaction.
+- Audit records are append-only, redacted, and include request and idempotency
+  identifiers.
+- Transaction retry behavior is bounded and safe only for idempotent service
+  operations.
 
 ## Source adapter contract
 
@@ -183,6 +250,10 @@ batch contains an opaque continuation cursor. Reprocessing is safe.
 
 ## Observability
 
+Every backend PR includes request IDs, authorization-failure metrics,
+mutation/error metrics, audit coverage, and redaction tests. Observability is
+not deferred to a final hardening PR.
+
 Required metrics:
 
 - API request count, latency, and authorization failures
@@ -198,12 +269,14 @@ version, result, confidence, and human correction.
 
 ## Rollout and rollback
 
-1. Enable the base feature for 3 to 5 internal users.
-2. Add 5 active onboarding customers through manual entry.
-3. Run alongside the existing process for two weeks.
-4. Validate identity mapping and communication classifications before enabling
+1. Deploy the authentication prerequisite with Integration Hub disabled.
+2. Run PR 0 with two test accounts and selected internal users.
+3. Verify feature-flag rollback, authorization, atomic audit, and proxy behavior.
+4. Expand the manual pilot to 5 active onboarding accounts.
+5. Run alongside the existing process for two weeks.
+6. Validate identity mapping and communication classifications before enabling
    alerts.
-5. Expand to 20 customers, then to the onboarding team.
+7. Expand to 20 accounts, then to the onboarding team.
 
 Rollback disables the feature flag and workers. Existing support workflows
 continue because no support routes, collections, or state are changed.

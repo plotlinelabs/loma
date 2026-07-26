@@ -77,7 +77,31 @@ This directory is the Phase 0 design contract for later implementation.
 
 - Product and support-bot boundaries are explicit.
 - Initial collections, indexes, lifecycle states, and API contracts are defined.
-- Access is denied by default and enforced by the backend.
+- The authentication proxy contract is implemented and tested before any
+  Integration Hub authorization is trusted.
+- Access grants, revocation, audit visibility, and temporary delegation are
+  explicit and enforced by the backend.
+- `account_id` is the canonical identity term throughout the module.
+- Resource mutations and their audit records commit atomically or fail together.
+- Every lifecycle enum, transition, archival rule, and restore rule is defined.
 - Source connectors are read-only in the initial phases.
-- Phase 1 is divided into independently reviewable pull requests.
+- A PR 0 vertical slice validates authentication, MongoDB transactions,
+  dashboard proxying, authorization, audit, and feature-flag rollback.
+- Phase 1 is divided into independently reviewable pull requests after PR 0.
 - Pilot metrics and rollback conditions are documented.
+
+## Decisions required from onboarding users
+
+Before PR 0 is promoted beyond two test accounts, product must validate:
+
+- Whether Android, iOS, Web, backend, push, and infosec are separate concurrent
+  projects or workstreams within one project.
+- Whether milestones require dependency relationships.
+- Whether waiting state belongs to a communication, task, project, or a derived
+  project summary.
+- Whether internal tasks may have multiple owners.
+- Whether customer contacts are first-class records.
+- The operational distinction between a blocker and a risk.
+- The handover acceptance criteria and required sign-off.
+- Whether target-date changes require a reason and approval.
+- Whether reminder and escalation policies vary by account.

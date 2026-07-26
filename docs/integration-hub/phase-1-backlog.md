@@ -26,56 +26,95 @@ Excluded:
 - Customer portal
 - Automatic technical verification
 
-## PR-sized work items
+## Prerequisite: authentication hardening
 
-### PR 1: Feature gate and authorization
+Before Integration Hub code is enabled:
+
+- Name and configure the trusted identity proxy.
+- Strip client identity headers at the edge and inject a verified identity.
+- Block direct production backend access.
+- Fail closed when verified identity is missing.
+- Add spoofed-header, invalid-assertion, missing-identity, and direct-access
+  tests.
+
+This is a separate platform PR because it affects the trust boundary of existing
+Loma APIs.
+
+## PR 0: validation vertical slice
 
 Deliver:
 
-- Add `LOMA_ENABLE_INTEGRATION_HUB`.
-- Add pilot allowlist configuration.
-- Add a reusable Integration Hub authorization guard.
-- Register a protected `/api/integration-hub/health` endpoint.
-- Add authorization tests for disabled, unauthorized, and authorized states.
+- Feature-gated dashboard route and `/api/integration-hub/health`.
+- One `integration_accounts` collection.
+- One account-scoped list endpoint.
+- One audited account mutation using a MongoDB transaction.
+- Request IDs, authorization and mutation metrics, and redaction tests.
+- Feature-flag rollback and support-route regression tests.
 
 Acceptance:
 
-- Feature is disabled by default.
-- Hiding the UI is not the only access control.
+- Verified proxy identity reaches the API and spoofed identity is rejected.
+- Resource and audit writes either both commit or both fail.
+- Assigned users cannot access the other test account.
+- Disabling the feature removes UI and API access without changing support.
+- The slice works with two test accounts in the deployed environment.
+
+PR 0 is a validation gate. Remaining Phase 1 work does not begin until its
+deployment evidence is reviewed.
+
+## Phase 1 PR-sized work items
+
+### PR 1: Authorization and account access grants
+
+Deliver:
+
+- Add explicit account, project, team, ACL, and temporary-delegation grants.
+- Add immediate transactional revocation on ownership changes.
+- Add account-scoped and global audit permissions.
+- Add authorization tests for every grant source and revocation path.
+
+Acceptance:
+
+- Task assignment alone does not grant account access.
+- Primary, technical, and backup ownership grants are explicit.
+- Expired delegation and reassignment revoke access immediately.
 - Existing API and support tests remain unchanged and pass.
 
-Dependencies: none.
+Dependencies: authentication prerequisite and PR 0.
 
 ### PR 2: Persistence foundation
 
 Deliver:
 
-- Create repository and service modules for accounts and projects.
+- Create repository and service modules for projects and versioned playbooks.
 - Add validation, UUID generation, timestamps, and optimistic concurrency.
 - Ensure required MongoDB indexes idempotently.
+- Define stage/status transitions, archive/restore, and health explanations.
 - Add unit tests using the repository's existing database test pattern.
 
 Acceptance:
 
-- Account and project CRUD works through service tests.
+- Project and playbook instantiation works through service tests.
 - Duplicate IDs and stale versions are rejected.
 - No non-`integration_` collection is written.
+- Every mutation includes atomic audit and baseline observability.
 
 Dependencies: PR 1.
 
-### PR 3: Account and portfolio APIs
+### PR 3: Project and portfolio APIs
 
 Deliver:
 
-- Add account and project REST endpoints.
+- Add project REST endpoints and archive/restore operations.
 - Enforce account-scoped visibility.
 - Add pagination, stage, health, owner, and target-date filters.
-- Write append-only audit records for mutations.
+- Implement ETag, idempotency, PATCH, stable sort, and rate-limit contracts.
 
 Acceptance:
 
 - Users see only authorized accounts.
 - Every mutation records an audit entry.
+- `next_action_task_id` never duplicates task state.
 - API error responses follow the Phase 0 contract.
 
 Dependencies: PR 2.
@@ -147,12 +186,13 @@ Acceptance:
 
 Dependencies: PR 4 and PR 5.
 
-### PR 8: Audit, observability, and pilot hardening
+### PR 8: Pilot validation and operational views
 
 Deliver:
 
-- Authorized audit view.
-- Metrics for API usage, latency, authorization failures, and mutation errors.
+- Authorized, account-scoped audit view.
+- Validate metrics, request tracing, mutation/audit coverage, and redaction
+  already delivered by earlier PRs.
 - Seed script or admin workflow for five pilot customers.
 - Security and regression test pass.
 
@@ -175,12 +215,16 @@ Dependencies: PRs 1 through 7.
 
 ## Pilot plan
 
-1. Select five active onboarding accounts and three to five internal users.
-2. Record baseline response and onboarding metrics.
-3. Enter the projects manually and run in parallel with the current process.
-4. Review data accuracy and usage daily for the first week.
-5. Review support-bot regressions, permission failures, and data gaps weekly.
-6. Continue to Phase 2 only when the exit criteria below are met.
+1. Validate terminology, workstreams, ownership, blockers, handover, and target
+   date rules with onboarding users.
+2. Run PR 0 with two test accounts and selected internal users.
+3. Review authentication, transaction, authorization, proxy, and rollback
+   evidence.
+4. Expand to five active onboarding accounts and three to five internal users.
+5. Record baseline response and onboarding metrics.
+6. Run in parallel with the current process for two weeks.
+7. Review support-bot regressions, permission failures, and data gaps weekly.
+8. Continue to Phase 2 only when the exit criteria below are met.
 
 ## Phase 1 exit criteria
 
