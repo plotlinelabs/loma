@@ -131,7 +131,7 @@ Dependencies: PR 2.
 
 Deliver:
 
-- CRUD endpoints for milestones, tasks, and risks.
+- Create, list, and update endpoints for milestones, tasks, and risks.
 - Validate lifecycle transitions, ownership, and due dates.
 - Add Action Center query for due and overdue tasks.
 

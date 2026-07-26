@@ -188,7 +188,7 @@ Source mappings support multiple identifiers per account, including:
 
 Automatic matching may propose mappings, but a human must confirm ambiguous
 matches. A source identifier cannot be actively mapped to two customers unless
-an administrator records an explicit exception.
+a caller with `integration_hub:manage_all` records an explicit exception.
 
 Raw Plotline API keys and connector secrets are never identity mappings. If a
 legacy workflow requires API-key correlation, it stores an irreversible,

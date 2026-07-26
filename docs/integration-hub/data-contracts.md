@@ -465,8 +465,8 @@ Health is explained state, never a bare label. `health_source` is `manual`,
 - `active|paused -> completed|cancelled`; reopening either terminal status
   requires `manage_all`, a reason, and an audit entry.
 - Archival is represented only by `archived_at` and `archived_by`, not by a
-  lifecycle status. Archive is reversible by an administrator and does not
-  alter the operational `status`.
+  lifecycle status. Archive is reversible by a caller with
+  `integration_hub:manage_all` and does not alter the operational `status`.
 - Archiving an account hides all children from normal queries but does not
   mutate their lifecycle status. Restore restores visibility, not prior task
   state.
@@ -492,8 +492,12 @@ All routes are under `/api/integration-hub` and return JSON.
   different filter fields use AND.
 - `ETag` is the quoted integer record version. `PATCH` requires `If-Match`;
   stale versions return `412`.
-- `POST` requires an `Idempotency-Key`. A key is scoped to actor, route, and
-  account for 24 hours; replay returns the original result.
+- `POST` requires an `Idempotency-Key`. For account creation, where no
+  `account_id` exists yet, the key is scoped to actor, normalized route, and
+  key value for 24 hours. For all other account-scoped operations, it is scoped
+  to actor, normalized route, resolved `account_id`, and key value for 24
+  hours. Replay returns the original result. Reusing a key with a different
+  request fingerprint returns `409`.
 - `PATCH` uses JSON Merge Patch semantics. Immutable IDs, audit fields, and
   derived fields cannot be patched.
 - Initial limits are 120 reads and 30 mutations per user per minute, returning
@@ -527,6 +531,36 @@ All routes are under `/api/integration-hub` and return JSON.
 | `PATCH` | `/risks/{risk_id}` | Update risk |
 | `GET` | `/actions` | Current user's due and overdue actions |
 | `GET` | `/audit` | Authorized audit query |
+
+## Route-to-permission authorization matrix
+
+Permissions are evaluated by API handlers, never from UI visibility or role
+names. In this table, **assigned access** means the caller has the named
+permission and an active `integration_account_access` grant for the target
+account. `view_all` and `manage_all` do not require an account grant.
+
+| Operation | Required authorization |
+| --- | --- |
+| List or read accounts, projects, milestones, tasks, risks, and actions | `view_assigned` plus an active account grant, or `view_all` |
+| Create an account | `manage_all` |
+| Update an account | `manage_assigned` plus an active account grant, or `manage_all` |
+| Archive or restore an account | `manage_all` |
+| Create a project or instantiate a playbook | `manage_assigned` plus an active account grant, or `manage_all` |
+| Update a non-terminal project | `manage_assigned` plus an active account grant, or `manage_all` |
+| Archive or restore a project | `manage_assigned` plus an active account grant, or `manage_all` |
+| Reopen a completed or cancelled project | `manage_all`; a reason is mandatory |
+| Create or update milestones, tasks, risks, and commitments | `manage_assigned` plus an active account grant, or `manage_all` |
+| Reopen terminal tasks or risks | `manage_assigned` plus an active account grant, or `manage_all`; a reason is mandatory |
+| Create, modify, revoke, or delegate access grants | `manage_all` |
+| Query `/audit` for one or more granted accounts | `view_assigned` plus an active grant for every requested account, or `view_all` |
+| Query `/audit` without an account scope or across accounts not otherwise visible | `audit_all` |
+
+`audit_all` alone grants access only to audit records. It does not grant access
+to operational resource routes. Conversely, `view_assigned` or `view_all`
+permits only audit records within the caller's normal account visibility.
+Archive and restore never depend on an `admin` role name. Implementations use
+the permissions above, even when an administrator role is configured with all
+permissions.
 
 ### Error shape
 
