@@ -142,10 +142,13 @@ Proposed permissions:
 - `integration_hub:view_all`
 - `integration_hub:manage_assigned`
 - `integration_hub:manage_all`
+- `integration_hub:audit_all`
 - `integration_hub:admin`
 
 Roles must map to permissions in configuration or governance data. API handlers
-must check permissions, not role names.
+must check permissions, not role names. `integration_hub:admin` does not
+implicitly replace permission checks: the admin role is configured with all
+permissions above, including `integration_hub:audit_all`.
 
 ### Account access grants
 

@@ -5,8 +5,13 @@
 - Collection names use the `integration_` prefix.
 - Public IDs are UUID strings and are separate from MongoDB `_id`.
 - All timestamps are UTC BSON datetimes.
-- Mutable records include `created_at`, `created_by`, `updated_at`, and
-  `updated_by`.
+- Mutable operational records include `created_at`, `created_by`, `updated_at`,
+  and `updated_by`. This applies to accounts, source mappings, access grants,
+  projects, milestones, tasks, risks, and commitments.
+- Append-only records are exempt from `updated_at` and `updated_by`:
+  interactions, evidence observations, audit logs, and completed AI-run
+  records. Corrections create a superseding record or an audit-linked review
+  record rather than mutating the original observation.
 - Archivable records include `archived_at` and `archived_by`; APIs do not
   hard-delete operational records.
 - Records use optimistic concurrency through an integer `version`.
@@ -69,6 +74,10 @@ outside the account record.
     "last_error_at": null,
     "last_error_code": null
   },
+  "created_at": "BSON datetime",
+  "created_by": "user@plotline.so",
+  "updated_at": "BSON datetime",
+  "updated_by": "user@plotline.so",
   "archived_at": null,
   "archived_by": null,
   "version": 1
@@ -106,6 +115,8 @@ can be delegated, expired, and revoked deterministically.
   "revoked_by": null,
   "created_at": "BSON datetime",
   "created_by": "user@plotline.so",
+  "updated_at": "BSON datetime",
+  "updated_by": "user@plotline.so",
   "version": 1
 }
 ```
@@ -164,8 +175,10 @@ Indexes:
 - `account_id`, `stage`, `status`, `health`, `target_go_live_at`
 - `next_action_task_id`
 
-`next_action_task_id` is optional and must reference an open task in the same
-project. Its display owner and due date are always derived from that task. A
+`next_action_task_id` is optional and must reference a non-terminal task
+(`open`, `in_progress`, or `blocked`) in the same project. Moving the referenced
+task to `done` or `cancelled` must atomically clear or replace the reference.
+Its display assignee and due date are always derived from that task. A
 future executive narrative, if needed, must be named `next_action_summary` and
 must not represent task state.
 
@@ -189,6 +202,10 @@ must not represent task state.
   "depends_on_milestone_ids": [],
   "due_at": "BSON datetime",
   "completed_at": null,
+  "created_at": "BSON datetime",
+  "created_by": "user@plotline.so",
+  "updated_at": "BSON datetime",
+  "updated_by": "user@plotline.so",
   "version": 1
 }
 ```
@@ -208,20 +225,32 @@ Indexes:
   "milestone_id": "mil_uuid",
   "summary": "Validate missing payment event",
   "status": "open",
-  "owner_type": "plotline",
-  "owner": "user@plotline.so",
+  "assignee": {
+    "type": "plotline_user",
+    "email": "user@plotline.so",
+    "display_name": "Vamsi Madhav"
+  },
   "due_at": "BSON datetime",
   "source_references": [],
-  "assignee_emails": ["user@plotline.so"],
+  "created_at": "BSON datetime",
+  "created_by": "user@plotline.so",
+  "updated_at": "BSON datetime",
+  "updated_by": "user@plotline.so",
   "version": 1
 }
 ```
+
+Phase 1 uses one accountable assignee per task. `assignee.type` is
+`plotline_user` or `customer_contact`; `email` is required for a Plotline user
+and optional for a customer contact, while `display_name` is always required.
+Collaborators may be represented by source references but are not task owners.
+Multiple accountable assignees require a future contract change.
 
 Indexes:
 
 - Unique: `task_id`
 - `project_id`, `status`
-- `owner`, `status`, `due_at`
+- `assignee.email`, `status`, `due_at`
 
 ### `integration_risks`
 
@@ -234,6 +263,10 @@ Indexes:
   "status": "open",
   "mitigation": "Schedule security review",
   "source_references": [],
+  "created_at": "BSON datetime",
+  "created_by": "user@plotline.so",
+  "updated_at": "BSON datetime",
+  "updated_by": "user@plotline.so",
   "version": 1
 }
 ```
@@ -291,6 +324,10 @@ Introduced in Phase 2 and human-confirmed before becoming official.
   "confidence": 0.87,
   "confirmed_by": null,
   "confirmed_at": null,
+  "created_at": "BSON datetime",
+  "created_by": "user@plotline.so",
+  "updated_at": "BSON datetime",
+  "updated_by": "user@plotline.so",
   "version": 1
 }
 ```
@@ -378,7 +415,7 @@ Introduced in Phase 4. Stores metadata, not unrestricted source content.
 
 ### Project lifecycle status
 
-`active`, `paused`, `completed`, `cancelled`, `archived`
+`active`, `paused`, `completed`, `cancelled`
 
 ### Project health
 
@@ -389,11 +426,11 @@ Health is explained state, never a bare label. `health_source` is `manual`,
 
 ### Account status
 
-`active`, `inactive`, `archived`
+`active`, `inactive`
 
 ### Source mapping status
 
-`proposed`, `confirmed`, `rejected`, `archived`
+`proposed`, `confirmed`, `rejected`
 
 ### Conversation state
 
@@ -427,7 +464,9 @@ Health is explained state, never a bare label. `health_source` is `manual`,
 - `active -> paused -> active` preserves the last stage.
 - `active|paused -> completed|cancelled`; reopening either terminal status
   requires `manage_all`, a reason, and an audit entry.
-- `completed|cancelled -> archived`; archive is reversible by an administrator.
+- Archival is represented only by `archived_at` and `archived_by`, not by a
+  lifecycle status. Archive is reversible by an administrator and does not
+  alter the operational `status`.
 - Archiving an account hides all children from normal queries but does not
   mutate their lifecycle status. Restore restores visibility, not prior task
   state.
@@ -474,6 +513,8 @@ All routes are under `/api/integration-hub` and return JSON.
 | `POST` | `/projects` | Create onboarding project |
 | `GET` | `/projects/{project_id}` | Get project and summary counts |
 | `PATCH` | `/projects/{project_id}` | Update stage, target, health, or next-action reference |
+| `POST` | `/projects/{project_id}/archive` | Archive project without changing lifecycle status |
+| `POST` | `/projects/{project_id}/restore` | Restore archived project visibility |
 | `POST` | `/projects/{project_id}/instantiate-playbook` | Create versioned milestones and tasks atomically |
 | `GET` | `/projects/{project_id}/milestones` | List milestones |
 | `POST` | `/projects/{project_id}/milestones` | Add milestone |

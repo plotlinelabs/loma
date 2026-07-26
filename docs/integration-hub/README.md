@@ -99,7 +99,8 @@ Before PR 0 is promoted beyond two test accounts, product must validate:
 - Whether milestones require dependency relationships.
 - Whether waiting state belongs to a communication, task, project, or a derived
   project summary.
-- Whether internal tasks may have multiple owners.
+- Whether a later phase needs collaborator roles in addition to the Phase 1
+  rule of one accountable task assignee.
 - Whether customer contacts are first-class records.
 - The operational distinction between a blocker and a risk.
 - The handover acceptance criteria and required sign-off.

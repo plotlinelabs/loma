@@ -64,10 +64,15 @@ deployment evidence is reviewed.
 
 ## Phase 1 PR-sized work items
 
-### PR 1: Authorization and account access grants
+### PR 1: Account persistence, APIs, and authorization grants
 
 Deliver:
 
+- Complete the `integration_accounts` repository and service beyond the PR 0
+  slice.
+- Implement account create, get, update, archive, and restore APIs.
+- Implement account list pagination, stable sorting, filters, ETags,
+  idempotency, and rate limits from the Phase 0 API contract.
 - Add explicit account, project, team, ACL, and temporary-delegation grants.
 - Add immediate transactional revocation on ownership changes.
 - Add account-scoped and global audit permissions.
@@ -78,6 +83,9 @@ Acceptance:
 - Task assignment alone does not grant account access.
 - Primary, technical, and backup ownership grants are explicit.
 - Expired delegation and reassignment revoke access immediately.
+- All account operations in the REST contract are implemented and audited.
+- Account archive and restore use `archived_at` without changing operational
+  status.
 - Existing API and support tests remain unchanged and pass.
 
 Dependencies: authentication prerequisite and PR 0.
