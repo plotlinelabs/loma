@@ -39,6 +39,7 @@ import {
   RiMenuFoldLine,
   RiMenuUnfoldLine,
   RiExpandUpDownLine,
+  RiBuildingLine,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -67,6 +68,11 @@ const navigation: NavItem[] = [
     name: "Activity",
     href: "/conversations",
     icon: <RiGridLine size={16} />,
+  },
+  {
+    name: "Integration Hub",
+    href: "/integration-hub",
+    icon: <RiBuildingLine size={16} />,
   },
   {
     name: "My Usage",

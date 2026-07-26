@@ -109,6 +109,13 @@ async def init_observability():
     await _db.projects.create_index("created_by")
     await _db.projects.create_index([("created_at", -1)])
 
+    # Integration Hub manual onboarding accounts
+    await _db.integration_accounts.create_index("account_id", unique=True)
+    await _db.integration_accounts.create_index([("updated_at", -1), ("account_id", 1)])
+    await _db.integration_accounts.create_index("stage")
+    await _db.integration_accounts.create_index("health")
+    await _db.integration_accounts.create_index("owner_email")
+
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)
     await _db.integrations.create_index("status")
