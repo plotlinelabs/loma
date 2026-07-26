@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { fetchConversations, fetchStats, fetchPersons } from "../../lib/api";
+import { fetchConversations, fetchStats } from "../../lib/api";
 import type { Conversation, StatsResponse } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
 import ChatContextMenu from "../../components/ChatContextMenu";
@@ -132,7 +132,7 @@ function MobileSkeletonCard() {
 export default function ConversationsPage() {
   const router = useRouter();
   const { data: session } = useSession();
-  const { isAdmin, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
+  const { isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [page, setPage] = useState(1);
@@ -143,9 +143,7 @@ export default function ConversationsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [personFilter, setPersonFilter] = useState("");
   const [topicFilter, setTopicFilter] = useState("");
-  const [persons, setPersons] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"mine" | "all">("mine");
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -156,22 +154,14 @@ export default function ConversationsPage() {
   }, [searchQuery]);
 
   useEffect(() => {
-    fetchPersons()
-      .then((data) => setPersons(data.persons))
-      .catch((e) => console.error("Failed to load persons:", e));
-  }, []);
-
-  useEffect(() => {
-    if (viewMode === "mine" && session?.user?.email) {
+    if (session?.user?.email) {
       setPersonFilter(session.user.email);
-    } else if (viewMode === "all") {
-      setPersonFilter("");
+      setPage(1);
     }
-    setPage(1);
-  }, [viewMode, session?.user?.email]);
+  }, [session?.user?.email]);
 
   useEffect(() => {
-    if (viewMode === "mine" && !personFilter) return;
+    if (!personFilter) return;
     loadData();
   }, [page, sourceFilter, categoryFilter, debouncedSearch, personFilter, topicFilter]);
 
@@ -199,19 +189,16 @@ export default function ConversationsPage() {
     }
   }
 
-  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || (viewMode === "all" && personFilter) || topicFilter;
+  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || topicFilter;
 
   const clearFilters = useCallback(() => {
     setSourceFilter("");
     setCategoryFilter("");
     setSearchQuery("");
     setDebouncedSearch("");
-    if (viewMode === "all") {
-      setPersonFilter("");
-    }
     setTopicFilter("");
     setPage(1);
-  }, [viewMode]);
+  }, []);
 
   function formatDuration(ms: number | null | undefined) {
     if (!ms) return null;
@@ -224,34 +211,6 @@ export default function ConversationsPage() {
         {/* Page header */}
         <div className="pwa-header-offset flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Conversations</h1>
-          {isAdmin && (
-            <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
-              <Button
-                variant={viewMode === "mine" ? "default" : "ghost"}
-                size="sm"
-                onClick={() => setViewMode("mine")}
-                className={cn(
-                  viewMode === "mine"
-                    ? "bg-accent-200 text-accent-on"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                My Conversations
-              </Button>
-              <Button
-                variant={viewMode === "all" ? "default" : "ghost"}
-                size="sm"
-                onClick={() => setViewMode("all")}
-                className={cn(
-                  viewMode === "all"
-                    ? "bg-accent-200 text-accent-on"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                All
-              </Button>
-            </div>
-          )}
         </div>
 
         {/* Search + Filters — single row, no card borders */}
@@ -297,22 +256,6 @@ export default function ConversationsPage() {
                 <SelectItem value="escalation_needed">Escalation Needed</SelectItem>
               </SelectContent>
             </Select>
-            {viewMode === "all" && (
-              <Select
-                value={personFilter || "__all__"}
-                onValueChange={(val) => { setPersonFilter(val === "__all__" ? "" : val); setPage(1); }}
-              >
-                <SelectTrigger className="w-auto min-w-[120px] bg-card border-border text-[13px] text-foreground">
-                  <SelectValue placeholder="All Persons" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">All Persons</SelectItem>
-                  {persons.map((p) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
             <Select
               value={topicFilter || "__all__"}
               onValueChange={(val) => { setTopicFilter(val === "__all__" ? "" : val); setPage(1); }}
