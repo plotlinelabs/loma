@@ -128,12 +128,49 @@ async def handle_update_work_item(request):
 
 
 async def handle_delete_work_item(request):
-    service, _ = _context(request)
-    account = await service.repository.delete_work_item(
-        request.match_info["account_id"], request.match_info["item_id"]
-    )
-    if not account:
+    service, actor = _context(request)
+    account_id = request.match_info["account_id"]
+    current = await service.repository.get(account_id)
+    item = _find_work_item(current or {}, request.match_info["item_id"])
+    if not item:
         return web.json_response({"error": "Not found"}, status=404)
+    account = await service.delete_work_item(account_id, item, actor)
+    return web.json_response({"account": _serialize(account)})
+
+
+async def handle_create_activity(request):
+    service, actor = _context(request)
+    account_id = request.match_info["account_id"]
+    if not await service.repository.get(account_id):
+        return web.json_response({"error": "Not found"}, status=404)
+    try:
+        account = await service.create_activity(account_id, await _json(request), actor)
+    except ValidationError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"account": _serialize(account)}, status=201)
+
+
+async def handle_create_source_link(request):
+    service, actor = _context(request)
+    account_id = request.match_info["account_id"]
+    if not await service.repository.get(account_id):
+        return web.json_response({"error": "Not found"}, status=404)
+    try:
+        account = await service.create_source_link(account_id, await _json(request), actor)
+    except ValidationError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"account": _serialize(account)}, status=201)
+
+
+async def handle_delete_source_link(request):
+    service, actor = _context(request)
+    account_id = request.match_info["account_id"]
+    current = await service.repository.get(account_id)
+    link = next((link for link in (current or {}).get("source_links", [])
+                 if link["link_id"] == request.match_info["link_id"]), None)
+    if not link:
+        return web.json_response({"error": "Not found"}, status=404)
+    account = await service.delete_source_link(account_id, link, actor)
     return web.json_response({"account": _serialize(account)})
 
 
@@ -153,4 +190,16 @@ def setup_integration_hub_routes(app):
     app.router.add_delete(
         "/api/integration-hub/accounts/{account_id}/work-items/{item_id}",
         handle_delete_work_item,
+    )
+    app.router.add_post(
+        "/api/integration-hub/accounts/{account_id}/activities",
+        handle_create_activity,
+    )
+    app.router.add_post(
+        "/api/integration-hub/accounts/{account_id}/source-links",
+        handle_create_source_link,
+    )
+    app.router.add_delete(
+        "/api/integration-hub/accounts/{account_id}/source-links/{link_id}",
+        handle_delete_source_link,
     )

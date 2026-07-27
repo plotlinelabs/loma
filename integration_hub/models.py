@@ -20,6 +20,8 @@ ENVIRONMENTS = ("development", "staging", "production")
 WORK_ITEM_TYPES = ("milestone", "task", "risk", "blocker")
 WORK_ITEM_STATUSES = ("not_started", "in_progress", "blocked", "completed")
 RISK_SEVERITIES = ("low", "medium", "high", "critical")
+ACTIVITY_TYPES = ("note", "decision", "update")
+SOURCE_TYPES = ("grain", "slack", "linear", "pylon", "hubspot", "document", "other")
 
 
 class ValidationError(ValueError):
@@ -102,6 +104,8 @@ def normalize_create(data):
         "go_live_criteria": _text(data.get("go_live_criteria"), "go_live_criteria"),
         "completion_percentage": 0,
         "work_items": [],
+        "activities": [],
+        "source_links": [],
     }
 
 
@@ -175,4 +179,29 @@ def normalize_work_item(data):
         "dependency": _text(data.get("dependency"), "dependency", maximum=500),
         "resolution": _text(data.get("resolution"), "resolution"),
         "escalated": bool(data.get("escalated", False)),
+    }
+
+
+def normalize_activity(data):
+    activity_type = data.get("type") or "note"
+    if activity_type not in ACTIVITY_TYPES:
+        raise ValidationError("type is invalid")
+    return {
+        "type": activity_type,
+        "message": _text(data.get("message"), "message", required=True, maximum=2000),
+    }
+
+
+def normalize_source_link(data):
+    source_type = data.get("type") or "other"
+    if source_type not in SOURCE_TYPES:
+        raise ValidationError("type is invalid")
+    url = _text(data.get("url"), "url", required=True, maximum=2000)
+    if not url.startswith(("https://", "http://")):
+        raise ValidationError("url must start with http:// or https://")
+    return {
+        "type": source_type,
+        "title": _text(data.get("title"), "title", required=True, maximum=200),
+        "url": url,
+        "notes": _text(data.get("notes"), "notes", maximum=1000),
     }

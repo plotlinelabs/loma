@@ -1,7 +1,8 @@
 import pytest
 
 from integration_hub.models import (
-    ValidationError, normalize_create, normalize_update, normalize_work_item,
+    ValidationError, normalize_activity, normalize_create, normalize_source_link,
+    normalize_update, normalize_work_item,
 )
 
 
@@ -51,6 +52,8 @@ def test_create_initializes_onboarding_plan_and_work_items():
     assert result["environments"] == ["staging", "production"]
     assert result["completion_percentage"] == 0
     assert result["work_items"] == []
+    assert result["activities"] == []
+    assert result["source_links"] == []
 
 
 def test_update_validates_completion_percentage():
@@ -81,3 +84,20 @@ def test_work_item_normalization():
 def test_work_item_rejects_invalid_fields(data):
     with pytest.raises(ValidationError):
         normalize_work_item(data)
+
+
+def test_activity_normalization():
+    assert normalize_activity({"type": "decision", "message": " Ship Friday "}) == {
+        "type": "decision", "message": "Ship Friday",
+    }
+    with pytest.raises(ValidationError):
+        normalize_activity({"type": "meeting", "message": "Invalid"})
+
+
+def test_source_link_normalization():
+    link = normalize_source_link({
+        "type": "grain", "title": "Kickoff", "url": "https://grain.com/recording",
+    })
+    assert link["type"] == "grain"
+    with pytest.raises(ValidationError, match="http"):
+        normalize_source_link({"type": "slack", "title": "Thread", "url": "slack://thread"})

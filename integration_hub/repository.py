@@ -27,6 +27,27 @@ class AccountRepository:
         )
         return await self.get(account_id)
 
+    async def append_activity(self, account_id, activity):
+        await self.collection.update_one(
+            {"account_id": account_id, "archived_at": None},
+            {"$push": {"activities": activity}},
+        )
+        return await self.get(account_id)
+
+    async def add_source_link(self, account_id, link):
+        await self.collection.update_one(
+            {"account_id": account_id, "archived_at": None},
+            {"$push": {"source_links": link}},
+        )
+        return await self.get(account_id)
+
+    async def delete_source_link(self, account_id, link_id):
+        result = await self.collection.update_one(
+            {"account_id": account_id, "archived_at": None},
+            {"$pull": {"source_links": {"link_id": link_id}}},
+        )
+        return await self.get(account_id) if result.modified_count else None
+
     async def add_work_item(self, account_id, item):
         await self.collection.update_one(
             {"account_id": account_id, "archived_at": None},

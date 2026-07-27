@@ -2,11 +2,14 @@
 
 import { FormEvent, useState } from "react";
 import {
+  createIntegrationActivity,
+  createIntegrationSourceLink,
   createIntegrationWorkItem,
   deleteIntegrationWorkItem,
+  deleteIntegrationSourceLink,
   formatIntegrationLabel,
   IntegrationAccount,
-  IntegrationWorkItemInput,
+  IntegrationSourceLink, IntegrationWorkItemInput,
   IntegrationWorkItemType,
   updateIntegrationAccount,
   updateIntegrationWorkItem,
@@ -17,7 +20,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RiAddLine, RiDeleteBinLine } from "@remixicon/react";
+import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine } from "@remixicon/react";
 
 const TYPES: IntegrationWorkItemType[] = ["milestone", "task", "risk", "blocker"];
 const PLATFORMS = ["android", "ios", "react_native", "flutter", "web", "unity", "kmp"];
@@ -46,6 +49,11 @@ export default function OnboardingWorkspace({
   const [item, setItem] = useState(emptyItem);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activityType, setActivityType] = useState<"note" | "decision">("note");
+  const [activityMessage, setActivityMessage] = useState("");
+  const [source, setSource] = useState<Pick<IntegrationSourceLink, "type" | "title" | "url" | "notes">>({
+    type: "document", title: "", url: "", notes: null,
+  });
 
   async function savePlan(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -91,6 +99,43 @@ export default function OnboardingWorkspace({
 
   async function removeItem(itemId: string) {
     const data = await deleteIntegrationWorkItem(account.account_id, itemId);
+    onChange(data.account);
+  }
+
+  async function addActivity(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const data = await createIntegrationActivity(account.account_id, {
+        type: activityType, message: activityMessage,
+      });
+      onChange(data.account);
+      setActivityMessage("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add activity");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addSource(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const data = await createIntegrationSourceLink(account.account_id, source);
+      onChange(data.account);
+      setSource({ type: "document", title: "", url: "", notes: null });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add source");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeSource(linkId: string) {
+    const data = await deleteIntegrationSourceLink(account.account_id, linkId);
     onChange(data.account);
   }
 
@@ -165,6 +210,55 @@ export default function OnboardingWorkspace({
           <div className="flex items-end"><Button type="submit" size="sm" disabled={saving || !item.title.trim()}><RiAddLine />Add item</Button></div>
         </form>
       </Card>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Card className="p-4">
+          <h2 className="font-heading text-base font-medium">Activity timeline</h2>
+          <p className="text-xs text-muted-foreground">Notes, decisions, and automatic onboarding changes.</p>
+          <form onSubmit={addActivity} className="mt-4 flex gap-2">
+            <select className="h-9 rounded-md border bg-background px-2 text-xs" value={activityType} onChange={(event) => setActivityType(event.target.value as "note" | "decision")}>
+              <option value="note">Note</option><option value="decision">Decision</option>
+            </select>
+            <Input required maxLength={2000} placeholder="Add an update..." value={activityMessage} onChange={(event) => setActivityMessage(event.target.value)} />
+            <Button type="submit" size="sm" disabled={saving || !activityMessage.trim()}><RiAddLine />Add</Button>
+          </form>
+          <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">
+            {[...(account.activities || [])].reverse().map((activity) => (
+              <div key={activity.activity_id} className="rounded-lg border p-3">
+                <div className="flex items-center justify-between gap-2"><Badge variant={activity.type === "update" ? "secondary" : "outline"}>{formatIntegrationLabel(activity.type)}</Badge><span className="text-[11px] text-muted-foreground">{new Date(activity.created_at).toLocaleString()}</span></div>
+                <p className="mt-2 text-sm">{activity.message}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{activity.created_by}</p>
+              </div>
+            ))}
+            {(account.activities || []).length === 0 && <p className="text-xs text-muted-foreground">No activity yet.</p>}
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <h2 className="font-heading text-base font-medium">Source links</h2>
+          <p className="text-xs text-muted-foreground">Attach meetings, threads, tickets, CRM records, and documents.</p>
+          <form onSubmit={addSource} className="mt-4 grid gap-2 sm:grid-cols-2">
+            <select className="h-9 rounded-md border bg-background px-2 text-xs" value={source.type} onChange={(event) => setSource({ ...source, type: event.target.value as IntegrationSourceLink["type"] })}>
+              {["grain", "slack", "linear", "pylon", "hubspot", "document", "other"].map((type) => <option key={type} value={type}>{formatIntegrationLabel(type)}</option>)}
+            </select>
+            <Input required placeholder="Title" value={source.title} onChange={(event) => setSource({ ...source, title: event.target.value })} />
+            <Input required type="url" placeholder="https://..." value={source.url} onChange={(event) => setSource({ ...source, url: event.target.value })} />
+            <Input placeholder="Optional notes" value={source.notes || ""} onChange={(event) => setSource({ ...source, notes: event.target.value || null })} />
+            <Button type="submit" size="sm" className="sm:col-span-2" disabled={saving || !source.title.trim() || !source.url.trim()}><RiAddLine />Add source</Button>
+          </form>
+          <div className="mt-4 space-y-2">
+            {(account.source_links || []).map((link) => (
+              <div key={link.link_id} className="flex items-center gap-2 rounded-lg border p-3">
+                <Badge variant="secondary">{formatIntegrationLabel(link.type)}</Badge>
+                <a href={link.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate text-sm font-medium hover:underline">{link.title}</a>
+                <RiExternalLinkLine className="text-muted-foreground" size={16} />
+                <Button variant="ghost" size="icon-sm" onClick={() => removeSource(link.link_id)} aria-label={`Delete ${link.title}`}><RiDeleteBinLine /></Button>
+              </div>
+            ))}
+            {(account.source_links || []).length === 0 && <p className="text-xs text-muted-foreground">No source links attached.</p>}
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }

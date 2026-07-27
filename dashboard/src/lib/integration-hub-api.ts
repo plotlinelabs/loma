@@ -32,6 +32,26 @@ export interface IntegrationAccount {
   go_live_criteria: string | null;
   completion_percentage: number;
   work_items: IntegrationWorkItem[];
+  activities: IntegrationActivity[];
+  source_links: IntegrationSourceLink[];
+}
+
+export interface IntegrationActivity {
+  activity_id: string;
+  type: "note" | "decision" | "update";
+  message: string;
+  created_at: string;
+  created_by: string;
+}
+
+export interface IntegrationSourceLink {
+  link_id: string;
+  type: "grain" | "slack" | "linear" | "pylon" | "hubspot" | "document" | "other";
+  title: string;
+  url: string;
+  notes: string | null;
+  created_at: string;
+  created_by: string;
 }
 
 export type IntegrationWorkItemType = "milestone" | "task" | "risk" | "blocker";
@@ -123,6 +143,32 @@ export function updateIntegrationWorkItem(
 export function deleteIntegrationWorkItem(accountId: string, itemId: string) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/work-items/${itemId}`,
+    { method: "DELETE" },
+  );
+}
+
+export function createIntegrationActivity(
+  accountId: string, input: Pick<IntegrationActivity, "type" | "message">,
+) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/activities`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function createIntegrationSourceLink(
+  accountId: string,
+  input: Pick<IntegrationSourceLink, "type" | "title" | "url" | "notes">,
+) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/source-links`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function deleteIntegrationSourceLink(accountId: string, linkId: string) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/source-links/${linkId}`,
     { method: "DELETE" },
   );
 }
