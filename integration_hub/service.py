@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from integration_hub.models import (
+    calculate_account_health,
     normalize_activity, normalize_create, normalize_source_link, normalize_update,
     normalize_work_item,
 )
@@ -26,7 +27,7 @@ class AccountService:
             "archived_by": None,
             "version": 1,
         }
-        return await self.repository.create(account)
+        return self.enrich(await self.repository.create(account))
 
     async def list(self, *, stage=None, health=None, search=None):
         query = {"archived_at": None}
@@ -36,12 +37,54 @@ class AccountService:
             query["health"] = health
         if search:
             query["name"] = {"$regex": search, "$options": "i"}
-        return await self.repository.list(query)
+        accounts = await self.repository.list(query)
+        return [self.enrich(account) for account in accounts]
+
+    async def get(self, account_id):
+        account = await self.repository.get(account_id)
+        return self.enrich(account) if account else None
+
+    async def list_actions(self, actor):
+        now = datetime.now(timezone.utc)
+        accounts = await self.repository.list({"archived_at": None})
+        actions = []
+        attention_accounts = []
+        for account in accounts:
+            enriched = self.enrich(account, now)
+            for item in account.get("work_items", []):
+                if (
+                    item.get("owner_email") == actor.lower()
+                    and item.get("type") in ("task", "milestone")
+                    and item.get("status") != "completed"
+                ):
+                    due_at = item.get("due_at")
+                    actions.append({
+                        **item,
+                        "account_id": account["account_id"],
+                        "account_name": account["name"],
+                        "is_overdue": bool(due_at and due_at < now),
+                    })
+            if enriched["effective_health"] in ("blocked", "at_risk", "escalated"):
+                attention_accounts.append(enriched)
+        actions.sort(key=lambda item: (
+            not item["is_overdue"],
+            item.get("due_at") is None,
+            item.get("due_at") or now,
+        ))
+        attention_accounts.sort(key=lambda account: (
+            {"escalated": 0, "blocked": 1, "at_risk": 2}.get(account["effective_health"], 3),
+            -account["overdue_count"],
+        ))
+        return actions, attention_accounts
+
+    @staticmethod
+    def enrich(account, now=None):
+        return {**account, **calculate_account_health(account, now)}
 
     async def update(self, account, data, actor):
         updates = normalize_update(data)
         if not updates:
-            return account
+            return self.enrich(account)
         updates.update({
             "updated_at": datetime.now(timezone.utc),
             "updated_by": actor,
@@ -82,7 +125,7 @@ class AccountService:
 
     async def create_activity(self, account_id, data, actor):
         activity = self._activity(normalize_activity(data), actor)
-        return await self.repository.append_activity(account_id, activity)
+        return self.enrich(await self.repository.append_activity(account_id, activity))
 
     async def create_source_link(self, account_id, data, actor):
         now = datetime.now(timezone.utc)
@@ -110,7 +153,8 @@ class AccountService:
     async def _record(self, account, activity_type, message, actor):
         if not account:
             return None
-        return await self.repository.append_activity(
+        updated = await self.repository.append_activity(
             account["account_id"],
             self._activity({"type": activity_type, "message": message}, actor),
         )
+        return self.enrich(updated)

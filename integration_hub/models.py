@@ -1,6 +1,6 @@
 """Validation and normalization for manual client onboarding records."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 STAGES = (
@@ -92,6 +92,7 @@ def normalize_create(data):
         "owner_email": normalize_email(data.get("owner_email")),
         "stage": stage,
         "health": health,
+        "health_override_enabled": bool(data.get("health_override_enabled", False)),
         "health_reason": _text(data.get("health_reason"), "health_reason"),
         "target_go_live_at": normalize_date(data.get("target_go_live_at")),
         "current_blocker": _text(data.get("current_blocker"), "current_blocker"),
@@ -114,7 +115,7 @@ def normalize_update(data):
         "name", "owner_email", "stage", "health", "health_reason",
         "target_go_live_at", "current_blocker", "next_action",
         "platforms", "environments", "stakeholders", "go_live_criteria",
-        "completion_percentage",
+        "completion_percentage", "health_override_enabled",
     }
     unknown = set(data) - allowed
     if unknown:
@@ -132,6 +133,10 @@ def normalize_update(data):
         if data["health"] not in HEALTH_STATES:
             raise ValidationError("health is invalid")
         result["health"] = data["health"]
+    if "health_override_enabled" in data:
+        if not isinstance(data["health_override_enabled"], bool):
+            raise ValidationError("health_override_enabled must be a boolean")
+        result["health_override_enabled"] = data["health_override_enabled"]
     if "health_reason" in data:
         result["health_reason"] = _text(data["health_reason"], "health_reason")
     if "target_go_live_at" in data:
@@ -204,4 +209,61 @@ def normalize_source_link(data):
         "title": _text(data.get("title"), "title", required=True, maximum=200),
         "url": url,
         "notes": _text(data.get("notes"), "notes", maximum=1000),
+    }
+
+
+def calculate_account_health(account, now=None):
+    """Return the derived health, explanations, and urgency counters."""
+    now = now or datetime.now(timezone.utc)
+    upcoming_cutoff = now + timedelta(days=7)
+    open_items = [
+        item for item in account.get("work_items", [])
+        if item.get("status") != "completed"
+    ]
+    overdue = [
+        item for item in open_items
+        if item.get("due_at") and item["due_at"] < now
+    ]
+    upcoming = [
+        item for item in open_items
+        if item.get("due_at") and now <= item["due_at"] <= upcoming_cutoff
+    ]
+    blockers = [item for item in open_items if item.get("type") == "blocker"]
+    severe = [
+        item for item in open_items
+        if item.get("type") in ("risk", "blocker")
+        and item.get("severity") in ("high", "critical")
+    ]
+    reasons = []
+    if blockers:
+        reasons.append(f"{len(blockers)} unresolved blocker{'s' if len(blockers) != 1 else ''}")
+    if overdue:
+        reasons.append(f"{len(overdue)} overdue item{'s' if len(overdue) != 1 else ''}")
+    if severe:
+        reasons.append(f"{len(severe)} high-severity risk{'s' if len(severe) != 1 else ''}")
+    target = account.get("target_go_live_at")
+    if target and target < now and account.get("completion_percentage", 0) < 100:
+        reasons.append("Target go-live date has passed")
+    elif target and target <= upcoming_cutoff and account.get("completion_percentage", 0) < 100:
+        reasons.append("Go-live is within 7 days")
+
+    if any(item.get("escalated") for item in severe):
+        calculated = "escalated"
+    elif blockers:
+        calculated = "blocked"
+    elif severe or len(overdue) >= 2 or (target and target < now):
+        calculated = "at_risk"
+    elif overdue or (target and target <= upcoming_cutoff and account.get("completion_percentage", 0) < 100):
+        calculated = "needs_attention"
+    else:
+        calculated = "on_track"
+
+    effective = account.get("health", calculated) if account.get("health_override_enabled") else calculated
+    return {
+        "calculated_health": calculated,
+        "effective_health": effective,
+        "calculated_health_reasons": reasons,
+        "overdue_count": len(overdue),
+        "upcoming_count": len(upcoming),
+        "open_blocker_count": len(blockers),
     }

@@ -8,6 +8,7 @@ import {
   deleteIntegrationWorkItem,
   deleteIntegrationSourceLink,
   formatIntegrationLabel,
+  INTEGRATION_HEALTH,
   IntegrationAccount,
   IntegrationSourceLink, IntegrationWorkItemInput,
   IntegrationWorkItemType,
@@ -68,6 +69,9 @@ export default function OnboardingWorkspace({
         stakeholders: String(values.get("stakeholders") || "").split("\n").map((v) => v.trim()).filter(Boolean),
         go_live_criteria: String(values.get("go_live_criteria") || ""),
         completion_percentage: Number(values.get("completion_percentage")),
+        health_override_enabled: values.get("health_override_enabled") === "on",
+        health: String(values.get("health") || account.health) as IntegrationAccount["health"],
+        health_reason: String(values.get("health_reason") || ""),
       });
       onChange(data.account);
     } catch (err) {
@@ -168,6 +172,27 @@ export default function OnboardingWorkspace({
           <div className="grid gap-4 md:grid-cols-2">
             <div><Label htmlFor="stakeholders">Stakeholders</Label><Textarea id="stakeholders" name="stakeholders" rows={3} defaultValue={(account.stakeholders || []).join("\n")} placeholder="One name or email per line" /></div>
             <div><Label htmlFor="go_live_criteria">Go-live criteria</Label><Textarea id="go_live_criteria" name="go_live_criteria" rows={3} defaultValue={account.go_live_criteria || ""} /></div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label>Automated health</Label>
+                  <p className="text-xs text-muted-foreground">{formatIntegrationLabel(account.calculated_health)}</p>
+                </div>
+                <Badge variant="secondary">{account.calculated_health_reasons.length ? `${account.calculated_health_reasons.length} reason${account.calculated_health_reasons.length === 1 ? "" : "s"}` : "No risks"}</Badge>
+              </div>
+              {account.calculated_health_reasons.length > 0 && <ul className="mt-2 list-disc pl-4 text-xs text-muted-foreground">{account.calculated_health_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
+            </div>
+            <div className="rounded-lg border p-3">
+              <label className="flex items-center gap-2 text-sm font-medium"><input type="checkbox" name="health_override_enabled" defaultChecked={account.health_override_enabled} />Override automated health</label>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <select name="health" defaultValue={account.health} className="h-9 rounded-md border bg-background px-2 text-xs">
+                  {INTEGRATION_HEALTH.map((health) => <option key={health} value={health}>{formatIntegrationLabel(health)}</option>)}
+                </select>
+                <Input name="health_reason" defaultValue={account.health_reason || ""} placeholder="Override reason" />
+              </div>
+            </div>
           </div>
           <div className="flex items-end gap-3">
             <div className="w-40"><Label htmlFor="completion_percentage">Completion %</Label><Input id="completion_percentage" name="completion_percentage" type="number" min={0} max={100} defaultValue={account.completion_percentage || 0} /></div>

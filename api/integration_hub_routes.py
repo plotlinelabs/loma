@@ -72,9 +72,18 @@ async def handle_list_accounts(request):
     return web.json_response({"accounts": _serialize(accounts)})
 
 
+async def handle_list_actions(request):
+    service, actor = _context(request)
+    actions, attention_accounts = await service.list_actions(actor)
+    return web.json_response({
+        "actions": _serialize(actions),
+        "attention_accounts": _serialize(attention_accounts),
+    })
+
+
 async def handle_get_account(request):
     service, _ = _context(request)
-    account = await service.repository.get(request.match_info["account_id"])
+    account = await service.get(request.match_info["account_id"])
     if not account:
         return web.json_response({"error": "Not found"}, status=404)
     return web.json_response({"account": _serialize(account)})
@@ -177,6 +186,7 @@ async def handle_delete_source_link(request):
 def setup_integration_hub_routes(app):
     app.router.add_post("/api/integration-hub/accounts", handle_create_account)
     app.router.add_get("/api/integration-hub/accounts", handle_list_accounts)
+    app.router.add_get("/api/integration-hub/actions", handle_list_actions)
     app.router.add_get("/api/integration-hub/accounts/{account_id}", handle_get_account)
     app.router.add_patch("/api/integration-hub/accounts/{account_id}", handle_update_account)
     app.router.add_post(

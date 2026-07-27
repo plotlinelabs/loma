@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from integration_hub.models import (
-    ValidationError, normalize_activity, normalize_create, normalize_source_link,
-    normalize_update, normalize_work_item,
+    ValidationError, calculate_account_health, normalize_activity, normalize_create,
+    normalize_source_link, normalize_update, normalize_work_item,
 )
 
 
@@ -101,3 +103,37 @@ def test_source_link_normalization():
     assert link["type"] == "grain"
     with pytest.raises(ValidationError, match="http"):
         normalize_source_link({"type": "slack", "title": "Thread", "url": "slack://thread"})
+
+
+def test_calculated_health_prioritizes_unresolved_blockers():
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    result = calculate_account_health({
+        "completion_percentage": 50,
+        "work_items": [{
+            "type": "blocker", "status": "in_progress", "severity": "high",
+            "due_at": now - timedelta(days=1), "escalated": False,
+        }],
+    }, now)
+    assert result["calculated_health"] == "blocked"
+    assert result["effective_health"] == "blocked"
+    assert result["overdue_count"] == 1
+    assert result["open_blocker_count"] == 1
+
+
+def test_manual_health_override_preserves_calculated_explanation():
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    result = calculate_account_health({
+        "health": "on_track",
+        "health_override_enabled": True,
+        "completion_percentage": 50,
+        "target_go_live_at": now - timedelta(days=1),
+        "work_items": [],
+    }, now)
+    assert result["calculated_health"] == "at_risk"
+    assert result["effective_health"] == "on_track"
+    assert "Target go-live date has passed" in result["calculated_health_reasons"]
+
+
+def test_health_override_flag_requires_boolean():
+    with pytest.raises(ValidationError, match="boolean"):
+        normalize_update({"health_override_enabled": "yes"})

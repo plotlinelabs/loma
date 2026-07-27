@@ -19,6 +19,13 @@ export interface IntegrationAccount {
   owner_email: string | null;
   stage: IntegrationStage;
   health: IntegrationHealth;
+  health_override_enabled: boolean;
+  calculated_health: IntegrationHealth;
+  effective_health: IntegrationHealth;
+  calculated_health_reasons: string[];
+  overdue_count: number;
+  upcoming_count: number;
+  open_blocker_count: number;
   health_reason: string | null;
   target_go_live_at: string | null;
   current_blocker: string | null;
@@ -79,7 +86,13 @@ export type IntegrationAccountInput = Pick<IntegrationAccount, "name"> &
   Partial<Pick<IntegrationAccount, "owner_email" | "stage" | "health" |
     "health_reason" | "target_go_live_at" | "current_blocker" | "next_action" |
     "platforms" | "environments" | "stakeholders" | "go_live_criteria" |
-    "completion_percentage">>;
+    "completion_percentage" | "health_override_enabled">>;
+
+export interface IntegrationAction extends IntegrationWorkItem {
+  account_id: string;
+  account_name: string;
+  is_overdue: boolean;
+}
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${basePath}${url}`, init);
@@ -102,6 +115,12 @@ export async function fetchIntegrationAccounts(filters: {
 export function fetchIntegrationAccount(accountId: string) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}`,
+  );
+}
+
+export function fetchIntegrationActions() {
+  return request<{ actions: IntegrationAction[]; attention_accounts: IntegrationAccount[] }>(
+    "/api/integration-hub/actions",
   );
 }
 
