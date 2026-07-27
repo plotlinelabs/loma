@@ -127,6 +127,21 @@ class AccountService:
         if not parent: raise RuntimeError("version_conflict")
         return await self.get(account["account_id"])
 
+    async def archive_resource(self, account, kind, resource, actor, expected_version, request_id, reason):
+        if not reason: raise ValidationError("reason is required")
+        now = datetime.now(timezone.utc)
+        audit = self._audit(
+            account["account_id"], actor, kind, resource["resource_id"],
+            f"{kind}.archived: {reason}", request_id,
+        )
+        parent = await self.repository.mutate_resource(
+            kind, resource["resource_id"], account["account_id"],
+            {"archived_at": now, "archived_by": actor, "updated_at": now, "updated_by": actor},
+            expected_version, account["version"], audit,
+        )
+        if not parent: raise RuntimeError("version_conflict")
+        return await self.get(account["account_id"])
+
     def _work_item(self, account_id, data, actor, now=None):
         now = now or datetime.now(timezone.utc); normalized = normalize_work_item(data)
         item_id = self._id("item")

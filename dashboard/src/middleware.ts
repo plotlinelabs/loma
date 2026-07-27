@@ -38,12 +38,6 @@ export default auth((req) => {
   if (isApi) {
     const headers = new Headers(req.headers);
     headers.set("X-User-Email", req.auth?.user?.email || "");
-    // Never forward caller-supplied trust headers. The value below exists only
-    // in the server runtime and is verified by Integration Hub's backend gate.
-    headers.delete("X-Loma-Proxy-Secret");
-    if (process.env.LOMA_PROXY_SECRET) {
-      headers.set("X-Loma-Proxy-Secret", process.env.LOMA_PROXY_SECRET);
-    }
     return NextResponse.next({ request: { headers } });
   }
 

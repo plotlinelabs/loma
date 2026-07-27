@@ -72,6 +72,8 @@ export interface IntegrationSourceLink {
   notes: string | null;
   created_at: string;
   created_by: string;
+  updated_at: string;
+  version: number;
 }
 
 export type IntegrationWorkItemType = "milestone" | "task" | "risk" | "blocker";
@@ -184,6 +186,13 @@ export function createIntegrationProject(accountId: string, version: number, inp
   );
 }
 
+export function archiveIntegrationProject(accountId: string, projectId: string, version: number) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/projects/${projectId}/archive`,
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify({ reason: "Deleted from dashboard" }) },
+  );
+}
+
 export function createIntegrationWorkItem(accountId: string, version: number, input: IntegrationWorkItemInput) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/work-items`,
@@ -223,6 +232,13 @@ export function createIntegrationSourceLink(
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/source-links`,
     { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
+  );
+}
+
+export function archiveIntegrationSourceLink(accountId: string, sourceId: string, version: number) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/source-links/${sourceId}/archive`,
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify({ reason: "Deleted from dashboard" }) },
   );
 }
 

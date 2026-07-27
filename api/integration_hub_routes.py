@@ -188,6 +188,31 @@ async def handle_create_project(request):
     return await _run(request, action)
 
 
+async def _archive_child_resource(request, kind, id_key):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit")
+        if not account: return _error(request, 404, "not_found", "Account not found")
+        resource = await service.repository.get_resource(
+            kind, request.match_info[id_key], account["account_id"],
+        )
+        if not resource: return _error(request, 404, "not_found", f"{kind.title()} not found")
+        body = await _json(request)
+        updated = await service.archive_resource(
+            account, kind, resource, actor, _if_match(request),
+            request["request_id"], body.get("reason"),
+        )
+        return _ok(request, {"account": updated}, version=updated["version"])
+    return await _run(request, action)
+
+
+async def handle_archive_project(request):
+    return await _archive_child_resource(request, "project", "project_id")
+
+
+async def handle_archive_source(request):
+    return await _archive_child_resource(request, "source", "source_id")
+
+
 async def handle_get_audit_log(request):
     async def action():
         service, _, _, account = await _account_context(request)
@@ -276,6 +301,7 @@ def setup_integration_hub_routes(app):
     app.router.add_post(f"{p}/accounts/{{account_id}}/archive", handle_archive_account)
     app.router.add_post(f"{p}/accounts/{{account_id}}/restore", handle_restore_account)
     app.router.add_post(f"{p}/accounts/{{account_id}}/projects", handle_create_project)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/projects/{{project_id}}/archive", handle_archive_project)
     app.router.add_get(f"{p}/accounts/{{account_id}}/audit-log", handle_get_audit_log)
     app.router.add_post(f"{p}/accounts/{{account_id}}/access-grants", handle_create_access_grant)
     app.router.add_post(f"{p}/accounts/{{account_id}}/work-items", handle_create_work_item)
@@ -283,3 +309,4 @@ def setup_integration_hub_routes(app):
     app.router.add_post(f"{p}/accounts/{{account_id}}/work-items/{{item_id}}/archive", handle_archive_work_item)
     app.router.add_post(f"{p}/accounts/{{account_id}}/activities", handle_create_activity)
     app.router.add_post(f"{p}/accounts/{{account_id}}/source-links", handle_create_source_link)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/source-links/{{source_id}}/archive", handle_archive_source)

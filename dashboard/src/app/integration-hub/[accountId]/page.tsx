@@ -49,7 +49,7 @@ export default function IntegrationAccountPage() {
           className="ml-auto"
           onClick={async () => {
             const restoring = account.status === "archived";
-            if (!restoring && !window.confirm("Archive this onboarding client?")) return;
+            if (!restoring && !window.confirm("Delete this onboarding client? It will be archived and can be restored later.")) return;
             try {
               const data = restoring
                 ? await restoreIntegrationAccount(account.account_id, account.version)
@@ -57,11 +57,11 @@ export default function IntegrationAccountPage() {
               if (restoring) setAccount(data.account);
               else window.location.href = "/integration-hub";
             } catch (err) {
-              setError(err instanceof Error ? err.message : "Could not archive client");
+              setError(err instanceof Error ? err.message : "Could not delete client");
             }
           }}
         >
-          {account.status === "archived" ? "Restore" : "Archive"}
+          {account.status === "archived" ? "Restore" : "Delete client"}
         </Button>
       </div>
       <nav className="flex gap-1 overflow-x-auto rounded-lg border bg-muted/30 p-1 text-xs">

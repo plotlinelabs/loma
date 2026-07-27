@@ -6,6 +6,8 @@ import {
   createIntegrationProject,
   createIntegrationSourceLink,
   createIntegrationWorkItem,
+  archiveIntegrationProject,
+  archiveIntegrationSourceLink,
   archiveIntegrationWorkItem,
   formatIntegrationLabel,
   INTEGRATION_HEALTH,
@@ -72,6 +74,20 @@ export default function OnboardingWorkspace({
       setError(err instanceof Error ? err.message : "Could not add project");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function removeProject(projectId: string, name: string) {
+    if (!window.confirm(`Delete project "${name}"?`)) return;
+    setError(null);
+    try {
+      const project = account.projects.find((entry) => entry.project_id === projectId);
+      const data = await archiveIntegrationProject(
+        account.account_id, projectId, project?.version || 0,
+      );
+      onChange(data.account);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete project");
     }
   }
 
@@ -188,6 +204,19 @@ export default function OnboardingWorkspace({
     }
   }
 
+  async function removeSource(link: IntegrationSourceLink) {
+    if (!window.confirm(`Delete source "${link.title}"?`)) return;
+    setError(null);
+    try {
+      const data = await archiveIntegrationSourceLink(
+        account.account_id, link.link_id, link.version,
+      );
+      onChange(data.account);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete source");
+    }
+  }
+
 
   return (
     <div className="space-y-3">
@@ -207,7 +236,13 @@ export default function OnboardingWorkspace({
         <div className="mt-3 grid gap-2 md:grid-cols-2">
           {(account.projects || []).map((project) => (
             <div key={project.project_id} className="rounded-lg border p-3">
-              <div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">{project.name}</p><Badge variant="secondary">{formatIntegrationLabel(project.status)}</Badge></div>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium">{project.name}</p>
+                <div className="flex items-center gap-1">
+                  <Badge variant="secondary">{formatIntegrationLabel(project.status)}</Badge>
+                  <Button variant="ghost" size="icon-sm" onClick={() => removeProject(project.project_id, project.name)} aria-label={`Delete ${project.name}`}><RiDeleteBinLine /></Button>
+                </div>
+              </div>
               <p className="mt-1 text-xs text-muted-foreground">{project.playbook ? formatIntegrationLabel(project.playbook) : "Custom workstream"}</p>
             </div>
           ))}
@@ -346,7 +381,7 @@ export default function OnboardingWorkspace({
                 <Badge variant="secondary">{formatIntegrationLabel(link.type)}</Badge>
                 <a href={link.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate text-sm font-medium hover:underline">{link.title}</a>
                 <RiExternalLinkLine className="text-muted-foreground" size={16} />
-
+                <Button variant="ghost" size="icon-sm" onClick={() => removeSource(link)} aria-label={`Delete ${link.title}`}><RiDeleteBinLine /></Button>
               </div>
             ))}
             {(account.source_links || []).length === 0 && <p className="text-xs text-muted-foreground">No source links attached.</p>}
