@@ -37,12 +37,12 @@ async def main():
         if existing:
             print(f"skip: {seed['name']}")
             continue
-        account = await service.create(seed, "pilot-seed@plotline.so")
+        account = await service.create(seed, "pilot-seed@example.com")
         playbook = "web_sdk" if seed["platforms"] == ["web"] else "mobile_sdk"
         await service.create_project(
             account["account_id"],
             {"name": "Primary onboarding", "playbook": playbook},
-            "pilot-seed@plotline.so",
+            "pilot-seed@example.com",
         )
         print(f"created: {seed['name']}")
     client.close()

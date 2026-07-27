@@ -103,6 +103,14 @@ def _text_list(value, field, maximum_items=50):
     ]
 
 
+def _boolean(value, field, *, default=False):
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValidationError(f"{field} must be a boolean")
+    return value
+
+
 def normalize_create(data):
     stage = data.get("stage") or "kickoff"
     health = data.get("health") or "on_track"
@@ -116,7 +124,9 @@ def normalize_create(data):
         "owner_email": normalize_email(data.get("owner_email")),
         "stage": stage,
         "health": health,
-        "health_override_enabled": bool(data.get("health_override_enabled", False)),
+        "health_override_enabled": _boolean(
+            data.get("health_override_enabled"), "health_override_enabled"
+        ),
         "health_reason": _text(data.get("health_reason"), "health_reason"),
         "target_go_live_at": normalize_date(data.get("target_go_live_at")),
         "current_blocker": _text(data.get("current_blocker"), "current_blocker"),
@@ -213,7 +223,7 @@ def normalize_work_item(data):
         "severity": severity if item_type in ("risk", "blocker") else None,
         "dependency": _text(data.get("dependency"), "dependency", maximum=500),
         "resolution": _text(data.get("resolution"), "resolution"),
-        "escalated": bool(data.get("escalated", False)),
+        "escalated": _boolean(data.get("escalated"), "escalated"),
         "project_id": _text(data.get("project_id"), "project_id", maximum=100),
         "depends_on": _text_list(data.get("depends_on"), "depends_on", maximum_items=20),
     }

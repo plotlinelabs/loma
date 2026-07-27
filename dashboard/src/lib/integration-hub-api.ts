@@ -129,6 +129,22 @@ export async function fetchIntegrationAccounts(filters: {
   return request(`/api/integration-hub/accounts${suffix}`);
 }
 
+export async function fetchAllIntegrationAccounts(filters: {
+  search?: string; stage?: string; health?: string; owner?: string; status?: string;
+} = {}): Promise<IntegrationAccount[]> {
+  const pageSize = 100;
+  const accounts: IntegrationAccount[] = [];
+  let page = 1;
+  while (true) {
+    const result = await fetchIntegrationAccounts({ ...filters, page, page_size: pageSize });
+    accounts.push(...result.accounts);
+    if (accounts.length >= result.pagination.total || result.accounts.length === 0) {
+      return accounts;
+    }
+    page += 1;
+  }
+}
+
 export function fetchIntegrationAccount(accountId: string) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}`,

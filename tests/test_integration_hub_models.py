@@ -12,11 +12,11 @@ from integration_hub.models import (
 def test_create_normalizes_manual_onboarding_fields():
     result = normalize_create({
         "name": " Acme ",
-        "owner_email": "Owner@Plotline.so",
+        "owner_email": "Owner@Example.com",
         "target_go_live_at": "2026-08-01",
     })
     assert result["name"] == "Acme"
-    assert result["owner_email"] == "owner@plotline.so"
+    assert result["owner_email"] == "owner@example.com"
     assert result["stage"] == "kickoff"
     assert result["health"] == "on_track"
     assert result["target_go_live_at"].isoformat() == "2026-08-01T00:00:00+00:00"
@@ -34,7 +34,7 @@ def test_create_rejects_invalid_fields(field, value):
 
 def test_update_rejects_unknown_fields():
     with pytest.raises(ValidationError, match="Unknown fields"):
-        normalize_update({"created_by": "spoofed@plotline.so"})
+        normalize_update({"created_by": "spoofed@example.com"})
 
 
 def test_name_is_required_and_limited():
@@ -70,13 +70,13 @@ def test_work_item_normalization():
         "type": "risk",
         "title": " Customer dependency ",
         "severity": "high",
-        "owner_email": "Owner@Plotline.so",
+        "owner_email": "Owner@Example.com",
         "due_at": "2026-08-15",
     })
     assert item["title"] == "Customer dependency"
     assert item["severity"] == "high"
     assert item["status"] == "not_started"
-    assert item["owner_email"] == "owner@plotline.so"
+    assert item["owner_email"] == "owner@example.com"
 
 
 @pytest.mark.parametrize("data", [
@@ -140,14 +140,24 @@ def test_health_override_flag_requires_boolean():
         normalize_update({"health_override_enabled": "yes"})
 
 
+@pytest.mark.parametrize("field,payload", [
+    ("health_override_enabled", {"name": "Acme", "health_override_enabled": "false"}),
+    ("escalated", {"type": "risk", "title": "Dependency", "escalated": "false"}),
+])
+def test_create_boolean_fields_reject_strings(field, payload):
+    normalizer = normalize_create if "name" in payload else normalize_work_item
+    with pytest.raises(ValidationError, match=f"{field} must be a boolean"):
+        normalizer(payload)
+
+
 def test_project_and_playbook_fields_are_normalized():
     project = normalize_project({
         "name": " Production rollout ",
-        "owner_email": "Owner@Plotline.so",
+        "owner_email": "Owner@Example.com",
         "playbook": "mobile_sdk",
     })
     assert project["name"] == "Production rollout"
-    assert project["owner_email"] == "owner@plotline.so"
+    assert project["owner_email"] == "owner@example.com"
     assert project["status"] == "planned"
     assert project["playbook"] == "mobile_sdk"
 

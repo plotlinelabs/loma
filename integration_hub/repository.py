@@ -14,6 +14,16 @@ class AccountRepository:
             [("updated_at", -1), ("account_id", 1)]
         ).skip(skip).to_list(limit)
 
+    async def list_all(self, query, batch_size=100):
+        accounts = []
+        skip = 0
+        while True:
+            batch = await self.list(query, limit=batch_size, skip=skip)
+            accounts.extend(batch)
+            if len(batch) < batch_size:
+                return accounts
+            skip += batch_size
+
     async def count(self, query):
         return await self.collection.count_documents(query)
 
@@ -56,49 +66,78 @@ class AccountRepository:
         )
         return await self.get(account_id) if result.matched_count else None
 
-    async def append_activity(self, account_id, activity):
-        await self.collection.update_one(
-            {"account_id": account_id, "archived_at": None},
-            {"$push": {"activities": activity}},
-        )
-        return await self.get(account_id)
-
-    async def add_source_link(self, account_id, link):
-        await self.collection.update_one(
-            {"account_id": account_id, "archived_at": None},
-            {"$push": {"source_links": link}},
-        )
-        return await self.get(account_id)
-
-    async def delete_source_link(self, account_id, link_id):
+    async def append_activity(self, account_id, activity, parent_updates):
         result = await self.collection.update_one(
             {"account_id": account_id, "archived_at": None},
-            {"$pull": {"source_links": {"link_id": link_id}}},
+            {
+                "$push": {"activities": activity},
+                "$set": parent_updates,
+                "$inc": {"version": 1},
+            },
+        )
+        return await self.get(account_id) if result.matched_count else None
+
+    async def add_source_link(self, account_id, link, activity, parent_updates):
+        result = await self.collection.update_one(
+            {"account_id": account_id, "archived_at": None},
+            {
+                "$push": {"source_links": link, "activities": activity},
+                "$set": parent_updates,
+                "$inc": {"version": 1},
+            },
+        )
+        return await self.get(account_id) if result.matched_count else None
+
+    async def delete_source_link(self, account_id, link_id, activity, parent_updates):
+        result = await self.collection.update_one(
+            {"account_id": account_id, "archived_at": None},
+            {
+                "$pull": {"source_links": {"link_id": link_id}},
+                "$push": {"activities": activity},
+                "$set": parent_updates,
+                "$inc": {"version": 1},
+            },
         )
         return await self.get(account_id) if result.modified_count else None
 
-    async def add_work_item(self, account_id, item):
-        await self.collection.update_one(
+    async def add_work_item(self, account_id, item, activity, parent_updates):
+        result = await self.collection.update_one(
             {"account_id": account_id, "archived_at": None},
-            {"$push": {"work_items": item}},
+            {
+                "$push": {"work_items": item, "activities": activity},
+                "$set": parent_updates,
+                "$inc": {"version": 1},
+            },
         )
-        return await self.get(account_id)
+        return await self.get(account_id) if result.matched_count else None
 
-    async def update_work_item(self, account_id, item_id, updates):
+    async def update_work_item(
+        self, account_id, item_id, updates, activity, parent_updates
+    ):
         set_fields = {f"work_items.$.{key}": value for key, value in updates.items()}
+        set_fields.update(parent_updates)
         result = await self.collection.update_one(
             {
                 "account_id": account_id,
                 "archived_at": None,
                 "work_items.item_id": item_id,
             },
-            {"$set": set_fields},
+            {
+                "$set": set_fields,
+                "$push": {"activities": activity},
+                "$inc": {"version": 1},
+            },
         )
         return await self.get(account_id) if result.matched_count else None
 
-    async def delete_work_item(self, account_id, item_id):
+    async def delete_work_item(self, account_id, item_id, activity, parent_updates):
         result = await self.collection.update_one(
             {"account_id": account_id, "archived_at": None},
-            {"$pull": {"work_items": {"item_id": item_id}}},
+            {
+                "$pull": {"work_items": {"item_id": item_id}},
+                "$push": {"activities": activity},
+                "$set": parent_updates,
+                "$inc": {"version": 1},
+            },
         )
         return await self.get(account_id) if result.modified_count else None

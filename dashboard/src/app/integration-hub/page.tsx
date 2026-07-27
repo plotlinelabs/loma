@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  createIntegrationAccount, fetchIntegrationAccounts, fetchIntegrationActions,
+  createIntegrationAccount, fetchAllIntegrationAccounts, fetchIntegrationActions,
   formatIntegrationLabel, INTEGRATION_STAGES, IntegrationAccount,
   IntegrationAccountInput, IntegrationAction,
 } from "@/lib/integration-hub-api";
@@ -46,10 +46,10 @@ export default function IntegrationHubPage() {
     setError(null);
     try {
       const [data, actionData] = await Promise.all([
-        fetchIntegrationAccounts({ search, stage: stage === "all" ? undefined : stage, status }),
+        fetchAllIntegrationAccounts({ search, stage: stage === "all" ? undefined : stage, status }),
         fetchIntegrationActions(),
       ]);
-      setAccounts(data.accounts);
+      setAccounts(data);
       setActions(actionData.actions);
       setAttentionAccounts(actionData.attention_accounts);
     } catch (err) {

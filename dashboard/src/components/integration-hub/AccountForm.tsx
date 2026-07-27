@@ -56,7 +56,7 @@ export default function AccountForm({
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="owner_email">Owner</Label>
-        <Input id="owner_email" name="owner_email" type="email" defaultValue={account?.owner_email || ""} placeholder="owner@plotline.so" />
+        <Input id="owner_email" name="owner_email" type="email" defaultValue={account?.owner_email || ""} placeholder="owner@example.com" />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
