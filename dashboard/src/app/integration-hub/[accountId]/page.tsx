@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
-  fetchIntegrationAccount, formatIntegrationLabel, IntegrationAccount,
+  archiveIntegrationAccount, fetchIntegrationAccount, formatIntegrationLabel, IntegrationAccount,
   IntegrationAccountInput, updateIntegrationAccount,
+  restoreIntegrationAccount,
 } from "@/lib/integration-hub-api";
 import AccountForm from "@/components/integration-hub/AccountForm";
 import OnboardingWorkspace from "@/components/integration-hub/OnboardingWorkspace";
@@ -14,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RiArrowLeftLine } from "@remixicon/react";
+import { Button } from "@/components/ui/button";
 
 export default function IntegrationAccountPage() {
   const { accountId } = useParams<{ accountId: string }>();
@@ -27,7 +29,7 @@ export default function IntegrationAccountPage() {
   }, [accountId]);
 
   async function save(input: IntegrationAccountInput) {
-    const data = await updateIntegrationAccount(accountId, input);
+    const data = await updateIntegrationAccount(accountId, input, account?.version);
     setAccount(data.account);
   }
 
@@ -41,8 +43,34 @@ export default function IntegrationAccountPage() {
         <h1 className="text-lg md:text-xl font-heading font-semibold">{account.name}</h1>
         <Badge variant="outline">{formatIntegrationLabel(account.stage)}</Badge>
         <Badge variant="outline">{formatIntegrationLabel(account.health)}</Badge>
+        <Button
+          variant="outline"
+          size="sm"
+          className="ml-auto"
+          onClick={async () => {
+            const restoring = account.status === "archived";
+            if (!restoring && !window.confirm("Archive this onboarding client?")) return;
+            try {
+              const data = restoring
+                ? await restoreIntegrationAccount(account.account_id, account.version)
+                : await archiveIntegrationAccount(account.account_id, account.version);
+              if (restoring) setAccount(data.account);
+              else window.location.href = "/integration-hub";
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Could not archive client");
+            }
+          }}
+        >
+          {account.status === "archived" ? "Restore" : "Archive"}
+        </Button>
       </div>
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+      <nav className="flex gap-1 overflow-x-auto rounded-lg border bg-muted/30 p-1 text-xs">
+        {[
+          ["overview", "Overview"], ["plan", "Action plan"], ["risks", "Risks"],
+          ["activity", "Activity"],
+        ].map(([id, label]) => <a key={id} href={`#${id}`} className="rounded-md px-3 py-1.5 hover:bg-background">{label}</a>)}
+      </nav>
+      <div id="overview" className="grid scroll-mt-4 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <Card className="p-4">
           <h2 className="mb-3 font-heading text-base font-medium">Onboarding overview</h2>
           <AccountForm key={account.version} account={account} submitLabel="Save changes" onSubmit={save} />

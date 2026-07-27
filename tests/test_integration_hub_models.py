@@ -4,7 +4,8 @@ import pytest
 
 from integration_hub.models import (
     ValidationError, calculate_account_health, normalize_activity, normalize_create,
-    normalize_source_link, normalize_update, normalize_work_item,
+    normalize_project, normalize_source_link, normalize_update, normalize_work_item,
+    validate_status_transition,
 )
 
 
@@ -137,3 +138,38 @@ def test_manual_health_override_preserves_calculated_explanation():
 def test_health_override_flag_requires_boolean():
     with pytest.raises(ValidationError, match="boolean"):
         normalize_update({"health_override_enabled": "yes"})
+
+
+def test_project_and_playbook_fields_are_normalized():
+    project = normalize_project({
+        "name": " Production rollout ",
+        "owner_email": "Owner@Plotline.so",
+        "playbook": "mobile_sdk",
+    })
+    assert project["name"] == "Production rollout"
+    assert project["owner_email"] == "owner@plotline.so"
+    assert project["status"] == "planned"
+    assert project["playbook"] == "mobile_sdk"
+
+
+def test_invalid_project_status_is_rejected():
+    with pytest.raises(ValidationError, match="status is invalid"):
+        normalize_project({"name": "Rollout", "status": "unknown"})
+
+
+def test_account_lifecycle_transitions_are_explicit():
+    validate_status_transition("active", "archived")
+    validate_status_transition("archived", "active")
+    with pytest.raises(ValidationError, match="Cannot transition"):
+        validate_status_transition("archived", "inactive")
+
+
+def test_work_item_supports_project_dependencies():
+    item = normalize_work_item({
+        "type": "task",
+        "title": "Validate events",
+        "project_id": "project_123",
+        "depends_on": ["item_1", "item_2"],
+    })
+    assert item["project_id"] == "project_123"
+    assert item["depends_on"] == ["item_1", "item_2"]

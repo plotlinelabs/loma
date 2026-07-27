@@ -39,13 +39,14 @@ export default function IntegrationHubPage() {
   const [actions, setActions] = useState<IntegrationAction[]>([]);
   const [attentionAccounts, setAttentionAccounts] = useState<IntegrationAccount[]>([]);
   const [sort, setSort] = useState("urgency");
+  const [status, setStatus] = useState("active");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [data, actionData] = await Promise.all([
-        fetchIntegrationAccounts({ search, stage: stage === "all" ? undefined : stage }),
+        fetchIntegrationAccounts({ search, stage: stage === "all" ? undefined : stage, status }),
         fetchIntegrationActions(),
       ]);
       setAccounts(data.accounts);
@@ -56,7 +57,7 @@ export default function IntegrationHubPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, stage]);
+  }, [search, stage, status]);
 
   useEffect(() => {
     const timer = setTimeout(load, search ? 250 : 0);
@@ -139,6 +140,14 @@ export default function IntegrationHubPage() {
             <SelectItem value="go_live">Sort by go-live</SelectItem>
             <SelectItem value="owner">Sort by owner</SelectItem>
             <SelectItem value="name">Sort by name</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={status} onValueChange={setStatus}>
+          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="active">Active clients</SelectItem>
+            <SelectItem value="inactive">Inactive clients</SelectItem>
+            <SelectItem value="archived">Archived clients</SelectItem>
           </SelectContent>
         </Select>
       </div>

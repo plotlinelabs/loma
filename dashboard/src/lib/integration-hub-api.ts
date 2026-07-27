@@ -15,7 +15,7 @@ export type IntegrationHealth = typeof INTEGRATION_HEALTH[number];
 export interface IntegrationAccount {
   account_id: string;
   name: string;
-  status: "active" | "inactive";
+  status: "active" | "inactive" | "archived";
   owner_email: string | null;
   stage: IntegrationStage;
   health: IntegrationHealth;
@@ -41,6 +41,18 @@ export interface IntegrationAccount {
   work_items: IntegrationWorkItem[];
   activities: IntegrationActivity[];
   source_links: IntegrationSourceLink[];
+  projects: IntegrationProject[];
+}
+
+export interface IntegrationProject {
+  project_id: string;
+  name: string;
+  description: string | null;
+  status: "planned" | "active" | "blocked" | "completed" | "archived";
+  owner_email: string | null;
+  target_at: string | null;
+  playbook: "mobile_sdk" | "web_sdk" | null;
+  created_at: string;
 }
 
 export interface IntegrationActivity {
@@ -102,12 +114,17 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export async function fetchIntegrationAccounts(filters: {
-  search?: string; stage?: string; health?: string;
-} = {}): Promise<{ accounts: IntegrationAccount[] }> {
+  search?: string; stage?: string; health?: string; owner?: string; status?: string;
+  page?: number; page_size?: number;
+} = {}): Promise<{ accounts: IntegrationAccount[]; pagination: { page: number; page_size: number; total: number } }> {
   const query = new URLSearchParams();
   if (filters.search) query.set("search", filters.search);
   if (filters.stage) query.set("stage", filters.stage);
   if (filters.health) query.set("health", filters.health);
+  if (filters.owner) query.set("owner", filters.owner);
+  if (filters.status) query.set("status", filters.status);
+  if (filters.page) query.set("page", String(filters.page));
+  if (filters.page_size) query.set("page_size", String(filters.page_size));
   const suffix = query.size ? `?${query}` : "";
   return request(`/api/integration-hub/accounts${suffix}`);
 }
@@ -132,14 +149,37 @@ export function createIntegrationAccount(input: IntegrationAccountInput) {
   });
 }
 
-export function updateIntegrationAccount(accountId: string, input: IntegrationAccountInput) {
+export function updateIntegrationAccount(accountId: string, input: IntegrationAccountInput, version?: number) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, ...(version === undefined ? {} : { version }) }),
     },
+  );
+}
+
+export function archiveIntegrationAccount(accountId: string, version: number) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/archive`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version }) },
+  );
+}
+
+export function restoreIntegrationAccount(accountId: string, version: number) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/restore`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version }) },
+  );
+}
+
+export function createIntegrationProject(accountId: string, input: {
+  name: string; description?: string; owner_email?: string; target_at?: string; playbook?: string;
+}) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/projects`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
 }
 

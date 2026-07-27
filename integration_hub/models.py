@@ -22,6 +22,30 @@ WORK_ITEM_STATUSES = ("not_started", "in_progress", "blocked", "completed")
 RISK_SEVERITIES = ("low", "medium", "high", "critical")
 ACTIVITY_TYPES = ("note", "decision", "update")
 SOURCE_TYPES = ("grain", "slack", "linear", "pylon", "hubspot", "document", "other")
+PROJECT_STATUSES = ("planned", "active", "blocked", "completed", "archived")
+ACCOUNT_STATUSES = ("active", "inactive", "archived")
+PLAYBOOKS = {
+    "mobile_sdk": {
+        "name": "Mobile SDK onboarding",
+        "items": (
+            ("milestone", "Kickoff complete"),
+            ("task", "Install SDK in development"),
+            ("task", "Configure identification, events, and attributes"),
+            ("milestone", "Validate test campaign"),
+            ("milestone", "Production release"),
+        ),
+    },
+    "web_sdk": {
+        "name": "Web SDK onboarding",
+        "items": (
+            ("milestone", "Kickoff complete"),
+            ("task", "Install Web SDK"),
+            ("task", "Configure pages, elements, and events"),
+            ("milestone", "Validate test campaign"),
+            ("milestone", "Production release"),
+        ),
+    },
+}
 
 
 class ValidationError(ValueError):
@@ -107,6 +131,7 @@ def normalize_create(data):
         "work_items": [],
         "activities": [],
         "source_links": [],
+        "projects": [],
     }
 
 
@@ -116,11 +141,16 @@ def normalize_update(data):
         "target_go_live_at", "current_blocker", "next_action",
         "platforms", "environments", "stakeholders", "go_live_criteria",
         "completion_percentage", "health_override_enabled",
+        "status",
     }
     unknown = set(data) - allowed
     if unknown:
         raise ValidationError(f"Unknown fields: {', '.join(sorted(unknown))}")
     result = {}
+    if "status" in data:
+        if data["status"] not in ("active", "inactive"):
+            raise ValidationError("status is invalid")
+        result["status"] = data["status"]
     if "name" in data:
         result["name"] = _text(data["name"], "name", required=True, maximum=200)
     if "owner_email" in data:
@@ -184,7 +214,33 @@ def normalize_work_item(data):
         "dependency": _text(data.get("dependency"), "dependency", maximum=500),
         "resolution": _text(data.get("resolution"), "resolution"),
         "escalated": bool(data.get("escalated", False)),
+        "project_id": _text(data.get("project_id"), "project_id", maximum=100),
+        "depends_on": _text_list(data.get("depends_on"), "depends_on", maximum_items=20),
     }
+
+
+def normalize_project(data):
+    status = data.get("status") or "planned"
+    if status not in PROJECT_STATUSES:
+        raise ValidationError("status is invalid")
+    return {
+        "name": _text(data.get("name"), "name", required=True, maximum=200),
+        "description": _text(data.get("description"), "description"),
+        "status": status,
+        "owner_email": normalize_email(data.get("owner_email")),
+        "target_at": normalize_date(data.get("target_at")),
+        "playbook": data.get("playbook") if data.get("playbook") in PLAYBOOKS else None,
+    }
+
+
+def validate_status_transition(current, target):
+    allowed = {
+        "active": {"active", "inactive", "archived"},
+        "inactive": {"inactive", "active", "archived"},
+        "archived": {"archived", "active"},
+    }
+    if target not in allowed.get(current, set()):
+        raise ValidationError(f"Cannot transition account from {current} to {target}")
 
 
 def normalize_activity(data):

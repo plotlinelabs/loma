@@ -9,10 +9,13 @@ class AccountRepository:
         await self.collection.insert_one(account)
         return account
 
-    async def list(self, query, limit=100):
+    async def list(self, query, limit=100, skip=0):
         return await self.collection.find(query).sort(
             [("updated_at", -1), ("account_id", 1)]
-        ).to_list(limit)
+        ).skip(skip).to_list(limit)
+
+    async def count(self, query):
+        return await self.collection.count_documents(query)
 
     async def get(self, account_id):
         return await self.collection.find_one({
@@ -20,12 +23,38 @@ class AccountRepository:
             "archived_at": None,
         })
 
-    async def update(self, account_id, updates):
-        await self.collection.update_one(
-            {"account_id": account_id, "archived_at": None},
-            {"$set": updates},
+    async def get_any(self, account_id):
+        return await self.collection.find_one({"account_id": account_id})
+
+    async def update(self, account_id, updates, *, expected_version=None, activity=None):
+        query = {"account_id": account_id}
+        if expected_version is not None:
+            query["version"] = expected_version
+        operation = {"$set": updates}
+        if activity:
+            operation["$push"] = {"activities": activity}
+        result = await self.collection.update_one(
+            query,
+            operation,
         )
-        return await self.get(account_id)
+        if not result.matched_count:
+            return None
+        return await self.get_any(account_id)
+
+    async def add_project(self, account_id, project, work_items, activity):
+        result = await self.collection.update_one(
+            {"account_id": account_id, "archived_at": None},
+            {
+                "$push": {
+                    "projects": project,
+                    "work_items": {"$each": work_items},
+                    "activities": activity,
+                },
+                "$inc": {"version": 1},
+                "$set": {"updated_at": project["created_at"], "updated_by": project["created_by"]},
+            },
+        )
+        return await self.get(account_id) if result.matched_count else None
 
     async def append_activity(self, account_id, activity):
         await self.collection.update_one(

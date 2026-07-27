@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import {
   createIntegrationActivity,
+  createIntegrationProject,
   createIntegrationSourceLink,
   createIntegrationWorkItem,
   deleteIntegrationWorkItem,
@@ -55,6 +56,25 @@ export default function OnboardingWorkspace({
   const [source, setSource] = useState<Pick<IntegrationSourceLink, "type" | "title" | "url" | "notes">>({
     type: "document", title: "", url: "", notes: null,
   });
+  const [projectName, setProjectName] = useState("");
+  const [projectPlaybook, setProjectPlaybook] = useState("mobile_sdk");
+
+  async function addProject(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const data = await createIntegrationProject(account.account_id, {
+        name: projectName, playbook: projectPlaybook,
+      });
+      onChange(data.account);
+      setProjectName("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add project");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function savePlan(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -146,6 +166,28 @@ export default function OnboardingWorkspace({
   return (
     <div className="space-y-3">
       {error && <p className="text-sm text-destructive">{error}</p>}
+      <Card className="p-4">
+        <h2 className="font-heading text-base font-medium">Projects and playbooks</h2>
+        <p className="text-xs text-muted-foreground">Track parallel workstreams and create standard onboarding tasks from a reusable playbook.</p>
+        <form onSubmit={addProject} className="mt-4 grid gap-2 sm:grid-cols-[1fr_220px_auto]">
+          <Input required maxLength={200} placeholder="Project or workstream name" value={projectName} onChange={(event) => setProjectName(event.target.value)} />
+          <select className="h-9 rounded-md border bg-background px-3 text-sm" value={projectPlaybook} onChange={(event) => setProjectPlaybook(event.target.value)}>
+            <option value="mobile_sdk">Mobile SDK onboarding</option>
+            <option value="web_sdk">Web SDK onboarding</option>
+            <option value="">No playbook</option>
+          </select>
+          <Button type="submit" size="sm" disabled={saving || !projectName.trim()}><RiAddLine />Add project</Button>
+        </form>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {(account.projects || []).map((project) => (
+            <div key={project.project_id} className="rounded-lg border p-3">
+              <div className="flex items-center justify-between gap-2"><p className="text-sm font-medium">{project.name}</p><Badge variant="secondary">{formatIntegrationLabel(project.status)}</Badge></div>
+              <p className="mt-1 text-xs text-muted-foreground">{project.playbook ? formatIntegrationLabel(project.playbook) : "Custom workstream"}</p>
+            </div>
+          ))}
+          {(account.projects || []).length === 0 && <p className="text-xs text-muted-foreground">No projects yet.</p>}
+        </div>
+      </Card>
       <Card className="p-4">
         <div className="mb-4 flex items-center justify-between">
           <div>

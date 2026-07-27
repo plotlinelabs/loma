@@ -5,7 +5,7 @@ from datetime import datetime
 from aiohttp import web
 
 from api.auth_helpers import get_user_email
-from integration_hub.models import HEALTH_STATES, STAGES, ValidationError
+from integration_hub.models import HEALTH_STATES, PLAYBOOKS, STAGES, ValidationError
 from integration_hub.repository import AccountRepository
 from integration_hub.service import AccountService
 from observability.db import get_db
@@ -66,10 +66,20 @@ async def handle_list_accounts(request):
         return web.json_response({"error": "stage is invalid"}, status=400)
     if health and health not in HEALTH_STATES:
         return web.json_response({"error": "health is invalid"}, status=400)
-    accounts = await service.list(
-        stage=stage, health=health, search=request.query.get("search")
+    try:
+        page = max(1, int(request.query.get("page", "1")))
+        page_size = min(100, max(1, int(request.query.get("page_size", "50"))))
+    except ValueError:
+        return web.json_response({"error": "page and page_size must be integers"}, status=400)
+    accounts, total = await service.list(
+        stage=stage, health=health, search=request.query.get("search"),
+        owner=request.query.get("owner"), status=request.query.get("status", "active"),
+        page=page, page_size=page_size,
     )
-    return web.json_response({"accounts": _serialize(accounts)})
+    return web.json_response({
+        "accounts": _serialize(accounts),
+        "pagination": {"page": page, "page_size": page_size, "total": total},
+    })
 
 
 async def handle_list_actions(request):
@@ -83,7 +93,7 @@ async def handle_list_actions(request):
 
 async def handle_get_account(request):
     service, _ = _context(request)
-    account = await service.get(request.match_info["account_id"])
+    account = await service.get(request.match_info["account_id"], include_archived=True)
     if not account:
         return web.json_response({"error": "Not found"}, status=404)
     return web.json_response({"account": _serialize(account)})
@@ -95,10 +105,77 @@ async def handle_update_account(request):
     if not account:
         return web.json_response({"error": "Not found"}, status=404)
     try:
-        updated = await service.update(account, await _json(request), actor)
+        body = await _json(request)
+        expected_version = body.pop("version", None)
+        if expected_version is not None and expected_version != account.get("version"):
+            return web.json_response({"error": "This client was updated by someone else"}, status=409)
+        updated = await service.update(account, body, actor)
     except ValidationError as exc:
         return web.json_response({"error": str(exc)}, status=400)
+    except RuntimeError as exc:
+        if str(exc) == "version_conflict":
+            return web.json_response({"error": "This client was updated by someone else"}, status=409)
+        raise
     return web.json_response({"account": _serialize(updated)})
+
+
+async def handle_archive_account(request):
+    service, actor = _context(request)
+    body = await _json(request)
+    try:
+        account = await service.archive(
+            request.match_info["account_id"], actor, body.get("version")
+        )
+    except (ValidationError, RuntimeError) as exc:
+        status = 409 if str(exc) == "version_conflict" else 400
+        return web.json_response({"error": str(exc)}, status=status)
+    if not account:
+        return web.json_response({"error": "Not found"}, status=404)
+    return web.json_response({"account": _serialize(account)})
+
+
+async def handle_restore_account(request):
+    service, actor = _context(request)
+    body = await _json(request)
+    try:
+        account = await service.restore(
+            request.match_info["account_id"], actor, body.get("version")
+        )
+    except (ValidationError, RuntimeError) as exc:
+        status = 409 if str(exc) == "version_conflict" else 400
+        return web.json_response({"error": str(exc)}, status=status)
+    if not account:
+        return web.json_response({"error": "Not found"}, status=404)
+    return web.json_response({"account": _serialize(account)})
+
+
+async def handle_create_project(request):
+    service, actor = _context(request)
+    try:
+        account = await service.create_project(
+            request.match_info["account_id"], await _json(request), actor
+        )
+    except ValidationError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    if not account:
+        return web.json_response({"error": "Not found"}, status=404)
+    return web.json_response({"account": _serialize(account)}, status=201)
+
+
+async def handle_list_playbooks(request):
+    _context(request)
+    return web.json_response({"playbooks": [
+        {"id": key, "name": value["name"], "item_count": len(value["items"])}
+        for key, value in PLAYBOOKS.items()
+    ]})
+
+
+async def handle_get_audit_log(request):
+    service, _ = _context(request)
+    account = await service.get(request.match_info["account_id"])
+    if not account:
+        return web.json_response({"error": "Not found"}, status=404)
+    return web.json_response({"activities": _serialize(account.get("activities", []))})
 
 
 def _find_work_item(account, item_id):
@@ -189,6 +266,15 @@ def setup_integration_hub_routes(app):
     app.router.add_get("/api/integration-hub/actions", handle_list_actions)
     app.router.add_get("/api/integration-hub/accounts/{account_id}", handle_get_account)
     app.router.add_patch("/api/integration-hub/accounts/{account_id}", handle_update_account)
+    app.router.add_post("/api/integration-hub/accounts/{account_id}/archive", handle_archive_account)
+    app.router.add_post("/api/integration-hub/accounts/{account_id}/restore", handle_restore_account)
+    app.router.add_get("/api/integration-hub/playbooks", handle_list_playbooks)
+    app.router.add_post(
+        "/api/integration-hub/accounts/{account_id}/projects", handle_create_project
+    )
+    app.router.add_get(
+        "/api/integration-hub/accounts/{account_id}/audit-log", handle_get_audit_log
+    )
     app.router.add_post(
         "/api/integration-hub/accounts/{account_id}/work-items",
         handle_create_work_item,
