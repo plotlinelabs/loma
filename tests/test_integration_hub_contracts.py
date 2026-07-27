@@ -73,6 +73,7 @@ async def test_idempotent_account_creation_writes_reservation_account_and_audit_
         integration_milestones = Collection("milestones")
         integration_risks = Collection("risks")
         integration_source_mappings = Collection("sources")
+        integration_interactions = Collection("interactions")
         integration_audit_log = Collection("audit")
         integration_idempotency = Collection("idempotency")
 
@@ -108,6 +109,7 @@ async def test_losing_idempotent_account_creation_returns_winning_response():
         integration_milestones = object()
         integration_risks = object()
         integration_source_mappings = object()
+        integration_interactions = object()
         integration_audit_log = object()
         integration_idempotency = Collection()
 
@@ -154,6 +156,7 @@ async def test_action_center_filters_and_limits_attention_accounts_in_mongodb():
         integration_milestones = ResourceCollection()
         integration_risks = object()
         integration_source_mappings = object()
+        integration_interactions = object()
         integration_audit_log = object()
         integration_idempotency = object()
 

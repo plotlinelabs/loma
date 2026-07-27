@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from integration_hub.models import (
     PLAYBOOKS, ValidationError, as_utc, calculate_account_health, normalize_activity,
     normalize_create, normalize_project, normalize_source_link, normalize_update,
-    normalize_work_item, validate_status_transition,
+    normalize_work_item, validate_status_transition, normalize_interaction,
 )
 
 EDIT_ROLES = {"owner", "editor"}
@@ -226,3 +226,30 @@ class AccountService:
         parent = await self.repository.create_resource("source", link, account["version"], audit)
         if not parent: raise RuntimeError("version_conflict")
         return await self.get(account["account_id"])
+
+    async def ingest_interaction(self, account, data, actor, request_id):
+        now = datetime.now(timezone.utc)
+        normalized = normalize_interaction(data)
+        if normalized["occurred_at"] is None:
+            raise ValidationError("occurred_at is required")
+        interaction_id = self._id("int")
+        interaction = {
+            "interaction_id": interaction_id, "account_id": account["account_id"],
+            **normalized, "ingested_at": now, "human_status": "unreviewed",
+        }
+        audit = self._audit(
+            account["account_id"], actor, "interaction", interaction_id,
+            "interaction.ingested", request_id,
+        )
+        audit.update({"before": None, "after": {
+            "interaction_id": interaction_id, "source": interaction["source"],
+            "conversation_state": interaction["conversation_state"],
+        }})
+        created = await self.repository.create_interaction(interaction, audit)
+        if not created:
+            existing = await self.repository.interactions.find_one({
+                "source": interaction["source"], "tenant_id": interaction["tenant_id"],
+                "source_id": interaction["source_id"],
+            })
+            return existing, False
+        return interaction, True

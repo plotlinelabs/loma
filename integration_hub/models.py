@@ -27,6 +27,12 @@ WORK_ITEM_STATUSES = {
 RISK_SEVERITIES = ("low", "medium", "high", "critical")
 ACTIVITY_TYPES = ("note", "decision", "update")
 SOURCE_TYPES = ("grain", "slack", "linear", "pylon", "hubspot", "document", "other")
+SOURCE_MAPPING_STATUSES = ("proposed", "confirmed", "rejected")
+CONVERSATION_STATES = (
+    "waiting_on_plotline", "waiting_on_customer", "internally_blocked",
+    "resolved", "monitoring", "no_action_required",
+)
+INTERACTION_DIRECTIONS = ("customer_to_plotline", "plotline_to_customer", "internal")
 PROJECT_STATUSES = ("active", "paused", "completed", "cancelled")
 ACCOUNT_STATUSES = ("active", "inactive", "archived")
 PLAYBOOKS = {
@@ -83,6 +89,52 @@ def normalize_date(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def normalize_source_mapping(data):
+    source = data.get("source")
+    if source not in SOURCE_TYPES:
+        raise ValidationError("source is invalid")
+    status = data.get("status") or "proposed"
+    if status not in SOURCE_MAPPING_STATUSES:
+        raise ValidationError("status is invalid")
+    return {
+        "source": source,
+        "tenant_id": _text(data.get("tenant_id"), "tenant_id", required=True, maximum=255),
+        "external_id": _text(data.get("external_id"), "external_id", required=True, maximum=255),
+        "label": _text(data.get("label"), "label", maximum=200),
+        "status": status,
+    }
+
+
+def normalize_interaction(data):
+    source = data.get("source")
+    if source not in SOURCE_TYPES:
+        raise ValidationError("source is invalid")
+    direction = data.get("direction")
+    if direction not in INTERACTION_DIRECTIONS:
+        raise ValidationError("direction is invalid")
+    state = data.get("conversation_state") or "monitoring"
+    if state not in CONVERSATION_STATES:
+        raise ValidationError("conversation_state is invalid")
+    confidence = data.get("confidence", 1)
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+        raise ValidationError("confidence must be between 0 and 1")
+    return {
+        "source": source,
+        "tenant_id": _text(data.get("tenant_id"), "tenant_id", required=True, maximum=255),
+        "source_id": _text(data.get("source_id"), "source_id", required=True, maximum=255),
+        "source_url": _text(data.get("source_url"), "source_url", maximum=2048),
+        "occurred_at": normalize_date(data.get("occurred_at")),
+        "direction": direction,
+        "classification": _text(data.get("classification"), "classification", maximum=100),
+        "requires_response": _boolean(data.get("requires_response"), "requires_response"),
+        "meaningful_contact": _boolean(data.get("meaningful_contact"), "meaningful_contact", default=True),
+        "conversation_state": state,
+        "summary": _text(data.get("summary"), "summary", required=True, maximum=1000),
+        "confidence": float(confidence),
+        "classifier_version": _text(data.get("classifier_version"), "classifier_version", maximum=100) or "rules-v1",
+    }
 
 
 def _choice_list(value, field, choices):

@@ -22,6 +22,7 @@ class AccountRepository:
         self.milestones = db.integration_milestones
         self.risks = db.integration_risks
         self.sources = db.integration_source_mappings
+        self.interactions = db.integration_interactions
         self.audit = db.integration_audit_log
         self.idempotency = db.integration_idempotency
 
@@ -103,24 +104,56 @@ class AccountRepository:
             return None
         account_id = account["account_id"]
         active = {"account_id": account_id, "archived_at": None}
-        projects, tasks, milestones, risks, sources, activities = await __import__("asyncio").gather(
+        projects, tasks, milestones, risks, sources, interactions, activities = await __import__("asyncio").gather(
             self.projects.find(active).sort("created_at", 1).to_list(None),
             self.tasks.find(active).sort("created_at", 1).to_list(None),
             self.milestones.find(active).sort("created_at", 1).to_list(None),
             self.risks.find(active).sort("created_at", 1).to_list(None),
             self.sources.find(active).sort("created_at", 1).to_list(None),
+            self.interactions.find({"account_id": account_id}).sort("occurred_at", -1).limit(100).to_list(100),
             self.audit.find({"account_id": account_id}).sort("created_at", -1).limit(200).to_list(200),
         )
         result = dict(account)
         result["projects"] = projects
         result["work_items"] = tasks + milestones + risks
         result["source_links"] = sources
+        result["interactions"] = interactions
         result["activities"] = [{
             "activity_id": row["audit_id"], "type": row.get("activity_type", "update"),
             "message": row["action"], "created_at": row["created_at"],
             "created_by": row["actor"],
         } for row in reversed(activities)]
         return result
+
+    async def create_interaction(self, interaction, audit_entry):
+        async def operation(session):
+            try:
+                await self.interactions.insert_one(interaction, session=session)
+                created = True
+            except DuplicateKeyError:
+                created = False
+            if created:
+                await self.audit.insert_one(audit_entry, session=session)
+            return created
+        return await self._transaction(operation)
+
+    async def list_interactions(self, account_id, limit=50, cursor=None):
+        query = {"account_id": account_id}
+        if cursor:
+            occurred_at, interaction_id = self.decode_cursor(cursor)
+            query["$or"] = [
+                {"occurred_at": {"$lt": occurred_at}},
+                {"occurred_at": occurred_at, "interaction_id": {"$gt": interaction_id}},
+            ]
+        rows = await self.interactions.find(query).sort(
+            [("occurred_at", -1), ("interaction_id", 1)]
+        ).limit(limit + 1).to_list(limit + 1)
+        more = len(rows) > limit
+        rows = rows[:limit]
+        cursor = self.encode_cursor({
+            "updated_at": rows[-1]["occurred_at"], "account_id": rows[-1]["interaction_id"],
+        }) if more and rows else None
+        return rows, cursor
 
     async def mutate_account(self, account_id, updates, expected_version, audit_entry):
         async def operation(session):

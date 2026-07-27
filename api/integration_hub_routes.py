@@ -276,6 +276,31 @@ async def handle_create_source_link(request):
     return await _run(request, action)
 
 
+async def handle_list_interactions(request):
+    async def action():
+        service, _, _, account = await _account_context(request)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        limit = min(100, max(1, int(request.query.get("limit", "50"))))
+        rows, cursor = await service.repository.list_interactions(
+            account["account_id"], limit, request.query.get("cursor"),
+        )
+        return _ok(request, {"interactions": rows, "pagination": {"next_cursor": cursor, "limit": limit}})
+    return await _run(request, action)
+
+
+async def handle_ingest_interaction(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        interaction, created = await service.ingest_interaction(
+            account, await _json(request), actor, request["request_id"],
+        )
+        return _ok(request, {"interaction": interaction}, 201 if created else 200)
+    return await _run(request, action)
+
+
 def setup_integration_hub_routes(app):
     p = "/api/integration-hub"
     app.router.add_post(f"{p}/accounts", handle_create_account)
@@ -295,3 +320,5 @@ def setup_integration_hub_routes(app):
     app.router.add_post(f"{p}/accounts/{{account_id}}/activities", handle_create_activity)
     app.router.add_post(f"{p}/accounts/{{account_id}}/source-links", handle_create_source_link)
     app.router.add_post(f"{p}/accounts/{{account_id}}/source-links/{{source_id}}/archive", handle_archive_source)
+    app.router.add_get(f"{p}/accounts/{{account_id}}/interactions", handle_list_interactions)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/interactions", handle_ingest_interaction)

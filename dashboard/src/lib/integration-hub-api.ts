@@ -42,6 +42,22 @@ export interface IntegrationAccount {
   activities: IntegrationActivity[];
   source_links: IntegrationSourceLink[];
   projects: IntegrationProject[];
+  interactions: IntegrationInteraction[];
+}
+
+export interface IntegrationInteraction {
+  interaction_id: string;
+  source: IntegrationSourceLink["type"];
+  source_url: string | null;
+  occurred_at: string;
+  direction: "customer_to_plotline" | "plotline_to_customer" | "internal";
+  classification: string | null;
+  requires_response: boolean;
+  meaningful_contact: boolean;
+  conversation_state: "waiting_on_plotline" | "waiting_on_customer" | "internally_blocked" | "resolved" | "monitoring" | "no_action_required";
+  summary: string;
+  confidence: number;
+  human_status: "unreviewed" | "confirmed" | "corrected";
 }
 
 export interface IntegrationProject {
