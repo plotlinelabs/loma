@@ -7,6 +7,7 @@ from integration_hub.models import (
     normalize_project, normalize_source_link, normalize_update, normalize_work_item,
     validate_status_transition,
 )
+from integration_hub.service import AccountService
 
 
 def test_create_normalizes_manual_onboarding_fields():
@@ -133,6 +134,49 @@ def test_manual_health_override_preserves_calculated_explanation():
     assert result["calculated_health"] == "at_risk"
     assert result["effective_health"] == "on_track"
     assert "Target go-live date has passed" in result["calculated_health_reasons"]
+
+
+def test_calculated_health_accepts_naive_mongodb_datetimes():
+    now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    result = calculate_account_health({
+        "completion_percentage": 50,
+        "target_go_live_at": datetime(2026, 7, 31),
+        "work_items": [{
+            "type": "task",
+            "status": "in_progress",
+            "due_at": datetime(2026, 7, 30),
+        }],
+    }, now)
+    assert result["calculated_health"] == "at_risk"
+    assert result["overdue_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_action_center_accepts_naive_mongodb_datetimes():
+    class Repository:
+        async def list_all(self, query):
+            assert query == {"archived_at": None}
+            return [{
+                "account_id": "acc_1",
+                "name": "Acme",
+                "completion_percentage": 50,
+                "target_go_live_at": datetime(2020, 7, 31),
+                "work_items": [{
+                    "item_id": "item_1",
+                    "type": "task",
+                    "title": "Ship SDK",
+                    "status": "in_progress",
+                    "owner_email": "owner@example.com",
+                    "due_at": datetime(2020, 7, 30),
+                }],
+            }]
+
+    actions, attention = await AccountService(Repository()).list_actions(
+        "owner@example.com"
+    )
+    assert actions[0]["is_overdue"] is True
+    assert actions[0]["due_at"].tzinfo == timezone.utc
+    assert attention[0]["effective_health"] == "at_risk"
 
 
 def test_health_override_flag_requires_boolean():

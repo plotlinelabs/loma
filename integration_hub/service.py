@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from integration_hub.models import (
-    PLAYBOOKS, ValidationError, calculate_account_health,
+    PLAYBOOKS, ValidationError, as_utc, calculate_account_health,
     normalize_activity, normalize_create, normalize_source_link, normalize_update,
     normalize_project, normalize_work_item, validate_status_transition,
 )
@@ -70,9 +70,10 @@ class AccountService:
                     and item.get("type") in ("task", "milestone")
                     and item.get("status") != "completed"
                 ):
-                    due_at = item.get("due_at")
+                    due_at = as_utc(item.get("due_at"))
                     actions.append({
                         **item,
+                        "due_at": due_at,
                         "account_id": account["account_id"],
                         "account_name": account["name"],
                         "is_overdue": bool(due_at and due_at < now),

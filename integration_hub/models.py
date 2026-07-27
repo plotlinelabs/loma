@@ -278,9 +278,16 @@ def normalize_source_link(data):
     }
 
 
+def as_utc(value):
+    """Normalize MongoDB's naive UTC datetimes before date comparisons."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
 def calculate_account_health(account, now=None):
     """Return the derived health, explanations, and urgency counters."""
-    now = now or datetime.now(timezone.utc)
+    now = as_utc(now or datetime.now(timezone.utc))
     upcoming_cutoff = now + timedelta(days=7)
     open_items = [
         item for item in account.get("work_items", [])
@@ -288,11 +295,11 @@ def calculate_account_health(account, now=None):
     ]
     overdue = [
         item for item in open_items
-        if item.get("due_at") and item["due_at"] < now
+        if item.get("due_at") and as_utc(item["due_at"]) < now
     ]
     upcoming = [
         item for item in open_items
-        if item.get("due_at") and now <= item["due_at"] <= upcoming_cutoff
+        if item.get("due_at") and now <= as_utc(item["due_at"]) <= upcoming_cutoff
     ]
     blockers = [item for item in open_items if item.get("type") == "blocker"]
     severe = [
@@ -307,7 +314,7 @@ def calculate_account_health(account, now=None):
         reasons.append(f"{len(overdue)} overdue item{'s' if len(overdue) != 1 else ''}")
     if severe:
         reasons.append(f"{len(severe)} high-severity risk{'s' if len(severe) != 1 else ''}")
-    target = account.get("target_go_live_at")
+    target = as_utc(account.get("target_go_live_at"))
     if target and target < now and account.get("completion_percentage", 0) < 100:
         reasons.append("Target go-live date has passed")
     elif target and target <= upcoming_cutoff and account.get("completion_percentage", 0) < 100:
