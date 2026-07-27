@@ -105,12 +105,11 @@ async def handle_create_account(request):
         service, actor, _ = _context(request); _require_module(request, True)
         key = request.headers.get("Idempotency-Key", "").strip()
         if not key: raise ValidationError("Idempotency-Key header is required")
-        cached = await service.repository.find_idempotent(actor, key)
-        if cached: return _ok(request, cached["response"], 200, cached["response"]["account"]["version"])
-        account = await service.create(await _json(request), actor, request["request_id"])
-        payload = {"account": _serialize(account)}
-        await service.repository.save_idempotent(actor, key, payload)
-        return _ok(request, payload, 201, account["version"])
+        payload, created = await service.create_idempotent(
+            await _json(request), actor, request["request_id"], key,
+        )
+        account = payload["account"]
+        return _ok(request, payload, 201 if created else 200, account["version"])
     return await _run(request, action)
 
 
@@ -131,7 +130,8 @@ async def handle_list_accounts(request):
 async def handle_list_actions(request):
     async def action():
         service, actor, _ = _context(request); _require_module(request)
-        actions, attention = await service.list_actions(actor)
+        limit = min(100, max(1, int(request.query.get("limit", "100"))))
+        actions, attention = await service.list_actions(actor, limit)
         return _ok(request, {"actions": actions, "attention_accounts": attention})
     return await _run(request, action)
 

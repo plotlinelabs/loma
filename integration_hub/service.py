@@ -26,7 +26,7 @@ class AccountService:
                 "resource_type": resource_type, "resource_id": resource_id, "action": action,
                 "request_id": request_id, "created_at": datetime.now(timezone.utc)}
 
-    async def create(self, data, actor, request_id):
+    def build_account(self, data, actor, request_id):
         now = datetime.now(timezone.utc)
         account_id = self._id("acc")
         account = {"account_id": account_id, **normalize_create(data), "created_at": now,
@@ -34,7 +34,20 @@ class AccountService:
                    "archived_at": None, "archived_by": None, "version": 1}
         audit = self._audit(account_id, actor, "account", account_id, "account.created", request_id)
         audit.update({"before": None, "after": account, "resource_version": 1})
+        return account, audit
+
+    async def create(self, data, actor, request_id):
+        account, audit = self.build_account(data, actor, request_id)
         return self.enrich(await self.repository.create(account, audit))
+
+    async def create_idempotent(self, data, actor, request_id, key):
+        account, audit = self.build_account(data, actor, request_id)
+        enriched = self.enrich(account)
+        payload = {"account": enriched}
+        response, created = await self.repository.create_idempotent(
+            account, audit, actor, key, payload,
+        )
+        return response, created
 
     async def list(self, actor, system_role, *, stage=None, health=None, search=None,
                    owner=None, status="active", limit=50, cursor=None):
@@ -56,9 +69,9 @@ class AccountService:
         account = await self.repository.get(account_id, include_archived)
         return self.enrich(await self.repository.hydrate(account)) if account else None
 
-    async def list_actions(self, actor):
+    async def list_actions(self, actor, attention_limit=100):
         now = datetime.now(timezone.utc)
-        actions, attention = await self.repository.list_actions(actor)
+        actions, attention = await self.repository.list_actions(actor, attention_limit)
         result = []
         for row in actions:
             account = row.pop("account")

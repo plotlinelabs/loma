@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 
 RESOURCE_COLLECTIONS = {
@@ -49,6 +50,32 @@ class AccountRepository:
             await self.audit.insert_one(audit_entry, session=session)
             return account
         return await self._transaction(operation)
+
+    async def create_idempotent(self, account, audit_entry, actor, key, response):
+        """Create the account, audit row, and idempotency result in one transaction."""
+        record = {
+            "actor": actor,
+            "key": key,
+            "response": response,
+            "created_at": datetime.now(timezone.utc),
+        }
+
+        async def operation(session):
+            # The unique (actor, key) index serializes concurrent retries. Inserting
+            # this first ensures a losing request cannot create an account.
+            await self.idempotency.insert_one(record, session=session)
+            await self.collection.insert_one(account, session=session)
+            await self.audit.insert_one(audit_entry, session=session)
+            return True
+
+        try:
+            await self._transaction(operation)
+            return response, True
+        except DuplicateKeyError:
+            existing = await self.idempotency.find_one({"actor": actor, "key": key})
+            if not existing:
+                raise
+            return existing["response"], False
 
     async def list(self, query, limit=50, cursor=None):
         query = dict(query)
@@ -177,7 +204,7 @@ class AccountRepository:
             next_cursor = self.encode_cursor({"updated_at": rows[-1]["created_at"], "account_id": rows[-1]["audit_id"]})
         return rows, next_cursor
 
-    async def list_actions(self, actor):
+    async def list_actions(self, actor, attention_limit=100):
         pipeline = [
             {"$match": {"owner_email": actor.lower(), "archived_at": None,
                         "status": {"$nin": ["completed", "cancelled", "achieved", "resolved", "accepted"]}}},
@@ -189,16 +216,62 @@ class AccountRepository:
         actions = []
         for collection in (self.tasks, self.milestones):
             actions.extend(await collection.aggregate(pipeline).to_list(500))
+        now = datetime.now(timezone.utc)
+        closed = ["completed", "cancelled", "achieved", "resolved", "accepted"]
         attention_pipeline = [
             {"$match": {"archived_at": None, "status": "active"}},
+            {"$lookup": {
+                "from": "integration_tasks", "let": {"account_id": "$account_id"},
+                "pipeline": [{"$match": {"$expr": {"$eq": ["$account_id", "$$account_id"]},
+                                         "archived_at": None, "status": {"$nin": closed},
+                                         "due_at": {"$lt": now}}},
+                             {"$limit": 2}],
+                "as": "attention_overdue_tasks",
+            }},
+            {"$lookup": {
+                "from": "integration_milestones", "let": {"account_id": "$account_id"},
+                "pipeline": [{"$match": {"$expr": {"$eq": ["$account_id", "$$account_id"]},
+                                         "archived_at": None, "status": {"$nin": closed},
+                                         "due_at": {"$lt": now}}},
+                             {"$limit": 2}],
+                "as": "attention_overdue_milestones",
+            }},
+            {"$lookup": {
+                "from": "integration_risks", "let": {"account_id": "$account_id"},
+                "pipeline": [{"$match": {"$expr": {"$eq": ["$account_id", "$$account_id"]},
+                                         "archived_at": None, "status": {"$nin": closed},
+                                         "$or": [{"type": "blocker"},
+                                                 {"severity": {"$in": ["high", "critical"]}}]}},
+                             {"$limit": 1}],
+                "as": "attention_risks",
+            }},
+            {"$addFields": {
+                "attention_overdue_count": {"$add": [
+                    {"$size": "$attention_overdue_tasks"},
+                    {"$size": "$attention_overdue_milestones"},
+                ]},
+            }},
+            {"$match": {"$or": [
+                {"health_override_enabled": True,
+                 "health": {"$in": ["blocked", "at_risk", "escalated"]}},
+                {"current_blocker": {"$nin": [None, ""]}},
+                {"attention_overdue_count": {"$gte": 2}},
+                {"attention_risks.0": {"$exists": True}},
+                {"$expr": {"$and": [
+                    {"$ne": ["$target_go_live_at", None]},
+                    {"$lt": ["$target_go_live_at", now]},
+                    {"$lt": [{"$ifNull": ["$completion_percentage", 0]}, 100]},
+                ]}},
+            ]}},
+            {"$sort": {"updated_at": -1, "account_id": 1}},
+            {"$limit": attention_limit},
+            {"$unset": ["attention_overdue_tasks", "attention_overdue_milestones",
+                        "attention_risks", "attention_overdue_count"]},
             *[
                 {"$lookup": {
-                    "from": collection,
-                    "let": {"account_id": "$account_id"},
-                    "pipeline": [
-                        {"$match": {"$expr": {"$eq": ["$account_id", "$$account_id"]},
-                                    "archived_at": None}},
-                    ],
+                    "from": collection, "let": {"account_id": "$account_id"},
+                    "pipeline": [{"$match": {"$expr": {"$eq": ["$account_id", "$$account_id"]},
+                                             "archived_at": None}}],
                     "as": field,
                 }}
                 for collection, field in (
@@ -211,9 +284,8 @@ class AccountRepository:
                 "$concatArrays": ["$health_tasks", "$health_milestones", "$health_risks"]
             }}},
             {"$project": {"health_tasks": 0, "health_milestones": 0, "health_risks": 0}},
-            {"$sort": {"updated_at": -1, "account_id": 1}},
         ]
-        attention = await self.collection.aggregate(attention_pipeline).to_list(None)
+        attention = await self.collection.aggregate(attention_pipeline).to_list(attention_limit)
         return actions, attention
 
     async def find_idempotent(self, actor, key):

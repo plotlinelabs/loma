@@ -154,8 +154,9 @@ def test_calculated_health_accepts_naive_mongodb_datetimes():
 @pytest.mark.asyncio
 async def test_action_center_accepts_naive_mongodb_datetimes():
     class Repository:
-        async def list_actions(self, actor):
+        async def list_actions(self, actor, attention_limit=100):
             assert actor == "owner@example.com"
+            assert attention_limit == 100
             return ([{
                 "resource_id": "item_1", "type": "task", "title": "Ship SDK",
                 "status": "in_progress", "owner_email": actor,
