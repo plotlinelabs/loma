@@ -27,7 +27,8 @@ WORK_ITEM_STATUSES = {
 RISK_SEVERITIES = ("low", "medium", "high", "critical")
 ACTIVITY_TYPES = ("note", "decision", "update")
 SOURCE_TYPES = ("grain", "slack", "linear", "pylon", "hubspot", "document", "other")
-SOURCE_MAPPING_STATUSES = ("proposed", "confirmed", "rejected")
+SOURCE_MAPPING_STATUSES = ("active", "paused")
+SYNC_SOURCE_TYPES = ("slack", "grain", "pylon")
 CONVERSATION_STATES = (
     "waiting_on_plotline", "waiting_on_customer", "internally_blocked",
     "resolved", "monitoring", "no_action_required",
@@ -93,17 +94,26 @@ def normalize_date(value):
 
 def normalize_source_mapping(data):
     source = data.get("source")
-    if source not in SOURCE_TYPES:
-        raise ValidationError("source is invalid")
-    status = data.get("status") or "proposed"
+    if source not in SYNC_SOURCE_TYPES:
+        raise ValidationError("source does not support read-only sync")
+    status = data.get("status") or "active"
     if status not in SOURCE_MAPPING_STATUSES:
         raise ValidationError("status is invalid")
+    config = data.get("config") or {}
+    if not isinstance(config, dict):
+        raise ValidationError("config must be an object")
+    allowed_config = {"thread_ts", "source_url", "limit"}
+    if set(config) - allowed_config:
+        raise ValidationError("config contains unsupported fields")
+    if "limit" in config and (isinstance(config["limit"], bool) or not isinstance(config["limit"], int) or not 1 <= config["limit"] <= 200):
+        raise ValidationError("config.limit must be between 1 and 200")
     return {
         "source": source,
         "tenant_id": _text(data.get("tenant_id"), "tenant_id", required=True, maximum=255),
         "external_id": _text(data.get("external_id"), "external_id", required=True, maximum=255),
         "label": _text(data.get("label"), "label", maximum=200),
         "status": status,
+        "config": {key: value for key, value in config.items() if value not in (None, "")},
     }
 
 

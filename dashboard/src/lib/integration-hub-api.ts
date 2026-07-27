@@ -43,6 +43,7 @@ export interface IntegrationAccount {
   source_links: IntegrationSourceLink[];
   projects: IntegrationProject[];
   interactions: IntegrationInteraction[];
+  sync_sources: IntegrationSyncSource[];
 }
 
 export interface IntegrationInteraction {
@@ -260,4 +261,37 @@ export function archiveIntegrationSourceLink(accountId: string, sourceId: string
 
 export function formatIntegrationLabel(value: string) {
   return value.split("_").map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");
+}
+
+export interface IntegrationSyncSource {
+  mapping_id: string;
+  source: "slack" | "grain" | "pylon";
+  tenant_id: string;
+  external_id: string;
+  label: string | null;
+  status: "active" | "paused";
+  sync_status: "never_synced" | "succeeded" | "failed";
+  last_error: string | null;
+  last_synced_at: string | null;
+  config: { thread_ts?: string; source_url?: string; limit?: number };
+}
+
+export function createIntegrationSyncSource(accountId: string, input: {
+  source: IntegrationSyncSource["source"];
+  tenant_id: string;
+  external_id: string;
+  label?: string;
+  config?: IntegrationSyncSource["config"];
+}) {
+  return request<{ source: IntegrationSyncSource }>(
+    `/api/integration-hub/accounts/${accountId}/sync-sources`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function syncIntegrationSource(accountId: string, mappingId: string) {
+  return request<{ source: IntegrationSyncSource; created: number; seen: number }>(
+    `/api/integration-hub/accounts/${accountId}/sync-sources/${mappingId}/sync`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
 }

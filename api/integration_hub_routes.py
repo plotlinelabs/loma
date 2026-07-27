@@ -139,7 +139,8 @@ async def handle_list_actions(request):
 async def handle_get_account(request):
     async def action():
         service, _, _, account = await _account_context(request, include_archived=True)
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         hydrated = await service.get(account["account_id"], True)
         return _ok(request, {"account": hydrated}, version=account["version"])
     return await _run(request, action)
@@ -148,7 +149,8 @@ async def handle_get_account(request):
 async def handle_update_account(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit")
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         updated = await service.update(account, await _json(request), actor, _if_match(request), request["request_id"])
         return _ok(request, {"account": updated}, version=updated["version"])
     return await _run(request, action)
@@ -157,7 +159,8 @@ async def handle_update_account(request):
 async def _lifecycle_account(request, restore=False):
     async def action():
         service, actor, _, account = await _account_context(request, "edit", True)
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         body = await _json(request) if request.can_read_body else {}
         updated = await (service.restore(account, actor, _if_match(request), request["request_id"])
                          if restore else service.archive(account, actor, _if_match(request), request["request_id"], body.get("reason")))
@@ -179,7 +182,8 @@ async def handle_list_playbooks(request):
 async def handle_create_project(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit")
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         if _if_match(request) != account["version"]: raise RuntimeError("version_conflict")
         updated = await service.create_project(account, await _json(request), actor, request["request_id"])
         return _ok(request, {"account": updated}, 201, updated["version"])
@@ -189,7 +193,8 @@ async def handle_create_project(request):
 async def _archive_child_resource(request, kind, id_key):
     async def action():
         service, actor, _, account = await _account_context(request, "edit")
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         resource = await service.repository.get_resource(
             kind, request.match_info[id_key], account["account_id"],
         )
@@ -214,7 +219,8 @@ async def handle_archive_source(request):
 async def handle_get_audit_log(request):
     async def action():
         service, _, _, account = await _account_context(request)
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         rows, cursor = await service.repository.list_audit(account["account_id"], min(100, int(request.query.get("limit", "50"))), request.query.get("cursor"))
         return _ok(request, {"audit_entries": rows, "pagination": {"next_cursor": cursor}})
     return await _run(request, action)
@@ -227,7 +233,8 @@ def _find_item(account, item_id):
 async def handle_create_work_item(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit")
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         if _if_match(request) != account["version"]: raise RuntimeError("version_conflict")
         updated = await service.create_work_item(account, await _json(request), actor, request["request_id"])
         return _ok(request, {"account": updated}, 201, updated["version"])
@@ -259,7 +266,8 @@ async def handle_archive_work_item(request):
 async def handle_create_activity(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit")
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         if _if_match(request) != account["version"]: raise RuntimeError("version_conflict")
         updated = await service.create_activity(account, await _json(request), actor, request["request_id"])
         return _ok(request, {"account": updated}, 201, updated["version"])
@@ -269,7 +277,8 @@ async def handle_create_activity(request):
 async def handle_create_source_link(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit")
-        if not account: return _error(request, 404, "not_found", "Account not found")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
         if _if_match(request) != account["version"]: raise RuntimeError("version_conflict")
         updated = await service.create_source_link(account, await _json(request), actor, request["request_id"])
         return _ok(request, {"account": updated}, 201, updated["version"])
@@ -301,6 +310,41 @@ async def handle_ingest_interaction(request):
     return await _run(request, action)
 
 
+async def handle_list_sync_sources(request):
+    async def action():
+        service, _, _, account = await _account_context(request)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        rows = await service.repository.list_sync_sources(account["account_id"])
+        return _ok(request, {"sources": rows})
+    return await _run(request, action)
+
+
+async def handle_create_sync_source(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        mapping = await service.create_sync_source(account, await _json(request), actor, request["request_id"])
+        return _ok(request, {"source": mapping}, 201)
+    return await _run(request, action)
+
+
+async def handle_sync_source(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        mapping = await service.repository.sync_sources.find_one({
+            "account_id": account["account_id"], "mapping_id": request.match_info["mapping_id"],
+            "archived_at": None, "status": "active",
+        })
+        if not mapping:
+            return _error(request, 404, "not_found", "Sync source not found")
+        updated, created, seen = await service.sync_source(account, mapping, actor, request["request_id"])
+        return _ok(request, {"source": updated, "created": created, "seen": seen})
+    return await _run(request, action)
+
 def setup_integration_hub_routes(app):
     p = "/api/integration-hub"
     app.router.add_post(f"{p}/accounts", handle_create_account)
@@ -321,4 +365,7 @@ def setup_integration_hub_routes(app):
     app.router.add_post(f"{p}/accounts/{{account_id}}/source-links", handle_create_source_link)
     app.router.add_post(f"{p}/accounts/{{account_id}}/source-links/{{source_id}}/archive", handle_archive_source)
     app.router.add_get(f"{p}/accounts/{{account_id}}/interactions", handle_list_interactions)
+    app.router.add_get(f"{p}/accounts/{{account_id}}/sync-sources", handle_list_sync_sources)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources", handle_create_sync_source)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources/{{mapping_id}}/sync", handle_sync_source)
     app.router.add_post(f"{p}/accounts/{{account_id}}/interactions", handle_ingest_interaction)

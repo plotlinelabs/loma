@@ -23,6 +23,7 @@ class AccountRepository:
         self.risks = db.integration_risks
         self.sources = db.integration_source_mappings
         self.interactions = db.integration_interactions
+        self.sync_sources = getattr(db, "integration_sync_sources", self.sources)
         self.audit = db.integration_audit_log
         self.idempotency = db.integration_idempotency
 
@@ -104,12 +105,13 @@ class AccountRepository:
             return None
         account_id = account["account_id"]
         active = {"account_id": account_id, "archived_at": None}
-        projects, tasks, milestones, risks, sources, interactions, activities = await __import__("asyncio").gather(
+        projects, tasks, milestones, risks, sources, sync_sources, interactions, activities = await __import__("asyncio").gather(
             self.projects.find(active).sort("created_at", 1).to_list(None),
             self.tasks.find(active).sort("created_at", 1).to_list(None),
             self.milestones.find(active).sort("created_at", 1).to_list(None),
             self.risks.find(active).sort("created_at", 1).to_list(None),
             self.sources.find(active).sort("created_at", 1).to_list(None),
+            self.sync_sources.find(active).sort("created_at", 1).to_list(None),
             self.interactions.find({"account_id": account_id}).sort("occurred_at", -1).limit(100).to_list(100),
             self.audit.find({"account_id": account_id}).sort("created_at", -1).limit(200).to_list(200),
         )
@@ -117,6 +119,7 @@ class AccountRepository:
         result["projects"] = projects
         result["work_items"] = tasks + milestones + risks
         result["source_links"] = sources
+        result["sync_sources"] = sync_sources
         result["interactions"] = interactions
         result["activities"] = [{
             "activity_id": row["audit_id"], "type": row.get("activity_type", "update"),
@@ -124,6 +127,25 @@ class AccountRepository:
             "created_by": row["actor"],
         } for row in reversed(activities)]
         return result
+
+
+    async def list_sync_sources(self, account_id):
+        return await self.sync_sources.find({"account_id": account_id, "archived_at": None}).sort("created_at", 1).to_list(None)
+
+    async def create_sync_source(self, mapping, audit_entry):
+        async def operation(session):
+            await self.sync_sources.insert_one(mapping, session=session)
+            await self.audit.insert_one(audit_entry, session=session)
+            return mapping
+        return await self._transaction(operation)
+
+    async def update_sync_result(self, mapping_id, *, status, error, checkpoint, synced_at):
+        return await self.sync_sources.find_one_and_update(
+            {"mapping_id": mapping_id, "archived_at": None},
+            {"$set": {"sync_status": status, "last_error": error, "checkpoint": checkpoint,
+                      "last_synced_at": synced_at, "updated_at": synced_at}},
+            return_document=ReturnDocument.AFTER,
+        )
 
     async def create_interaction(self, interaction, audit_entry):
         async def operation(session):

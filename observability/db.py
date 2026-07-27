@@ -125,6 +125,8 @@ async def init_observability():
     )
     await _db.integration_interactions.create_index([("account_id", 1), ("occurred_at", -1)])
     await _db.integration_interactions.create_index([("conversation_state", 1), ("occurred_at", -1)])
+    await _db.integration_sync_sources.create_index("mapping_id", unique=True)
+    await _db.integration_sync_sources.create_index([("account_id", 1), ("source", 1), ("archived_at", 1)])
     for collection in (_db.integration_projects, _db.integration_tasks,
                        _db.integration_milestones, _db.integration_risks,
                        _db.integration_source_mappings):

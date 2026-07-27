@@ -3,16 +3,19 @@
 import { FormEvent, useState } from "react";
 import {
   createIntegrationActivity,
+  fetchIntegrationAccount,
   createIntegrationProject,
   createIntegrationSourceLink,
   createIntegrationWorkItem,
+  createIntegrationSyncSource,
+  syncIntegrationSource,
   archiveIntegrationProject,
   archiveIntegrationSourceLink,
   archiveIntegrationWorkItem,
   formatIntegrationLabel,
   INTEGRATION_HEALTH,
   IntegrationAccount,
-  IntegrationSourceLink, IntegrationWorkItemInput,
+  IntegrationSourceLink, IntegrationSyncSource, IntegrationWorkItemInput,
   IntegrationWorkItemType,
   updateIntegrationAccount,
   updateIntegrationWorkItem,
@@ -60,6 +63,8 @@ export default function OnboardingWorkspace({
   });
   const [projectName, setProjectName] = useState("");
   const [projectPlaybook, setProjectPlaybook] = useState("mobile_sdk");
+  const [syncSource, setSyncSource] = useState<{ source: IntegrationSyncSource["source"]; tenant_id: string; external_id: string; label: string }>({ source: "slack", tenant_id: "plotline", external_id: "", label: "" });
+  const [syncingId, setSyncingId] = useState<string | null>(null);
 
   async function addProject(event: FormEvent) {
     event.preventDefault();
@@ -214,6 +219,28 @@ export default function OnboardingWorkspace({
   }
 
 
+  async function addSyncSource(event: FormEvent) {
+    event.preventDefault(); setSaving(true); setError(null);
+    try {
+      await createIntegrationSyncSource(account.account_id, syncSource);
+      const refreshed = await fetchIntegrationAccount(account.account_id);
+      onChange(refreshed.account);
+      setSyncSource({ source: "slack", tenant_id: "plotline", external_id: "", label: "" });
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not add read-only source"); }
+    finally { setSaving(false); }
+  }
+
+  async function runSync(mappingId: string) {
+    setSyncingId(mappingId); setError(null);
+    try {
+      await syncIntegrationSource(account.account_id, mappingId);
+      const refreshed = await fetchIntegrationAccount(account.account_id);
+      onChange(refreshed.account);
+    } catch (err) { setError(err instanceof Error ? err.message : "Read-only sync failed"); }
+    finally { setSyncingId(null); }
+  }
+
+
   return (
     <div className="space-y-3">
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -226,6 +253,24 @@ export default function OnboardingWorkspace({
             </p>
           </div>
           <Badge variant="outline">{(account.interactions || []).length} recent</Badge>
+        </div>
+
+        <form onSubmit={addSyncSource} className="mt-4 grid gap-2 md:grid-cols-[150px_1fr_1fr_auto]">
+          <select className="h-9 rounded-md border bg-background px-3 text-sm" value={syncSource.source} onChange={(event) => setSyncSource({ ...syncSource, source: event.target.value as IntegrationSyncSource["source"] })}>
+            <option value="slack">Slack channel</option><option value="grain">Grain title search</option><option value="pylon">Pylon issue</option>
+          </select>
+          <Input required maxLength={255} placeholder="Workspace or tenant" value={syncSource.tenant_id} onChange={(event) => setSyncSource({ ...syncSource, tenant_id: event.target.value })} />
+          <Input required maxLength={255} placeholder={syncSource.source === "slack" ? "Channel ID" : syncSource.source === "pylon" ? "Issue ID" : "Meeting title search"} value={syncSource.external_id} onChange={(event) => setSyncSource({ ...syncSource, external_id: event.target.value })} />
+          <Button type="submit" size="sm" disabled={saving}>Add read-only source</Button>
+        </form>
+        <p className="mt-2 text-xs text-muted-foreground">Uses existing Loma credentials. Sync only reads external data and cannot send messages or change source records.</p>
+        <div className="mt-3 space-y-2">
+          {(account.sync_sources || []).map((mapping) => (
+            <div key={mapping.mapping_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+              <div><p className="text-sm font-medium">{mapping.label || formatIntegrationLabel(mapping.source)}</p><p className="text-xs text-muted-foreground">{mapping.external_id} · {mapping.last_synced_at ? `Last synced ${new Date(mapping.last_synced_at).toLocaleString()}` : "Never synced"}{mapping.last_error ? ` · ${mapping.last_error}` : ""}</p></div>
+              <Button type="button" variant="outline" size="sm" disabled={syncingId === mapping.mapping_id} onClick={() => runSync(mapping.mapping_id)}>{syncingId === mapping.mapping_id ? "Syncing..." : "Sync now"}</Button>
+            </div>
+          ))}
         </div>
         <div className="mt-3 space-y-2">
           {(account.interactions || []).map((interaction) => (

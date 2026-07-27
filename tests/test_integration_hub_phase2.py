@@ -86,3 +86,48 @@ async def test_interaction_ingestion_is_deduplicated():
     assert replay_created is False
     assert second["interaction_id"] == first["interaction_id"]
     assert len(repository.rows) == 1
+
+
+def test_sync_mapping_is_limited_to_pull_only_sources():
+    from integration_hub.models import normalize_source_mapping, ValidationError
+    assert normalize_source_mapping({"source": "slack", "tenant_id": "T1", "external_id": "C1"})["status"] == "active"
+    with pytest.raises(ValidationError):
+        normalize_source_mapping({"source": "linear", "tenant_id": "T1", "external_id": "ENG"})
+    with pytest.raises(ValidationError):
+        normalize_source_mapping({"source": "slack", "tenant_id": "T1", "external_id": "C1", "config": {"write": True}})
+
+
+@pytest.mark.asyncio
+async def test_pull_dispatches_only_registered_readers(monkeypatch):
+    from integration_hub import read_only_sync
+    called = []
+    async def reader(mapping, actor):
+        called.append((mapping["external_id"], actor))
+        return []
+    monkeypatch.setitem(read_only_sync.READERS, "slack", reader)
+    result = await read_only_sync.pull({"source": "slack", "external_id": "C1"}, "user@example.com")
+    assert result == []
+    assert called == [("C1", "user@example.com")]
+    assert not any(name.startswith(("send", "update", "create", "reply", "post")) for name in read_only_sync.READERS)
+
+
+@pytest.mark.asyncio
+async def test_sync_deduplicates_pulled_records(monkeypatch):
+    from integration_hub.service import AccountService
+    service = AccountService(None)
+    records = [{"source": "slack", "tenant_id": "T", "source_id": "1"}]
+    async def fake_pull(mapping, actor): return records
+    monkeypatch.setattr("integration_hub.read_only_sync.pull", fake_pull)
+    seen = []
+    async def ingest(account, record, actor, request_id):
+        seen.append(record)
+        return record, len(seen) == 1
+    service.ingest_interaction = ingest
+    class Repo:
+        async def update_sync_result(self, *args, **kwargs): return kwargs
+    service.repository = Repo()
+    updated, created, total = await service.sync_source(
+        {"account_id": "a"}, {"mapping_id": "m", "source": "slack"}, "u", "r"
+    )
+    assert (created, total) == (1, 1)
+    assert updated["status"] == "succeeded"

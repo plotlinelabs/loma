@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from integration_hub.models import (
     PLAYBOOKS, ValidationError, as_utc, calculate_account_health, normalize_activity,
     normalize_create, normalize_project, normalize_source_link, normalize_update,
-    normalize_work_item, validate_status_transition, normalize_interaction,
+    normalize_work_item, validate_status_transition, normalize_interaction, normalize_source_mapping,
 )
 
 EDIT_ROLES = {"owner", "editor"}
@@ -253,3 +253,39 @@ class AccountService:
             })
             return existing, False
         return interaction, True
+
+    async def create_sync_source(self, account, data, actor, request_id):
+        now = datetime.now(timezone.utc)
+        mapping_id = self._id("sync")
+        mapping = {
+            "mapping_id": mapping_id, "account_id": account["account_id"],
+            **normalize_source_mapping(data), "sync_status": "never_synced",
+            "last_error": None, "last_synced_at": None, "checkpoint": None,
+            "created_at": now, "created_by": actor, "updated_at": now,
+            "archived_at": None,
+        }
+        audit = self._audit(account["account_id"], actor, "sync_source", mapping_id,
+                            "sync_source.created", request_id)
+        await self.repository.create_sync_source(mapping, audit)
+        return mapping
+
+    async def sync_source(self, account, mapping, actor, request_id):
+        from integration_hub.read_only_sync import pull
+        now = datetime.now(timezone.utc)
+        try:
+            records = await pull(mapping, actor)
+            created = 0
+            for record in records:
+                _, was_created = await self.ingest_interaction(account, record, actor, request_id)
+                created += int(was_created)
+            updated = await self.repository.update_sync_result(
+                mapping["mapping_id"], status="succeeded", error=None,
+                checkpoint={"records_seen": len(records)}, synced_at=now,
+            )
+            return updated, created, len(records)
+        except Exception as exc:
+            await self.repository.update_sync_result(
+                mapping["mapping_id"], status="failed", error=str(exc)[:500],
+                checkpoint=mapping.get("checkpoint"), synced_at=now,
+            )
+            raise
