@@ -21,7 +21,6 @@ class AccountRepository:
         self.milestones = db.integration_milestones
         self.risks = db.integration_risks
         self.sources = db.integration_source_mappings
-        self.grants = db.integration_access_grants
         self.audit = db.integration_audit_log
         self.idempotency = db.integration_idempotency
 
@@ -44,10 +43,9 @@ class AccountRepository:
         async with await self.db.client.start_session() as session:
             return await session.with_transaction(callback)
 
-    async def create(self, account, grant, audit_entry):
+    async def create(self, account, audit_entry):
         async def operation(session):
             await self.collection.insert_one(account, session=session)
-            await self.grants.insert_one(grant, session=session)
             await self.audit.insert_one(audit_entry, session=session)
             return account
         return await self._transaction(operation)
@@ -72,16 +70,6 @@ class AccountRepository:
         if not include_archived:
             query["archived_at"] = None
         return await self.collection.find_one(query)
-
-    async def get_access(self, account_id, actor):
-        return await self.grants.find_one({
-            "account_id": account_id, "principal_email": actor.lower(), "archived_at": None,
-        })
-
-    async def accessible_account_ids(self, actor):
-        return [row["account_id"] async for row in self.grants.find(
-            {"principal_email": actor.lower(), "archived_at": None}, {"account_id": 1, "_id": 0}
-        )]
 
     async def hydrate(self, account):
         if not account:
@@ -190,12 +178,9 @@ class AccountRepository:
         return rows, next_cursor
 
     async def list_actions(self, actor):
-        ids = await self.accessible_account_ids(actor)
-        if not ids:
-            return [], []
         pipeline = [
-            {"$match": {"account_id": {"$in": ids}, "owner_email": actor.lower(), "archived_at": None,
-                        "status": {"$nin": ["completed", "cancelled", "resolved", "accepted"]}}},
+            {"$match": {"owner_email": actor.lower(), "archived_at": None,
+                        "status": {"$nin": ["completed", "cancelled", "achieved", "resolved", "accepted"]}}},
             {"$lookup": {"from": "integration_accounts", "localField": "account_id", "foreignField": "account_id", "as": "account"}},
             {"$unwind": "$account"},
             {"$match": {"account.archived_at": None}},
@@ -204,42 +189,32 @@ class AccountRepository:
         actions = []
         for collection in (self.tasks, self.milestones):
             actions.extend(await collection.aggregate(pipeline).to_list(500))
-        attention = await self.collection.find({
-            "account_id": {"$in": ids}, "archived_at": None,
-            "$or": [{"health": {"$in": ["blocked", "at_risk", "escalated"]}}, {"current_blocker": {"$ne": None}}],
-        }).sort([("updated_at", -1), ("account_id", 1)]).limit(100).to_list(100)
+        attention_pipeline = [
+            {"$match": {"archived_at": None, "status": "active"}},
+            *[
+                {"$lookup": {
+                    "from": collection,
+                    "let": {"account_id": "$account_id"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$eq": ["$account_id", "$$account_id"]},
+                                    "archived_at": None}},
+                    ],
+                    "as": field,
+                }}
+                for collection, field in (
+                    ("integration_tasks", "health_tasks"),
+                    ("integration_milestones", "health_milestones"),
+                    ("integration_risks", "health_risks"),
+                )
+            ],
+            {"$addFields": {"work_items": {
+                "$concatArrays": ["$health_tasks", "$health_milestones", "$health_risks"]
+            }}},
+            {"$project": {"health_tasks": 0, "health_milestones": 0, "health_risks": 0}},
+            {"$sort": {"updated_at": -1, "account_id": 1}},
+        ]
+        attention = await self.collection.aggregate(attention_pipeline).to_list(None)
         return actions, attention
-
-    async def create_grant(self, grant, account_version, audit_entry):
-        async def operation(session):
-            parent = await self.collection.find_one_and_update(
-                {"account_id": grant["account_id"], "version": account_version, "archived_at": None},
-                {"$set": {"updated_at": grant["created_at"], "updated_by": grant["created_by"]}, "$inc": {"version": 1}},
-                session=session, return_document=ReturnDocument.AFTER)
-            if not parent: return None
-            await self.grants.insert_one(grant, session=session)
-            audit_entry.update({"before": None, "after": grant, "resource_version": 1})
-            await self.audit.insert_one(audit_entry, session=session)
-            return parent
-        return await self._transaction(operation)
-
-    async def archive_grant(self, grant, account_version, actor, audit_entry):
-        now = datetime.now(timezone.utc)
-        async def operation(session):
-            parent = await self.collection.find_one_and_update(
-                {"account_id": grant["account_id"], "version": account_version, "archived_at": None},
-                {"$set": {"updated_at": now, "updated_by": actor}, "$inc": {"version": 1}},
-                session=session, return_document=ReturnDocument.AFTER)
-            if not parent: return None
-            after = await self.grants.find_one_and_update(
-                {"grant_id": grant["grant_id"], "version": grant["version"], "archived_at": None},
-                {"$set": {"archived_at": now, "archived_by": actor}, "$inc": {"version": 1}},
-                session=session, return_document=ReturnDocument.AFTER)
-            if not after: return None
-            audit_entry.update({"before": grant, "after": after, "resource_version": after["version"]})
-            await self.audit.insert_one(audit_entry, session=session)
-            return parent
-        return await self._transaction(operation)
 
     async def find_idempotent(self, actor, key):
         return await self.idempotency.find_one({"actor": actor, "key": key})

@@ -1,5 +1,6 @@
 """Integration Hub application service with account-scoped authorization."""
 import uuid
+import re
 from datetime import datetime, timezone
 
 from integration_hub.models import (
@@ -31,32 +32,22 @@ class AccountService:
         account = {"account_id": account_id, **normalize_create(data), "created_at": now,
                    "created_by": actor, "updated_at": now, "updated_by": actor,
                    "archived_at": None, "archived_by": None, "version": 1}
-        grant = {"grant_id": self._id("grant"), "account_id": account_id,
-                 "principal_email": actor.lower(), "role": "owner", "version": 1,
-                 "created_at": now, "created_by": actor, "archived_at": None}
         audit = self._audit(account_id, actor, "account", account_id, "account.created", request_id)
         audit.update({"before": None, "after": account, "resource_version": 1})
-        return self.enrich(await self.repository.create(account, grant, audit))
-
-    async def authorize(self, account_id, actor, permission="read", system_role="chatter"):
-        if system_role == "admin":
-            return "owner"
-        grant = await self.repository.get_access(account_id, actor)
-        role = grant.get("role") if grant else None
-        allowed = EDIT_ROLES if permission == "edit" else READ_ROLES
-        return role if role in allowed else None
+        return self.enrich(await self.repository.create(account, audit))
 
     async def list(self, actor, system_role, *, stage=None, health=None, search=None,
                    owner=None, status="active", limit=50, cursor=None):
         query = {"archived_at": None}
-        if system_role != "admin":
-            ids = await self.repository.accessible_account_ids(actor)
-            query["account_id"] = {"$in": ids}
         if status == "archived": query = {**query, "archived_at": {"$ne": None}}
         elif status: query["status"] = status
         if stage: query["stage"] = stage
         if health: query["health"] = health
-        if search: query["name"] = {"$regex": search, "$options": "i"}
+        if search:
+            search = search.strip()
+            if len(search) > 100:
+                raise ValidationError("search must be 100 characters or less")
+            query["name"] = {"$regex": re.escape(search), "$options": "i"}
         if owner: query["owner_email"] = owner.lower()
         accounts, next_cursor = await self.repository.list(query, limit, cursor)
         return [self.enrich(account) for account in accounts], next_cursor
@@ -74,7 +65,12 @@ class AccountService:
             due = as_utc(row.get("due_at"))
             result.append({**row, "item_id": row["resource_id"], "account_name": account["name"],
                            "is_overdue": bool(due and due < now)})
-        return result, [self.enrich(row) for row in attention]
+        enriched = [self.enrich(row) for row in attention]
+        return result, [
+            row for row in enriched
+            if row["effective_health"] in {"blocked", "at_risk", "escalated"}
+            or row.get("current_blocker")
+        ]
 
     @staticmethod
     def enrich(account):
@@ -207,20 +203,6 @@ class AccountService:
         updated = await self.repository.mutate_account(account["account_id"], {"updated_at": now, "updated_by": actor}, account["version"], audit)
         if not updated: raise RuntimeError("version_conflict")
         return await self.get(account["account_id"])
-
-    async def create_grant(self, account, data, actor, request_id):
-        email = (data.get("principal_email") or "").strip().lower()
-        role = data.get("role")
-        if "@" not in email: raise ValidationError("principal_email must be valid")
-        if role not in ("owner", "editor", "viewer"): raise ValidationError("grant role is invalid")
-        if await self.repository.get_access(account["account_id"], email): raise ValidationError("active grant already exists")
-        now = datetime.now(timezone.utc); grant_id = self._id("grant")
-        grant = {"grant_id": grant_id, "account_id": account["account_id"], "principal_email": email,
-                 "role": role, "version": 1, "created_at": now, "created_by": actor, "archived_at": None}
-        audit = self._audit(account["account_id"], actor, "access_grant", grant_id, "access_grant.created", request_id)
-        parent = await self.repository.create_grant(grant, account["version"], audit)
-        if not parent: raise RuntimeError("version_conflict")
-        return await self.get(account["account_id"]), grant
 
     async def create_source_link(self, account, data, actor, request_id):
         now = datetime.now(timezone.utc); link_id = self._id("link")

@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 
 import pytest
+from aiohttp import web
 
+from api.integration_hub_routes import setup_integration_hub_routes
 from integration_hub.models import ValidationError
 from integration_hub.repository import AccountRepository
 from integration_hub.service import AccountService
@@ -16,27 +18,30 @@ def test_cursor_is_opaque_and_round_trips_stable_sort_key():
         AccountRepository.decode_cursor("not-a-cursor")
 
 
-@pytest.mark.asyncio
-async def test_empty_access_grants_deny_cross_account_access():
-    class Repository:
-        async def get_access(self, account_id, actor):
-            return None
-
-    service = AccountService(Repository())
-    assert await service.authorize("acc_other", "user@example.com", "read", "chatter") is None
-    assert await service.authorize("acc_other", "user@example.com", "edit", "chatter") is None
-    assert await service.authorize("acc_other", "admin@example.com", "edit", "admin") == "owner"
+def test_integration_hub_routes_use_module_permissions_without_access_grants():
+    app = web.Application()
+    setup_integration_hub_routes(app)
+    routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
+    assert ("GET", "/api/integration-hub/accounts") in routes
+    assert ("GET", "/api/integration-hub/actions") in routes
+    assert not any("access-grants" in path for _, path in routes)
 
 
 @pytest.mark.asyncio
-async def test_access_grant_roles_enforce_read_and_edit_permissions():
+async def test_list_escapes_search_expression_and_keeps_it_bounded():
     class Repository:
-        async def get_access(self, account_id, actor):
-            return {"role": "viewer"}
+        query = None
 
-    service = AccountService(Repository())
-    assert await service.authorize("acc_1", "viewer@example.com", "read") == "viewer"
-    assert await service.authorize("acc_1", "viewer@example.com", "edit") is None
+        async def list(self, query, limit, cursor):
+            self.query = query
+            return [], None
+
+    repository = Repository()
+    service = AccountService(repository)
+    await service.list("user@example.com", "chatter", search="Acme.*", limit=25)
+    assert repository.query["name"]["$regex"] == "Acme\\.\\*"
+    with pytest.raises(ValidationError, match="100 characters"):
+        await service.list("user@example.com", "chatter", search="x" * 101)
 
 
 def test_dependency_self_cycle_is_rejected_before_write():

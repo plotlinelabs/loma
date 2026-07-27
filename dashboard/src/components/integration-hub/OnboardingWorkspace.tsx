@@ -50,6 +50,7 @@ export default function OnboardingWorkspace({
   onChange: (account: IntegrationAccount) => void;
 }) {
   const [item, setItem] = useState(emptyItem);
+  const [editingItem, setEditingItem] = useState<IntegrationAccount["work_items"][number] | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activityType, setActivityType] = useState<"note" | "decision">("note");
@@ -147,26 +148,21 @@ export default function OnboardingWorkspace({
     } catch (err) { setError(err instanceof Error ? err.message : "Could not archive work item"); }
   }
 
-  async function editItem(entry: IntegrationAccount["work_items"][number]) {
-    const title = window.prompt("Title", entry.title);
-    if (title === null) return;
-    const description = window.prompt("Description", entry.description || "");
-    if (description === null) return;
-    const owner = window.prompt("Owner email", entry.owner_email || "");
-    if (owner === null) return;
-    const dueAt = window.prompt("Due date (YYYY-MM-DD)", entry.due_at?.slice(0, 10) || "");
-    if (dueAt === null) return;
-    const dependency = window.prompt("Dependency", entry.dependency || "");
-    if (dependency === null) return;
-    const resolution = window.prompt("Resolution", entry.resolution || "");
-    if (resolution === null) return;
+  async function saveEditedItem(event: FormEvent) {
+    event.preventDefault();
+    if (!editingItem) return;
     setSaving(true); setError(null);
     try {
-      const data = await updateIntegrationWorkItem(account.account_id, entry.item_id, entry.version, {
-        title, description: description || null, owner_email: owner || null,
-        due_at: dueAt || null, dependency: dependency || null, resolution: resolution || null,
+      const data = await updateIntegrationWorkItem(account.account_id, editingItem.item_id, editingItem.version, {
+        title: editingItem.title,
+        description: editingItem.description || null,
+        owner_email: editingItem.owner_email || null,
+        due_at: editingItem.due_at?.slice(0, 10) || null,
+        dependency: editingItem.dependency || null,
+        resolution: editingItem.resolution || null,
       });
       onChange(data.account);
+      setEditingItem(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update work item");
     } finally { setSaving(false); }
@@ -320,8 +316,19 @@ export default function OnboardingWorkspace({
                         <select className="h-8 rounded-md border bg-background px-2 text-xs" value={entry.status} onChange={(event) => setStatus(entry.item_id, event.target.value as IntegrationWorkItemInput["status"])}>
                           {(entry.type === "task" ? ["todo", "in_progress", "blocked", "completed", "cancelled"] : entry.type === "milestone" ? ["pending", "in_progress", "achieved", "missed", "cancelled"] : entry.type === "risk" ? ["open", "mitigating", "accepted", "resolved"] : ["open", "mitigating", "resolved"]).map((status) => <option key={status} value={status}>{formatIntegrationLabel(status)}</option>)}
                         </select>
-                        <Button variant="ghost" size="icon-sm" onClick={() => editItem(entry)} aria-label={`Edit ${entry.title}`}><RiEditLine /></Button>
+                        <Button variant="ghost" size="icon-sm" onClick={() => setEditingItem({ ...entry })} aria-label={`Edit ${entry.title}`}><RiEditLine /></Button>
                         <Button variant="ghost" size="icon-sm" onClick={() => removeItem(entry.item_id)} aria-label={`Delete ${entry.title}`}><RiDeleteBinLine /></Button>
+                        {editingItem?.item_id === entry.item_id && (
+                          <form onSubmit={saveEditedItem} className="grid w-full gap-2 rounded-md border bg-background p-3 sm:grid-cols-2 lg:grid-cols-3">
+                            <div><Label>Title</Label><Input required value={editingItem.title} onChange={(event) => setEditingItem({ ...editingItem, title: event.target.value })} /></div>
+                            <div><Label>Owner</Label><Input type="email" value={editingItem.owner_email || ""} onChange={(event) => setEditingItem({ ...editingItem, owner_email: event.target.value || null })} /></div>
+                            <div><Label>Due date</Label><Input type="date" value={editingItem.due_at?.slice(0, 10) || ""} onChange={(event) => setEditingItem({ ...editingItem, due_at: event.target.value || null })} /></div>
+                            <div className="sm:col-span-2 lg:col-span-3"><Label>Description</Label><Textarea value={editingItem.description || ""} onChange={(event) => setEditingItem({ ...editingItem, description: event.target.value || null })} /></div>
+                            <div><Label>Dependency</Label><Input value={editingItem.dependency || ""} onChange={(event) => setEditingItem({ ...editingItem, dependency: event.target.value || null })} /></div>
+                            <div><Label>Resolution</Label><Input value={editingItem.resolution || ""} onChange={(event) => setEditingItem({ ...editingItem, resolution: event.target.value || null })} /></div>
+                            <div className="flex items-end justify-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setEditingItem(null)}>Cancel</Button><Button type="submit" size="sm" disabled={saving || !editingItem.title.trim()}>Save</Button></div>
+                          </form>
+                        )}
                       </div>
                     ))}
                   </div>

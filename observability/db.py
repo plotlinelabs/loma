@@ -128,9 +128,6 @@ async def init_observability():
     await _db.integration_tasks.create_index([("owner_email", 1), ("status", 1), ("due_at", 1)])
     await _db.integration_milestones.create_index([("owner_email", 1), ("status", 1), ("due_at", 1)])
     await _db.integration_risks.create_index([("account_id", 1), ("status", 1), ("severity", 1)])
-    await _db.integration_access_grants.create_index(
-        [("account_id", 1), ("principal_email", 1)], unique=True)
-    await _db.integration_access_grants.create_index([("principal_email", 1), ("archived_at", 1)])
     await _db.integration_audit_log.create_index("audit_id", unique=True)
     await _db.integration_audit_log.create_index([("account_id", 1), ("created_at", -1), ("audit_id", 1)])
     await _db.integration_idempotency.create_index([("actor", 1), ("key", 1)], unique=True)

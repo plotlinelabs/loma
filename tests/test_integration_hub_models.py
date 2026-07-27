@@ -196,6 +196,26 @@ def test_project_and_playbook_fields_are_normalized():
     assert project["playbook"] == "mobile_sdk"
 
 
+def test_invalid_playbook_is_rejected():
+    with pytest.raises(ValidationError, match="playbook is invalid"):
+        normalize_project({"name": "SDK rollout", "playbook": "missing"})
+
+
+def test_closed_items_do_not_affect_health():
+    result = calculate_account_health({
+        "work_items": [
+            {"type": "task", "status": "cancelled", "due_at": datetime(2020, 1, 1, tzinfo=timezone.utc)},
+            {"type": "milestone", "status": "achieved", "due_at": datetime(2020, 1, 1, tzinfo=timezone.utc)},
+            {"type": "risk", "status": "resolved", "severity": "critical", "escalated": True},
+            {"type": "blocker", "status": "resolved", "severity": "critical"},
+        ],
+        "completion_percentage": 100,
+    }, now=datetime(2026, 7, 27, tzinfo=timezone.utc))
+    assert result["calculated_health"] == "on_track"
+    assert result["overdue_count"] == 0
+    assert result["open_blocker_count"] == 0
+
+
 def test_invalid_project_status_is_rejected():
     with pytest.raises(ValidationError, match="status is invalid"):
         normalize_project({"name": "Rollout", "status": "unknown"})

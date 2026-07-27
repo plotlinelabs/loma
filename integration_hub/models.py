@@ -239,6 +239,9 @@ def normalize_project(data):
     health = data.get("health") or "on_track"
     if stage not in STAGES: raise ValidationError("stage is invalid")
     if health not in HEALTH_STATES: raise ValidationError("health is invalid")
+    playbook = data.get("playbook")
+    if playbook and playbook not in PLAYBOOKS:
+        raise ValidationError("playbook is invalid")
     return {
         "name": _text(data.get("name"), "name", required=True, maximum=200),
         "description": _text(data.get("description"), "description"),
@@ -248,7 +251,7 @@ def normalize_project(data):
         "health_reason": _text(data.get("health_reason"), "health_reason"),
         "owner_email": normalize_email(data.get("owner_email")),
         "target_at": normalize_date(data.get("target_at")),
-        "playbook": data.get("playbook") if data.get("playbook") in PLAYBOOKS else None,
+        "playbook": playbook or None,
     }
 
 
@@ -298,9 +301,15 @@ def calculate_account_health(account, now=None):
     """Return the derived health, explanations, and urgency counters."""
     now = as_utc(now or datetime.now(timezone.utc))
     upcoming_cutoff = now + timedelta(days=7)
+    closed_statuses = {
+        "task": {"completed", "cancelled"},
+        "milestone": {"achieved", "cancelled"},
+        "risk": {"resolved", "accepted"},
+        "blocker": {"resolved"},
+    }
     open_items = [
         item for item in account.get("work_items", [])
-        if item.get("status") != "completed"
+        if item.get("status") not in closed_statuses.get(item.get("type"), set())
     ]
     overdue = [
         item for item in open_items

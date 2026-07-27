@@ -86,8 +86,6 @@ async def _account_context(request, permission="read", include_archived=False):
     service, actor, system_role = _context(request); _require_module(request, permission == "edit")
     account = await service.repository.get(request.match_info["account_id"], include_archived)
     if not account: return service, actor, system_role, None
-    if not await service.authorize(account["account_id"], actor, permission, system_role):
-        raise web.HTTPForbidden(text="Account access grant required")
     return service, actor, system_role, account
 
 
@@ -278,18 +276,6 @@ async def handle_create_source_link(request):
     return await _run(request, action)
 
 
-async def handle_create_access_grant(request):
-    async def action():
-        service, actor, system_role, account = await _account_context(request, "edit")
-        if not account: return _error(request, 404, "not_found", "Account not found")
-        role = await service.authorize(account["account_id"], actor, "edit", system_role)
-        if role != "owner": return _error(request, 403, "forbidden", "Account owner access required")
-        if _if_match(request) != account["version"]: raise RuntimeError("version_conflict")
-        updated, grant = await service.create_grant(account, await _json(request), actor, request["request_id"])
-        return _ok(request, {"account": updated, "grant": grant}, 201, updated["version"])
-    return await _run(request, action)
-
-
 def setup_integration_hub_routes(app):
     p = "/api/integration-hub"
     app.router.add_post(f"{p}/accounts", handle_create_account)
@@ -303,7 +289,6 @@ def setup_integration_hub_routes(app):
     app.router.add_post(f"{p}/accounts/{{account_id}}/projects", handle_create_project)
     app.router.add_post(f"{p}/accounts/{{account_id}}/projects/{{project_id}}/archive", handle_archive_project)
     app.router.add_get(f"{p}/accounts/{{account_id}}/audit-log", handle_get_audit_log)
-    app.router.add_post(f"{p}/accounts/{{account_id}}/access-grants", handle_create_access_grant)
     app.router.add_post(f"{p}/accounts/{{account_id}}/work-items", handle_create_work_item)
     app.router.add_patch(f"{p}/accounts/{{account_id}}/work-items/{{item_id}}", handle_update_work_item)
     app.router.add_post(f"{p}/accounts/{{account_id}}/work-items/{{item_id}}/archive", handle_archive_work_item)
