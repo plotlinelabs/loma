@@ -48,7 +48,8 @@ export interface IntegrationProject {
   project_id: string;
   name: string;
   description: string | null;
-  status: "planned" | "active" | "blocked" | "completed" | "archived";
+  status: "active" | "paused" | "completed" | "cancelled";
+  version: number;
   owner_email: string | null;
   target_at: string | null;
   playbook: "mobile_sdk" | "web_sdk" | null;
@@ -74,7 +75,7 @@ export interface IntegrationSourceLink {
 }
 
 export type IntegrationWorkItemType = "milestone" | "task" | "risk" | "blocker";
-export type IntegrationWorkItemStatus = "not_started" | "in_progress" | "blocked" | "completed";
+export type IntegrationWorkItemStatus = "todo" | "pending" | "open" | "in_progress" | "blocked" | "mitigating" | "completed" | "achieved" | "missed" | "accepted" | "resolved" | "cancelled";
 export interface IntegrationWorkItem {
   item_id: string;
   type: IntegrationWorkItemType;
@@ -89,9 +90,10 @@ export interface IntegrationWorkItem {
   escalated: boolean;
   created_at: string;
   updated_at: string;
+  version: number;
 }
 export type IntegrationWorkItemInput = Omit<
-  IntegrationWorkItem, "item_id" | "created_at" | "updated_at"
+  IntegrationWorkItem, "item_id" | "created_at" | "updated_at" | "version"
 >;
 
 export type IntegrationAccountInput = Pick<IntegrationAccount, "name"> &
@@ -109,40 +111,23 @@ export interface IntegrationAction extends IntegrationWorkItem {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${basePath}${url}`, init);
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed: ${response.status}`);
+  if (!response.ok) throw new Error(data.error?.message || data.error || `Request failed: ${response.status}`);
   return data;
 }
 
 export async function fetchIntegrationAccounts(filters: {
   search?: string; stage?: string; health?: string; owner?: string; status?: string;
-  page?: number; page_size?: number;
-} = {}): Promise<{ accounts: IntegrationAccount[]; pagination: { page: number; page_size: number; total: number } }> {
+  cursor?: string; limit?: number;
+} = {}): Promise<{ accounts: IntegrationAccount[]; pagination: { next_cursor: string | null; limit: number } }> {
   const query = new URLSearchParams();
   if (filters.search) query.set("search", filters.search);
   if (filters.stage) query.set("stage", filters.stage);
   if (filters.health) query.set("health", filters.health);
   if (filters.owner) query.set("owner", filters.owner);
   if (filters.status) query.set("status", filters.status);
-  if (filters.page) query.set("page", String(filters.page));
-  if (filters.page_size) query.set("page_size", String(filters.page_size));
-  const suffix = query.size ? `?${query}` : "";
-  return request(`/api/integration-hub/accounts${suffix}`);
-}
-
-export async function fetchAllIntegrationAccounts(filters: {
-  search?: string; stage?: string; health?: string; owner?: string; status?: string;
-} = {}): Promise<IntegrationAccount[]> {
-  const pageSize = 100;
-  const accounts: IntegrationAccount[] = [];
-  let page = 1;
-  while (true) {
-    const result = await fetchIntegrationAccounts({ ...filters, page, page_size: pageSize });
-    accounts.push(...result.accounts);
-    if (accounts.length >= result.pagination.total || result.accounts.length === 0) {
-      return accounts;
-    }
-    page += 1;
-  }
+  if (filters.cursor) query.set("cursor", filters.cursor);
+  query.set("limit", String(filters.limit || 25));
+  return request(`/api/integration-hub/accounts?${query}`);
 }
 
 export function fetchIntegrationAccount(accountId: string) {
@@ -160,7 +145,7 @@ export function fetchIntegrationActions() {
 export function createIntegrationAccount(input: IntegrationAccountInput) {
   return request<{ account: IntegrationAccount }>("/api/integration-hub/accounts", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
   });
 }
@@ -170,8 +155,8 @@ export function updateIntegrationAccount(accountId: string, input: IntegrationAc
     `/api/integration-hub/accounts/${accountId}`,
     {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...input, ...(version === undefined ? {} : { version }) }),
+      headers: { "Content-Type": "application/json", ...(version === undefined ? {} : { "If-Match": `"${version}"` }) },
+      body: JSON.stringify(input),
     },
   );
 }
@@ -179,72 +164,65 @@ export function updateIntegrationAccount(accountId: string, input: IntegrationAc
 export function archiveIntegrationAccount(accountId: string, version: number) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/archive`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version }) },
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify({ reason: "Archived from dashboard" }) },
   );
 }
 
 export function restoreIntegrationAccount(accountId: string, version: number) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/restore`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version }) },
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify({}) },
   );
 }
 
-export function createIntegrationProject(accountId: string, input: {
+export function createIntegrationProject(accountId: string, version: number, input: {
   name: string; description?: string; owner_email?: string; target_at?: string; playbook?: string;
 }) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/projects`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
   );
 }
 
-export function createIntegrationWorkItem(accountId: string, input: IntegrationWorkItemInput) {
+export function createIntegrationWorkItem(accountId: string, version: number, input: IntegrationWorkItemInput) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/work-items`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
   );
 }
 
 export function updateIntegrationWorkItem(
-  accountId: string, itemId: string, input: Partial<IntegrationWorkItemInput>,
+  accountId: string, itemId: string, version: number, input: Partial<IntegrationWorkItemInput>,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/work-items/${itemId}`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "PATCH", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
   );
 }
 
-export function deleteIntegrationWorkItem(accountId: string, itemId: string) {
+export function archiveIntegrationWorkItem(accountId: string, itemId: string, version: number) {
   return request<{ account: IntegrationAccount }>(
-    `/api/integration-hub/accounts/${accountId}/work-items/${itemId}`,
-    { method: "DELETE" },
+    `/api/integration-hub/accounts/${accountId}/work-items/${itemId}/archive`,
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify({ reason: "Archived from dashboard" }) },
   );
 }
 
 export function createIntegrationActivity(
-  accountId: string, input: Pick<IntegrationActivity, "type" | "message">,
+  accountId: string, version: number, input: Pick<IntegrationActivity, "type" | "message">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/activities`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
   );
 }
 
 export function createIntegrationSourceLink(
-  accountId: string,
+  accountId: string, version: number,
   input: Pick<IntegrationSourceLink, "type" | "title" | "url" | "notes">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/source-links`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
-  );
-}
-
-export function deleteIntegrationSourceLink(accountId: string, linkId: string) {
-  return request<{ account: IntegrationAccount }>(
-    `/api/integration-hub/accounts/${accountId}/source-links/${linkId}`,
-    { method: "DELETE" },
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
   );
 }
 

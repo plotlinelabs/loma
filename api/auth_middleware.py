@@ -6,6 +6,7 @@ and attaches user identity + system role to the request.
 
 import logging
 import os
+import hmac
 
 from aiohttp import web
 
@@ -51,7 +52,15 @@ async def auth_middleware(request, handler):
     if request.method == "OPTIONS":
         return await handler(request)
 
-    # API routes: attach user identity if available (never block)
+    # Integration Hub is fail-closed: it is reachable only through the authenticated
+    # dashboard proxy, which overwrites both identity and this server-only secret.
+    if request.path.startswith("/api/integration-hub") and not (_IS_PREVIEW or _IS_DEV):
+        expected = os.environ.get("LOMA_PROXY_SECRET", "")
+        supplied = request.headers.get("X-Loma-Proxy-Secret", "")
+        if not expected or not hmac.compare_digest(expected, supplied):
+            return web.json_response({"error": "Trusted proxy authentication required"}, status=401)
+
+    # API routes: attach user identity if available.
     if request.path.startswith("/api/"):
         user_email = request.headers.get("X-User-Email", "").strip()
         using_preview_fallback = False

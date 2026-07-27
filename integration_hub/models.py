@@ -18,11 +18,16 @@ HEALTH_STATES = ("on_track", "needs_attention", "blocked", "silent", "at_risk", 
 PLATFORMS = ("android", "ios", "react_native", "flutter", "web", "unity", "kmp")
 ENVIRONMENTS = ("development", "staging", "production")
 WORK_ITEM_TYPES = ("milestone", "task", "risk", "blocker")
-WORK_ITEM_STATUSES = ("not_started", "in_progress", "blocked", "completed")
+WORK_ITEM_STATUSES = {
+    "task": ("todo", "in_progress", "blocked", "completed", "cancelled"),
+    "milestone": ("pending", "in_progress", "achieved", "missed", "cancelled"),
+    "risk": ("open", "mitigating", "accepted", "resolved"),
+    "blocker": ("open", "mitigating", "resolved"),
+}
 RISK_SEVERITIES = ("low", "medium", "high", "critical")
 ACTIVITY_TYPES = ("note", "decision", "update")
 SOURCE_TYPES = ("grain", "slack", "linear", "pylon", "hubspot", "document", "other")
-PROJECT_STATUSES = ("planned", "active", "blocked", "completed", "archived")
+PROJECT_STATUSES = ("active", "paused", "completed", "cancelled")
 ACCOUNT_STATUSES = ("active", "inactive", "archived")
 PLAYBOOKS = {
     "mobile_sdk": {
@@ -138,10 +143,6 @@ def normalize_create(data):
         "stakeholders": _text_list(data.get("stakeholders"), "stakeholders"),
         "go_live_criteria": _text(data.get("go_live_criteria"), "go_live_criteria"),
         "completion_percentage": 0,
-        "work_items": [],
-        "activities": [],
-        "source_links": [],
-        "projects": [],
     }
 
 
@@ -207,8 +208,9 @@ def normalize_work_item(data):
     item_type = data.get("type")
     if item_type not in WORK_ITEM_TYPES:
         raise ValidationError("type is invalid")
-    status = data.get("status") or "not_started"
-    if status not in WORK_ITEM_STATUSES:
+    defaults = {"task": "todo", "milestone": "pending", "risk": "open", "blocker": "open"}
+    status = data.get("status") or defaults[item_type]
+    if status not in WORK_ITEM_STATUSES[item_type]:
         raise ValidationError("status is invalid")
     severity = data.get("severity")
     if severity and severity not in RISK_SEVERITIES:
@@ -230,13 +232,20 @@ def normalize_work_item(data):
 
 
 def normalize_project(data):
-    status = data.get("status") or "planned"
+    status = data.get("status") or "active"
     if status not in PROJECT_STATUSES:
         raise ValidationError("status is invalid")
+    stage = data.get("stage") or "kickoff"
+    health = data.get("health") or "on_track"
+    if stage not in STAGES: raise ValidationError("stage is invalid")
+    if health not in HEALTH_STATES: raise ValidationError("health is invalid")
     return {
         "name": _text(data.get("name"), "name", required=True, maximum=200),
         "description": _text(data.get("description"), "description"),
         "status": status,
+        "stage": stage,
+        "health": health,
+        "health_reason": _text(data.get("health_reason"), "health_reason"),
         "owner_email": normalize_email(data.get("owner_email")),
         "target_at": normalize_date(data.get("target_at")),
         "playbook": data.get("playbook") if data.get("playbook") in PLAYBOOKS else None,

@@ -6,8 +6,7 @@ import {
   createIntegrationProject,
   createIntegrationSourceLink,
   createIntegrationWorkItem,
-  deleteIntegrationWorkItem,
-  deleteIntegrationSourceLink,
+  archiveIntegrationWorkItem,
   formatIntegrationLabel,
   INTEGRATION_HEALTH,
   IntegrationAccount,
@@ -22,7 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine } from "@remixicon/react";
+import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine, RiEditLine } from "@remixicon/react";
 
 const TYPES: IntegrationWorkItemType[] = ["milestone", "task", "risk", "blocker"];
 const PLATFORMS = ["android", "ios", "react_native", "flutter", "web", "unity", "kmp"];
@@ -32,7 +31,7 @@ const emptyItem: IntegrationWorkItemInput = {
   type: "task",
   title: "",
   description: null,
-  status: "not_started",
+  status: "todo",
   owner_email: null,
   due_at: null,
   severity: null,
@@ -64,7 +63,7 @@ export default function OnboardingWorkspace({
     setSaving(true);
     setError(null);
     try {
-      const data = await createIntegrationProject(account.account_id, {
+      const data = await createIntegrationProject(account.account_id, account.version, {
         name: projectName, playbook: projectPlaybook,
       });
       onChange(data.account);
@@ -92,7 +91,7 @@ export default function OnboardingWorkspace({
         health_override_enabled: values.get("health_override_enabled") === "on",
         health: String(values.get("health") || account.health) as IntegrationAccount["health"],
         health_reason: String(values.get("health_reason") || ""),
-      });
+      }, account.version);
       onChange(data.account);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save onboarding plan");
@@ -106,7 +105,7 @@ export default function OnboardingWorkspace({
     setSaving(true);
     setError(null);
     try {
-      const data = await createIntegrationWorkItem(account.account_id, item);
+      const data = await createIntegrationWorkItem(account.account_id, account.version, item);
       onChange(data.account);
       setItem(emptyItem);
     } catch (err) {
@@ -117,13 +116,44 @@ export default function OnboardingWorkspace({
   }
 
   async function setStatus(itemId: string, status: IntegrationWorkItemInput["status"]) {
-    const data = await updateIntegrationWorkItem(account.account_id, itemId, { status });
-    onChange(data.account);
+    setError(null);
+    try {
+      const data = await updateIntegrationWorkItem(account.account_id, itemId, account.work_items.find((entry) => entry.item_id === itemId)?.version || 0, { status });
+      onChange(data.account);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not update status"); }
   }
 
   async function removeItem(itemId: string) {
-    const data = await deleteIntegrationWorkItem(account.account_id, itemId);
-    onChange(data.account);
+    setError(null);
+    try {
+      const data = await archiveIntegrationWorkItem(account.account_id, itemId, account.work_items.find((entry) => entry.item_id === itemId)?.version || 0);
+      onChange(data.account);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not archive work item"); }
+  }
+
+  async function editItem(entry: IntegrationAccount["work_items"][number]) {
+    const title = window.prompt("Title", entry.title);
+    if (title === null) return;
+    const description = window.prompt("Description", entry.description || "");
+    if (description === null) return;
+    const owner = window.prompt("Owner email", entry.owner_email || "");
+    if (owner === null) return;
+    const dueAt = window.prompt("Due date (YYYY-MM-DD)", entry.due_at?.slice(0, 10) || "");
+    if (dueAt === null) return;
+    const dependency = window.prompt("Dependency", entry.dependency || "");
+    if (dependency === null) return;
+    const resolution = window.prompt("Resolution", entry.resolution || "");
+    if (resolution === null) return;
+    setSaving(true); setError(null);
+    try {
+      const data = await updateIntegrationWorkItem(account.account_id, entry.item_id, entry.version, {
+        title, description: description || null, owner_email: owner || null,
+        due_at: dueAt || null, dependency: dependency || null, resolution: resolution || null,
+      });
+      onChange(data.account);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update work item");
+    } finally { setSaving(false); }
   }
 
   async function addActivity(event: FormEvent) {
@@ -131,7 +161,7 @@ export default function OnboardingWorkspace({
     setSaving(true);
     setError(null);
     try {
-      const data = await createIntegrationActivity(account.account_id, {
+      const data = await createIntegrationActivity(account.account_id, account.version, {
         type: activityType, message: activityMessage,
       });
       onChange(data.account);
@@ -148,7 +178,7 @@ export default function OnboardingWorkspace({
     setSaving(true);
     setError(null);
     try {
-      const data = await createIntegrationSourceLink(account.account_id, source);
+      const data = await createIntegrationSourceLink(account.account_id, account.version, source);
       onChange(data.account);
       setSource({ type: "document", title: "", url: "", notes: null });
     } catch (err) {
@@ -158,10 +188,6 @@ export default function OnboardingWorkspace({
     }
   }
 
-  async function removeSource(linkId: string) {
-    const data = await deleteIntegrationSourceLink(account.account_id, linkId);
-    onChange(data.account);
-  }
 
   return (
     <div className="space-y-3">
@@ -255,10 +281,11 @@ export default function OnboardingWorkspace({
                   <div className="space-y-2">
                     {items.map((entry) => (
                       <div key={entry.item_id} className="flex flex-wrap items-center gap-2 rounded-md bg-muted/40 p-2">
-                        <div className="min-w-48 flex-1"><p className="text-sm font-medium">{entry.title}</p><p className="text-xs text-muted-foreground">{entry.owner_email || "Unassigned"}{entry.due_at ? ` · Due ${new Date(entry.due_at).toLocaleDateString()}` : ""}{entry.severity ? ` · ${formatIntegrationLabel(entry.severity)}` : ""}</p></div>
+                        <div className="min-w-48 flex-1"><p className="text-sm font-medium">{entry.title}</p><p className="text-xs text-muted-foreground">{entry.description ? `${entry.description} · ` : ""}{entry.owner_email || "Unassigned"}{entry.due_at ? ` · Due ${new Date(entry.due_at).toLocaleDateString()}` : ""}{entry.severity ? ` · ${formatIntegrationLabel(entry.severity)}` : ""}{entry.dependency ? ` · Dependency: ${entry.dependency}` : ""}{entry.resolution ? ` · Resolution: ${entry.resolution}` : ""}</p></div>
                         <select className="h-8 rounded-md border bg-background px-2 text-xs" value={entry.status} onChange={(event) => setStatus(entry.item_id, event.target.value as IntegrationWorkItemInput["status"])}>
-                          {["not_started", "in_progress", "blocked", "completed"].map((status) => <option key={status} value={status}>{formatIntegrationLabel(status)}</option>)}
+                          {(entry.type === "task" ? ["todo", "in_progress", "blocked", "completed", "cancelled"] : entry.type === "milestone" ? ["pending", "in_progress", "achieved", "missed", "cancelled"] : entry.type === "risk" ? ["open", "mitigating", "accepted", "resolved"] : ["open", "mitigating", "resolved"]).map((status) => <option key={status} value={status}>{formatIntegrationLabel(status)}</option>)}
                         </select>
+                        <Button variant="ghost" size="icon-sm" onClick={() => editItem(entry)} aria-label={`Edit ${entry.title}`}><RiEditLine /></Button>
                         <Button variant="ghost" size="icon-sm" onClick={() => removeItem(entry.item_id)} aria-label={`Delete ${entry.title}`}><RiDeleteBinLine /></Button>
                       </div>
                     ))}
@@ -269,7 +296,7 @@ export default function OnboardingWorkspace({
           })}
         </div>
         <form onSubmit={addItem} className="mt-4 grid gap-3 rounded-lg border p-3 md:grid-cols-2 lg:grid-cols-4">
-          <div><Label>Type</Label><select className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={item.type} onChange={(event) => setItem({ ...item, type: event.target.value as IntegrationWorkItemType })}>{TYPES.map((type) => <option key={type} value={type}>{formatIntegrationLabel(type)}</option>)}</select></div>
+          <div><Label>Type</Label><select className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={item.type} onChange={(event) => { const type = event.target.value as IntegrationWorkItemType; const defaults = { task: "todo", milestone: "pending", risk: "open", blocker: "open" } as const; setItem({ ...item, type, status: defaults[type] }); }}>{TYPES.map((type) => <option key={type} value={type}>{formatIntegrationLabel(type)}</option>)}</select></div>
           <div><Label>Title</Label><Input required value={item.title} onChange={(event) => setItem({ ...item, title: event.target.value })} /></div>
           <div><Label>Owner</Label><Input type="email" value={item.owner_email || ""} onChange={(event) => setItem({ ...item, owner_email: event.target.value || null })} /></div>
           <div><Label>Due date</Label><Input type="date" value={item.due_at || ""} onChange={(event) => setItem({ ...item, due_at: event.target.value || null })} /></div>
@@ -319,7 +346,7 @@ export default function OnboardingWorkspace({
                 <Badge variant="secondary">{formatIntegrationLabel(link.type)}</Badge>
                 <a href={link.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate text-sm font-medium hover:underline">{link.title}</a>
                 <RiExternalLinkLine className="text-muted-foreground" size={16} />
-                <Button variant="ghost" size="icon-sm" onClick={() => removeSource(link.link_id)} aria-label={`Delete ${link.title}`}><RiDeleteBinLine /></Button>
+
               </div>
             ))}
             {(account.source_links || []).length === 0 && <p className="text-xs text-muted-foreground">No source links attached.</p>}

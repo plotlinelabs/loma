@@ -55,9 +55,9 @@ def test_create_initializes_onboarding_plan_and_work_items():
     assert result["platforms"] == ["ios", "android"]
     assert result["environments"] == ["staging", "production"]
     assert result["completion_percentage"] == 0
-    assert result["work_items"] == []
-    assert result["activities"] == []
-    assert result["source_links"] == []
+    assert "work_items" not in result
+    assert "activities" not in result
+    assert "source_links" not in result
 
 
 def test_update_validates_completion_percentage():
@@ -76,7 +76,7 @@ def test_work_item_normalization():
     })
     assert item["title"] == "Customer dependency"
     assert item["severity"] == "high"
-    assert item["status"] == "not_started"
+    assert item["status"] == "open"
     assert item["owner_email"] == "owner@example.com"
 
 
@@ -154,29 +154,19 @@ def test_calculated_health_accepts_naive_mongodb_datetimes():
 @pytest.mark.asyncio
 async def test_action_center_accepts_naive_mongodb_datetimes():
     class Repository:
-        async def list_all(self, query):
-            assert query == {"archived_at": None}
-            return [{
-                "account_id": "acc_1",
-                "name": "Acme",
-                "completion_percentage": 50,
-                "target_go_live_at": datetime(2020, 7, 31),
-                "work_items": [{
-                    "item_id": "item_1",
-                    "type": "task",
-                    "title": "Ship SDK",
-                    "status": "in_progress",
-                    "owner_email": "owner@example.com",
-                    "due_at": datetime(2020, 7, 30),
-                }],
-            }]
+        async def list_actions(self, actor):
+            assert actor == "owner@example.com"
+            return ([{
+                "resource_id": "item_1", "type": "task", "title": "Ship SDK",
+                "status": "in_progress", "owner_email": actor,
+                "due_at": datetime(2020, 7, 30),
+                "account": {"account_id": "acc_1", "name": "Acme"},
+            }], [])
 
-    actions, attention = await AccountService(Repository()).list_actions(
-        "owner@example.com"
-    )
+    actions, attention = await AccountService(Repository()).list_actions("owner@example.com")
     assert actions[0]["is_overdue"] is True
-    assert actions[0]["due_at"].tzinfo == timezone.utc
-    assert attention[0]["effective_health"] == "at_risk"
+    assert actions[0]["item_id"] == "item_1"
+    assert attention == []
 
 
 def test_health_override_flag_requires_boolean():
@@ -202,7 +192,7 @@ def test_project_and_playbook_fields_are_normalized():
     })
     assert project["name"] == "Production rollout"
     assert project["owner_email"] == "owner@example.com"
-    assert project["status"] == "planned"
+    assert project["status"] == "active"
     assert project["playbook"] == "mobile_sdk"
 
 
@@ -227,3 +217,20 @@ def test_work_item_supports_project_dependencies():
     })
     assert item["project_id"] == "project_123"
     assert item["depends_on"] == ["item_1", "item_2"]
+
+
+def test_resource_lifecycles_match_phase_one_contract():
+    assert normalize_work_item({"type": "task", "title": "T"})["status"] == "todo"
+    assert normalize_work_item({"type": "milestone", "title": "M"})["status"] == "pending"
+    assert normalize_work_item({"type": "risk", "title": "R"})["status"] == "open"
+    assert normalize_project({"name": "P"})["status"] == "active"
+    with pytest.raises(ValidationError):
+        normalize_project({"name": "P", "status": "planned"})
+
+
+def test_distinct_lifecycle_transitions_and_reopen_rules():
+    AccountService._validate_item_transition("task", "completed", "in_progress")
+    AccountService._validate_item_transition("milestone", "achieved", "in_progress")
+    AccountService._validate_item_transition("risk", "resolved", "open")
+    with pytest.raises(ValidationError):
+        AccountService._validate_item_transition("task", "todo", "completed")

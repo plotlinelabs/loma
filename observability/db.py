@@ -50,6 +50,12 @@ async def init_observability():
 
     # Governance: tool_configs collection
     await _db.tool_configs.create_index("tool_key", unique=True)
+    await _db.tool_configs.update_one(
+        {"tool_key": "integration_hub"},
+        {"$setOnInsert": {"tool_key": "integration_hub", "name": "Integration Hub",
+                          "auth_mode": "none", "roles": ["Admin", "Analyst", "Read-only", "Support"],
+                          "enabled": True}}, upsert=True,
+    )
 
     # OAuth tokens (per-user encrypted tokens for personal integrations)
     # Compound index: one token doc per user per provider (google, slack, etc.)
@@ -109,15 +115,26 @@ async def init_observability():
     await _db.projects.create_index("created_by")
     await _db.projects.create_index([("created_at", -1)])
 
-    # Integration Hub manual onboarding accounts
+    # Integration Hub: bounded account documents and independent resources.
     await _db.integration_accounts.create_index("account_id", unique=True)
-    await _db.integration_accounts.create_index([("updated_at", -1), ("account_id", 1)])
-    await _db.integration_accounts.create_index("stage")
-    await _db.integration_accounts.create_index("health")
-    await _db.integration_accounts.create_index("owner_email")
-    await _db.integration_accounts.create_index([("status", 1), ("updated_at", -1)])
-    await _db.integration_accounts.create_index("projects.project_id")
-    await _db.integration_accounts.create_index("work_items.owner_email")
+    await _db.integration_accounts.create_index([("status", 1), ("updated_at", -1), ("account_id", 1)])
+    await _db.integration_accounts.create_index([("stage", 1), ("updated_at", -1)])
+    await _db.integration_accounts.create_index([("owner_email", 1), ("updated_at", -1)])
+    for collection in (_db.integration_projects, _db.integration_tasks,
+                       _db.integration_milestones, _db.integration_risks,
+                       _db.integration_source_mappings):
+        await collection.create_index("resource_id", unique=True)
+        await collection.create_index([("account_id", 1), ("archived_at", 1), ("created_at", 1)])
+    await _db.integration_tasks.create_index([("owner_email", 1), ("status", 1), ("due_at", 1)])
+    await _db.integration_milestones.create_index([("owner_email", 1), ("status", 1), ("due_at", 1)])
+    await _db.integration_risks.create_index([("account_id", 1), ("status", 1), ("severity", 1)])
+    await _db.integration_access_grants.create_index(
+        [("account_id", 1), ("principal_email", 1)], unique=True)
+    await _db.integration_access_grants.create_index([("principal_email", 1), ("archived_at", 1)])
+    await _db.integration_audit_log.create_index("audit_id", unique=True)
+    await _db.integration_audit_log.create_index([("account_id", 1), ("created_at", -1), ("audit_id", 1)])
+    await _db.integration_idempotency.create_index([("actor", 1), ("key", 1)], unique=True)
+    await _db.integration_idempotency.create_index("created_at", expireAfterSeconds=86400)
 
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)

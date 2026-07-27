@@ -50,6 +50,7 @@ type NavItem = {
   badgeKey?: string;
   /** Minimum system role required to see this nav item */
   minRole?: SystemRole;
+  toolKey?: string;
 };
 
 const navigation: NavItem[] = [
@@ -73,6 +74,7 @@ const navigation: NavItem[] = [
     name: "Integration Hub",
     href: "/integration-hub",
     icon: <RiBuildingLine size={16} />,
+    toolKey: "integration_hub",
   },
   {
     name: "My Usage",
@@ -349,7 +351,7 @@ export default function Sidebar({
   onToggleCollapse: () => void;
 }) {
   const { data: session, status } = useSession();
-  const { loading: userLoading, hasRole, pinnedIds, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
+  const { user, loading: userLoading, hasRole, pinnedIds, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
   const { theme, setTheme } = useTheme();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -361,7 +363,11 @@ export default function Sidebar({
   const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
 
   // Filter nav items by role
-  const visibleNav = navigation.filter((item) => !item.minRole || hasRole(item.minRole));
+  const visibleNav = navigation.filter((item) => {
+    if (item.minRole && !hasRole(item.minRole)) return false;
+    if (item.toolKey && user?.system_role !== "admin" && !user?.tool_assignments?.[item.toolKey]?.role) return false;
+    return true;
+  });
 
   // Reload conversations after a mutation (rename, delete, project change)
   const reloadConversations = useCallback(() => {

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  createIntegrationAccount, fetchAllIntegrationAccounts, fetchIntegrationActions,
+  createIntegrationAccount, fetchIntegrationAccounts, fetchIntegrationActions,
   formatIntegrationLabel, INTEGRATION_STAGES, IntegrationAccount,
   IntegrationAccountInput, IntegrationAction,
 } from "@/lib/integration-hub-api";
@@ -40,16 +40,18 @@ export default function IntegrationHubPage() {
   const [attentionAccounts, setAttentionAccounts] = useState<IntegrationAccount[]>([]);
   const [sort, setSort] = useState("urgency");
   const [status, setStatus] = useState("active");
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [data, actionData] = await Promise.all([
-        fetchAllIntegrationAccounts({ search, stage: stage === "all" ? undefined : stage, status }),
+        fetchIntegrationAccounts({ search, stage: stage === "all" ? undefined : stage, status, limit: 25 }),
         fetchIntegrationActions(),
       ]);
-      setAccounts(data);
+      setAccounts(data.accounts);
+      setNextCursor(data.pagination.next_cursor);
       setActions(actionData.actions);
       setAttentionAccounts(actionData.attention_accounts);
     } catch (err) {
@@ -68,6 +70,17 @@ export default function IntegrationHubPage() {
     await createIntegrationAccount(input);
     setDialogOpen(false);
     await load();
+  }
+
+  async function loadMore() {
+    if (!nextCursor) return;
+    try {
+      const data = await fetchIntegrationAccounts({ search, stage: stage === "all" ? undefined : stage, status, cursor: nextCursor, limit: 25 });
+      setAccounts((current) => [...current, ...data.accounts]);
+      setNextCursor(data.pagination.next_cursor);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load more clients");
+    }
   }
 
   const sortedAccounts = [...accounts].sort((left, right) => {
@@ -186,6 +199,7 @@ export default function IntegrationHubPage() {
               </Card>
             </Link>
           ))}
+          {nextCursor && <div className="pt-2 text-center"><Button variant="outline" size="sm" onClick={loadMore}>Load more clients</Button></div>}
         </div>
       )}
     </div>
