@@ -396,6 +396,7 @@ def test_pylon_message_normalization_returns_real_safe_content():
         "timestamp": "2026-07-28T10:00:00Z",
         "source": "email",
         "is_private": False,
+        "attachments": [],
     }
 
 
@@ -404,6 +405,33 @@ def test_pylon_message_normalization_marks_internal_notes_private():
     assert normalize_message({
         "id": "note-1", "body": "Agent-only context", "source": "internal_note",
     })["is_private"] is True
+
+
+def test_pylon_message_normalization_includes_images_and_files():
+    from tools.pylon import normalize_message
+
+    message = normalize_message({
+        "id": "message-with-files",
+        "file_urls": [
+            "https://assets.usepylon.com/org%2F24ddc2d2-9091-43e2-b722-43ac7fb9c932-screenshot.png?Signature=x",
+            "https://assets.usepylon.com/org%2F24ddc2d2-9091-43e2-b722-43ac7fb9c932-results.xlsx?Signature=y",
+        ],
+    })
+
+    assert message["attachments"] == [
+        {
+            "url": "https://assets.usepylon.com/org%2F24ddc2d2-9091-43e2-b722-43ac7fb9c932-screenshot.png?Signature=x",
+            "name": "screenshot.png",
+            "content_type": "image/png",
+            "is_image": True,
+        },
+        {
+            "url": "https://assets.usepylon.com/org%2F24ddc2d2-9091-43e2-b722-43ac7fb9c932-results.xlsx?Signature=y",
+            "name": "results.xlsx",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "is_image": False,
+        },
+    ]
 
 
 @pytest.mark.asyncio

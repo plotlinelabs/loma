@@ -31,6 +31,7 @@ import sys
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import aiohttp
 
@@ -297,6 +298,38 @@ def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
     author = message.get("author") or {}
     if not isinstance(author, dict):
         author = {}
+    raw_attachments = (
+        message.get("file_urls")
+        or message.get("attachment_urls")
+        or message.get("attachments")
+        or []
+    )
+    attachments = []
+    for attachment in raw_attachments:
+        url = attachment if isinstance(attachment, str) else (
+            attachment.get("url") or attachment.get("file_url")
+        )
+        if not url or urlparse(str(url)).scheme not in {"http", "https"}:
+            continue
+        supplied_name = attachment.get("name") if isinstance(attachment, dict) else None
+        decoded_path = unquote(urlparse(str(url)).path)
+        filename = supplied_name or decoded_path.rsplit("/", 1)[-1]
+        # Pylon asset paths commonly prefix the original filename with UUIDs.
+        filename = re.sub(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-",
+            "",
+            filename,
+            flags=re.I,
+        )
+        content_type = (
+            attachment.get("content_type") if isinstance(attachment, dict) else None
+        ) or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        attachments.append({
+            "url": str(url),
+            "name": filename or "Attachment",
+            "content_type": content_type,
+            "is_image": content_type.startswith("image/"),
+        })
     return {
         "id": str(message.get("id") or ""),
         "body": body,
@@ -309,6 +342,7 @@ def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
             or message.get("message_type") in {"internal_note", "note"}
             or message.get("source") in {"internal_note", "note"}
         ),
+        "attachments": attachments,
     }
 
 

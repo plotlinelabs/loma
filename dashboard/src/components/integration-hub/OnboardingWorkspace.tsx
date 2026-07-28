@@ -517,6 +517,18 @@ export default function OnboardingWorkspace({
                 <span>{message.timestamp ? new Date(message.timestamp).toLocaleString() : ""}</span>
               </div>
               <p className="whitespace-pre-wrap">{message.body || "Message content unavailable"}</p>
+              {message.attachments?.length > 0 && <div className="mt-3 flex flex-wrap gap-2">
+                {message.attachments.map((attachment) => attachment.is_image ? (
+                  <a key={attachment.url} href={attachment.url} target="_blank" rel="noreferrer" className="block">
+                    {/* Pylon returns signed, read-only asset URLs from its own CDN. */}
+                    <img src={attachment.url} alt={attachment.name} className="max-h-48 max-w-full rounded-md border object-contain" />
+                  </a>
+                ) : (
+                  <a key={attachment.url} href={attachment.url} target="_blank" rel="noreferrer" className="inline-flex rounded-md border px-3 py-2 text-xs text-primary underline">
+                    {attachment.name}
+                  </a>
+                ))}
+              </div>}
             </div>)}
           </div>
           {selectedPylonIssue.issue.url && <a className="mt-3 inline-block text-sm text-primary underline" href={selectedPylonIssue.issue.url} target="_blank" rel="noreferrer">View ticket in Pylon</a>}

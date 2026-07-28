@@ -370,6 +370,12 @@ export interface PylonIssueDetail {
     timestamp?: string | null;
     source?: string | null;
     is_private: boolean;
+    attachments: Array<{
+      url: string;
+      name: string;
+      content_type: string;
+      is_image: boolean;
+    }>;
   }>;
 }
 
