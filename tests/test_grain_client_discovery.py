@@ -10,7 +10,7 @@ async def test_discovery_excludes_unrelated_grain_results(monkeypatch):
             "recordings": [
                 {
                     "id": "matching-title",
-                    "title": "Okencasa onboarding kickoff",
+                    "title": "Acme onboarding kickoff",
                     "date": "2026-07-28T10:00:00Z",
                     "participants": [],
                 },
@@ -18,7 +18,7 @@ async def test_discovery_excludes_unrelated_grain_results(monkeypatch):
                     "id": "matching-contact",
                     "title": "Weekly implementation call",
                     "date": "2026-07-27T10:00:00Z",
-                    "participants": [{"email": "owner@okencasa.com"}],
+                    "participants": [{"email": "owner@acme.example.com"}],
                 },
                 {
                     "id": "unrelated",
@@ -32,7 +32,7 @@ async def test_discovery_excludes_unrelated_grain_results(monkeypatch):
     monkeypatch.setattr(grain, "search_recordings", search)
 
     result = await grain.discover_client_recordings(
-        "Okencasa", ["owner@okencasa.com", "csm@plotline.so"]
+        "Acme", ["owner@acme.example.com", "csm@internal.example"]
     )
 
     assert [row["id"] for row in result["recordings"]] == [
@@ -42,21 +42,22 @@ async def test_discovery_excludes_unrelated_grain_results(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_plotline_participants_do_not_match_every_client(monkeypatch):
+async def test_internal_participants_do_not_match_every_client(monkeypatch):
+    monkeypatch.setenv("INTERNAL_EMAIL_DOMAIN", "internal.example")
     async def search(_query):
         return {
             "recordings": [{
                 "id": "internal",
                 "title": "Internal weekly review",
                 "date": "2026-07-28T10:00:00Z",
-                "participants": [{"email": "csm@plotline.so"}],
+                "participants": [{"email": "csm@internal.example"}],
             }]
         }
 
     monkeypatch.setattr(grain, "search_recordings", search)
 
     result = await grain.discover_client_recordings(
-        "Okencasa", ["csm@plotline.so"]
+        "Acme", ["csm@internal.example"]
     )
 
     assert result == {"recordings": []}

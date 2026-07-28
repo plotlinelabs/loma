@@ -352,7 +352,7 @@ async def get_threads(issue_id: str) -> dict[str, Any]:
 
 
 def issue_web_url(issue: dict[str, Any]) -> str | None:
-    """Return the Plotline Pylon issue URL used by the support workspace."""
+    """Return the issue URL used by the support workspace."""
     number = issue.get("number")
     if number is None:
         return issue.get("link") or issue.get("url") or issue.get("web_url")

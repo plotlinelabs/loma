@@ -1,4 +1,5 @@
 """Integration Hub application service with account-scoped authorization."""
+import os
 import uuid
 import re
 from pymongo.errors import DuplicateKeyError
@@ -60,7 +61,8 @@ class AccountService:
         normalized = normalize_contact(data)
         domain = normalized["email"].rsplit("@", 1)[1]
         allowed_domains = account.get("client_email_domains") or []
-        if domain != "plotline.so" and allowed_domains and domain not in allowed_domains:
+        internal_domain = os.environ.get("INTERNAL_EMAIL_DOMAIN", "").strip().lower().lstrip("@")
+        if domain != internal_domain and (not allowed_domains or domain not in allowed_domains):
             raise ValidationError("Contact email must match a configured client email domain")
         contact = {
             "contact_id": contact_id, "account_id": account["account_id"],
@@ -79,7 +81,8 @@ class AccountService:
         normalized = normalize_contact(data)
         domain = normalized["email"].rsplit("@", 1)[1]
         allowed_domains = account.get("client_email_domains") or []
-        if domain != "plotline.so" and allowed_domains and domain not in allowed_domains:
+        internal_domain = os.environ.get("INTERNAL_EMAIL_DOMAIN", "").strip().lower().lstrip("@")
+        if domain != internal_domain and (not allowed_domains or domain not in allowed_domains):
             raise ValidationError("Contact email must match a configured client email domain")
         audit = self._audit(
             account["account_id"], actor, "contact", contact_id,

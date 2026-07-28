@@ -185,12 +185,15 @@ async def discover_client_recordings(
         return re.sub(r"[^a-z0-9]", "", value.casefold())
 
     generic_domains = {
-        "gmail.com", "outlook.com", "yahoo.com", "hotmail.com", "plotline.so",
+        "gmail.com", "outlook.com", "yahoo.com", "hotmail.com",
     }
     emails = {
         email.strip().casefold()
         for email in contact_emails or []
-        if "@" in email and not email.casefold().endswith("@plotline.so")
+        if "@" in email and not (
+            os.environ.get("INTERNAL_EMAIL_DOMAIN")
+            and email.casefold().endswith("@" + os.environ["INTERNAL_EMAIL_DOMAIN"].casefold())
+        )
     }
     domains = {
         email.rsplit("@", 1)[-1]

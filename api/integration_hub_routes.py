@@ -1,7 +1,9 @@
 """Contract-compliant REST routes for Integration Hub Phase 1."""
 import os
+import re
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from aiohttp import web
 from pymongo import ReturnDocument
@@ -43,7 +45,8 @@ def _ok(request, payload, status=200, version=None):
 
 
 async def _context(request, cost=1):
-    request["request_id"] = request.headers.get("X-Request-ID", "").strip() or str(uuid.uuid4())
+    supplied_request_id = request.headers.get("X-Request-ID", "").strip()
+    request["request_id"] = supplied_request_id[:128] if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied_request_id) else str(uuid.uuid4())
     if not _enabled(): raise web.HTTPNotFound()
     db = get_db()
     if db is None: raise web.HTTPServiceUnavailable(text="Integration Hub storage unavailable")
@@ -83,7 +86,11 @@ def _if_match(request, required=True):
     if not value:
         if required: raise ValidationError("If-Match header is required")
         return None
-    try: return int(value.strip('W/"'))
+    match = re.fullmatch(r'"([0-9]+)"', value.strip())
+    try:
+        if not match:
+            raise ValueError
+        return int(match.group(1))
     except ValueError as exc: raise ValidationError("If-Match must contain a numeric ETag") from exc
 
 
@@ -100,10 +107,13 @@ async def _run(request, handler):
     except (ValidationError, ValueError) as exc: return _error(request, 400, "validation_error", str(exc))
     except RuntimeError as exc:
         if str(exc) == "version_conflict": return _error(request, 412, "precondition_failed", "Resource changed; reload and retry")
-        raise
+        return _error(request, 502, "upstream_error", "Connected service request failed")
     except web.HTTPException as exc:
         request.setdefault("request_id", str(uuid.uuid4()))
-        return _error(request, exc.status, "http_error", exc.text or exc.reason)
+        response = _error(request, exc.status, "http_error", exc.text or exc.reason)
+        if "Retry-After" in exc.headers:
+            response.headers["Retry-After"] = exc.headers["Retry-After"]
+        return response
 
 
 async def handle_create_account(request):
@@ -419,7 +429,7 @@ async def handle_get_pylon_issue(request):
             raise RuntimeError(messages_result["error"])
         issue = issue_result.get("data") or issue_result
         issue_account_id = (issue.get("account") or {}).get("id") or issue.get("account_id")
-        if issue_account_id and str(issue_account_id) != str(mapping["external_id"]):
+        if not issue_account_id or str(issue_account_id) != str(mapping["external_id"]):
             return _error(request, 404, "not_found", "Issue not found for this client")
         issue["url"] = issue_web_url(issue)
         messages = messages_result.get("data") or messages_result.get("messages") or []
@@ -491,11 +501,21 @@ async def handle_invite_contact(request):
         if not access_url:
             return _error(request, 422, "access_url_required",
                           "Add a dashboard access URL before sending an invite")
+        parsed_url = urlparse(access_url)
+        allowed_hosts = {
+            host.strip().lower() for host in
+            os.environ.get("INTEGRATION_HUB_INVITE_HOSTS", "").split(",") if host.strip()
+        }
+        if parsed_url.scheme != "https" or not parsed_url.hostname or (
+            allowed_hosts and parsed_url.hostname.lower() not in allowed_hosts
+        ):
+            return _error(request, 422, "invalid_access_url",
+                          "Dashboard access URL must use HTTPS and an approved host")
         from tools.gmail import send_email
         await send_email(
             actor, contact["email"],
             f"{account['name']} dashboard access",
-            f"Hi {contact['name']},\n\nYour dashboard access is ready: {access_url}\n\nRegards,\nPlotline",
+            f"Hi {contact['name']},\n\nYour dashboard access is ready: {access_url}",
         )
         updated = await service.update_contact(
             account, contact["contact_id"],

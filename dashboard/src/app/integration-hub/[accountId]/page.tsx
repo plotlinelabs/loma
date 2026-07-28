@@ -26,9 +26,17 @@ export default function IntegrationAccountPage() {
   >("overview");
 
   useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setAccount(null);
+        setError(null);
+      }
+    });
     fetchIntegrationAccount(accountId)
-      .then((data) => setAccount(data.account))
-      .catch((err) => setError(err instanceof Error ? err.message : "Could not load client"));
+      .then((data) => { if (!cancelled) setAccount(data.account); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Could not load client"); });
+    return () => { cancelled = true; };
   }, [accountId]);
 
   async function save(input: IntegrationAccountInput) {
@@ -108,7 +116,7 @@ export default function IntegrationAccountPage() {
         </div>
       </div>}
       {section !== "overview" && (
-        <OnboardingWorkspace account={account} onChange={setAccount} section={section} />
+        <OnboardingWorkspace key={accountId} account={account} onChange={setAccount} section={section} />
       )}
     </div>
   );

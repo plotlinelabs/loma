@@ -15,8 +15,8 @@ def test_normalize_interaction_contract():
         "tenant_id": "T123",
         "source_id": "thread-1",
         "occurred_at": "2026-07-27T10:00:00Z",
-        "direction": "customer_to_plotline",
-        "conversation_state": "waiting_on_plotline",
+        "direction": "inbound",
+        "conversation_state": "waiting_on_us",
         "summary": "Customer asked for event validation.",
         "requires_response": True,
         "meaningful_contact": True,
@@ -29,7 +29,7 @@ def test_normalize_interaction_contract():
 
 @pytest.mark.parametrize("field,value", [
     ("source", "email"),
-    ("direction", "outbound"),
+    ("direction", "sideways"),
     ("conversation_state", "open"),
     ("confidence", 1.1),
 ])
@@ -39,7 +39,7 @@ def test_normalize_interaction_rejects_invalid_enums(field, value):
         "tenant_id": "T123",
         "source_id": "thread-1",
         "occurred_at": "2026-07-27T10:00:00Z",
-        "direction": "customer_to_plotline",
+        "direction": "inbound",
         "conversation_state": "monitoring",
         "summary": "Update",
         "confidence": 0.8,
@@ -78,8 +78,8 @@ async def test_interaction_ingestion_is_deduplicated():
         "tenant_id": "workspace",
         "source_id": "issue-1",
         "occurred_at": "2026-07-27T10:00:00Z",
-        "direction": "customer_to_plotline",
-        "conversation_state": "waiting_on_plotline",
+        "direction": "inbound",
+        "conversation_state": "waiting_on_us",
         "summary": "Customer needs a response.",
         "requires_response": True,
     }
@@ -206,11 +206,11 @@ def test_connector_analysis_marks_customer_issues_as_waiting():
     row = _interaction(
         "slack", "T1", "1.1", "2026-07-27T10:00:00Z",
         "Customer: SDK initialization is failing, can you help?",
-        direction="customer_to_plotline",
+        direction="inbound",
     )
     assert row["classification"] == "reported_issue"
     assert row["requires_response"] is True
-    assert row["conversation_state"] == "waiting_on_plotline"
+    assert row["conversation_state"] == "waiting_on_us"
     assert row["evidence"]["source_id"] == "1.1"
 
 
@@ -255,7 +255,7 @@ async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypat
         return {"data": [{
             "id": "user-1",
             "name": "Vamsi",
-            "email": "vamsi@plotline.so",
+            "email": "owner@internal.example",
         }]}
 
     monkeypatch.setattr("tools.pylon._api_post", api_post)
@@ -276,7 +276,7 @@ async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypat
     assert result["issues"][0]["assignee"] == {
         "id": "user-1",
         "name": "Vamsi",
-        "email": "vamsi@plotline.so",
+        "email": "owner@internal.example",
     }
     assert result["issues"][0]["url"] == (
         "https://app.usepylon.com/support/issues/views/"
@@ -304,7 +304,7 @@ async def test_pylon_issue_page_resolves_nested_assignee_id(monkeypatch):
         return {"data": [{
             "id": "user-1",
             "name": "Sindu",
-            "email": "sindu.sayani@plotline.so",
+            "email": "agent@internal.example",
         }]}
 
     monkeypatch.setattr("tools.pylon._api_post", api_post)
@@ -316,7 +316,7 @@ async def test_pylon_issue_page_resolves_nested_assignee_id(monkeypatch):
     assert result["issues"][0]["assignee"] == {
         "id": "user-1",
         "name": "Sindu",
-        "email": "sindu.sayani@plotline.so",
+        "email": "agent@internal.example",
     }
 
 
@@ -455,7 +455,6 @@ async def test_pylon_customer_mapping_imports_all_issue_threads_read_only(monkey
     async def list_issues(**_kwargs):
         return {"issues": [
             {"id": "i1", "customer": "Acme", "customer_id": "account-1"},
-            {"id": "i2", "customer": "Other", "customer_id": "account-2"},
         ]}
     async def get_issue(issue_id):
         return {"data": {"id": issue_id, "title": "SDK issue", "state": "open"}}
@@ -466,7 +465,7 @@ async def test_pylon_customer_mapping_imports_all_issue_threads_read_only(monkey
             {"id": f"{issue_id}-m2", "created_at": "2026-07-27T11:00:00Z",
              "source": "agent", "body": "We are checking."},
         ]}
-    monkeypatch.setattr("tools.pylon.list_issues", list_issues)
+    monkeypatch.setattr("tools.pylon.list_account_issues_page", lambda *_args, **_kwargs: list_issues())
     monkeypatch.setattr("tools.pylon.get_issue", get_issue)
     monkeypatch.setattr("tools.pylon.get_messages", get_messages)
     rows = await read_only_sync._pylon({
@@ -475,3 +474,15 @@ async def test_pylon_customer_mapping_imports_all_issue_threads_read_only(monkey
     assert [row["source_id"] for row in rows] == ["i1-m1", "i1-m2"]
     assert rows[-1]["conversation_state"] == "waiting_on_customer"
     assert all(row["conversation_id"] == "i1" for row in rows)
+def test_slack_epoch_timestamp_is_preserved_in_utc():
+    from integration_hub.read_only_sync import _parse_timestamp
+    parsed = _parse_timestamp("1712345678.000123")
+    assert parsed.tzinfo == timezone.utc
+    assert parsed.timestamp() == pytest.approx(1712345678.000123)
+
+
+def test_naive_external_timestamp_is_normalized_to_utc():
+    from integration_hub.read_only_sync import _parse_timestamp
+    parsed = _parse_timestamp("2026-07-27T10:00:00")
+    assert parsed.tzinfo == timezone.utc
+    assert parsed.isoformat() == "2026-07-27T10:00:00+00:00"

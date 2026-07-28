@@ -16,11 +16,20 @@ def _parse_timestamp(value):
     if not value:
         return datetime.now(timezone.utc)
     if isinstance(value, datetime):
-        return value
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
     try:
-        return datetime.fromisoformat(str(value).replace(" UTC", "+00:00").replace("Z", "+00:00"))
-    except ValueError:
+        raw = str(value).strip()
+        if raw.replace(".", "", 1).isdigit():
+            return datetime.fromtimestamp(float(raw), timezone.utc)
+        parsed = datetime.fromisoformat(raw.replace(" UTC", "+00:00").replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return datetime.now(timezone.utc)
+
+
+def _checkpoint(mapping):
+    value = (mapping.get("checkpoint") or {}).get("last_occurred_at")
+    return _parse_timestamp(value) if value else None
 
 
 def _analyse(summary, direction):
@@ -29,12 +38,12 @@ def _analyse(summary, direction):
         "error", "fail", "broken", "block", "issue", "unable", "not working",
     ))
     question = "?" in text or any(word in text for word in ("help", "how do", "can you"))
-    requires_response = direction == "customer_to_plotline" and (issue or question)
+    requires_response = direction == "inbound" and (issue or question)
     return {
         "classification": "reported_issue" if issue else
                           ("customer_question" if question else "update"),
         "requires_response": requires_response,
-        "conversation_state": "waiting_on_plotline" if requires_response else "monitoring",
+        "conversation_state": "waiting_on_us" if requires_response else "monitoring",
         "confidence": 0.65 if (issue or question) else 0.5,
     }
 
@@ -65,31 +74,35 @@ async def _slack(mapping, _actor):
     if result.get("error"):
         raise SyncError(result["error"])
     customer_ids = set(config.get("customer_user_ids", []))
-    plotline_ids = set(config.get("plotline_user_ids", []))
-    checkpoint = (mapping.get("checkpoint") or {}).get("last_occurred_at")
+    internal_ids = set(config.get("internal_user_ids", []))
+    checkpoint = _checkpoint(mapping)
     rows = [
         _interaction("slack", result.get("channel_id") or mapping["tenant_id"],
-                     f'{result.get("channel_id", mapping["external_id"])}:{msg.get("ts") or index}',
+                     f'{result.get("channel_id", mapping["external_id"])}:{msg.get("ts") or msg.get("client_msg_id")}',
                      msg.get("ts") or msg.get("timestamp"),
                      f'{msg.get("user", "Unknown")}: {msg.get("text", "")}',
                      config.get("source_url"),
-                     "customer_to_plotline" if msg.get("user_id") in customer_ids else
-                     ("plotline_to_customer" if msg.get("user_id") in plotline_ids else "internal"),
+                     "inbound" if msg.get("user_id") in customer_ids else
+                     ("outbound" if msg.get("user_id") in internal_ids else "internal"),
                      msg.get("thread_ts") or config.get("thread_ts") or msg.get("ts"),
                      msg)
         for index, msg in enumerate(result.get("messages", [])) if msg.get("text")
     ]
-    return [row for row in rows if not checkpoint or row["occurred_at"].isoformat() > checkpoint]
+    return [row for row in rows if not checkpoint or row["occurred_at"] >= checkpoint]
 
 
 async def _grain(mapping, _actor):
-    from tools.grain import find_recording_by_id, get_transcript, search_recordings
+    from tools.grain import discover_client_recordings, find_recording_by_id, get_transcript
     explicit_ids = mapping.get("config", {}).get("recording_ids", [])
     if explicit_ids:
-        found = await asyncio.gather(*(find_recording_by_id(item) for item in explicit_ids))
+        found = await asyncio.gather(*(find_recording_by_id(item, days=3650) for item in explicit_ids))
         rows = [row for row in found if row]
     else:
-        result = await search_recordings(mapping["external_id"])
+        config = mapping.get("config", {})
+        result = await discover_client_recordings(
+            config.get("customer_name") or mapping.get("label") or mapping["external_id"],
+            config.get("customer_emails") or [],
+        )
         if result.get("error"):
             raise SyncError(result["error"])
         rows = result.get("recordings", [])
@@ -114,19 +127,17 @@ async def _grain(mapping, _actor):
 
 
 async def _pylon(mapping, _actor):
-    from tools.pylon import get_issue, get_messages, list_issues
+    from tools.pylon import get_issue, get_messages, list_account_issues_page, normalize_message
     config = mapping.get("config", {})
     issue_ids = list(config.get("issue_ids", []))
     if not issue_ids:
-        result = await list_issues(days=3650, limit=100, max_pages=20)
+        if not mapping.get("external_id"):
+            raise SyncError("Pylon customer mapping is missing")
+        result = await list_account_issues_page(mapping["external_id"], limit=100)
         if result.get("error"):
             raise SyncError(result["error"])
-        issue_ids = [
-            row["id"] for row in result.get("issues", [])
-            if row.get("customer_id") == mapping["external_id"]
-            or (not row.get("customer_id") and row.get("customer") == config.get("customer_name"))
-        ]
-    checkpoint = (mapping.get("checkpoint") or {}).get("last_occurred_at")
+        issue_ids = [row["id"] for row in result.get("issues", [])]
+    checkpoint = _checkpoint(mapping)
     interactions = []
     for issue_id in issue_ids[:500]:
         issue, messages = await asyncio.gather(get_issue(issue_id), get_messages(issue_id))
@@ -142,16 +153,19 @@ async def _pylon(mapping, _actor):
         for row in rows:
             if not row.get("id"):
                 continue
+            normalized = normalize_message(row)
+            if normalized.get("is_private"):
+                continue
             direction = (
-                "customer_to_plotline"
+                "inbound"
                 if row.get("source") in {"customer", "email", "slack_customer"}
                 or row.get("sender_type") in {"customer", "contact"}
-                else "plotline_to_customer"
+                else "outbound"
             )
             item = _interaction(
                 "pylon", mapping["tenant_id"], row["id"],
                 row.get("created_at") or row.get("timestamp"),
-                row.get("body_html") or row.get("body") or row.get("text") or "Pylon message",
+                normalized.get("body") or "Support message",
                 row.get("url") or issue_data.get("url"), direction, conversation_id, {
                     "issue_id": conversation_id, "issue_title": issue_data.get("title"),
                     "issue_status": issue_state, "assignee": issue_data.get("assignee"),
@@ -160,14 +174,14 @@ async def _pylon(mapping, _actor):
             )
             if issue_state in {"closed", "resolved"}:
                 item.update(requires_response=False, conversation_state="resolved")
-            elif direction == "customer_to_plotline":
-                item.update(requires_response=True, conversation_state="waiting_on_plotline")
+            elif direction == "inbound":
+                item.update(requires_response=True, conversation_state="waiting_on_us")
             else:
                 item.update(requires_response=False, conversation_state="waiting_on_customer")
             interactions.append(item)
     interactions.sort(key=lambda row: row["occurred_at"])
     return [row for row in interactions
-            if not checkpoint or row["occurred_at"].isoformat() > checkpoint]
+            if not checkpoint or row["occurred_at"] >= checkpoint]
 
 
 async def discover_pylon_customers(query):

@@ -37,7 +37,8 @@ import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine, RiEditLine } from "@rem
 const TYPES: IntegrationWorkItemType[] = ["milestone", "task", "risk", "blocker"];
 const PLATFORMS = ["android", "ios", "react_native", "flutter", "web", "unity", "kmp"];
 const ENVIRONMENTS = ["development", "staging", "production"];
-const MEETING_RECORDER = "meetings@plotline.so";
+const INTERNAL_EMAIL_DOMAIN = (process.env.NEXT_PUBLIC_INTERNAL_EMAIL_DOMAIN || "internal.example").toLowerCase();
+const MEETING_RECORDER = process.env.NEXT_PUBLIC_MEETING_RECORDER_EMAIL || `meetings@${INTERNAL_EMAIL_DOMAIN}`;
 
 const emptyItem: IntegrationWorkItemInput = {
   type: "task",
@@ -186,13 +187,11 @@ export default function OnboardingWorkspace({
     setSearchingPylon(true); setPylonSearchCompleted(false); setError(null);
     void searchPylonCustomers(account.name)
       .then((result) => {
-        const exact = result.customers.filter((customer) => customer.name.trim().toLowerCase() === account.name.trim().toLowerCase());
-        if (exact.length === 1) return connectPylon(exact[0]);
         setPylonMatches(result.customers);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Could not identify this client in Pylon"))
       .finally(() => { setSearchingPylon(false); setPylonSearchCompleted(true); });
-  // The mapping action is intentionally invoked only once per account name.
+  // Discovery is automatic, but creating a persistent mapping requires an explicit click.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.name, pylonConnected]);
 
@@ -480,8 +479,8 @@ export default function OnboardingWorkspace({
         </div>}
         {pylonConnected && urgentIssues.length > 0 && <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
           <div className="mb-2">
-            <p className="text-sm font-medium">Needs a Plotline response</p>
-            <p className="text-xs text-muted-foreground">New issues and conversations currently waiting on Plotline.</p>
+            <p className="text-sm font-medium">Needs a our response</p>
+            <p className="text-xs text-muted-foreground">New issues and conversations currently waiting on us.</p>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             {urgentIssues.map((issue) => (
@@ -538,7 +537,7 @@ export default function OnboardingWorkspace({
             <Input className="max-w-sm" maxLength={100} placeholder="Search issues" value={pylonIssueQuery} onChange={(event) => setPylonIssueQuery(event.target.value)} />
             <select className="h-9 rounded-md border bg-background px-3 text-sm" value={pylonIssueStatus} onChange={(event) => setPylonIssueStatus(event.target.value)}>
               <option value="new">New</option>
-              <option value="waiting_on_you">On Plotline</option>
+              <option value="waiting_on_you">On us</option>
               <option value="waiting_on_customer">On customer</option>
               <option value="on_hold">On hold</option>
               <option value="closed">Closed</option>
@@ -567,7 +566,7 @@ export default function OnboardingWorkspace({
       <Card className={section === "contacts" ? "p-4" : "hidden"}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="font-heading text-base font-medium">Client and Plotline users</h2>
+            <h2 className="font-heading text-base font-medium">Client and Internal users</h2>
             <p className="text-xs text-muted-foreground">Manage pilot stakeholders, dashboard access, organization IDs, invitations, and meeting attendees.</p>
           </div>
         </div>
@@ -577,7 +576,7 @@ export default function OnboardingWorkspace({
             <Input placeholder="client.com, subsidiary.com" value={domainInput} onChange={(event) => setDomainInput(event.target.value)} />
             <Button type="button" variant="outline" size="sm" disabled={saving} onClick={saveDomains}>Save domains</Button>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">Only these domains and `@plotline.so` can be stored. Plotline users are grouped separately.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Only configured client domains can be stored. Internal users are grouped separately.</p>
         </div>
         <form onSubmit={addContact} className="mt-3 grid gap-2 md:grid-cols-2">
           <Input required placeholder="Name" value={contact.name} onChange={(event) => setContact({ ...contact, name: event.target.value })} />
@@ -595,10 +594,10 @@ export default function OnboardingWorkspace({
             {editingContactId && <Button type="button" variant="outline" size="sm" onClick={() => { setEditingContactId(null); setContact(emptyContact); }}>Cancel</Button>}
           </div>
         </form>
-        {(["client", "plotline"] as const).map((bucket) => {
-          const items = (account.contacts || []).filter((item) => item.email.endsWith("@plotline.so") === (bucket === "plotline"));
+        {(["client", "internal"] as const).map((bucket) => {
+          const items = (account.contacts || []).filter((item) => item.email.endsWith(`@${INTERNAL_EMAIL_DOMAIN}`) === (bucket === "internal"));
           return <div key={bucket} className="mt-5">
-            <h3 className="text-sm font-medium">{bucket === "plotline" ? "Plotline users" : "Client users"}</h3>
+            <h3 className="text-sm font-medium">{bucket === "internal" ? "Internal users" : "Client users"}</h3>
             <div className="mt-2 grid gap-2 md:grid-cols-2">
             {items.map((item) => (
             <div key={item.contact_id} className="flex items-center justify-between rounded-lg border p-3">

@@ -157,7 +157,11 @@ class AccountRepository:
                 }}},
                 "health_escalated_count": {"$size": {"$filter": {
                     "input": "$health_open_items", "as": "item",
-                    "cond": {"$eq": ["$$item.escalated", True]},
+                    "cond": {"$and": [
+                        {"$eq": ["$$item.escalated", True]},
+                        {"$in": ["$$item.type", ["risk", "blocker"]]},
+                        {"$in": ["$$item.severity", ["high", "critical"]]},
+                    ]},
                 }}},
             }},
             {"$addFields": {"calculated_health": {"$switch": {
@@ -174,6 +178,11 @@ class AccountRepository:
                     ]}, "then": "at_risk"},
                     {"case": {"$gt": ["$health_overdue_count", 0]},
                      "then": "needs_attention"},
+                    {"case": {"$and": [
+                        {"$ne": ["$target_go_live_at", None]},
+                        {"$lte": ["$target_go_live_at", now + timedelta(days=7)]},
+                        {"$lt": ["$completion_percentage", 100]},
+                    ]}, "then": "needs_attention"},
                 ],
                 "default": "on_track",
             }}}},
@@ -189,7 +198,15 @@ class AccountRepository:
             {"$limit": limit + 1},
         ])
         rows = await self.collection.aggregate(pipeline).to_list(limit + 1)
-        enriched = [{**row, **calculate_account_health(row)} for row in rows]
+        enriched = []
+        for row in rows:
+            item = {**row, **calculate_account_health(row)}
+            item.pop("work_items", None)
+            item.pop("health_open_items", None)
+            for key in tuple(item):
+                if key.startswith("health_") and key.endswith("_count"):
+                    item.pop(key, None)
+            enriched.append(item)
         has_more = len(enriched) > limit
         enriched = enriched[:limit]
         return enriched, self.encode_cursor(enriched[-1]) if has_more and enriched else None

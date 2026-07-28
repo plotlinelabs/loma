@@ -92,11 +92,11 @@ export interface IntegrationInteraction {
   source: IntegrationSourceLink["type"];
   source_url: string | null;
   occurred_at: string;
-  direction: "customer_to_plotline" | "plotline_to_customer" | "internal";
+  direction: "inbound" | "outbound" | "internal";
   classification: string | null;
   requires_response: boolean;
   meaningful_contact: boolean;
-  conversation_state: "waiting_on_plotline" | "waiting_on_customer" | "internally_blocked" | "resolved" | "monitoring" | "no_action_required";
+  conversation_state: "waiting_on_us" | "waiting_on_customer" | "internally_blocked" | "resolved" | "monitoring" | "no_action_required";
   summary: string;
   confidence: number;
   human_status: "unreviewed" | "confirmed" | "corrected";
@@ -301,7 +301,9 @@ export function archiveIntegrationSourceLink(accountId: string, sourceId: string
 }
 
 export function formatIntegrationLabel(value: string) {
-  return value.split("_").map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");
+  if (!value) return "Unknown";
+  return value.split("_").filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ") || "Unknown";
 }
 
 export interface IntegrationSyncSource {

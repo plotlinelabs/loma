@@ -1,5 +1,7 @@
 """Validation and normalization for manual client onboarding records."""
 
+import os
+import re
 from datetime import datetime, timedelta, timezone
 
 
@@ -30,10 +32,10 @@ SOURCE_TYPES = ("grain", "slack", "linear", "pylon", "hubspot", "document", "oth
 SOURCE_MAPPING_STATUSES = ("active", "paused")
 SYNC_SOURCE_TYPES = ("slack", "grain", "pylon")
 CONVERSATION_STATES = (
-    "waiting_on_plotline", "waiting_on_customer", "internally_blocked",
+    "waiting_on_us", "waiting_on_customer", "internally_blocked",
     "resolved", "monitoring", "no_action_required",
 )
-INTERACTION_DIRECTIONS = ("customer_to_plotline", "plotline_to_customer", "internal")
+INTERACTION_DIRECTIONS = ("inbound", "outbound", "internal")
 PROJECT_STATUSES = ("active", "paused", "completed", "cancelled")
 ACCOUNT_STATUSES = ("active", "inactive", "archived")
 PLAYBOOKS = {
@@ -65,6 +67,8 @@ class ValidationError(ValueError):
 
 
 def _text(value, field, *, required=False, maximum=1000):
+    if value is not None and not isinstance(value, str):
+        raise ValidationError(f"{field} must be a string")
     text = (value or "").strip()
     if required and not text:
         raise ValidationError(f"{field} is required")
@@ -75,7 +79,7 @@ def _text(value, field, *, required=False, maximum=1000):
 
 def normalize_email(value, field="owner_email"):
     email = _text(value, field, maximum=320)
-    if email and ("@" not in email or email.startswith("@") or email.endswith("@")):
+    if email and (re.fullmatch(r"[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+\.[^@\s\x00-\x1f\x7f]+", email) is None):
         raise ValidationError(f"{field} must be a valid email address")
     return email.lower() if email else None
 
@@ -104,8 +108,8 @@ def normalize_source_mapping(data):
         raise ValidationError("config must be an object")
     allowed_config = {
         "thread_ts", "source_url", "limit", "customer_user_ids",
-        "plotline_user_ids", "recording_ids", "sync_interval_minutes",
-        "customer_name", "issue_ids",
+        "internal_user_ids", "recording_ids", "sync_interval_minutes",
+        "customer_name", "customer_emails", "issue_ids",
     }
     if set(config) - allowed_config:
         raise ValidationError("config contains unsupported fields")
@@ -117,7 +121,7 @@ def normalize_source_mapping(data):
         or not 15 <= config["sync_interval_minutes"] <= 1440
     ):
         raise ValidationError("config.sync_interval_minutes must be between 15 and 1440")
-    for field in ("customer_user_ids", "plotline_user_ids", "recording_ids", "issue_ids"):
+    for field in ("customer_user_ids", "internal_user_ids", "customer_emails", "recording_ids", "issue_ids"):
         if field in config:
             config[field] = _text_list(config[field], f"config.{field}", maximum_items=100)
     return {
@@ -296,8 +300,9 @@ def _domain_list(value):
         normalized = domain.lower().strip().lstrip("@")
         if "." not in normalized or any(char.isspace() for char in normalized):
             raise ValidationError("client_email_domains contains an invalid domain")
-        if normalized == "plotline.so":
-            raise ValidationError("plotline.so is reserved for Plotline users")
+        internal_domain = os.environ.get("INTERNAL_EMAIL_DOMAIN", "").strip().lower().lstrip("@")
+        if internal_domain and normalized == internal_domain:
+            raise ValidationError(f"{normalized} is reserved for internal users")
         if normalized not in result:
             result.append(normalized)
     return result

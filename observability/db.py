@@ -136,7 +136,9 @@ async def init_observability():
         [("account_id", 1), ("source", 1), ("tenant_id", 1), ("source_id", 1)],
         unique=True,
     )
-    await _db.integration_interactions.create_index([("account_id", 1), ("occurred_at", -1)])
+    await _db.integration_interactions.create_index(
+        [("account_id", 1), ("occurred_at", -1), ("interaction_id", 1)]
+    )
     await _db.integration_interactions.create_index([("conversation_state", 1), ("occurred_at", -1)])
     for collection in (_db.integration_raw_events, _db.integration_interactions):
         await collection.create_index(
@@ -152,6 +154,9 @@ async def init_observability():
     )
     await _db.integration_sync_sources.create_index("mapping_id", unique=True)
     await _db.integration_sync_sources.create_index([("account_id", 1), ("source", 1), ("archived_at", 1)])
+    await _db.integration_sync_sources.create_index(
+        [("status", 1), ("archived_at", 1), ("next_sync_at", 1)]
+    )
     await _db.integration_sync_jobs.create_index("job_id", unique=True)
     await _db.integration_sync_jobs.create_index(
         [("mapping_id", 1), ("status", 1), ("created_at", -1)]
@@ -164,6 +169,7 @@ async def init_observability():
     await _db.integration_sync_jobs.create_index(
         [("next_attempt_at", 1), ("status", 1)]
     )
+    await _db.integration_sync_jobs.create_index([("status", 1), ("lease_expires_at", 1)])
     for collection in (_db.integration_projects, _db.integration_tasks,
                        _db.integration_milestones, _db.integration_risks,
                        _db.integration_source_mappings):
@@ -193,6 +199,12 @@ async def init_observability():
     await _db.integration_rate_limits.create_index(
         "expires_at", expireAfterSeconds=120
     )
+    retention_seconds = int(os.environ.get("INTEGRATION_HUB_RETENTION_DAYS", "365")) * 86400
+    for collection in (
+        _db.integration_raw_events, _db.integration_interactions,
+        _db.integration_findings, _db.integration_external_conversations,
+    ):
+        await collection.create_index("ingested_at", expireAfterSeconds=retention_seconds)
 
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)

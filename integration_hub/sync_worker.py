@@ -4,6 +4,8 @@ The worker only calls read adapters. Jobs are claimed atomically in MongoDB,
 which prevents concurrent web workers from syncing the same mapping.
 """
 import asyncio
+import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from pymongo import ReturnDocument
@@ -11,13 +13,22 @@ from pymongo import ReturnDocument
 from integration_hub.read_only_sync import pull
 from integration_hub.repository import AccountRepository
 from integration_hub.service import AccountService
+from integration_hub.models import as_utc
+
+logger = logging.getLogger(__name__)
+LEASE_SECONDS = 300
 
 
 async def process_one(db):
     now = datetime.now(timezone.utc)
     job = await db.integration_sync_jobs.find_one_and_update(
-        {"status": "queued", "next_attempt_at": {"$lte": now}},
-        {"$set": {"status": "running", "started_at": now}, "$inc": {"attempt": 1}},
+        {"$or": [
+            {"status": "queued", "next_attempt_at": {"$lte": now}},
+            {"status": "running", "lease_expires_at": {"$lte": now}},
+        ]},
+        {"$set": {"status": "running", "started_at": now,
+                  "lease_expires_at": now + timedelta(seconds=LEASE_SECONDS)},
+         "$inc": {"attempt": 1}},
         sort=[("next_attempt_at", 1), ("created_at", 1)],
         return_document=ReturnDocument.AFTER,
     )
@@ -44,7 +55,7 @@ async def process_one(db):
                 account, record, job["created_by"], job["request_id"]
             )
             created += int(inserted)
-        occurred = [record["occurred_at"] for record in records if record.get("occurred_at")]
+        occurred = [as_utc(record["occurred_at"]) for record in records if record.get("occurred_at")]
         checkpoint = {
             "records_seen": len(records),
             "last_occurred_at": max(occurred).isoformat() if occurred else
@@ -59,8 +70,15 @@ async def process_one(db):
             {"job_id": job["job_id"]},
             {"$set": {"status": "succeeded", "created_count": created,
                       "seen_count": len(records), "checkpoint": checkpoint,
-                      "finished_at": finished}},
+                      "finished_at": finished, "lease_expires_at": None}},
         )
+    except asyncio.CancelledError:
+        await repository.sync_jobs.update_one(
+            {"job_id": job["job_id"]},
+            {"$set": {"status": "queued", "next_attempt_at": datetime.now(timezone.utc),
+                      "lease_expires_at": None, "last_error": "Worker stopped during sync"}},
+        )
+        raise
     except Exception as exc:
         attempt = job["attempt"]
         exhausted = attempt >= job.get("max_attempts", 5)
@@ -70,6 +88,7 @@ async def process_one(db):
             {"$set": {"status": "failed" if exhausted else "queued",
                       "last_error": str(exc)[:500],
                       "next_attempt_at": retry_at,
+                      "lease_expires_at": None,
                       **({"finished_at": datetime.now(timezone.utc)} if exhausted else {})}},
         )
         await repository.update_sync_result(
@@ -88,14 +107,25 @@ async def worker_loop(app):
             from observability.db import get_db
             db = get_db()
         now = datetime.now(timezone.utc)
-        if db is not None and (last_schedule is None or (now - last_schedule).total_seconds() >= 60):
-            await AccountRepository(db).schedule_due_syncs(now)
-            last_schedule = now
-        processed = await process_one(db) if db is not None else False
-        await asyncio.sleep(0 if processed else 5)
+        try:
+            if db is not None and (last_schedule is None or (now - last_schedule).total_seconds() >= 60):
+                await AccountRepository(db).schedule_due_syncs(now)
+                last_schedule = now
+            processed = await process_one(db) if db is not None else False
+            await asyncio.sleep(0 if processed else 5)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Integration Hub sync worker iteration failed")
+            await asyncio.sleep(5)
 
 
 async def worker_context(app):
+    enabled = os.environ.get("INTEGRATION_HUB_ENABLED", "").lower() in {"1", "true", "yes"}
+    enabled = enabled or os.environ.get("PREVIEW_MODE", "").lower() in {"1", "true", "yes"} or os.environ.get("ENV", "").upper() == "DEV"
+    if not enabled:
+        yield
+        return
     task = asyncio.create_task(worker_loop(app))
     yield
     task.cancel()

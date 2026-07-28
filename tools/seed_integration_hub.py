@@ -26,6 +26,10 @@ PILOT_CLIENTS = (
 
 
 async def main():
+    if os.environ.get("INTEGRATION_HUB_SEED_ALLOW") != "1":
+        raise SystemExit("Refusing to seed without INTEGRATION_HUB_SEED_ALLOW=1")
+    if os.environ.get("ENV", "").upper() in {"PROD", "PRODUCTION"}:
+        raise SystemExit("Refusing to seed a production environment")
     uri = os.environ.get("OBSERVABILITY_MONGODB_URI", "").strip()
     if not uri.startswith("mongodb"):
         raise SystemExit("OBSERVABILITY_MONGODB_URI must be configured")
