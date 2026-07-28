@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   createIntegrationActivity,
   fetchIntegrationAccount,
@@ -80,7 +80,21 @@ export default function OnboardingWorkspace({
   const [loadingPylonIssues, setLoadingPylonIssues] = useState(false);
   const [selectedPylonIssue, setSelectedPylonIssue] = useState<PylonIssueDetail | null>(null);
   const [loadingPylonIssueId, setLoadingPylonIssueId] = useState<string | null>(null);
+  const autoSearchedPylon = useRef(false);
   const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
+  const urgentPylonIssues = useMemo(
+    () => pylonIssues.filter((issue) => ["new", "waiting_on_you", "waiting_on_plotline"].includes(issue.state)),
+    [pylonIssues],
+  );
+  const historicalPylonIssues = useMemo(
+    () => pylonIssues.filter((issue) => ["waiting_on_customer", "closed", "resolved"].includes(issue.state)),
+    [pylonIssues],
+  );
+
+  function pylonAssignee(issue: PylonIssueSummary) {
+    if (typeof issue.assignee === "string") return issue.assignee;
+    return issue.assignee?.name || issue.assignee?.email || issue.assignee?.id || "Unassigned";
+  }
 
   async function loadPylonIssues(cursor?: string, append = false) {
     setLoadingPylonIssues(true); setError(null);
@@ -119,6 +133,17 @@ export default function OnboardingWorkspace({
     } catch (err) { setError(err instanceof Error ? err.message : "Could not search Pylon customers"); }
     finally { setSearchingPylon(false); setPylonSearchCompleted(true); }
   }
+
+  useEffect(() => {
+    if (pylonConnected || autoSearchedPylon.current) return;
+    autoSearchedPylon.current = true;
+    setPylonQuery(account.name);
+    setSearchingPylon(true); setPylonSearchCompleted(false); setError(null);
+    void searchPylonCustomers(account.name)
+      .then((result) => setPylonMatches(result.customers))
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not identify this client in Pylon"))
+      .finally(() => { setSearchingPylon(false); setPylonSearchCompleted(true); });
+  }, [account.name, pylonConnected]);
 
   async function connectPylon(customer: PylonCustomerMatch) {
     setSaving(true); setError(null);
@@ -357,29 +382,32 @@ export default function OnboardingWorkspace({
             </div>
           ))}
         </div>
-        {pylonConnected && <div className="mt-4 rounded-lg border">
-          <div className="flex flex-wrap gap-2 border-b p-3">
-            <Input className="max-w-sm" maxLength={100} placeholder="Search issues" value={pylonIssueQuery} onChange={(event) => setPylonIssueQuery(event.target.value)} />
-            <select className="h-9 rounded-md border bg-background px-3 text-sm" value={pylonIssueStatus} onChange={(event) => setPylonIssueStatus(event.target.value)}>
-              <option value="">All statuses</option><option value="new">New</option><option value="waiting_on_you">Waiting on Plotline</option><option value="waiting_on_customer">Waiting on customer</option><option value="closed">Closed</option>
-            </select>
+        {pylonConnected && urgentPylonIssues.length > 0 && <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+          <div className="mb-2">
+            <p className="text-sm font-medium">Needs a Plotline response</p>
+            <p className="text-xs text-muted-foreground">New issues and conversations currently waiting on Plotline.</p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="p-3">Issue</th><th className="p-3">Status</th><th className="p-3">Assignee</th><th className="p-3">Updated</th><th className="p-3">Ticket</th></tr></thead>
-              <tbody>
-                {pylonIssues.map((issue) => <tr key={issue.id} className="cursor-pointer border-b hover:bg-muted/30" onClick={() => openPylonIssue(issue.id)}>
-                  <td className="p-3 font-medium">{loadingPylonIssueId === issue.id ? "Loading..." : issue.title}</td>
-                  <td className="p-3"><Badge variant="outline">{formatIntegrationLabel(issue.state)}</Badge></td>
-                  <td className="p-3">{typeof issue.assignee === "string" ? issue.assignee : issue.assignee?.name || issue.assignee?.email || "Unassigned"}</td>
-                  <td className="p-3 text-muted-foreground">{issue.updated_at ? new Date(issue.updated_at).toLocaleString() : "Unknown"}</td>
-                  <td className="p-3">{issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" className="text-primary underline" onClick={(event) => event.stopPropagation()}>Open</a> : "Unavailable"}</td>
-                </tr>)}
-              </tbody>
-            </table>
-            {!pylonIssues.length && !loadingPylonIssues && <p className="p-4 text-sm text-muted-foreground">No Pylon issues match these filters.</p>}
+          <div className="grid gap-2 md:grid-cols-2">
+            {urgentPylonIssues.map((issue) => (
+              <div key={issue.id} className="rounded-md border bg-background p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <a href={issue.url || "#"} target="_blank" rel="noreferrer" className="font-medium text-primary underline">
+                    {issue.title}
+                  </a>
+                  <Badge variant="outline">{formatIntegrationLabel(issue.state)}</Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {pylonAssignee(issue)} · {issue.updated_at ? new Date(issue.updated_at).toLocaleString() : "Unknown update time"}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Button type="button" variant="outline" size="sm" disabled={loadingPylonIssueId === issue.id} onClick={() => openPylonIssue(issue.id)}>
+                    {loadingPylonIssueId === issue.id ? "Loading..." : "View context"}
+                  </Button>
+                  {issue.url && <a href={issue.url} target="_blank" rel="noreferrer" className="inline-flex items-center text-xs text-primary underline">Open in Pylon</a>}
+                </div>
+              </div>
+            ))}
           </div>
-          {pylonIssueCursor && <div className="border-t p-3"><Button type="button" variant="outline" size="sm" disabled={loadingPylonIssues} onClick={() => loadPylonIssues(pylonIssueCursor, true)}>{loadingPylonIssues ? "Loading..." : "Load more"}</Button></div>}
         </div>}
         {selectedPylonIssue && <div className="mt-3 rounded-lg border p-4">
           <div className="flex items-start justify-between gap-3">
@@ -392,6 +420,32 @@ export default function OnboardingWorkspace({
             </div>)}
           </div>
           {selectedPylonIssue.issue.url && <a className="mt-3 inline-block text-sm text-primary underline" href={selectedPylonIssue.issue.url} target="_blank" rel="noreferrer">View ticket in Pylon</a>}
+        </div>}
+        {pylonConnected && <div className="mt-4 rounded-lg border">
+          <div className="flex flex-wrap gap-2 border-b p-3">
+            <Input className="max-w-sm" maxLength={100} placeholder="Search issues" value={pylonIssueQuery} onChange={(event) => setPylonIssueQuery(event.target.value)} />
+            <select className="h-9 rounded-md border bg-background px-3 text-sm" value={pylonIssueStatus} onChange={(event) => setPylonIssueStatus(event.target.value)}>
+              <option value="">Waiting on customer and resolved</option><option value="waiting_on_customer">Waiting on customer</option><option value="closed">Closed</option><option value="resolved">Resolved</option>
+            </select>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="p-3">Issue</th><th className="p-3">Status</th><th className="p-3">Assignee</th><th className="p-3">Updated</th><th className="p-3">Ticket</th></tr></thead>
+              <tbody>
+                {historicalPylonIssues.map((issue) => <tr key={issue.id} className="border-b hover:bg-muted/30">
+                  <td className="p-3 font-medium">
+                    {issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" className="text-primary underline">{issue.title}</a> : issue.title}
+                  </td>
+                  <td className="p-3"><Badge variant="outline">{formatIntegrationLabel(issue.state)}</Badge></td>
+                  <td className="p-3">{pylonAssignee(issue)}</td>
+                  <td className="p-3 text-muted-foreground">{issue.updated_at ? new Date(issue.updated_at).toLocaleString() : "Unknown"}</td>
+                  <td className="p-3"><div className="flex gap-2">{issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" className="text-primary underline">Open</a> : "Unavailable"}<button type="button" className="text-primary underline" onClick={() => openPylonIssue(issue.id)}>Details</button></div></td>
+                </tr>)}
+              </tbody>
+            </table>
+            {!historicalPylonIssues.length && !loadingPylonIssues && <p className="p-4 text-sm text-muted-foreground">No waiting-on-customer or resolved issues match these filters.</p>}
+          </div>
+          {pylonIssueCursor && <div className="border-t p-3"><Button type="button" variant="outline" size="sm" disabled={loadingPylonIssues} onClick={() => loadPylonIssues(pylonIssueCursor, true)}>{loadingPylonIssues ? "Loading..." : "Load more"}</Button></div>}
         </div>}
       </Card>
       <Card className="p-4">

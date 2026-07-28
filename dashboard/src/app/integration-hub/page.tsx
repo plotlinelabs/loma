@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   createIntegrationAccount, fetchIntegrationAccounts, fetchIntegrationActions,
+  createIntegrationSyncSource, findPylonCustomerForClient,
   formatIntegrationLabel, INTEGRATION_STAGES, IntegrationAccount,
   IntegrationAccountInput, IntegrationAction,
 } from "@/lib/integration-hub-api";
@@ -69,7 +70,18 @@ export default function IntegrationHubPage() {
 
   async function create(input: IntegrationAccountInput) {
     // Reuse the same key for every retry of this form session.
-    await createIntegrationAccount(input, createKey);
+    const result = await createIntegrationAccount(input, createKey);
+    const pylonCustomer = await findPylonCustomerForClient(input.name);
+    const alreadyConnected = (result.account.sync_sources || []).some((source) => source.source === "pylon");
+    if (pylonCustomer && !alreadyConnected) {
+      await createIntegrationSyncSource(result.account.account_id, {
+        source: "pylon",
+        tenant_id: "pylon",
+        external_id: pylonCustomer.customer_id,
+        label: pylonCustomer.name,
+        config: { customer_name: pylonCustomer.name },
+      });
+    }
     setCreateKey(crypto.randomUUID());
     setDialogOpen(false);
     await load();

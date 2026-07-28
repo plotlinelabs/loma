@@ -409,6 +409,19 @@ async def list_account_issues_page(
     result = await _api_post("/issues/search", body)
     if result.get("error"):
         return result
+    def assignee_summary(issue: dict[str, Any]) -> Any:
+        """Normalize the assignee shapes returned by different Pylon API versions."""
+        assignee = (
+            issue.get("assignee")
+            or issue.get("assigned_to")
+            or issue.get("assignee_user")
+            or issue.get("user")
+        )
+        if assignee:
+            return assignee
+        assignee_id = issue.get("assignee_id")
+        return {"id": assignee_id} if assignee_id else None
+
     issues = []
     for issue in result.get("data", []):
         issues.append({
@@ -416,7 +429,7 @@ async def list_account_issues_page(
             "number": issue.get("number"),
             "title": issue.get("title") or "Untitled issue",
             "state": issue.get("state") or "unknown",
-            "assignee": issue.get("assignee"),
+            "assignee": assignee_summary(issue),
             "created_at": issue.get("created_at"),
             "updated_at": issue.get("updated_at"),
             "account_id": (issue.get("account") or {}).get("id") or issue.get("account_id"),

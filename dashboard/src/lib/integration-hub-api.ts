@@ -315,6 +315,16 @@ export function searchPylonCustomers(query: string) {
   );
 }
 
+export async function findPylonCustomerForClient(name: string) {
+  const normalizedName = name.trim().toLocaleLowerCase();
+  const result = await searchPylonCustomers(name);
+  const exactMatches = result.customers.filter(
+    (customer) => customer.name.trim().toLocaleLowerCase() === normalizedName,
+  );
+  if (exactMatches.length === 1) return exactMatches[0];
+  return null;
+}
+
 export interface PylonIssueSummary {
   id: string;
   title: string;
