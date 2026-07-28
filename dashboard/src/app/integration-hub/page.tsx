@@ -41,6 +41,7 @@ export default function IntegrationHubPage() {
   const [sort, setSort] = useState("urgency");
   const [status, setStatus] = useState("active");
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [createKey, setCreateKey] = useState(() => crypto.randomUUID());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,7 +68,9 @@ export default function IntegrationHubPage() {
   }, [load, search]);
 
   async function create(input: IntegrationAccountInput) {
-    await createIntegrationAccount(input);
+    // Reuse the same key for every retry of this form session.
+    await createIntegrationAccount(input, createKey);
+    setCreateKey(crypto.randomUUID());
     setDialogOpen(false);
     await load();
   }
@@ -101,7 +104,10 @@ export default function IntegrationHubPage() {
           <h1 className="text-lg md:text-xl font-heading font-semibold">Integration Hub</h1>
           <p className="mt-1 text-[13px] text-muted-foreground">Manage client onboarding, ownership, blockers, and next actions.</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (open) setCreateKey(crypto.randomUUID());
+        }}>
           <DialogTrigger asChild><Button size="sm"><RiAddLine />Add client</Button></DialogTrigger>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>

@@ -161,10 +161,10 @@ export function fetchIntegrationActions() {
   );
 }
 
-export function createIntegrationAccount(input: IntegrationAccountInput) {
+export function createIntegrationAccount(input: IntegrationAccountInput, idempotencyKey: string) {
   return request<{ account: IntegrationAccount }>("/api/integration-hub/accounts", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(input),
   });
 }

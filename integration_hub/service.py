@@ -9,10 +9,6 @@ from integration_hub.models import (
     normalize_work_item, validate_status_transition, normalize_interaction, normalize_source_mapping,
 )
 
-EDIT_ROLES = {"owner", "editor"}
-READ_ROLES = EDIT_ROLES | {"viewer"}
-
-
 class AccountService:
     def __init__(self, repository):
         self.repository = repository
@@ -49,21 +45,24 @@ class AccountService:
         )
         return response, created
 
-    async def list(self, actor, system_role, *, stage=None, health=None, search=None,
+    async def list(self, *legacy_context, stage=None, health=None, search=None,
                    owner=None, status="active", limit=50, cursor=None):
         query = {"archived_at": None}
         if status == "archived": query = {**query, "archived_at": {"$ne": None}}
         elif status: query["status"] = status
         if stage: query["stage"] = stage
-        if health: query["health"] = health
         if search:
             search = search.strip()
             if len(search) > 100:
                 raise ValidationError("search must be 100 characters or less")
             query["name"] = {"$regex": re.escape(search), "$options": "i"}
         if owner: query["owner_email"] = owner.lower()
+        if hasattr(self.repository, "list_with_health"):
+            return await self.repository.list_with_health(query, limit, cursor, health)
         accounts, next_cursor = await self.repository.list(query, limit, cursor)
-        return [self.enrich(account) for account in accounts], next_cursor
+        enriched = [self.enrich(account) for account in accounts]
+        return ([row for row in enriched if row["effective_health"] == health]
+                if health else enriched), next_cursor
 
     async def get(self, account_id, include_archived=False):
         account = await self.repository.get(account_id, include_archived)
@@ -161,14 +160,27 @@ class AccountService:
     async def validate_references(self, account_id, item, current_id=None):
         if item.get("project_id") and not await self.repository.get_resource("project", item["project_id"], account_id):
             raise ValidationError("project_id does not reference an active project")
-        for dependency in item.get("depends_on", []):
+        requested = item.get("depends_on", [])
+        for dependency in requested:
             if dependency == current_id: raise ValidationError("work item cannot depend on itself")
             found = None
             for kind in ("task", "milestone", "risk"):
                 found = found or await self.repository.get_resource(kind, dependency, account_id)
             if not found: raise ValidationError("depends_on contains a missing work item")
-            if current_id and current_id in found.get("depends_on", []):
-                raise ValidationError("dependency cycle detected")
+        if current_id:
+            # A cycle exists when any proposed dependency can already reach the
+            # item being edited. Traverse the full graph, not only direct edges.
+            pending, visited = list(requested), set()
+            while pending:
+                dependency = pending.pop()
+                if dependency == current_id:
+                    raise ValidationError("dependency cycle detected")
+                if dependency in visited:
+                    continue
+                visited.add(dependency)
+                found = await self.repository.get_any_work_item(dependency, account_id)
+                if found:
+                    pending.extend(found.get("depends_on", []))
 
     async def create_work_item(self, account, data, actor, request_id):
         item = self._work_item(account["account_id"], data, actor)
@@ -211,9 +223,21 @@ class AccountService:
 
     async def create_activity(self, account, data, actor, request_id):
         activity = normalize_activity(data); now = datetime.now(timezone.utc)
-        audit = self._audit(account["account_id"], actor, "activity", self._id("activity"), activity["message"], request_id)
-        audit.update({"activity_type": activity["type"]})
-        updated = await self.repository.mutate_account(account["account_id"], {"updated_at": now, "updated_by": actor}, account["version"], audit)
+        activity_id = self._id("activity")
+        timeline = {
+            "activity_id": activity_id, "account_id": account["account_id"],
+            "type": activity["type"], "message": activity["message"],
+            "created_at": now, "created_by": actor,
+        }
+        audit = self._audit(
+            account["account_id"], actor, "activity", activity_id,
+            "timeline.activity_created", request_id,
+        )
+        updated = await self.repository.create_timeline_activity(
+            account["account_id"], timeline,
+            {"updated_at": now, "updated_by": actor},
+            account["version"], audit,
+        )
         if not updated: raise RuntimeError("version_conflict")
         return await self.get(account["account_id"])
 
@@ -248,6 +272,7 @@ class AccountService:
         created = await self.repository.create_interaction(interaction, audit)
         if not created:
             existing = await self.repository.interactions.find_one({
+                "account_id": account["account_id"],
                 "source": interaction["source"], "tenant_id": interaction["tenant_id"],
                 "source_id": interaction["source_id"],
             })
@@ -261,6 +286,7 @@ class AccountService:
             "mapping_id": mapping_id, "account_id": account["account_id"],
             **normalize_source_mapping(data), "sync_status": "never_synced",
             "last_error": None, "last_synced_at": None, "checkpoint": None,
+            "next_sync_at": now,
             "created_at": now, "created_by": actor, "updated_at": now,
             "archived_at": None,
         }
@@ -289,3 +315,14 @@ class AccountService:
                 checkpoint=mapping.get("checkpoint"), synced_at=now,
             )
             raise
+
+    async def queue_sync(self, account, mapping, actor, request_id):
+        """Persist a pull-only job and acquire a mapping-scoped distributed lock."""
+        job = {
+            "job_id": self._id("job"), "account_id": account["account_id"],
+            "mapping_id": mapping["mapping_id"], "source": mapping["source"],
+            "status": "queued", "attempt": 0, "max_attempts": 5,
+            "created_at": datetime.now(timezone.utc), "created_by": actor,
+            "request_id": request_id, "next_attempt_at": datetime.now(timezone.utc),
+        }
+        return await self.repository.enqueue_sync_job(job)

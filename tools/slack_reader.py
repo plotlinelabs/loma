@@ -119,6 +119,10 @@ def _format_message(msg: dict[str, Any], client: WebClient, users_cache: dict[st
     """Format a Slack message for agent consumption."""
     user_id = msg.get("user", "")
     result: dict[str, Any] = {
+        # Keep Slack's immutable, full-precision identifier for consumers that
+        # persist messages. `timestamp` is display-only and loses precision.
+        "ts": msg.get("ts", ""),
+        "user_id": user_id,
         "timestamp": _format_ts(msg.get("ts", "")),
         "user": _resolve_username(client, user_id, users_cache) if user_id else "bot",
         "text": msg.get("text", ""),

@@ -1,10 +1,11 @@
 """MongoDB repositories for Integration Hub's account-scoped resources."""
 import base64
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
+from integration_hub.models import calculate_account_health
 
 
 RESOURCE_COLLECTIONS = {
@@ -23,8 +24,13 @@ class AccountRepository:
         self.risks = db.integration_risks
         self.sources = db.integration_source_mappings
         self.interactions = db.integration_interactions
+        self.raw_events = getattr(db, "integration_raw_events", self.interactions)
+        self.findings = getattr(db, "integration_findings", self.interactions)
+        self.conversations = getattr(db, "integration_external_conversations", self.interactions)
         self.sync_sources = getattr(db, "integration_sync_sources", self.sources)
+        self.sync_jobs = getattr(db, "integration_sync_jobs", None)
         self.audit = db.integration_audit_log
+        self.timeline = getattr(db, "integration_timeline", self.audit)
         self.idempotency = db.integration_idempotency
 
     @staticmethod
@@ -94,6 +100,99 @@ class AccountRepository:
         docs = docs[:limit]
         return docs, self.encode_cursor(docs[-1]) if has_more and docs else None
 
+    async def list_with_health(self, query, limit=50, cursor=None, health=None):
+        """List accounts with the same child-backed health used by account detail.
+
+        Child lookup happens in MongoDB before health filtering and pagination,
+        preventing portfolio/detail drift and incorrect urgency ordering.
+        """
+        query = dict(query)
+        if cursor:
+            updated_at, account_id = self.decode_cursor(cursor)
+            query["$or"] = [
+                {"updated_at": {"$lt": updated_at}},
+                {"updated_at": updated_at, "account_id": {"$gt": account_id}},
+            ]
+        pipeline = [{"$match": query}]
+        for collection, field in (
+            ("integration_tasks", "health_tasks"),
+            ("integration_milestones", "health_milestones"),
+            ("integration_risks", "health_risks"),
+        ):
+            pipeline.append({"$lookup": {
+                "from": collection, "let": {"account_id": "$account_id"},
+                "pipeline": [{"$match": {"$expr": {"$eq": ["$account_id", "$$account_id"]},
+                                         "archived_at": None}}],
+                "as": field,
+            }})
+        now = datetime.now(timezone.utc)
+        closed = ["completed", "cancelled", "achieved", "resolved", "accepted"]
+        pipeline.extend([
+            {"$addFields": {"work_items": {"$concatArrays": [
+                "$health_tasks", "$health_milestones", "$health_risks"
+            ]}}},
+            {"$addFields": {"health_open_items": {"$filter": {
+                "input": "$work_items", "as": "item",
+                "cond": {"$not": [{"$in": ["$$item.status", closed]}]},
+            }}}},
+            {"$addFields": {
+                "health_overdue_count": {"$size": {"$filter": {
+                    "input": "$health_open_items", "as": "item",
+                    "cond": {"$and": [
+                        {"$ne": ["$$item.due_at", None]},
+                        {"$lt": ["$$item.due_at", now]},
+                    ]},
+                }}},
+                "health_blocker_count": {"$size": {"$filter": {
+                    "input": "$health_open_items", "as": "item",
+                    "cond": {"$eq": ["$$item.type", "blocker"]},
+                }}},
+                "health_severe_count": {"$size": {"$filter": {
+                    "input": "$health_open_items", "as": "item",
+                    "cond": {"$and": [
+                        {"$in": ["$$item.type", ["risk", "blocker"]]},
+                        {"$in": ["$$item.severity", ["high", "critical"]]},
+                    ]},
+                }}},
+                "health_escalated_count": {"$size": {"$filter": {
+                    "input": "$health_open_items", "as": "item",
+                    "cond": {"$eq": ["$$item.escalated", True]},
+                }}},
+            }},
+            {"$addFields": {"calculated_health": {"$switch": {
+                "branches": [
+                    {"case": {"$gt": ["$health_escalated_count", 0]}, "then": "escalated"},
+                    {"case": {"$gt": ["$health_blocker_count", 0]}, "then": "blocked"},
+                    {"case": {"$or": [
+                        {"$gt": ["$health_severe_count", 0]},
+                        {"$gte": ["$health_overdue_count", 2]},
+                        {"$and": [
+                            {"$ne": ["$target_go_live_at", None]},
+                            {"$lt": ["$target_go_live_at", now]},
+                        ]},
+                    ]}, "then": "at_risk"},
+                    {"case": {"$gt": ["$health_overdue_count", 0]},
+                     "then": "needs_attention"},
+                ],
+                "default": "on_track",
+            }}}},
+            {"$addFields": {"effective_health": {"$cond": [
+                "$health_override_enabled", "$health", "$calculated_health",
+            ]}}},
+            {"$project": {"health_tasks": 0, "health_milestones": 0, "health_risks": 0}},
+        ])
+        if health:
+            pipeline.append({"$match": {"effective_health": health}})
+        pipeline.extend([
+            {"$sort": {"updated_at": -1, "account_id": 1}},
+            {"$limit": limit + 1},
+        ])
+        rows = await self.collection.aggregate(pipeline).to_list(limit + 1)
+        enriched = [{**row, **calculate_account_health(row)} for row in rows]
+        has_more = len(enriched) > limit
+        enriched = enriched[:limit]
+        return enriched, self.encode_cursor(enriched[-1]) if has_more and enriched else None
+
     async def get(self, account_id, include_archived=False):
         query = {"account_id": account_id}
         if not include_archived:
@@ -113,7 +212,7 @@ class AccountRepository:
             self.sources.find(active).sort("created_at", 1).to_list(None),
             self.sync_sources.find(active).sort("created_at", 1).to_list(None),
             self.interactions.find({"account_id": account_id}).sort("occurred_at", -1).limit(100).to_list(100),
-            self.audit.find({"account_id": account_id}).sort("created_at", -1).limit(200).to_list(200),
+            self.timeline.find({"account_id": account_id}).sort("created_at", -1).limit(200).to_list(200),
         )
         result = dict(account)
         result["projects"] = projects
@@ -121,16 +220,17 @@ class AccountRepository:
         result["source_links"] = sources
         result["sync_sources"] = sync_sources
         result["interactions"] = interactions
-        result["activities"] = [{
-            "activity_id": row["audit_id"], "type": row.get("activity_type", "update"),
-            "message": row["action"], "created_at": row["created_at"],
-            "created_by": row["actor"],
-        } for row in reversed(activities)]
+        result["activities"] = list(reversed(activities))
         return result
 
 
     async def list_sync_sources(self, account_id):
         return await self.sync_sources.find({"account_id": account_id, "archived_at": None}).sort("created_at", 1).to_list(None)
+
+    async def list_sync_jobs(self, account_id, limit=50):
+        return await self.sync_jobs.find({"account_id": account_id}).sort(
+            "created_at", -1
+        ).limit(limit).to_list(limit)
 
     async def create_sync_source(self, mapping, audit_entry):
         async def operation(session):
@@ -147,14 +247,106 @@ class AccountRepository:
             return_document=ReturnDocument.AFTER,
         )
 
+    async def enqueue_sync_job(self, job):
+        """Queue at most one active job for a mapping across all web workers."""
+        existing = await self.sync_jobs.find_one({
+            "mapping_id": job["mapping_id"], "status": {"$in": ["queued", "running"]},
+        })
+        if existing:
+            return existing, False
+        try:
+            await self.sync_jobs.insert_one(job)
+        except DuplicateKeyError:
+            existing = await self.sync_jobs.find_one({
+                "mapping_id": job["mapping_id"], "status": {"$in": ["queued", "running"]},
+            })
+            if existing:
+                return existing, False
+            raise
+        await self.sync_sources.update_one(
+            {"mapping_id": job["mapping_id"]},
+            {"$set": {"sync_status": "queued", "last_error": None,
+                      "updated_at": job["created_at"]}},
+        )
+        return job, True
+
+    async def schedule_due_syncs(self, now):
+        mappings = await self.sync_sources.find({
+            "status": "active", "archived_at": None,
+            "next_sync_at": {"$lte": now},
+        }).limit(50).to_list(50)
+        queued = 0
+        for mapping in mappings:
+            interval = mapping.get("config", {}).get("sync_interval_minutes", 60)
+            job = {
+                "job_id": f"job_{mapping['mapping_id']}_{int(now.timestamp())}",
+                "account_id": mapping["account_id"],
+                "mapping_id": mapping["mapping_id"], "source": mapping["source"],
+                "status": "queued", "attempt": 0, "max_attempts": 5,
+                "created_at": now, "created_by": "integration-hub-scheduler",
+                "request_id": f"scheduled:{mapping['mapping_id']}:{int(now.timestamp())}",
+                "next_attempt_at": now,
+            }
+            _, created = await self.enqueue_sync_job(job)
+            queued += int(created)
+            await self.sync_sources.update_one(
+                {"mapping_id": mapping["mapping_id"]},
+                {"$set": {"next_sync_at": now + timedelta(minutes=interval)}},
+            )
+        return queued
+
     async def create_interaction(self, interaction, audit_entry):
         async def operation(session):
             try:
+                raw_event = {
+                    "account_id": interaction["account_id"],
+                    "source": interaction["source"],
+                    "tenant_id": interaction["tenant_id"],
+                    "source_id": interaction["source_id"],
+                    "occurred_at": interaction["occurred_at"],
+                    "ingested_at": interaction["ingested_at"],
+                    "payload": interaction.get("raw", {}),
+                }
+                if self.raw_events is not self.interactions:
+                    await self.raw_events.insert_one(raw_event, session=session)
                 await self.interactions.insert_one(interaction, session=session)
                 created = True
             except DuplicateKeyError:
                 created = False
             if created:
+                conversation_id = interaction.get("conversation_id")
+                if conversation_id and self.conversations is not self.interactions:
+                    await self.conversations.update_one(
+                        {"account_id": interaction["account_id"],
+                         "source": interaction["source"],
+                         "tenant_id": interaction["tenant_id"],
+                         "conversation_id": conversation_id},
+                        {"$set": {
+                            "last_interaction_at": interaction["occurred_at"],
+                            "state": interaction["conversation_state"],
+                            "summary": interaction["summary"],
+                            "updated_at": interaction["ingested_at"],
+                        }, "$setOnInsert": {
+                            "created_at": interaction["ingested_at"],
+                        }},
+                        upsert=True, session=session,
+                    )
+                if self.findings is not self.interactions and interaction.get("classification") in {
+                    "reported_issue", "customer_question"
+                }:
+                    await self.findings.insert_one({
+                        "finding_id": f"finding_{interaction['interaction_id']}",
+                        "account_id": interaction["account_id"],
+                        "interaction_id": interaction["interaction_id"],
+                        "classification": interaction["classification"],
+                        "summary": interaction["summary"],
+                        "evidence": interaction.get("evidence", {}),
+                        "requires_response": interaction["requires_response"],
+                        "conversation_state": interaction["conversation_state"],
+                        "confidence": interaction["confidence"],
+                        "review_status": "unreviewed",
+                        "created_at": interaction["ingested_at"],
+                    }, session=session)
                 await self.audit.insert_one(audit_entry, session=session)
             return created
         return await self._transaction(operation)
@@ -194,6 +386,24 @@ class AccountRepository:
             return after
         return await self._transaction(operation)
 
+    async def create_timeline_activity(self, account_id, activity, updates,
+                                       expected_version, audit_entry):
+        async def operation(session):
+            parent = await self.collection.find_one_and_update(
+                {"account_id": account_id, "version": expected_version,
+                 "archived_at": None},
+                {"$set": updates, "$inc": {"version": 1}}, session=session,
+                return_document=ReturnDocument.AFTER,
+            )
+            if not parent:
+                return None
+            await self.timeline.insert_one(activity, session=session)
+            audit_entry.update({"before": None, "after": activity,
+                                "resource_version": parent["version"]})
+            await self.audit.insert_one(audit_entry, session=session)
+            return parent
+        return await self._transaction(operation)
+
     def resource_collection(self, kind):
         return getattr(self, RESOURCE_COLLECTIONS[kind])
 
@@ -201,6 +411,16 @@ class AccountRepository:
         return await self.resource_collection(kind).find_one({
             "resource_id": resource_id, "account_id": account_id, "archived_at": None,
         })
+
+    async def get_any_work_item(self, resource_id, account_id):
+        for collection in (self.tasks, self.milestones, self.risks):
+            row = await collection.find_one({
+                "resource_id": resource_id, "account_id": account_id,
+                "archived_at": None,
+            })
+            if row:
+                return row
+        return None
 
     async def create_resource(self, kind, resource, account_version, audit_entry, extra_resources=()):
         collection = self.resource_collection(kind)
@@ -342,11 +562,3 @@ class AccountRepository:
         ]
         attention = await self.collection.aggregate(attention_pipeline).to_list(attention_limit)
         return actions, attention
-
-    async def find_idempotent(self, actor, key):
-        return await self.idempotency.find_one({"actor": actor, "key": key})
-
-    async def save_idempotent(self, actor, key, response):
-        await self.idempotency.update_one({"actor": actor, "key": key}, {"$setOnInsert": {
-            "actor": actor, "key": key, "response": response, "created_at": datetime.now(timezone.utc),
-        }}, upsert=True)

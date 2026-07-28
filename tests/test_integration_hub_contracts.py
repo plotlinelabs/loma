@@ -167,3 +167,23 @@ async def test_action_center_filters_and_limits_attention_accounts_in_mongodb():
     assert any(stage.get("$match", {}).get("$or") for stage in pipeline)
     assert {"$limit": 25} in pipeline
     assert captured["limits"][-1] == 25
+
+
+@pytest.mark.asyncio
+async def test_dependency_validation_detects_transitive_cycle():
+    graph = {
+        "B": {"resource_id": "B", "depends_on": ["C"]},
+        "C": {"resource_id": "C", "depends_on": ["A"]},
+    }
+
+    class Repository:
+        async def get_resource(self, kind, resource_id, account_id):
+            return graph.get(resource_id)
+
+        async def get_any_work_item(self, resource_id, account_id):
+            return graph.get(resource_id)
+
+    with pytest.raises(ValidationError, match="cycle"):
+        await AccountService(Repository()).validate_references(
+            "acc_1", {"depends_on": ["B"]}, current_id="A"
+        )

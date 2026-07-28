@@ -131,3 +131,63 @@ async def test_sync_deduplicates_pulled_records(monkeypatch):
     )
     assert (created, total) == (1, 1)
     assert updated["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_slack_sync_uses_full_precision_ts_as_external_id(monkeypatch):
+    from integration_hub import read_only_sync
+    monkeypatch.setattr("tools.slack_reader.read_history", lambda *args, **kwargs: {
+        "channel_id": "C1",
+        "messages": [
+            {"ts": "1785169528.000101", "timestamp": "2026-07-27 10:00 UTC",
+             "user": "A", "user_id": "U1", "text": "First"},
+            {"ts": "1785169528.000102", "timestamp": "2026-07-27 10:00 UTC",
+             "user": "B", "user_id": "U2", "text": "Second"},
+        ],
+    })
+    rows = await read_only_sync._slack({
+        "external_id": "C1", "tenant_id": "T1", "config": {},
+    }, "user@example.com")
+    assert [row["source_id"] for row in rows] == [
+        "C1:1785169528.000101", "C1:1785169528.000102",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_interaction_deduplication_is_account_scoped():
+    class Repository(InteractionRepository):
+        async def create_interaction(self, interaction, audit):
+            identity = ("account_id", "source", "tenant_id", "source_id")
+            if any(tuple(row[key] for key in identity) ==
+                   tuple(interaction[key] for key in identity) for row in self.rows):
+                return False
+            self.rows.append(interaction)
+            return True
+
+    repository = Repository()
+    service = AccountService(repository)
+    payload = {
+        "source": "slack", "tenant_id": "T1", "source_id": "C1:1.1",
+        "occurred_at": "2026-07-27T10:00:00Z", "direction": "internal",
+        "conversation_state": "monitoring", "summary": "Shared-channel update",
+    }
+    _, first = await service.ingest_interaction(
+        {"account_id": "acc_1"}, payload, "owner@example.com", "r1"
+    )
+    _, second = await service.ingest_interaction(
+        {"account_id": "acc_2"}, payload, "owner@example.com", "r2"
+    )
+    assert first is True and second is True
+
+
+def test_connector_analysis_marks_customer_issues_as_waiting():
+    from integration_hub.read_only_sync import _interaction
+    row = _interaction(
+        "slack", "T1", "1.1", "2026-07-27T10:00:00Z",
+        "Customer: SDK initialization is failing, can you help?",
+        direction="customer_to_plotline",
+    )
+    assert row["classification"] == "reported_issue"
+    assert row["requires_response"] is True
+    assert row["conversation_state"] == "waiting_on_plotline"
+    assert row["evidence"]["source_id"] == "1.1"

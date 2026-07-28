@@ -23,14 +23,34 @@ def _parse_timestamp(value):
         return datetime.now(timezone.utc)
 
 
-def _interaction(source, tenant_id, source_id, occurred_at, summary, url=None, direction="internal"):
+def _analyse(summary, direction):
+    text = (summary or "").lower()
+    issue = any(word in text for word in (
+        "error", "fail", "broken", "block", "issue", "unable", "not working",
+    ))
+    question = "?" in text or any(word in text for word in ("help", "how do", "can you"))
+    requires_response = direction == "customer_to_plotline" and (issue or question)
+    return {
+        "classification": "reported_issue" if issue else
+                          ("customer_question" if question else "update"),
+        "requires_response": requires_response,
+        "conversation_state": "waiting_on_plotline" if requires_response else "monitoring",
+        "confidence": 0.65 if (issue or question) else 0.5,
+    }
+
+
+def _interaction(source, tenant_id, source_id, occurred_at, summary, url=None,
+                 direction="internal", conversation_id=None, raw=None):
+    analysis = _analyse(summary, direction)
     return {
         "source": source, "tenant_id": tenant_id, "source_id": str(source_id),
         "source_url": url, "occurred_at": _parse_timestamp(occurred_at),
-        "direction": direction, "classification": None, "requires_response": False,
-        "meaningful_contact": True, "conversation_state": "monitoring",
+        "direction": direction, **analysis,
+        "meaningful_contact": True,
         "summary": (summary or "Activity imported from connected source")[:1000],
-        "confidence": 1.0, "classifier_version": "connector-v1",
+        "classifier_version": "rules-v2", "conversation_id": conversation_id,
+        "evidence": {"source_id": str(source_id), "excerpt": (summary or "")[:500]},
+        "raw": raw or {},
     }
 
 
@@ -44,26 +64,53 @@ async def _slack(mapping, _actor):
     )
     if result.get("error"):
         raise SyncError(result["error"])
-    return [
+    customer_ids = set(config.get("customer_user_ids", []))
+    plotline_ids = set(config.get("plotline_user_ids", []))
+    checkpoint = (mapping.get("checkpoint") or {}).get("last_occurred_at")
+    rows = [
         _interaction("slack", result.get("channel_id") or mapping["tenant_id"],
-                     f'{result.get("channel_id", mapping["external_id"])}:{msg.get("timestamp", index)}',
-                     msg.get("timestamp"), f'{msg.get("user", "Unknown")}: {msg.get("text", "")}',
-                     config.get("source_url"))
+                     f'{result.get("channel_id", mapping["external_id"])}:{msg.get("ts") or index}',
+                     msg.get("ts") or msg.get("timestamp"),
+                     f'{msg.get("user", "Unknown")}: {msg.get("text", "")}',
+                     config.get("source_url"),
+                     "customer_to_plotline" if msg.get("user_id") in customer_ids else
+                     ("plotline_to_customer" if msg.get("user_id") in plotline_ids else "internal"),
+                     msg.get("thread_ts") or config.get("thread_ts") or msg.get("ts"),
+                     msg)
         for index, msg in enumerate(result.get("messages", [])) if msg.get("text")
     ]
+    return [row for row in rows if not checkpoint or row["occurred_at"].isoformat() > checkpoint]
 
 
 async def _grain(mapping, _actor):
-    from tools.grain import search_recordings
-    result = await search_recordings(mapping["external_id"])
-    if result.get("error"):
-        raise SyncError(result["error"])
-    return [
+    from tools.grain import find_recording_by_id, get_transcript, search_recordings
+    explicit_ids = mapping.get("config", {}).get("recording_ids", [])
+    if explicit_ids:
+        found = await asyncio.gather(*(find_recording_by_id(item) for item in explicit_ids))
+        rows = [row for row in found if row]
+    else:
+        result = await search_recordings(mapping["external_id"])
+        if result.get("error"):
+            raise SyncError(result["error"])
+        rows = result.get("recordings", [])
+    interactions = []
+    for row in rows:
+        recording_id = row.get("id")
+        transcript = await get_transcript(recording_id, "text")
+        transcript_text = "" if transcript.get("error") else transcript.get("transcript", "")
+        summary = row.get("ai_summary") or row.get("title") or "Grain meeting"
+        if row.get("action_items"):
+            summary += " Actions: " + "; ".join(item.get("text", "") for item in row["action_items"])
+        interactions.append(
         _interaction("grain", mapping["tenant_id"], row.get("id"),
                      row.get("date") or row.get("created_at"),
-                     row.get("title") or "Grain meeting", row.get("url"))
-        for row in result.get("recordings", []) if row.get("id")
-    ]
+                     summary, row.get("url"), "internal", recording_id, {
+                         "participants": row.get("participants", []),
+                         "action_items": row.get("action_items", []),
+                         "transcript_excerpt": transcript_text[:5000],
+                     })
+        )
+    return interactions
 
 
 async def _pylon(mapping, _actor):
@@ -75,11 +122,19 @@ async def _pylon(mapping, _actor):
     rows = messages.get("data") or messages.get("messages") or []
     if isinstance(rows, dict):
         rows = rows.get("data", [])
+    issue_data = issue.get("data") or issue
+    conversation_id = str(issue_data.get("id") or mapping["external_id"])
     return [
         _interaction("pylon", mapping["tenant_id"], row.get("id"),
                      row.get("created_at") or row.get("timestamp"),
                      row.get("body_html") or row.get("body") or row.get("text") or "Pylon message",
-                     row.get("url"), "customer_to_plotline" if row.get("source") == "customer" else "internal")
+                     row.get("url"),
+                     "customer_to_plotline" if row.get("source") == "customer" else "plotline_to_customer",
+                     conversation_id, {
+                         "issue_id": conversation_id, "issue_title": issue_data.get("title"),
+                         "issue_status": issue_data.get("state") or issue_data.get("status"),
+                         "assignee": issue_data.get("assignee"),
+                     })
         for row in rows if row.get("id")
     ]
 

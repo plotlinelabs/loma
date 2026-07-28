@@ -120,13 +120,46 @@ async def init_observability():
     await _db.integration_accounts.create_index([("status", 1), ("updated_at", -1), ("account_id", 1)])
     await _db.integration_accounts.create_index([("stage", 1), ("updated_at", -1)])
     await _db.integration_accounts.create_index([("owner_email", 1), ("updated_at", -1)])
+    # Migrate the prototype's global external-ID uniqueness. Shared channels
+    # and meetings may legitimately be linked to more than one account.
+    async for index in _db.integration_interactions.list_indexes():
+        keys = list(index.get("key", {}).items())
+        if index.get("unique") and keys == [
+            ("source", 1), ("tenant_id", 1), ("source_id", 1)
+        ]:
+            await _db.integration_interactions.drop_index(index["name"])
     await _db.integration_interactions.create_index(
-        [("source", 1), ("tenant_id", 1), ("source_id", 1)], unique=True
+        [("account_id", 1), ("source", 1), ("tenant_id", 1), ("source_id", 1)],
+        unique=True,
     )
     await _db.integration_interactions.create_index([("account_id", 1), ("occurred_at", -1)])
     await _db.integration_interactions.create_index([("conversation_state", 1), ("occurred_at", -1)])
+    for collection in (_db.integration_raw_events, _db.integration_interactions):
+        await collection.create_index(
+            [("account_id", 1), ("source", 1), ("tenant_id", 1), ("source_id", 1)],
+            unique=True,
+        )
+    await _db.integration_external_conversations.create_index(
+        [("account_id", 1), ("source", 1), ("tenant_id", 1), ("conversation_id", 1)],
+        unique=True,
+    )
+    await _db.integration_findings.create_index(
+        [("account_id", 1), ("review_status", 1), ("created_at", -1)]
+    )
     await _db.integration_sync_sources.create_index("mapping_id", unique=True)
     await _db.integration_sync_sources.create_index([("account_id", 1), ("source", 1), ("archived_at", 1)])
+    await _db.integration_sync_jobs.create_index("job_id", unique=True)
+    await _db.integration_sync_jobs.create_index(
+        [("mapping_id", 1), ("status", 1), ("created_at", -1)]
+    )
+    await _db.integration_sync_jobs.create_index(
+        [("mapping_id", 1)], unique=True,
+        partialFilterExpression={"status": {"$in": ["queued", "running"]}},
+        name="one_active_sync_per_mapping",
+    )
+    await _db.integration_sync_jobs.create_index(
+        [("next_attempt_at", 1), ("status", 1)]
+    )
     for collection in (_db.integration_projects, _db.integration_tasks,
                        _db.integration_milestones, _db.integration_risks,
                        _db.integration_source_mappings):
@@ -137,8 +170,17 @@ async def init_observability():
     await _db.integration_risks.create_index([("account_id", 1), ("status", 1), ("severity", 1)])
     await _db.integration_audit_log.create_index("audit_id", unique=True)
     await _db.integration_audit_log.create_index([("account_id", 1), ("created_at", -1), ("audit_id", 1)])
+    await _db.integration_timeline.create_index(
+        [("account_id", 1), ("created_at", -1), ("activity_id", 1)]
+    )
     await _db.integration_idempotency.create_index([("actor", 1), ("key", 1)], unique=True)
     await _db.integration_idempotency.create_index("created_at", expireAfterSeconds=86400)
+    await _db.integration_rate_limits.create_index(
+        [("actor", 1), ("window", 1)], unique=True
+    )
+    await _db.integration_rate_limits.create_index(
+        "expires_at", expireAfterSeconds=120
+    )
 
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)

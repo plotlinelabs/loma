@@ -102,11 +102,23 @@ def normalize_source_mapping(data):
     config = data.get("config") or {}
     if not isinstance(config, dict):
         raise ValidationError("config must be an object")
-    allowed_config = {"thread_ts", "source_url", "limit"}
+    allowed_config = {
+        "thread_ts", "source_url", "limit", "customer_user_ids",
+        "plotline_user_ids", "recording_ids", "sync_interval_minutes",
+    }
     if set(config) - allowed_config:
         raise ValidationError("config contains unsupported fields")
     if "limit" in config and (isinstance(config["limit"], bool) or not isinstance(config["limit"], int) or not 1 <= config["limit"] <= 200):
         raise ValidationError("config.limit must be between 1 and 200")
+    if "sync_interval_minutes" in config and (
+        isinstance(config["sync_interval_minutes"], bool)
+        or not isinstance(config["sync_interval_minutes"], int)
+        or not 15 <= config["sync_interval_minutes"] <= 1440
+    ):
+        raise ValidationError("config.sync_interval_minutes must be between 15 and 1440")
+    for field in ("customer_user_ids", "plotline_user_ids", "recording_ids"):
+        if field in config:
+            config[field] = _text_list(config[field], f"config.{field}", maximum_items=100)
     return {
         "source": source,
         "tenant_id": _text(data.get("tenant_id"), "tenant_id", required=True, maximum=255),
@@ -144,6 +156,9 @@ def normalize_interaction(data):
         "summary": _text(data.get("summary"), "summary", required=True, maximum=1000),
         "confidence": float(confidence),
         "classifier_version": _text(data.get("classifier_version"), "classifier_version", maximum=100) or "rules-v1",
+        "conversation_id": _text(data.get("conversation_id"), "conversation_id", maximum=255),
+        "evidence": data.get("evidence") if isinstance(data.get("evidence"), dict) else {},
+        "raw": data.get("raw") if isinstance(data.get("raw"), dict) else {},
     }
 
 

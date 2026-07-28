@@ -1,11 +1,10 @@
 """Contract-compliant REST routes for Integration Hub Phase 1."""
 import os
-import time
 import uuid
-from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiohttp import web
+from pymongo import ReturnDocument
 
 from api.auth_helpers import get_system_role, get_user_email
 from integration_hub.models import HEALTH_STATES, PLAYBOOKS, STAGES, ValidationError
@@ -13,7 +12,6 @@ from integration_hub.repository import AccountRepository
 from integration_hub.service import AccountService
 from observability.db import get_db
 
-_RATE_BUCKETS = defaultdict(deque)
 _RATE_LIMIT = int(os.environ.get("INTEGRATION_HUB_RATE_LIMIT", "120"))
 
 
@@ -43,17 +41,23 @@ def _ok(request, payload, status=200, version=None):
     return web.json_response(_serialize(payload), status=status, headers=headers)
 
 
-def _context(request):
+async def _context(request, cost=1):
     request["request_id"] = request.headers.get("X-Request-ID", "").strip() or str(uuid.uuid4())
     if not _enabled(): raise web.HTTPNotFound()
     db = get_db()
     if db is None: raise web.HTTPServiceUnavailable(text="Integration Hub storage unavailable")
     actor = get_user_email(request)
     if not actor: raise web.HTTPUnauthorized(text="Authentication required")
-    now = time.monotonic(); bucket = _RATE_BUCKETS[actor]
-    while bucket and bucket[0] < now - 60: bucket.popleft()
-    if len(bucket) >= _RATE_LIMIT: raise web.HTTPTooManyRequests(headers={"Retry-After": "60"})
-    bucket.append(now)
+    # Mongo-backed fixed windows apply consistently across all web workers.
+    now = datetime.now(timezone.utc)
+    window = now.replace(second=0, microsecond=0)
+    bucket = await db.integration_rate_limits.find_one_and_update(
+        {"actor": actor, "window": window},
+        {"$inc": {"count": cost}, "$setOnInsert": {"expires_at": now}},
+        upsert=True, return_document=ReturnDocument.AFTER,
+    )
+    if bucket["count"] > _RATE_LIMIT:
+        raise web.HTTPTooManyRequests(headers={"Retry-After": "60"})
     return AccountService(AccountRepository(db)), actor, get_system_role(request)
 
 
@@ -82,8 +86,9 @@ def _if_match(request, required=True):
     except ValueError as exc: raise ValidationError("If-Match must contain a numeric ETag") from exc
 
 
-async def _account_context(request, permission="read", include_archived=False):
-    service, actor, system_role = _context(request); _require_module(request, permission == "edit")
+async def _account_context(request, permission="read", include_archived=False, cost=1):
+    service, actor, system_role = await _context(request, cost)
+    _require_module(request, permission == "edit")
     account = await service.repository.get(request.match_info["account_id"], include_archived)
     if not account: return service, actor, system_role, None
     return service, actor, system_role, account
@@ -102,7 +107,7 @@ async def _run(request, handler):
 
 async def handle_create_account(request):
     async def action():
-        service, actor, _ = _context(request); _require_module(request, True)
+        service, actor, _ = await _context(request); _require_module(request, True)
         key = request.headers.get("Idempotency-Key", "").strip()
         if not key: raise ValidationError("Idempotency-Key header is required")
         payload, created = await service.create_idempotent(
@@ -115,12 +120,12 @@ async def handle_create_account(request):
 
 async def handle_list_accounts(request):
     async def action():
-        service, actor, role = _context(request); _require_module(request)
+        service, actor, role = await _context(request); _require_module(request)
         stage, health = request.query.get("stage"), request.query.get("health")
         if stage and stage not in STAGES: raise ValidationError("stage is invalid")
         if health and health not in HEALTH_STATES: raise ValidationError("health is invalid")
         limit = min(100, max(1, int(request.query.get("limit", request.query.get("page_size", "50")))))
-        accounts, cursor = await service.list(actor, role, stage=stage, health=health,
+        accounts, cursor = await service.list(stage=stage, health=health,
             search=request.query.get("search"), owner=request.query.get("owner"),
             status=request.query.get("status", "active"), limit=limit, cursor=request.query.get("cursor"))
         return _ok(request, {"accounts": accounts, "pagination": {"next_cursor": cursor, "limit": limit}})
@@ -129,7 +134,7 @@ async def handle_list_accounts(request):
 
 async def handle_list_actions(request):
     async def action():
-        service, actor, _ = _context(request); _require_module(request)
+        service, actor, _ = await _context(request); _require_module(request)
         limit = min(100, max(1, int(request.query.get("limit", "100"))))
         actions, attention = await service.list_actions(actor, limit)
         return _ok(request, {"actions": actions, "attention_accounts": attention})
@@ -142,7 +147,7 @@ async def handle_get_account(request):
         if not account:
             return _error(request, 404, "not_found", "Account not found")
         hydrated = await service.get(account["account_id"], True)
-        return _ok(request, {"account": hydrated}, version=account["version"])
+        return _ok(request, {"account": hydrated}, version=hydrated["version"])
     return await _run(request, action)
 
 
@@ -174,7 +179,7 @@ async def handle_restore_account(request): return await _lifecycle_account(reque
 
 async def handle_list_playbooks(request):
     async def action():
-        _context(request); _require_module(request)
+        await _context(request); _require_module(request)
         return _ok(request, {"playbooks": [{"id": key, "name": value["name"], "item_count": len(value["items"])} for key, value in PLAYBOOKS.items()]})
     return await _run(request, action)
 
@@ -221,7 +226,10 @@ async def handle_get_audit_log(request):
         service, _, _, account = await _account_context(request)
         if not account:
             return _error(request, 404, "not_found", "Account not found")
-        rows, cursor = await service.repository.list_audit(account["account_id"], min(100, int(request.query.get("limit", "50"))), request.query.get("cursor"))
+        limit = min(100, max(1, int(request.query.get("limit", "50"))))
+        rows, cursor = await service.repository.list_audit(
+            account["account_id"], limit, request.query.get("cursor")
+        )
         return _ok(request, {"audit_entries": rows, "pagination": {"next_cursor": cursor}})
     return await _run(request, action)
 
@@ -320,6 +328,17 @@ async def handle_list_sync_sources(request):
     return await _run(request, action)
 
 
+async def handle_list_sync_jobs(request):
+    async def action():
+        service, _, _, account = await _account_context(request)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        limit = min(100, max(1, int(request.query.get("limit", "50"))))
+        rows = await service.repository.list_sync_jobs(account["account_id"], limit)
+        return _ok(request, {"jobs": rows, "limit": limit})
+    return await _run(request, action)
+
+
 async def handle_create_sync_source(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit")
@@ -332,7 +351,7 @@ async def handle_create_sync_source(request):
 
 async def handle_sync_source(request):
     async def action():
-        service, actor, _, account = await _account_context(request, "edit")
+        service, actor, _, account = await _account_context(request, "edit", cost=10)
         if not account:
             return _error(request, 404, "not_found", "Account not found")
         mapping = await service.repository.sync_sources.find_one({
@@ -341,11 +360,13 @@ async def handle_sync_source(request):
         })
         if not mapping:
             return _error(request, 404, "not_found", "Sync source not found")
-        updated, created, seen = await service.sync_source(account, mapping, actor, request["request_id"])
-        return _ok(request, {"source": updated, "created": created, "seen": seen})
+        job, created = await service.queue_sync(account, mapping, actor, request["request_id"])
+        return _ok(request, {"job": job}, 202 if created else 200)
     return await _run(request, action)
 
 def setup_integration_hub_routes(app):
+    from integration_hub.sync_worker import worker_context
+    app.cleanup_ctx.append(worker_context)
     p = "/api/integration-hub"
     app.router.add_post(f"{p}/accounts", handle_create_account)
     app.router.add_get(f"{p}/accounts", handle_list_accounts)
@@ -366,6 +387,7 @@ def setup_integration_hub_routes(app):
     app.router.add_post(f"{p}/accounts/{{account_id}}/source-links/{{source_id}}/archive", handle_archive_source)
     app.router.add_get(f"{p}/accounts/{{account_id}}/interactions", handle_list_interactions)
     app.router.add_get(f"{p}/accounts/{{account_id}}/sync-sources", handle_list_sync_sources)
+    app.router.add_get(f"{p}/accounts/{{account_id}}/sync-jobs", handle_list_sync_jobs)
     app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources", handle_create_sync_source)
     app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources/{{mapping_id}}/sync", handle_sync_source)
     app.router.add_post(f"{p}/accounts/{{account_id}}/interactions", handle_ingest_interaction)
