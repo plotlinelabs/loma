@@ -21,6 +21,9 @@ export default function IntegrationAccountPage() {
   const { accountId } = useParams<{ accountId: string }>();
   const [account, setAccount] = useState<IntegrationAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [section, setSection] = useState<
+    "overview" | "onboarding" | "communications" | "contacts" | "history"
+  >("overview");
 
   useEffect(() => {
     fetchIntegrationAccount(accountId)
@@ -66,11 +69,25 @@ export default function IntegrationAccountPage() {
       </div>
       <nav className="flex gap-1 overflow-x-auto rounded-lg border bg-muted/30 p-1 text-xs">
         {[
-          ["overview", "Overview"], ["plan", "Action plan"], ["risks", "Risks"],
-          ["activity", "Activity"],
-        ].map(([id, label]) => <a key={id} href={`#${id}`} className="rounded-md px-3 py-1.5 hover:bg-background">{label}</a>)}
+          ["overview", "Overview"],
+          ["onboarding", "Onboarding plan"],
+          ["communications", "Communications"],
+          ["contacts", "Client users"],
+          ["history", "History & sources"],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setSection(id as typeof section)}
+            className={`whitespace-nowrap rounded-md px-3 py-1.5 ${
+              section === id ? "bg-background shadow-sm" : "hover:bg-background"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </nav>
-      <div id="overview" className="grid scroll-mt-4 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+      {section === "overview" && <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <Card className="p-4">
           <h2 className="mb-3 font-heading text-base font-medium">Onboarding overview</h2>
           <AccountForm key={account.version} account={account} submitLabel="Save changes" onSubmit={save} />
@@ -89,8 +106,10 @@ export default function IntegrationAccountPage() {
             <p className="mt-2 text-[13px] text-muted-foreground">Last updated {new Date(account.updated_at).toLocaleString()}.</p>
           </Card>
         </div>
-      </div>
-      <OnboardingWorkspace account={account} onChange={setAccount} />
+      </div>}
+      {section !== "overview" && (
+        <OnboardingWorkspace account={account} onChange={setAccount} section={section} />
+      )}
     </div>
   );
 }

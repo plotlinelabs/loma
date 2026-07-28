@@ -421,15 +421,46 @@ async def list_account_issues_page(
     query: str | None = None,
 ) -> dict[str, Any]:
     """Fetch one lightweight, server-filtered issue page for a Pylon account."""
+    states = [value.strip() for value in (state or "").split(",") if value.strip()]
+    if len(states) > 1:
+        # Pylon's issue search intermittently returns 500 for an `in` state
+        # filter. Query each state independently and merge the bounded result.
+        pages = await asyncio.gather(*(
+            list_account_issues_page(
+                account_id,
+                limit=limit,
+                state=single_state,
+                assignee_id=assignee_id,
+                query=query,
+            )
+            for single_state in states
+        ))
+        error = next((page.get("error") for page in pages if page.get("error")), None)
+        if error:
+            return {"error": error}
+        issues_by_id = {
+            issue["id"]: issue
+            for page in pages
+            for issue in page.get("issues", [])
+        }
+        issues = sorted(
+            issues_by_id.values(),
+            key=lambda issue: issue.get("updated_at") or "",
+            reverse=True,
+        )[:limit]
+        return {
+            "issues": issues,
+            "pagination": {"next_cursor": None, "has_next_page": False},
+        }
+
     filters: list[dict[str, Any]] = [
         {"field": "account_id", "operator": "equals", "value": account_id},
     ]
-    if state:
-        states = [value.strip() for value in state.split(",") if value.strip()]
+    if states:
         filters.append({
             "field": "state",
-            "operator": "equals" if len(states) == 1 else "in",
-            "value": states[0] if len(states) == 1 else states,
+            "operator": "equals",
+            "value": states[0],
         })
     if assignee_id:
         filters.append({"field": "assignee_id", "operator": "equals", "value": assignee_id})

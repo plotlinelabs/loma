@@ -286,21 +286,32 @@ async def test_pylon_issue_page_caps_external_page_size(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pylon_issue_page_supports_combined_status_filter(monkeypatch):
+    requested_states = []
+
     async def api_post(_path, body):
         state_filter = next(
             item for item in body["filter"]["subfilters"]
             if item["field"] == "state"
         )
-        assert state_filter["value"] == [
-            "waiting_on_customer", "closed", "resolved",
-        ]
-        return {"data": [], "pagination": {"has_next_page": False}}
+        requested_states.append(state_filter["value"])
+        return {
+            "data": [{
+                "id": f"issue-{state_filter['value']}",
+                "state": state_filter["value"],
+                "updated_at": "2026-07-28T10:00:00Z",
+            }],
+            "pagination": {"has_next_page": False},
+        }
 
     monkeypatch.setattr("tools.pylon._api_post", api_post)
     from tools.pylon import list_account_issues_page
-    await list_account_issues_page(
-        "account-1", state="waiting_on_customer,closed,resolved"
+    result = await list_account_issues_page(
+        "account-1", state="new,waiting_on_you"
     )
+    assert requested_states == ["new", "waiting_on_you"]
+    assert {issue["state"] for issue in result["issues"]} == {
+        "new", "waiting_on_you",
+    }
 
 
 @pytest.mark.asyncio

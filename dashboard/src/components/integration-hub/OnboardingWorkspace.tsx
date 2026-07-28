@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   createIntegrationActivity,
   fetchIntegrationAccount,
@@ -54,9 +54,11 @@ const emptyItem: IntegrationWorkItemInput = {
 export default function OnboardingWorkspace({
   account,
   onChange,
+  section = "onboarding",
 }: {
   account: IntegrationAccount;
   onChange: (account: IntegrationAccount) => void;
+  section?: "onboarding" | "communications" | "contacts" | "history";
 }) {
   const [item, setItem] = useState(emptyItem);
   const [editingItem, setEditingItem] = useState<IntegrationAccount["work_items"][number] | null>(null);
@@ -86,10 +88,6 @@ export default function OnboardingWorkspace({
   const autoSearchedPylon = useRef(false);
   const pylonIssueRequest = useRef(0);
   const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
-  const historicalPylonIssues = useMemo(
-    () => pylonIssues.filter((issue) => ["waiting_on_customer", "closed"].includes(issue.state)),
-    [pylonIssues],
-  );
   const [contact, setContact] = useState({ name: "", email: "", role: "", phone: "" });
   const [grainMeetings, setGrainMeetings] = useState<GrainMeeting[]>([]);
   const [loadingGrain, setLoadingGrain] = useState(false);
@@ -404,7 +402,7 @@ export default function OnboardingWorkspace({
   return (
     <div className="space-y-3">
       {error && <p className="text-sm text-destructive">{error}</p>}
-      <Card className="p-4">
+      <Card className={section === "communications" ? "p-4" : "hidden"}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="font-heading text-base font-medium">Communication monitoring</h2>
@@ -497,14 +495,18 @@ export default function OnboardingWorkspace({
           <div className="flex flex-wrap gap-2 border-b p-3">
             <Input className="max-w-sm" maxLength={100} placeholder="Search issues" value={pylonIssueQuery} onChange={(event) => setPylonIssueQuery(event.target.value)} />
             <select className="h-9 rounded-md border bg-background px-3 text-sm" value={pylonIssueStatus} onChange={(event) => setPylonIssueStatus(event.target.value)}>
-              <option value="waiting_on_customer">Waiting on customer</option><option value="closed">Resolved</option>
+              <option value="new">New</option>
+              <option value="waiting_on_you">On Plotline</option>
+              <option value="waiting_on_customer">On customer</option>
+              <option value="on_hold">On hold</option>
+              <option value="closed">Closed</option>
             </select>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="p-3">Issue</th><th className="p-3">Status</th><th className="p-3">Assignee</th><th className="p-3">Updated</th><th className="p-3">Ticket</th></tr></thead>
               <tbody>
-                {historicalPylonIssues.map((issue) => <tr key={issue.id} className="border-b hover:bg-muted/30">
+                {pylonIssues.map((issue) => <tr key={issue.id} className="border-b hover:bg-muted/30">
                   <td className="p-3 font-medium">
                     {issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" className="text-primary underline">{issue.title}</a> : issue.title}
                   </td>
@@ -515,12 +517,12 @@ export default function OnboardingWorkspace({
                 </tr>)}
               </tbody>
             </table>
-            {!historicalPylonIssues.length && !loadingPylonIssues && <p className="p-4 text-sm text-muted-foreground">No waiting-on-customer or resolved issues match these filters.</p>}
+            {!pylonIssues.length && !loadingPylonIssues && <p className="p-4 text-sm text-muted-foreground">No issues match this status and search.</p>}
           </div>
           {pylonIssueCursor && <div className="border-t p-3"><Button type="button" variant="outline" size="sm" disabled={loadingPylonIssues} onClick={() => loadPylonIssues(pylonIssueCursor, true)}>{loadingPylonIssues ? "Loading..." : "Load more"}</Button></div>}
         </div>}
       </Card>
-      <Card className="p-4">
+      <Card className={section === "contacts" ? "p-4" : "hidden"}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="font-heading text-base font-medium">Client organization users</h2>
@@ -553,7 +555,7 @@ export default function OnboardingWorkspace({
           ))}
         </div>
       </Card>
-      <Card className="p-4">
+      <Card className={section === "communications" ? "p-4" : "hidden"}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="font-heading text-base font-medium">Grain meetings</h2>
@@ -574,7 +576,7 @@ export default function OnboardingWorkspace({
           {!loadingGrain && grainMeetings.length === 0 && <p className="text-xs text-muted-foreground">Search to find Grain meetings for this client.</p>}
         </div>
       </Card>
-      <Card className="p-4">
+      <Card className={section === "onboarding" ? "p-4" : "hidden"}>
         <h2 className="font-heading text-base font-medium">Projects and playbooks</h2>
         <p className="text-xs text-muted-foreground">Track parallel workstreams and create standard onboarding tasks from a reusable playbook.</p>
         <form onSubmit={addProject} className="mt-4 grid gap-2 sm:grid-cols-[1fr_220px_auto]">
@@ -602,7 +604,7 @@ export default function OnboardingWorkspace({
           {(account.projects || []).length === 0 && <p className="text-xs text-muted-foreground">No projects yet.</p>}
         </div>
       </Card>
-      <Card className="p-4">
+      <Card className={section === "onboarding" ? "p-4" : "hidden"}>
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h2 className="font-heading text-base font-medium">Onboarding plan</h2>
@@ -657,7 +659,7 @@ export default function OnboardingWorkspace({
         </form>
       </Card>
 
-      <Card className="p-4">
+      <Card className={section === "onboarding" ? "p-4" : "hidden"}>
         <h2 className="font-heading text-base font-medium">Milestones, tasks, risks and blockers</h2>
         <div className="mt-4 space-y-2">
           {TYPES.map((type) => {
@@ -704,7 +706,7 @@ export default function OnboardingWorkspace({
         </form>
       </Card>
 
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className={section === "history" ? "grid gap-3 lg:grid-cols-2" : "hidden"}>
         <Card className="p-4">
           <h2 className="font-heading text-base font-medium">Activity timeline</h2>
           <p className="text-xs text-muted-foreground">Notes, decisions, and automatic onboarding changes.</p>
