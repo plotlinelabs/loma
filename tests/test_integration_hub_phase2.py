@@ -258,7 +258,8 @@ async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypat
     assert captured["path"] == "/issues/search"
     assert captured["body"]["cursor"] == "current-page"
     assert captured["body"]["limit"] == 25
-    filters = captured["body"]["filter"]["value"]
+    assert captured["body"]["filter"]["operator"] == "and"
+    filters = captured["body"]["filter"]["subfilters"]
     assert {"field": "account_id", "operator": "equals", "value": "account-1"} in filters
     assert result["issues"][0]["id"] == "issue-1"
     assert result["pagination"]["next_cursor"] == "next-page"
@@ -274,6 +275,21 @@ async def test_pylon_issue_page_caps_external_page_size(monkeypatch):
     from tools.pylon import list_account_issues_page
     result = await list_account_issues_page("account-1", limit=500)
     assert result["pagination"]["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_pylon_issue_page_uses_plain_filter_for_account_only(monkeypatch):
+    async def api_post(_path, body):
+        assert body["filter"] == {
+            "field": "account_id",
+            "operator": "equals",
+            "value": "account-1",
+        }
+        return {"data": [], "pagination": {"has_next_page": False}}
+
+    monkeypatch.setattr("tools.pylon._api_post", api_post)
+    from tools.pylon import list_account_issues_page
+    await list_account_issues_page("account-1")
 
 
 @pytest.mark.asyncio

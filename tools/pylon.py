@@ -382,7 +382,11 @@ async def list_account_issues_page(
     if query:
         filters.append({"field": "title", "operator": "string_contains", "value": query[:100]})
     body: dict[str, Any] = {
-        "filter": {"op": "and", "value": filters},
+        "filter": (
+            {"operator": "and", "subfilters": filters}
+            if len(filters) > 1
+            else filters[0]
+        ),
         "limit": min(50, max(1, limit)),
     }
     if cursor:
