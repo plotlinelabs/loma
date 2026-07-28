@@ -352,6 +352,36 @@ async def list_issues(
     }
 
 
+async def search_accounts(query: str, limit: int = 50) -> dict[str, Any]:
+    """Search Pylon accounts by name without scanning the issue archive."""
+    query = (query or "").strip()
+    if not query:
+        return {"accounts": []}
+
+    result = await _api_post("/accounts/search", {
+        "filter": {
+            "field": "name",
+            "operator": "string_contains",
+            "value": query,
+        },
+        "limit": min(100, max(1, limit)),
+    })
+    if "error" in result:
+        return result
+
+    accounts = []
+    for account in result.get("data", []):
+        account_id = str(account.get("id") or "")
+        name = str(account.get("name") or "").strip()
+        if account_id and name:
+            accounts.append({
+                "customer_id": account_id,
+                "name": name,
+                "domains": account.get("domains") or [],
+            })
+    return {"accounts": accounts}
+
+
 async def reply(
     issue_id: str,
     body_html: str,

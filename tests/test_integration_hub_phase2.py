@@ -217,23 +217,18 @@ def test_connector_analysis_marks_customer_issues_as_waiting():
 @pytest.mark.asyncio
 async def test_pylon_customer_discovery_groups_issues_by_stable_account_id(monkeypatch):
     from integration_hub import read_only_sync
-    async def list_issues(**_kwargs):
-        return {"issues": [
-            {"id": "i1", "title": "SDK error", "state": "open",
-             "customer": "Acme", "customer_id": "account-1"},
-            {"id": "i2", "title": "Follow-up", "state": "waiting_on_customer",
-             "customer": "Acme", "customer_id": "account-1"},
-            {"id": "i3", "title": "Other", "state": "open",
-             "customer": "Other Co", "customer_id": "account-2"},
-        ]}
-    monkeypatch.setattr("tools.pylon.list_issues", list_issues)
+    async def search_accounts(query, limit):
+        assert query == "acm"
+        assert limit == 50
+        return {"accounts": [{
+            "customer_id": "account-1", "name": "Acme",
+            "domains": ["acme.test"],
+        }]}
+    monkeypatch.setattr("tools.pylon.search_accounts", search_accounts)
     rows = await read_only_sync.discover_pylon_customers("acm")
     assert rows == [{
-        "customer_id": "account-1", "name": "Acme", "issue_count": 2,
-        "preview_issues": [
-            {"id": "i1", "title": "SDK error", "state": "open", "updated_at": None},
-            {"id": "i2", "title": "Follow-up", "state": "waiting_on_customer", "updated_at": None},
-        ],
+        "customer_id": "account-1", "name": "Acme",
+        "domains": ["acme.test"], "issue_count": None, "preview_issues": [],
     }]
 
 

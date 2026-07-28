@@ -170,29 +170,19 @@ async def _pylon(mapping, _actor):
             if not checkpoint or row["occurred_at"].isoformat() > checkpoint]
 
 
-async def discover_pylon_customers(query, days=3650):
+async def discover_pylon_customers(query):
     """Discover Pylon customers without exposing any write operation."""
-    from tools.pylon import list_issues
-    result = await list_issues(days=days, limit=100, max_pages=20)
+    from tools.pylon import search_accounts
+    result = await search_accounts(query, limit=50)
     if result.get("error"):
         raise SyncError(result["error"])
-    query = (query or "").strip().lower()
-    customers = {}
-    for issue in result.get("issues", []):
-        name = (issue.get("customer") or "").strip()
-        customer_id = (issue.get("customer_id") or "").strip()
-        if not name or not customer_id or (query and query not in name.lower()):
-            continue
-        entry = customers.setdefault(customer_id, {
-            "customer_id": customer_id, "name": name, "issue_count": 0,
-            "preview_issues": [],
-        })
-        entry["issue_count"] += 1
-        if len(entry["preview_issues"]) < 5:
-            entry["preview_issues"].append({
-                key: issue.get(key) for key in ("id", "title", "state", "updated_at")
-            })
-    return sorted(customers.values(), key=lambda row: row["name"].lower())[:50]
+    return [{
+        "customer_id": account["customer_id"],
+        "name": account["name"],
+        "domains": account.get("domains", []),
+        "issue_count": None,
+        "preview_issues": [],
+    } for account in result.get("accounts", [])]
 
 
 READERS = {"slack": _slack, "grain": _grain, "pylon": _pylon}

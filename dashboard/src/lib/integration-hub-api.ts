@@ -304,7 +304,8 @@ export interface IntegrationSyncSource {
 export interface PylonCustomerMatch {
   customer_id: string;
   name: string;
-  issue_count: number;
+  domains?: string[];
+  issue_count: number | null;
   preview_issues: Array<{ id: string; title: string; state: string; updated_at: string }>;
 }
 

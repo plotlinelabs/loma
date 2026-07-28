@@ -69,14 +69,15 @@ export default function OnboardingWorkspace({
   const [pylonQuery, setPylonQuery] = useState("");
   const [pylonMatches, setPylonMatches] = useState<PylonCustomerMatch[]>([]);
   const [searchingPylon, setSearchingPylon] = useState(false);
+  const [pylonSearchCompleted, setPylonSearchCompleted] = useState(false);
 
   async function findPylonCustomers() {
-    setSearchingPylon(true); setError(null);
+    setSearchingPylon(true); setPylonSearchCompleted(false); setError(null);
     try {
       const result = await searchPylonCustomers(pylonQuery);
       setPylonMatches(result.customers);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not search Pylon customers"); }
-    finally { setSearchingPylon(false); }
+    finally { setSearchingPylon(false); setPylonSearchCompleted(true); }
   }
 
   async function connectPylon(customer: PylonCustomerMatch) {
@@ -300,10 +301,13 @@ export default function OnboardingWorkspace({
           <div className="mt-2 space-y-2">
             {pylonMatches.map((customer) => (
               <div key={customer.customer_id} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 p-2">
-                <div><p className="text-sm font-medium">{customer.name}</p><p className="text-xs text-muted-foreground">{customer.issue_count} recent issues · {customer.preview_issues.slice(0, 2).map((issue) => issue.title).join(", ")}</p></div>
+                <div><p className="text-sm font-medium">{customer.name}</p><p className="text-xs text-muted-foreground">{customer.domains?.length ? customer.domains.join(", ") : "Pylon customer account"}</p></div>
                 <Button type="button" size="sm" disabled={saving} onClick={() => connectPylon(customer)}>Connect read-only</Button>
               </div>
             ))}
+            {pylonSearchCompleted && !pylonMatches.length && !error ? (
+              <p className="text-sm text-muted-foreground">No Pylon customers found for &quot;{pylonQuery}&quot;.</p>
+            ) : null}
           </div>
         </div>
         <div className="mt-3 space-y-2">
