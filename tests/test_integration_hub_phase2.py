@@ -1,8 +1,11 @@
 from datetime import timezone
+from unittest.mock import AsyncMock
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from integration_hub.models import ValidationError, normalize_interaction
+from integration_hub.repository import AccountRepository
 from integration_hub.service import AccountService
 
 
@@ -178,6 +181,24 @@ async def test_interaction_deduplication_is_account_scoped():
         {"account_id": "acc_2"}, payload, "owner@example.com", "r2"
     )
     assert first is True and second is True
+
+
+@pytest.mark.asyncio
+async def test_repository_handles_duplicate_after_transaction_aborts():
+    """A duplicate aborts MongoDB's transaction and must escape its callback.
+
+    Catching it inside the callback causes the driver to commit an aborted
+    transaction and report NoSuchTransaction to the sync worker.
+    """
+    repository = AccountRepository.__new__(AccountRepository)
+    repository._transaction = AsyncMock(side_effect=DuplicateKeyError("duplicate"))
+
+    created = await repository.create_interaction(
+        {"account_id": "acc_1"}, {"audit_id": "audit_1"}
+    )
+
+    assert created is False
+    repository._transaction.assert_awaited_once()
 
 
 def test_connector_analysis_marks_customer_issues_as_waiting():

@@ -297,59 +297,62 @@ class AccountRepository:
 
     async def create_interaction(self, interaction, audit_entry):
         async def operation(session):
-            try:
-                raw_event = {
-                    "account_id": interaction["account_id"],
-                    "source": interaction["source"],
-                    "tenant_id": interaction["tenant_id"],
-                    "source_id": interaction["source_id"],
-                    "occurred_at": interaction["occurred_at"],
-                    "ingested_at": interaction["ingested_at"],
-                    "payload": interaction.get("raw", {}),
-                }
-                if self.raw_events is not self.interactions:
-                    await self.raw_events.insert_one(raw_event, session=session)
-                await self.interactions.insert_one(interaction, session=session)
-                created = True
-            except DuplicateKeyError:
-                created = False
-            if created:
-                conversation_id = interaction.get("conversation_id")
-                if conversation_id and self.conversations is not self.interactions:
-                    await self.conversations.update_one(
-                        {"account_id": interaction["account_id"],
-                         "source": interaction["source"],
-                         "tenant_id": interaction["tenant_id"],
-                         "conversation_id": conversation_id},
-                        {"$set": {
-                            "last_interaction_at": interaction["occurred_at"],
-                            "state": interaction["conversation_state"],
-                            "summary": interaction["summary"],
-                            "updated_at": interaction["ingested_at"],
-                        }, "$setOnInsert": {
-                            "created_at": interaction["ingested_at"],
-                        }},
-                        upsert=True, session=session,
-                    )
-                if self.findings is not self.interactions and interaction.get("classification") in {
-                    "reported_issue", "customer_question"
-                }:
-                    await self.findings.insert_one({
-                        "finding_id": f"finding_{interaction['interaction_id']}",
-                        "account_id": interaction["account_id"],
-                        "interaction_id": interaction["interaction_id"],
-                        "classification": interaction["classification"],
+            raw_event = {
+                "account_id": interaction["account_id"],
+                "source": interaction["source"],
+                "tenant_id": interaction["tenant_id"],
+                "source_id": interaction["source_id"],
+                "occurred_at": interaction["occurred_at"],
+                "ingested_at": interaction["ingested_at"],
+                "payload": interaction.get("raw", {}),
+            }
+            if self.raw_events is not self.interactions:
+                await self.raw_events.insert_one(raw_event, session=session)
+            await self.interactions.insert_one(interaction, session=session)
+            conversation_id = interaction.get("conversation_id")
+            if conversation_id and self.conversations is not self.interactions:
+                await self.conversations.update_one(
+                    {"account_id": interaction["account_id"],
+                     "source": interaction["source"],
+                     "tenant_id": interaction["tenant_id"],
+                     "conversation_id": conversation_id},
+                    {"$set": {
+                        "last_interaction_at": interaction["occurred_at"],
+                        "state": interaction["conversation_state"],
                         "summary": interaction["summary"],
-                        "evidence": interaction.get("evidence", {}),
-                        "requires_response": interaction["requires_response"],
-                        "conversation_state": interaction["conversation_state"],
-                        "confidence": interaction["confidence"],
-                        "review_status": "unreviewed",
+                        "updated_at": interaction["ingested_at"],
+                    }, "$setOnInsert": {
                         "created_at": interaction["ingested_at"],
-                    }, session=session)
-                await self.audit.insert_one(audit_entry, session=session)
-            return created
-        return await self._transaction(operation)
+                    }},
+                    upsert=True, session=session,
+                )
+            if self.findings is not self.interactions and interaction.get("classification") in {
+                "reported_issue", "customer_question"
+            }:
+                await self.findings.insert_one({
+                    "finding_id": f"finding_{interaction['interaction_id']}",
+                    "account_id": interaction["account_id"],
+                    "interaction_id": interaction["interaction_id"],
+                    "classification": interaction["classification"],
+                    "summary": interaction["summary"],
+                    "evidence": interaction.get("evidence", {}),
+                    "requires_response": interaction["requires_response"],
+                    "conversation_state": interaction["conversation_state"],
+                    "confidence": interaction["confidence"],
+                    "review_status": "unreviewed",
+                    "created_at": interaction["ingested_at"],
+                }, session=session)
+            await self.audit.insert_one(audit_entry, session=session)
+            return True
+
+        # Never swallow DuplicateKeyError inside the transaction callback. MongoDB
+        # aborts the transaction on that write error, so continuing the callback
+        # makes with_transaction attempt to commit an already-aborted transaction
+        # and surfaces NoSuchTransaction instead of a harmless deduplication.
+        try:
+            return await self._transaction(operation)
+        except DuplicateKeyError:
+            return False
 
     async def list_interactions(self, account_id, limit=50, cursor=None):
         query = {"account_id": account_id}
