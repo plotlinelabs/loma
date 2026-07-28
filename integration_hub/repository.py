@@ -31,6 +31,7 @@ class AccountRepository:
         self.sync_jobs = getattr(db, "integration_sync_jobs", None)
         self.audit = db.integration_audit_log
         self.timeline = getattr(db, "integration_timeline", self.audit)
+        self.contacts = getattr(db, "integration_contacts", self.sources)
         self.idempotency = db.integration_idempotency
 
     @staticmethod
@@ -204,7 +205,7 @@ class AccountRepository:
             return None
         account_id = account["account_id"]
         active = {"account_id": account_id, "archived_at": None}
-        projects, tasks, milestones, risks, sources, sync_sources, interactions, activities, conversations, findings = await __import__("asyncio").gather(
+        projects, tasks, milestones, risks, sources, sync_sources, interactions, activities, conversations, findings, contacts = await __import__("asyncio").gather(
             self.projects.find(active).sort("created_at", 1).to_list(None),
             self.tasks.find(active).sort("created_at", 1).to_list(None),
             self.milestones.find(active).sort("created_at", 1).to_list(None),
@@ -215,6 +216,7 @@ class AccountRepository:
             self.timeline.find({"account_id": account_id}).sort("created_at", -1).limit(200).to_list(200),
             self.conversations.find({"account_id": account_id}).sort("last_interaction_at", -1).limit(100).to_list(100),
             self.findings.find({"account_id": account_id}).sort("created_at", -1).limit(100).to_list(100),
+            self.contacts.find(active).sort("name", 1).to_list(None),
         )
         result = dict(account)
         result["projects"] = projects
@@ -225,7 +227,54 @@ class AccountRepository:
         result["activities"] = list(reversed(activities))
         result["conversations"] = conversations
         result["findings"] = findings
+        result["contacts"] = contacts
         return result
+
+    async def find_active_by_name_key(self, name_key):
+        return await self.collection.find_one({"name_key": name_key, "archived_at": None})
+
+    async def create_contact(self, contact, audit_entry):
+        async def operation(session):
+            parent = await self.collection.find_one_and_update(
+                {"account_id": contact["account_id"], "archived_at": None},
+                {"$set": {
+                    "updated_at": contact["created_at"],
+                    "updated_by": contact["created_by"],
+                }, "$inc": {"version": 1}},
+                return_document=ReturnDocument.AFTER, session=session,
+            )
+            if not parent:
+                return None
+            await self.contacts.insert_one(contact, session=session)
+            await self.audit.insert_one(audit_entry, session=session)
+            return parent
+        return await self._transaction(operation)
+
+    async def archive_contact(self, account_id, contact_id, actor, audit_entry):
+        now = datetime.now(timezone.utc)
+        async def operation(session):
+            existing = await self.contacts.find_one(
+                {"account_id": account_id, "contact_id": contact_id, "archived_at": None},
+                session=session,
+            )
+            if not existing:
+                return None
+            parent = await self.collection.find_one_and_update(
+                {"account_id": account_id, "archived_at": None},
+                {"$set": {"updated_at": now, "updated_by": actor}, "$inc": {"version": 1}},
+                return_document=ReturnDocument.AFTER, session=session,
+            )
+            if not parent:
+                return None
+            result = await self.contacts.find_one_and_update(
+                {"account_id": account_id, "contact_id": contact_id, "archived_at": None},
+                {"$set": {"archived_at": now, "archived_by": actor}},
+                return_document=ReturnDocument.AFTER, session=session,
+            )
+            if result:
+                await self.audit.insert_one(audit_entry, session=session)
+            return result if result else None
+        return await self._transaction(operation)
 
 
     async def list_sync_sources(self, account_id):

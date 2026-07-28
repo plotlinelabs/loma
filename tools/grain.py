@@ -176,6 +176,33 @@ async def search_recordings(query: str) -> dict[str, Any]:
     }
 
 
+async def discover_client_recordings(
+    company_name: str, contact_emails: list[str] | None = None
+) -> dict[str, Any]:
+    """Find likely client meetings without importing or changing anything in Grain."""
+    terms = [company_name.strip()]
+    for email in contact_emails or []:
+        domain = email.rsplit("@", 1)[-1].split(".", 1)[0]
+        if domain and domain.casefold() not in {"gmail", "outlook", "yahoo", "hotmail"}:
+            terms.append(domain)
+    recordings: dict[str, dict[str, Any]] = {}
+    for term in dict.fromkeys(term for term in terms if term):
+        result = await search_recordings(term)
+        if result.get("error"):
+            continue
+        for recording in result.get("recordings", []):
+            recordings[recording["id"]] = recording
+    emails = {email.casefold() for email in contact_emails or []}
+    rows = list(recordings.values())
+    if emails:
+        rows.sort(key=lambda row: any(
+            (participant.get("email") or "").casefold() in emails
+            for participant in row.get("participants", [])
+        ), reverse=True)
+    rows.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
+    return {"recordings": rows[:50]}
+
+
 async def get_transcript(recording_id: str, fmt: str = "json") -> dict[str, Any]:
     """Get the transcript for a specific recording."""
     if fmt == "text":

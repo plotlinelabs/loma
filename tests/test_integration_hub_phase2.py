@@ -303,6 +303,21 @@ async def test_pylon_issue_page_supports_combined_status_filter(monkeypatch):
     )
 
 
+@pytest.mark.asyncio
+async def test_pylon_issue_page_uses_equals_for_single_status(monkeypatch):
+    async def api_post(_path, body):
+        state_filter = next(
+            item for item in body["filter"]["subfilters"] if item["field"] == "state"
+        )
+        assert state_filter == {
+            "field": "state", "operator": "equals", "value": "waiting_on_customer",
+        }
+        return {"data": [], "pagination": {"has_next_page": False}}
+    monkeypatch.setattr("tools.pylon._api_post", api_post)
+    from tools.pylon import list_account_issues_page
+    await list_account_issues_page("account-1", state="waiting_on_customer")
+
+
 def test_pylon_message_normalization_returns_real_safe_content():
     from tools.pylon import normalize_message
 
@@ -323,6 +338,13 @@ def test_pylon_message_normalization_returns_real_safe_content():
         "source": "email",
         "is_private": False,
     }
+
+
+def test_pylon_message_normalization_marks_internal_notes_private():
+    from tools.pylon import normalize_message
+    assert normalize_message({
+        "id": "note-1", "body": "Agent-only context", "source": "internal_note",
+    })["is_private"] is True
 
 
 @pytest.mark.asyncio

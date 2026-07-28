@@ -17,6 +17,7 @@ def test_create_normalizes_manual_onboarding_fields():
         "target_go_live_at": "2026-08-01",
     })
     assert result["name"] == "Acme"
+    assert result["name_key"] == "acme"
     assert result["owner_email"] == "owner@example.com"
     assert result["stage"] == "kickoff"
     assert result["health"] == "on_track"
@@ -36,6 +37,15 @@ def test_create_rejects_invalid_fields(field, value):
 def test_update_rejects_unknown_fields():
     with pytest.raises(ValidationError, match="Unknown fields"):
         normalize_update({"created_by": "spoofed@example.com"})
+
+
+def test_contact_normalization_requires_valid_email():
+    from integration_hub.models import normalize_contact
+    assert normalize_contact({
+        "name": " Customer Admin ", "email": "ADMIN@ACME.COM", "role": "Admin",
+    })["email"] == "admin@acme.com"
+    with pytest.raises(ValidationError, match="email"):
+        normalize_contact({"name": "Customer Admin", "email": "invalid"})
 
 
 def test_name_is_required_and_limited():

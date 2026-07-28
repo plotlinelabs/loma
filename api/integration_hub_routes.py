@@ -425,9 +425,82 @@ async def handle_get_pylon_issue(request):
         messages = messages_result.get("data") or messages_result.get("messages") or []
         if isinstance(messages, dict):
             messages = messages.get("data", [])
+        normalized_messages = [
+            normalize_message(message) for message in messages[:200]
+        ]
         return _ok(request, {
             "issue": issue,
-            "messages": [normalize_message(message) for message in messages[:200]],
+            "messages": [
+                message for message in normalized_messages
+                if not message["is_private"]
+            ],
+        })
+    return await _run(request, action)
+
+
+async def handle_create_contact(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        updated = await service.create_contact(
+            account, await _json(request), actor, request["request_id"],
+        )
+        return _ok(request, {"account": updated}, 201, updated["version"])
+    return await _run(request, action)
+
+
+async def handle_archive_contact(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        updated = await service.archive_contact(
+            account, request.match_info["contact_id"], actor, request["request_id"],
+        )
+        return _ok(request, {"account": updated}, version=updated["version"])
+    return await _run(request, action)
+
+
+async def handle_discover_grain_meetings(request):
+    async def action():
+        service, _, _, account = await _account_context(request, cost=4)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        hydrated = await service.get(account["account_id"])
+        from tools.grain import discover_client_recordings
+        result = await discover_client_recordings(
+            account["name"], [contact["email"] for contact in hydrated.get("contacts", [])],
+        )
+        return _ok(request, result)
+    return await _run(request, action)
+
+
+async def handle_get_grain_summary(request):
+    async def action():
+        service, _, _, account = await _account_context(request, cost=4)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        from tools.grain import discover_client_recordings, get_transcript
+        recording_id = request.match_info["recording_id"]
+        hydrated = await service.get(account["account_id"])
+        discovered = await discover_client_recordings(
+            account["name"], [contact["email"] for contact in hydrated.get("contacts", [])],
+        )
+        recording = next(
+            (item for item in discovered.get("recordings", []) if item["id"] == recording_id),
+            None,
+        )
+        if not recording:
+            return _error(request, 404, "not_found", "Grain meeting not found for this client")
+        transcript = await get_transcript(recording_id, "text")
+        return _ok(request, {
+            "recording": recording,
+            "summary": recording.get("ai_summary") or "No Grain summary is available.",
+            "action_items": recording.get("action_items", []),
+            "transcript_excerpt": (
+                "" if transcript.get("error") else transcript.get("transcript", "")[:5000]
+            ),
         })
     return await _run(request, action)
 
@@ -475,5 +548,9 @@ def setup_integration_hub_routes(app):
     app.router.add_get(f"{p}/pylon/customers", handle_search_pylon_customers)
     app.router.add_get(f"{p}/accounts/{{account_id}}/pylon/issues", handle_list_pylon_issues)
     app.router.add_get(f"{p}/accounts/{{account_id}}/pylon/issues/{{issue_id}}", handle_get_pylon_issue)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/contacts", handle_create_contact)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}/archive", handle_archive_contact)
+    app.router.add_get(f"{p}/accounts/{{account_id}}/grain/meetings", handle_discover_grain_meetings)
+    app.router.add_get(f"{p}/accounts/{{account_id}}/grain/meetings/{{recording_id}}/summary", handle_get_grain_summary)
     app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources/{{mapping_id}}/sync", handle_sync_source)
     app.router.add_post(f"{p}/accounts/{{account_id}}/interactions", handle_ingest_interaction)

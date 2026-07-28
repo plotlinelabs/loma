@@ -1,12 +1,14 @@
 """Integration Hub application service with account-scoped authorization."""
 import uuid
 import re
+from pymongo.errors import DuplicateKeyError
 from datetime import datetime, timezone
 
 from integration_hub.models import (
     PLAYBOOKS, ValidationError, as_utc, calculate_account_health, normalize_activity,
     normalize_create, normalize_project, normalize_source_link, normalize_update,
     normalize_work_item, validate_status_transition, normalize_interaction, normalize_source_mapping,
+    normalize_contact,
 )
 
 class AccountService:
@@ -38,12 +40,46 @@ class AccountService:
 
     async def create_idempotent(self, data, actor, request_id, key):
         account, audit = self.build_account(data, actor, request_id)
+        if await self.repository.find_active_by_name_key(account["name_key"]):
+            raise ValidationError("An active client with this name already exists")
         enriched = self.enrich(account)
         payload = {"account": enriched}
-        response, created = await self.repository.create_idempotent(
-            account, audit, actor, key, payload,
-        )
+        try:
+            response, created = await self.repository.create_idempotent(
+                account, audit, actor, key, payload,
+            )
+        except DuplicateKeyError as exc:
+            if await self.repository.find_active_by_name_key(account["name_key"]):
+                raise ValidationError("An active client with this name already exists") from exc
+            raise
         return response, created
+
+    async def create_contact(self, account, data, actor, request_id):
+        now = datetime.now(timezone.utc)
+        contact_id = self._id("contact")
+        contact = {
+            "contact_id": contact_id, "account_id": account["account_id"],
+            **normalize_contact(data), "created_at": now, "created_by": actor,
+            "archived_at": None,
+        }
+        audit = self._audit(
+            account["account_id"], actor, "contact", contact_id,
+            "contact.created", request_id,
+        )
+        await self.repository.create_contact(contact, audit)
+        return await self.get(account["account_id"])
+
+    async def archive_contact(self, account, contact_id, actor, request_id):
+        audit = self._audit(
+            account["account_id"], actor, "contact", contact_id,
+            "contact.archived", request_id,
+        )
+        contact = await self.repository.archive_contact(
+            account["account_id"], contact_id, actor, audit,
+        )
+        if not contact:
+            raise ValidationError("Contact not found")
+        return await self.get(account["account_id"])
 
     async def list(self, *legacy_context, stage=None, health=None, search=None,
                    owner=None, status="active", limit=50, cursor=None):

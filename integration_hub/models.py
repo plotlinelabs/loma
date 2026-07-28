@@ -201,8 +201,10 @@ def normalize_create(data):
         raise ValidationError("stage is invalid")
     if health not in HEALTH_STATES:
         raise ValidationError("health is invalid")
+    name = _text(data.get("name"), "name", required=True, maximum=200)
     return {
-        "name": _text(data.get("name"), "name", required=True, maximum=200),
+        "name": name,
+        "name_key": " ".join(name.casefold().split()),
         "status": "active",
         "owner_email": normalize_email(data.get("owner_email")),
         "stage": stage,
@@ -242,6 +244,7 @@ def normalize_update(data):
         result["status"] = data["status"]
     if "name" in data:
         result["name"] = _text(data["name"], "name", required=True, maximum=200)
+        result["name_key"] = " ".join(result["name"].casefold().split())
     if "owner_email" in data:
         result["owner_email"] = normalize_email(data["owner_email"])
     if "stage" in data:
@@ -280,6 +283,19 @@ def normalize_update(data):
             raise ValidationError("completion_percentage must be an integer from 0 to 100")
         result["completion_percentage"] = value
     return result
+
+
+def normalize_contact(data):
+    name = _text(data.get("name"), "name", required=True, maximum=200)
+    email = normalize_email(data.get("email"))
+    if not email:
+        raise ValidationError("email is required")
+    return {
+        "name": name,
+        "email": email,
+        "role": _text(data.get("role"), "role", maximum=200),
+        "phone": _text(data.get("phone"), "phone", maximum=50),
+    }
 
 
 def normalize_work_item(data):

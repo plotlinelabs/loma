@@ -46,6 +46,16 @@ export interface IntegrationAccount {
   sync_sources: IntegrationSyncSource[];
   conversations: IntegrationConversation[];
   findings: IntegrationFinding[];
+  contacts: IntegrationContact[];
+}
+
+export interface IntegrationContact {
+  contact_id: string;
+  name: string;
+  email: string;
+  role: string | null;
+  phone: string | null;
+  created_at: string;
 }
 
 export interface IntegrationConversation {
@@ -301,6 +311,16 @@ export interface IntegrationSyncSource {
   config: { thread_ts?: string; source_url?: string; limit?: number; customer_name?: string; issue_ids?: string[] };
 }
 
+export interface GrainMeeting {
+  id: string;
+  title: string;
+  date: string;
+  url: string;
+  participants?: Array<{ name: string; email: string; scope?: string }>;
+  ai_summary?: string;
+  action_items?: Array<{ text: string; status?: string; assignee?: string }>;
+}
+
 export interface PylonCustomerMatch {
   customer_id: string;
   name: string;
@@ -366,6 +386,36 @@ export function fetchPylonIssue(accountId: string, issueId: string) {
   return request<PylonIssueDetail>(
     `/api/integration-hub/accounts/${accountId}/pylon/issues/${encodeURIComponent(issueId)}`,
   );
+}
+
+export function createIntegrationContact(
+  accountId: string,
+  input: Pick<IntegrationContact, "name" | "email" | "role" | "phone">,
+) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/contacts`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function archiveIntegrationContact(accountId: string, contactId: string) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/archive`,
+    { method: "POST" },
+  );
+}
+
+export function discoverGrainMeetings(accountId: string) {
+  return request<{ recordings: GrainMeeting[] }>(
+    `/api/integration-hub/accounts/${accountId}/grain/meetings`,
+  );
+}
+
+export function fetchGrainMeetingSummary(accountId: string, recordingId: string) {
+  return request<{
+    recording: GrainMeeting; summary: string;
+    action_items: GrainMeeting["action_items"]; transcript_excerpt: string;
+  }>(`/api/integration-hub/accounts/${accountId}/grain/meetings/${recordingId}/summary`);
 }
 
 export function createIntegrationSyncSource(accountId: string, input: {

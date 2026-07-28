@@ -117,6 +117,10 @@ async def init_observability():
 
     # Integration Hub: bounded account documents and independent resources.
     await _db.integration_accounts.create_index("account_id", unique=True)
+    await _db.integration_accounts.create_index(
+        "name_key", unique=True,
+        partialFilterExpression={"name_key": {"$type": "string"}, "archived_at": None},
+    )
     await _db.integration_accounts.create_index([("status", 1), ("updated_at", -1), ("account_id", 1)])
     await _db.integration_accounts.create_index([("stage", 1), ("updated_at", -1)])
     await _db.integration_accounts.create_index([("owner_email", 1), ("updated_at", -1)])
@@ -172,6 +176,14 @@ async def init_observability():
     await _db.integration_audit_log.create_index([("account_id", 1), ("created_at", -1), ("audit_id", 1)])
     await _db.integration_timeline.create_index(
         [("account_id", 1), ("created_at", -1), ("activity_id", 1)]
+    )
+    await _db.integration_contacts.create_index("contact_id", unique=True)
+    await _db.integration_contacts.create_index(
+        [("account_id", 1), ("archived_at", 1), ("name", 1)]
+    )
+    await _db.integration_contacts.create_index(
+        [("account_id", 1), ("email", 1)],
+        unique=True, partialFilterExpression={"archived_at": None},
     )
     await _db.integration_idempotency.create_index([("actor", 1), ("key", 1)], unique=True)
     await _db.integration_idempotency.create_index("created_at", expireAfterSeconds=86400)

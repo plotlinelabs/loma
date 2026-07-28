@@ -303,7 +303,12 @@ def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
         "author": author.get("name") or "Unknown sender",
         "timestamp": message.get("timestamp") or message.get("created_at"),
         "source": message.get("source"),
-        "is_private": bool(message.get("is_private", False)),
+        "is_private": bool(
+            message.get("is_private", False)
+            or message.get("private", False)
+            or message.get("message_type") in {"internal_note", "note"}
+            or message.get("source") in {"internal_note", "note"}
+        ),
     }
 
 
@@ -421,7 +426,11 @@ async def list_account_issues_page(
     ]
     if state:
         states = [value.strip() for value in state.split(",") if value.strip()]
-        filters.append({"field": "state", "operator": "in", "value": states})
+        filters.append({
+            "field": "state",
+            "operator": "equals" if len(states) == 1 else "in",
+            "value": states[0] if len(states) == 1 else states,
+        })
     if assignee_id:
         filters.append({"field": "assignee_id", "operator": "equals", "value": assignee_id})
     if query:
@@ -452,14 +461,45 @@ async def list_account_issues_page(
         assignee_id = issue.get("assignee_id")
         return {"id": assignee_id} if assignee_id else None
 
+    assignee_ids = {
+        str(issue.get("assignee_id"))
+        for issue in result.get("data", [])
+        if issue.get("assignee_id")
+    }
+    assignee_directory: dict[str, dict[str, Any]] = {}
+    if assignee_ids:
+        users_result = await _api_get("/users")
+        users = (
+            users_result.get("data")
+            or users_result.get("users")
+            or []
+        ) if not users_result.get("error") else []
+        assignee_directory = {
+            str(user.get("id")): user for user in users if str(user.get("id")) in assignee_ids
+        }
+        missing_ids = assignee_ids - set(assignee_directory)
+        if missing_ids:
+            fetched = await asyncio.gather(*(_api_get(f"/users/{user_id}") for user_id in missing_ids))
+            for user_id, user_result in zip(missing_ids, fetched):
+                if user_result.get("error"):
+                    continue
+                user = user_result.get("data") or user_result
+                if isinstance(user, dict):
+                    assignee_directory[user_id] = user
+
     issues = []
     for issue in result.get("data", []):
+        assignee = assignee_summary(issue)
+        if isinstance(assignee, str):
+            assignee = assignee_directory.get(assignee, {"id": assignee})
+        elif isinstance(assignee, dict) and assignee.get("id"):
+            assignee = {**assignee_directory.get(str(assignee["id"]), {}), **assignee}
         issues.append({
             "id": str(issue.get("id") or ""),
             "number": issue.get("number"),
             "title": issue.get("title") or "Untitled issue",
             "state": issue.get("state") or "unknown",
-            "assignee": assignee_summary(issue),
+            "assignee": assignee,
             "created_at": issue.get("created_at"),
             "updated_at": issue.get("updated_at"),
             "account_id": (issue.get("account") or {}).get("id") or issue.get("account_id"),

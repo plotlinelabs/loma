@@ -23,6 +23,8 @@ import {
   IntegrationWorkItemType,
   updateIntegrationAccount,
   updateIntegrationWorkItem,
+  createIntegrationContact, archiveIntegrationContact,
+  discoverGrainMeetings, fetchGrainMeetingSummary, GrainMeeting,
 } from "@/lib/integration-hub-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,23 +76,24 @@ export default function OnboardingWorkspace({
   const [searchingPylon, setSearchingPylon] = useState(false);
   const [pylonSearchCompleted, setPylonSearchCompleted] = useState(false);
   const [pylonIssues, setPylonIssues] = useState<PylonIssueSummary[]>([]);
+  const [urgentIssues, setUrgentIssues] = useState<PylonIssueSummary[]>([]);
   const [pylonIssueCursor, setPylonIssueCursor] = useState<string | null>(null);
   const [pylonIssueQuery, setPylonIssueQuery] = useState("");
-  const [pylonIssueStatus, setPylonIssueStatus] = useState("");
+  const [pylonIssueStatus, setPylonIssueStatus] = useState("waiting_on_customer");
   const [loadingPylonIssues, setLoadingPylonIssues] = useState(false);
   const [selectedPylonIssue, setSelectedPylonIssue] = useState<PylonIssueDetail | null>(null);
   const [loadingPylonIssueId, setLoadingPylonIssueId] = useState<string | null>(null);
   const autoSearchedPylon = useRef(false);
   const pylonIssueRequest = useRef(0);
   const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
-  const urgentPylonIssues = useMemo(
-    () => pylonIssues.filter((issue) => ["new", "waiting_on_you", "waiting_on_plotline"].includes(issue.state)),
-    [pylonIssues],
-  );
   const historicalPylonIssues = useMemo(
-    () => pylonIssues.filter((issue) => ["waiting_on_customer", "closed", "resolved"].includes(issue.state)),
+    () => pylonIssues.filter((issue) => ["waiting_on_customer", "closed"].includes(issue.state)),
     [pylonIssues],
   );
+  const [contact, setContact] = useState({ name: "", email: "", role: "", phone: "" });
+  const [grainMeetings, setGrainMeetings] = useState<GrainMeeting[]>([]);
+  const [loadingGrain, setLoadingGrain] = useState(false);
+  const [grainSummary, setGrainSummary] = useState<{ id: string; summary: string; transcript: string; actionItems: GrainMeeting["action_items"] } | null>(null);
 
   function pylonAssignee(issue: PylonIssueSummary) {
     if (typeof issue.assignee === "string") return issue.assignee;
@@ -103,9 +106,7 @@ export default function OnboardingWorkspace({
     try {
       const result = await fetchPylonIssues(account.account_id, {
         cursor,
-        status: pylonIssueStatus === "historical"
-          ? "waiting_on_customer,closed,resolved"
-          : pylonIssueStatus || undefined,
+        status: pylonIssueStatus,
         query: pylonIssueQuery.trim() || undefined, limit: 25,
       });
       if (requestId !== pylonIssueRequest.current) return;
@@ -115,6 +116,17 @@ export default function OnboardingWorkspace({
       setError(err instanceof Error ? err.message : "Could not load Pylon issues");
     } finally {
       if (requestId === pylonIssueRequest.current) setLoadingPylonIssues(false);
+    }
+  }
+
+  async function loadUrgentPylonIssues() {
+    try {
+      const result = await fetchPylonIssues(account.account_id, {
+        status: "new,waiting_on_you", limit: 25,
+      });
+      setUrgentIssues(result.issues);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load urgent Pylon issues");
     }
   }
 
@@ -135,6 +147,11 @@ export default function OnboardingWorkspace({
   // Search/filter changes intentionally trigger a debounced server-side fetch.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.account_id, pylonConnected, pylonIssueQuery, pylonIssueStatus]);
+
+  useEffect(() => {
+    if (pylonConnected) void loadUrgentPylonIssues();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.account_id, pylonConnected]);
 
   async function findPylonCustomers() {
     setSearchingPylon(true); setPylonSearchCompleted(false); setError(null);
@@ -167,6 +184,46 @@ export default function OnboardingWorkspace({
       onChange(refreshed.account); setPylonMatches([]); setPylonQuery("");
     } catch (err) { setError(err instanceof Error ? err.message : "Could not connect Pylon customer"); }
     finally { setSaving(false); }
+  }
+
+  async function addContact(event: FormEvent) {
+    event.preventDefault(); setSaving(true); setError(null);
+    try {
+      const result = await createIntegrationContact(account.account_id, {
+        ...contact, role: contact.role || null, phone: contact.phone || null,
+      });
+      onChange(result.account);
+      setContact({ name: "", email: "", role: "", phone: "" });
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not add contact"); }
+    finally { setSaving(false); }
+  }
+
+  async function removeContact(contactId: string) {
+    setSaving(true); setError(null);
+    try {
+      const result = await archiveIntegrationContact(account.account_id, contactId);
+      onChange(result.account);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not remove contact"); }
+    finally { setSaving(false); }
+  }
+
+  async function findGrainMeetings() {
+    setLoadingGrain(true); setError(null);
+    try { setGrainMeetings((await discoverGrainMeetings(account.account_id)).recordings); }
+    catch (err) { setError(err instanceof Error ? err.message : "Could not search Grain"); }
+    finally { setLoadingGrain(false); }
+  }
+
+  async function showGrainSummary(meeting: GrainMeeting) {
+    setLoadingGrain(true); setError(null);
+    try {
+      const result = await fetchGrainMeetingSummary(account.account_id, meeting.id);
+      setGrainSummary({
+        id: meeting.id, summary: result.summary,
+        transcript: result.transcript_excerpt, actionItems: result.action_items,
+      });
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not load Grain summary"); }
+    finally { setLoadingGrain(false); }
   }
 
   async function addProject(event: FormEvent) {
@@ -366,7 +423,7 @@ export default function OnboardingWorkspace({
           <Button type="submit" size="sm" disabled={saving}>Add read-only source</Button>
         </form>
         <p className="mt-2 text-xs text-muted-foreground">Uses existing Loma credentials. Sync only reads external data and cannot send messages or change source records.</p>
-        <div className="mt-3 rounded-lg border p-3">
+        {!pylonConnected && <div className="mt-3 rounded-lg border p-3">
           <p className="text-sm font-medium">Connect a Pylon customer</p>
           <p className="text-xs text-muted-foreground">Search and map one customer. Only that customer&apos;s issues and full message threads are imported.</p>
           <div className="mt-2 flex gap-2">
@@ -384,7 +441,7 @@ export default function OnboardingWorkspace({
               <p className="text-sm text-muted-foreground">No Pylon customers found for &quot;{pylonQuery}&quot;.</p>
             ) : null}
           </div>
-        </div>
+        </div>}
         <div className="mt-3 space-y-2">
           {(account.sync_sources || []).map((mapping) => (
             <div key={mapping.mapping_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
@@ -393,13 +450,13 @@ export default function OnboardingWorkspace({
             </div>
           ))}
         </div>
-        {pylonConnected && urgentPylonIssues.length > 0 && <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+        {pylonConnected && urgentIssues.length > 0 && <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
           <div className="mb-2">
             <p className="text-sm font-medium">Needs a Plotline response</p>
             <p className="text-xs text-muted-foreground">New issues and conversations currently waiting on Plotline.</p>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
-            {urgentPylonIssues.map((issue) => (
+            {urgentIssues.map((issue) => (
               <div key={issue.id} className="rounded-md border bg-background p-3">
                 <div className="flex items-start justify-between gap-2">
                   <a href={issue.url || "#"} target="_blank" rel="noreferrer" className="font-medium text-primary underline">
@@ -440,7 +497,7 @@ export default function OnboardingWorkspace({
           <div className="flex flex-wrap gap-2 border-b p-3">
             <Input className="max-w-sm" maxLength={100} placeholder="Search issues" value={pylonIssueQuery} onChange={(event) => setPylonIssueQuery(event.target.value)} />
             <select className="h-9 rounded-md border bg-background px-3 text-sm" value={pylonIssueStatus} onChange={(event) => setPylonIssueStatus(event.target.value)}>
-              <option value="">All issues</option><option value="historical">Waiting on customer and resolved</option><option value="waiting_on_customer">Waiting on customer</option><option value="closed">Closed</option><option value="resolved">Resolved</option>
+              <option value="waiting_on_customer">Waiting on customer</option><option value="closed">Resolved</option>
             </select>
           </div>
           <div className="overflow-x-auto">
@@ -462,6 +519,60 @@ export default function OnboardingWorkspace({
           </div>
           {pylonIssueCursor && <div className="border-t p-3"><Button type="button" variant="outline" size="sm" disabled={loadingPylonIssues} onClick={() => loadPylonIssues(pylonIssueCursor, true)}>{loadingPylonIssues ? "Loading..." : "Load more"}</Button></div>}
         </div>}
+      </Card>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-base font-medium">Client organization users</h2>
+            <p className="text-xs text-muted-foreground">Store client contacts for meeting discovery and call scheduling.</p>
+          </div>
+          {(account.contacts || []).length > 0 && (
+            <a
+              className="text-sm text-primary underline"
+              target="_blank"
+              rel="noreferrer"
+              href={`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`Call with ${account.name}`)}&add=${encodeURIComponent((account.contacts || []).map((item) => item.email).join(","))}`}
+            >
+              Schedule call
+            </a>
+          )}
+        </div>
+        <form onSubmit={addContact} className="mt-3 grid gap-2 md:grid-cols-5">
+          <Input required placeholder="Name" value={contact.name} onChange={(event) => setContact({ ...contact, name: event.target.value })} />
+          <Input required type="email" placeholder="Email" value={contact.email} onChange={(event) => setContact({ ...contact, email: event.target.value })} />
+          <Input placeholder="Role" value={contact.role} onChange={(event) => setContact({ ...contact, role: event.target.value })} />
+          <Input placeholder="Phone" value={contact.phone} onChange={(event) => setContact({ ...contact, phone: event.target.value })} />
+          <Button type="submit" size="sm" disabled={saving}>Add user</Button>
+        </form>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {(account.contacts || []).map((item) => (
+            <div key={item.contact_id} className="flex items-center justify-between rounded-lg border p-3">
+              <div><p className="text-sm font-medium">{item.name}</p><a href={`mailto:${item.email}`} className="text-xs text-primary underline">{item.email}</a>{item.role && <p className="text-xs text-muted-foreground">{item.role}</p>}</div>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${item.name}`} onClick={() => removeContact(item.contact_id)}><RiDeleteBinLine /></Button>
+            </div>
+          ))}
+        </div>
+      </Card>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-base font-medium">Grain meetings</h2>
+            <p className="text-xs text-muted-foreground">Find meetings using the client name and saved contact domains. Summaries load only when requested.</p>
+          </div>
+          <Button type="button" variant="outline" size="sm" disabled={loadingGrain} onClick={findGrainMeetings}>{loadingGrain ? "Searching..." : "Find meetings"}</Button>
+        </div>
+        <div className="mt-3 space-y-2">
+          {grainMeetings.map((meeting) => (
+            <div key={meeting.id} className="rounded-lg border p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div><a href={meeting.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-primary underline">{meeting.title}</a><p className="text-xs text-muted-foreground">{meeting.date ? new Date(meeting.date).toLocaleString() : "Meeting date unavailable"} · {(meeting.participants || []).map((item) => item.name || item.email).join(", ") || "No participants listed"}</p></div>
+                <Button type="button" variant="outline" size="sm" disabled={loadingGrain} onClick={() => showGrainSummary(meeting)}>Show summary</Button>
+              </div>
+              {grainSummary?.id === meeting.id && <div className="mt-3 rounded-md bg-muted/40 p-3 text-sm"><p className="whitespace-pre-wrap">{grainSummary.summary}</p>{grainSummary.actionItems?.length ? <ul className="mt-2 list-disc pl-4">{grainSummary.actionItems.map((item, index) => <li key={`${meeting.id}-${index}`}>{item.text}</li>)}</ul> : null}{grainSummary.transcript && <details className="mt-2"><summary className="cursor-pointer text-xs text-primary">Transcript excerpt</summary><p className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap text-xs">{grainSummary.transcript}</p></details>}</div>}
+            </div>
+          ))}
+          {!loadingGrain && grainMeetings.length === 0 && <p className="text-xs text-muted-foreground">Search to find Grain meetings for this client.</p>}
+        </div>
       </Card>
       <Card className="p-4">
         <h2 className="font-heading text-base font-medium">Projects and playbooks</h2>
