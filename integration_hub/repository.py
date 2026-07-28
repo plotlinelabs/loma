@@ -276,6 +276,25 @@ class AccountRepository:
             return result if result else None
         return await self._transaction(operation)
 
+    async def update_contact(self, account_id, contact_id, updates, actor, audit_entry):
+        async def operation(session):
+            parent = await self.collection.find_one_and_update(
+                {"account_id": account_id, "archived_at": None},
+                {"$set": {"updated_at": updates["updated_at"], "updated_by": actor},
+                 "$inc": {"version": 1}},
+                return_document=ReturnDocument.AFTER, session=session,
+            )
+            if not parent:
+                return None
+            result = await self.contacts.find_one_and_update(
+                {"account_id": account_id, "contact_id": contact_id, "archived_at": None},
+                {"$set": updates}, return_document=ReturnDocument.AFTER, session=session,
+            )
+            if result:
+                await self.audit.insert_one(audit_entry, session=session)
+            return result
+        return await self._transaction(operation)
+
 
     async def list_sync_sources(self, account_id):
         return await self.sync_sources.find({"account_id": account_id, "archived_at": None}).sort("created_at", 1).to_list(None)

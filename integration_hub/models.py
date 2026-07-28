@@ -223,6 +223,7 @@ def normalize_create(data):
         "stakeholders": _text_list(data.get("stakeholders"), "stakeholders"),
         "go_live_criteria": _text(data.get("go_live_criteria"), "go_live_criteria"),
         "completion_percentage": 0,
+        "client_email_domains": _domain_list(data.get("client_email_domains")),
     }
 
 
@@ -233,6 +234,7 @@ def normalize_update(data):
         "platforms", "environments", "stakeholders", "go_live_criteria",
         "completion_percentage", "health_override_enabled",
         "status",
+        "client_email_domains",
     }
     unknown = set(data) - allowed
     if unknown:
@@ -282,6 +284,22 @@ def normalize_update(data):
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 100:
             raise ValidationError("completion_percentage must be an integer from 0 to 100")
         result["completion_percentage"] = value
+    if "client_email_domains" in data:
+        result["client_email_domains"] = _domain_list(data["client_email_domains"])
+    return result
+
+
+def _domain_list(value):
+    domains = _text_list(value, "client_email_domains", maximum_items=20)
+    result = []
+    for domain in domains:
+        normalized = domain.lower().strip().lstrip("@")
+        if "." not in normalized or any(char.isspace() for char in normalized):
+            raise ValidationError("client_email_domains contains an invalid domain")
+        if normalized == "plotline.so":
+            raise ValidationError("plotline.so is reserved for Plotline users")
+        if normalized not in result:
+            result.append(normalized)
     return result
 
 
@@ -294,7 +312,12 @@ def normalize_contact(data):
         "name": name,
         "email": email,
         "role": _text(data.get("role"), "role", maximum=200),
+        "role_description": _text(data.get("role_description"), "role_description", maximum=1000),
         "phone": _text(data.get("phone"), "phone", maximum=50),
+        "dashboard_access": _text(data.get("dashboard_access"), "dashboard_access", maximum=100),
+        "organization_ids": _text_list(data.get("organization_ids"), "organization_ids", maximum_items=20),
+        "access_url": _text(data.get("access_url"), "access_url", maximum=2048),
+        "invite_sent_at": _text(data.get("invite_sent_at"), "invite_sent_at", maximum=100),
     }
 
 

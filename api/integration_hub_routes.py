@@ -462,6 +462,53 @@ async def handle_archive_contact(request):
     return await _run(request, action)
 
 
+async def handle_update_contact(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit")
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        updated = await service.update_contact(
+            account, request.match_info["contact_id"], await _json(request),
+            actor, request["request_id"],
+        )
+        return _ok(request, {"account": updated}, version=updated["version"])
+    return await _run(request, action)
+
+
+async def handle_invite_contact(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit", cost=5)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        hydrated = await service.get(account["account_id"])
+        contact = next((
+            item for item in hydrated.get("contacts", [])
+            if item["contact_id"] == request.match_info["contact_id"]
+        ), None)
+        if not contact:
+            return _error(request, 404, "not_found", "Contact not found")
+        access_url = contact.get("access_url")
+        if not access_url:
+            return _error(request, 422, "access_url_required",
+                          "Add a dashboard access URL before sending an invite")
+        from tools.gmail import send_email
+        await send_email(
+            actor, contact["email"],
+            f"{account['name']} dashboard access",
+            f"Hi {contact['name']},\n\nYour dashboard access is ready: {access_url}\n\nRegards,\nPlotline",
+        )
+        updated = await service.update_contact(
+            account, contact["contact_id"],
+            {**{key: contact.get(key) for key in (
+                "name", "email", "role", "role_description", "phone",
+                "dashboard_access", "organization_ids", "access_url",
+            )}, "invite_sent_at": datetime.now(timezone.utc).isoformat()},
+            actor, request["request_id"],
+        )
+        return _ok(request, {"account": updated}, version=updated["version"])
+    return await _run(request, action)
+
+
 async def handle_discover_grain_meetings(request):
     async def action():
         service, _, _, account = await _account_context(request, cost=4)
@@ -549,6 +596,8 @@ def setup_integration_hub_routes(app):
     app.router.add_get(f"{p}/accounts/{{account_id}}/pylon/issues", handle_list_pylon_issues)
     app.router.add_get(f"{p}/accounts/{{account_id}}/pylon/issues/{{issue_id}}", handle_get_pylon_issue)
     app.router.add_post(f"{p}/accounts/{{account_id}}/contacts", handle_create_contact)
+    app.router.add_patch(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}", handle_update_contact)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}/invite", handle_invite_contact)
     app.router.add_post(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}/archive", handle_archive_contact)
     app.router.add_get(f"{p}/accounts/{{account_id}}/grain/meetings", handle_discover_grain_meetings)
     app.router.add_get(f"{p}/accounts/{{account_id}}/grain/meetings/{{recording_id}}/summary", handle_get_grain_summary)

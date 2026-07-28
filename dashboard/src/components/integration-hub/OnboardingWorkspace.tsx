@@ -8,7 +8,6 @@ import {
   createIntegrationSourceLink,
   createIntegrationWorkItem,
   createIntegrationSyncSource,
-  syncIntegrationSource,
   searchPylonCustomers,
   fetchPylonIssue,
   fetchPylonIssues,
@@ -18,12 +17,13 @@ import {
   formatIntegrationLabel,
   INTEGRATION_HEALTH,
   IntegrationAccount,
-  IntegrationSourceLink, IntegrationSyncSource, IntegrationWorkItemInput, PylonCustomerMatch,
+  IntegrationSourceLink, IntegrationWorkItemInput, PylonCustomerMatch,
   PylonIssueDetail, PylonIssueSummary,
   IntegrationWorkItemType,
   updateIntegrationAccount,
   updateIntegrationWorkItem,
-  createIntegrationContact, archiveIntegrationContact,
+  createIntegrationContact, updateIntegrationContact, inviteIntegrationContact,
+  archiveIntegrationContact,
   discoverGrainMeetings, fetchGrainMeetingSummary, GrainMeeting,
 } from "@/lib/integration-hub-api";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,7 @@ import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine, RiEditLine } from "@rem
 const TYPES: IntegrationWorkItemType[] = ["milestone", "task", "risk", "blocker"];
 const PLATFORMS = ["android", "ios", "react_native", "flutter", "web", "unity", "kmp"];
 const ENVIRONMENTS = ["development", "staging", "production"];
+const MEETING_RECORDER = "meetings@plotline.so";
 
 const emptyItem: IntegrationWorkItemInput = {
   type: "task",
@@ -50,6 +51,23 @@ const emptyItem: IntegrationWorkItemInput = {
   resolution: null,
   escalated: false,
 };
+
+function MeetingScheduler({ account }: { account: IntegrationAccount }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const attendees = Array.from(new Set([...selected, MEETING_RECORDER]));
+  const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`Call with ${account.name}`)}&add=${encodeURIComponent(attendees.join(","))}`;
+  return <div className="mt-5 rounded-lg border p-3">
+    <p className="text-sm font-medium">Schedule a client call</p>
+    <p className="text-xs text-muted-foreground">Choose attendees. `{MEETING_RECORDER}` is always included for recording.</p>
+    <div className="mt-2 flex flex-wrap gap-2">
+      {(account.contacts || []).map((item) => <label key={item.contact_id} className="flex items-center gap-2 rounded-md border px-2 py-1 text-xs">
+        <input type="checkbox" checked={selected.includes(item.email)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.email] : current.filter((email) => email !== item.email))} />
+        {item.name}
+      </label>)}
+    </div>
+    <a className="mt-3 inline-flex text-sm text-primary underline" target="_blank" rel="noreferrer" href={url}>Continue to Google Calendar</a>
+  </div>;
+}
 
 export default function OnboardingWorkspace({
   account,
@@ -71,8 +89,6 @@ export default function OnboardingWorkspace({
   });
   const [projectName, setProjectName] = useState("");
   const [projectPlaybook, setProjectPlaybook] = useState("mobile_sdk");
-  const [syncSource, setSyncSource] = useState<{ source: IntegrationSyncSource["source"]; tenant_id: string; external_id: string; label: string }>({ source: "slack", tenant_id: "plotline", external_id: "", label: "" });
-  const [syncingId, setSyncingId] = useState<string | null>(null);
   const [pylonQuery, setPylonQuery] = useState("");
   const [pylonMatches, setPylonMatches] = useState<PylonCustomerMatch[]>([]);
   const [searchingPylon, setSearchingPylon] = useState(false);
@@ -88,7 +104,10 @@ export default function OnboardingWorkspace({
   const autoSearchedPylon = useRef(false);
   const pylonIssueRequest = useRef(0);
   const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
-  const [contact, setContact] = useState({ name: "", email: "", role: "", phone: "" });
+  const emptyContact = { name: "", email: "", role: "", role_description: "", phone: "", dashboard_access: "", organization_ids: "", access_url: "" };
+  const [contact, setContact] = useState(emptyContact);
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [domainInput, setDomainInput] = useState((account.client_email_domains || []).join(", "));
   const [grainMeetings, setGrainMeetings] = useState<GrainMeeting[]>([]);
   const [loadingGrain, setLoadingGrain] = useState(false);
   const [grainSummary, setGrainSummary] = useState<{ id: string; summary: string; transcript: string; actionItems: GrainMeeting["action_items"] } | null>(null);
@@ -166,9 +185,15 @@ export default function OnboardingWorkspace({
     setPylonQuery(account.name);
     setSearchingPylon(true); setPylonSearchCompleted(false); setError(null);
     void searchPylonCustomers(account.name)
-      .then((result) => setPylonMatches(result.customers))
+      .then((result) => {
+        const exact = result.customers.filter((customer) => customer.name.trim().toLowerCase() === account.name.trim().toLowerCase());
+        if (exact.length === 1) return connectPylon(exact[0]);
+        setPylonMatches(result.customers);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Could not identify this client in Pylon"))
       .finally(() => { setSearchingPylon(false); setPylonSearchCompleted(true); });
+  // The mapping action is intentionally invoked only once per account name.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.name, pylonConnected]);
 
   async function connectPylon(customer: PylonCustomerMatch) {
@@ -187,12 +212,49 @@ export default function OnboardingWorkspace({
   async function addContact(event: FormEvent) {
     event.preventDefault(); setSaving(true); setError(null);
     try {
-      const result = await createIntegrationContact(account.account_id, {
-        ...contact, role: contact.role || null, phone: contact.phone || null,
-      });
+      const payload = {
+        ...contact,
+        role: contact.role || null, role_description: contact.role_description || null,
+        phone: contact.phone || null, dashboard_access: contact.dashboard_access || null,
+        organization_ids: contact.organization_ids.split(",").map((item) => item.trim()).filter(Boolean),
+        access_url: contact.access_url || null,
+      };
+      const result = editingContactId
+        ? await updateIntegrationContact(account.account_id, editingContactId, payload)
+        : await createIntegrationContact(account.account_id, payload);
       onChange(result.account);
-      setContact({ name: "", email: "", role: "", phone: "" });
+      setContact(emptyContact); setEditingContactId(null);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not add contact"); }
+    finally { setSaving(false); }
+  }
+
+  function editContact(item: IntegrationAccount["contacts"][number]) {
+    setEditingContactId(item.contact_id);
+    setContact({
+      name: item.name, email: item.email, role: item.role || "",
+      role_description: item.role_description || "", phone: item.phone || "",
+      dashboard_access: item.dashboard_access || "",
+      organization_ids: (item.organization_ids || []).join(", "),
+      access_url: item.access_url || "",
+    });
+  }
+
+  async function saveDomains() {
+    setSaving(true); setError(null);
+    try {
+      const domains = domainInput.split(",").map((item) => item.trim().replace(/^@/, "")).filter(Boolean);
+      const result = await updateIntegrationAccount(account.account_id, { name: account.name, client_email_domains: domains }, account.version);
+      onChange(result.account);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not save client email domains"); }
+    finally { setSaving(false); }
+  }
+
+  async function sendInvite(contactId: string) {
+    setSaving(true); setError(null);
+    try {
+      const result = await inviteIntegrationContact(account.account_id, contactId);
+      onChange(result.account);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not send dashboard invite"); }
     finally { setSaving(false); }
   }
 
@@ -211,6 +273,13 @@ export default function OnboardingWorkspace({
     catch (err) { setError(err instanceof Error ? err.message : "Could not search Grain"); }
     finally { setLoadingGrain(false); }
   }
+
+  useEffect(() => {
+    if (section !== "communications") return;
+    void findGrainMeetings();
+  // Refresh Grain automatically whenever the communications workspace is opened.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, account.account_id, account.contacts?.length]);
 
   async function showGrainSummary(meeting: GrainMeeting) {
     setLoadingGrain(true); setError(null);
@@ -377,28 +446,6 @@ export default function OnboardingWorkspace({
   }
 
 
-  async function addSyncSource(event: FormEvent) {
-    event.preventDefault(); setSaving(true); setError(null);
-    try {
-      await createIntegrationSyncSource(account.account_id, syncSource);
-      const refreshed = await fetchIntegrationAccount(account.account_id);
-      onChange(refreshed.account);
-      setSyncSource({ source: "slack", tenant_id: "plotline", external_id: "", label: "" });
-    } catch (err) { setError(err instanceof Error ? err.message : "Could not add read-only source"); }
-    finally { setSaving(false); }
-  }
-
-  async function runSync(mappingId: string) {
-    setSyncingId(mappingId); setError(null);
-    try {
-      await syncIntegrationSource(account.account_id, mappingId);
-      const refreshed = await fetchIntegrationAccount(account.account_id);
-      onChange(refreshed.account);
-    } catch (err) { setError(err instanceof Error ? err.message : "Read-only sync failed"); }
-    finally { setSyncingId(null); }
-  }
-
-
   return (
     <div className="space-y-3">
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -412,15 +459,6 @@ export default function OnboardingWorkspace({
           </div>
         </div>
 
-        <form onSubmit={addSyncSource} className="mt-4 grid gap-2 md:grid-cols-[150px_1fr_1fr_auto]">
-          <select className="h-9 rounded-md border bg-background px-3 text-sm" value={syncSource.source} onChange={(event) => setSyncSource({ ...syncSource, source: event.target.value as IntegrationSyncSource["source"] })}>
-            <option value="slack">Slack channel</option><option value="grain">Grain title search</option><option value="pylon">Pylon issue</option>
-          </select>
-          <Input required maxLength={255} placeholder="Workspace or tenant" value={syncSource.tenant_id} onChange={(event) => setSyncSource({ ...syncSource, tenant_id: event.target.value })} />
-          <Input required maxLength={255} placeholder={syncSource.source === "slack" ? "Channel ID" : syncSource.source === "pylon" ? "Issue ID" : "Meeting title search"} value={syncSource.external_id} onChange={(event) => setSyncSource({ ...syncSource, external_id: event.target.value })} />
-          <Button type="submit" size="sm" disabled={saving}>Add read-only source</Button>
-        </form>
-        <p className="mt-2 text-xs text-muted-foreground">Uses existing Loma credentials. Sync only reads external data and cannot send messages or change source records.</p>
         {!pylonConnected && <div className="mt-3 rounded-lg border p-3">
           <p className="text-sm font-medium">Connect a Pylon customer</p>
           <p className="text-xs text-muted-foreground">Search and map one customer. Only that customer&apos;s issues and full message threads are imported.</p>
@@ -440,14 +478,6 @@ export default function OnboardingWorkspace({
             ) : null}
           </div>
         </div>}
-        <div className="mt-3 space-y-2">
-          {(account.sync_sources || []).map((mapping) => (
-            <div key={mapping.mapping_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
-              <div><p className="text-sm font-medium">{mapping.label || formatIntegrationLabel(mapping.source)}</p><p className="text-xs text-muted-foreground">{mapping.external_id} · {mapping.last_synced_at ? `Last synced ${new Date(mapping.last_synced_at).toLocaleString()}` : "Never synced"}{mapping.last_error ? ` · ${mapping.last_error}` : ""}</p></div>
-              <Button type="button" variant="outline" size="sm" disabled={syncingId === mapping.mapping_id} onClick={() => runSync(mapping.mapping_id)}>{syncingId === mapping.mapping_id ? "Syncing..." : "Sync now"}</Button>
-            </div>
-          ))}
-        </div>
         {pylonConnected && urgentIssues.length > 0 && <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
           <div className="mb-2">
             <p className="text-sm font-medium">Needs a Plotline response</p>
@@ -525,35 +555,64 @@ export default function OnboardingWorkspace({
       <Card className={section === "contacts" ? "p-4" : "hidden"}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="font-heading text-base font-medium">Client organization users</h2>
-            <p className="text-xs text-muted-foreground">Store client contacts for meeting discovery and call scheduling.</p>
+            <h2 className="font-heading text-base font-medium">Client and Plotline users</h2>
+            <p className="text-xs text-muted-foreground">Manage pilot stakeholders, dashboard access, organization IDs, invitations, and meeting attendees.</p>
           </div>
-          {(account.contacts || []).length > 0 && (
-            <a
-              className="text-sm text-primary underline"
-              target="_blank"
-              rel="noreferrer"
-              href={`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`Call with ${account.name}`)}&add=${encodeURIComponent((account.contacts || []).map((item) => item.email).join(","))}`}
-            >
-              Schedule call
-            </a>
-          )}
         </div>
-        <form onSubmit={addContact} className="mt-3 grid gap-2 md:grid-cols-5">
+        <div className="mt-3 rounded-lg border p-3">
+          <Label>Allowed client email domains</Label>
+          <div className="mt-2 flex gap-2">
+            <Input placeholder="client.com, subsidiary.com" value={domainInput} onChange={(event) => setDomainInput(event.target.value)} />
+            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={saveDomains}>Save domains</Button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">Only these domains and `@plotline.so` can be stored. Plotline users are grouped separately.</p>
+        </div>
+        <form onSubmit={addContact} className="mt-3 grid gap-2 md:grid-cols-2">
           <Input required placeholder="Name" value={contact.name} onChange={(event) => setContact({ ...contact, name: event.target.value })} />
           <Input required type="email" placeholder="Email" value={contact.email} onChange={(event) => setContact({ ...contact, email: event.target.value })} />
-          <Input placeholder="Role" value={contact.role} onChange={(event) => setContact({ ...contact, role: event.target.value })} />
+          <Input placeholder="Role or title" value={contact.role} onChange={(event) => setContact({ ...contact, role: event.target.value })} />
           <Input placeholder="Phone" value={contact.phone} onChange={(event) => setContact({ ...contact, phone: event.target.value })} />
-          <Button type="submit" size="sm" disabled={saving}>Add user</Button>
+          <Textarea placeholder="Role in the pilot and why this person matters" value={contact.role_description} onChange={(event) => setContact({ ...contact, role_description: event.target.value })} />
+          <div className="space-y-2">
+            <Input placeholder="Dashboard access type, e.g. Admin or Viewer" value={contact.dashboard_access} onChange={(event) => setContact({ ...contact, dashboard_access: event.target.value })} />
+            <Input placeholder="Organization IDs, comma separated" value={contact.organization_ids} onChange={(event) => setContact({ ...contact, organization_ids: event.target.value })} />
+            <Input type="url" placeholder="Dashboard access URL" value={contact.access_url} onChange={(event) => setContact({ ...contact, access_url: event.target.value })} />
+          </div>
+          <div className="flex gap-2 md:col-span-2">
+            <Button type="submit" size="sm" disabled={saving}>{editingContactId ? "Save user" : "Add user"}</Button>
+            {editingContactId && <Button type="button" variant="outline" size="sm" onClick={() => { setEditingContactId(null); setContact(emptyContact); }}>Cancel</Button>}
+          </div>
         </form>
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          {(account.contacts || []).map((item) => (
+        {(["client", "plotline"] as const).map((bucket) => {
+          const items = (account.contacts || []).filter((item) => item.email.endsWith("@plotline.so") === (bucket === "plotline"));
+          return <div key={bucket} className="mt-5">
+            <h3 className="text-sm font-medium">{bucket === "plotline" ? "Plotline users" : "Client users"}</h3>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {items.map((item) => (
             <div key={item.contact_id} className="flex items-center justify-between rounded-lg border p-3">
-              <div><p className="text-sm font-medium">{item.name}</p><a href={`mailto:${item.email}`} className="text-xs text-primary underline">{item.email}</a>{item.role && <p className="text-xs text-muted-foreground">{item.role}</p>}</div>
-              <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${item.name}`} onClick={() => removeContact(item.contact_id)}><RiDeleteBinLine /></Button>
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{item.name}</p>
+                <a href={`mailto:${item.email}`} className="text-xs text-primary underline">{item.email}</a>
+                {item.role && <p className="text-xs">{item.role}</p>}
+                {item.role_description && <p className="text-xs text-muted-foreground">{item.role_description}</p>}
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Access: {item.dashboard_access || "Not configured"}
+                  {(item.organization_ids || []).length ? ` · Orgs: ${item.organization_ids.join(", ")}` : ""}
+                </p>
+                {item.invite_sent_at && <p className="text-xs text-emerald-600">Invite sent {new Date(item.invite_sent_at).toLocaleString()}</p>}
+              </div>
+              <div className="flex gap-1">
+                {item.access_url && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => sendInvite(item.contact_id)}>Send access</Button>}
+                <Button type="button" variant="ghost" size="icon-sm" aria-label={`Edit ${item.name}`} onClick={() => editContact(item)}><RiEditLine /></Button>
+                <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${item.name}`} onClick={() => removeContact(item.contact_id)}><RiDeleteBinLine /></Button>
+              </div>
             </div>
-          ))}
-        </div>
+            ))}
+            {!items.length && <p className="text-xs text-muted-foreground">No {bucket} users added.</p>}
+            </div>
+          </div>;
+        })}
+        {(account.contacts || []).length > 0 && <MeetingScheduler account={account} />}
       </Card>
       <Card className={section === "communications" ? "p-4" : "hidden"}>
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -734,7 +793,7 @@ export default function OnboardingWorkspace({
           <p className="text-xs text-muted-foreground">Attach meetings, threads, tickets, CRM records, and documents.</p>
           <form onSubmit={addSource} className="mt-4 grid gap-2 sm:grid-cols-2">
             <select className="h-9 rounded-md border bg-background px-2 text-xs" value={source.type} onChange={(event) => setSource({ ...source, type: event.target.value as IntegrationSourceLink["type"] })}>
-              {["grain", "slack", "linear", "pylon", "hubspot", "document", "other"].map((type) => <option key={type} value={type}>{formatIntegrationLabel(type)}</option>)}
+              {["linear", "hubspot", "document", "other"].map((type) => <option key={type} value={type}>{formatIntegrationLabel(type)}</option>)}
             </select>
             <Input required placeholder="Title" value={source.title} onChange={(event) => setSource({ ...source, title: event.target.value })} />
             <Input required type="url" placeholder="https://..." value={source.url} onChange={(event) => setSource({ ...source, url: event.target.value })} />

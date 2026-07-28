@@ -38,6 +38,7 @@ export interface IntegrationAccount {
   stakeholders: string[];
   go_live_criteria: string | null;
   completion_percentage: number;
+  client_email_domains: string[];
   work_items: IntegrationWorkItem[];
   activities: IntegrationActivity[];
   source_links: IntegrationSourceLink[];
@@ -54,7 +55,12 @@ export interface IntegrationContact {
   name: string;
   email: string;
   role: string | null;
+  role_description: string | null;
   phone: string | null;
+  dashboard_access: string | null;
+  organization_ids: string[];
+  access_url: string | null;
+  invite_sent_at: string | null;
   created_at: string;
 }
 
@@ -154,7 +160,7 @@ export type IntegrationAccountInput = Pick<IntegrationAccount, "name"> &
   Partial<Pick<IntegrationAccount, "owner_email" | "stage" | "health" |
     "health_reason" | "target_go_live_at" | "current_blocker" | "next_action" |
     "platforms" | "environments" | "stakeholders" | "go_live_criteria" |
-    "completion_percentage" | "health_override_enabled">>;
+    "completion_percentage" | "health_override_enabled" | "client_email_domains">>;
 
 export interface IntegrationAction extends IntegrationWorkItem {
   account_id: string;
@@ -390,11 +396,29 @@ export function fetchPylonIssue(accountId: string, issueId: string) {
 
 export function createIntegrationContact(
   accountId: string,
-  input: Pick<IntegrationContact, "name" | "email" | "role" | "phone">,
+  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "organization_ids" | "access_url">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function updateIntegrationContact(
+  accountId: string,
+  contactId: string,
+  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "organization_ids" | "access_url">,
+) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/contacts/${contactId}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+  );
+}
+
+export function inviteIntegrationContact(accountId: string, contactId: string) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/invite`,
+    { method: "POST" },
   );
 }
 

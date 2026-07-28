@@ -57,9 +57,15 @@ class AccountService:
     async def create_contact(self, account, data, actor, request_id):
         now = datetime.now(timezone.utc)
         contact_id = self._id("contact")
+        normalized = normalize_contact(data)
+        domain = normalized["email"].rsplit("@", 1)[1]
+        allowed_domains = account.get("client_email_domains") or []
+        if domain != "plotline.so" and allowed_domains and domain not in allowed_domains:
+            raise ValidationError("Contact email must match a configured client email domain")
         contact = {
             "contact_id": contact_id, "account_id": account["account_id"],
-            **normalize_contact(data), "created_at": now, "created_by": actor,
+            **normalized, "created_at": now, "created_by": actor,
+            "updated_at": now, "updated_by": actor,
             "archived_at": None,
         }
         audit = self._audit(
@@ -67,6 +73,25 @@ class AccountService:
             "contact.created", request_id,
         )
         await self.repository.create_contact(contact, audit)
+        return await self.get(account["account_id"])
+
+    async def update_contact(self, account, contact_id, data, actor, request_id):
+        normalized = normalize_contact(data)
+        domain = normalized["email"].rsplit("@", 1)[1]
+        allowed_domains = account.get("client_email_domains") or []
+        if domain != "plotline.so" and allowed_domains and domain not in allowed_domains:
+            raise ValidationError("Contact email must match a configured client email domain")
+        audit = self._audit(
+            account["account_id"], actor, "contact", contact_id,
+            "contact.updated", request_id,
+        )
+        updated = await self.repository.update_contact(
+            account["account_id"], contact_id,
+            {**normalized, "updated_at": datetime.now(timezone.utc), "updated_by": actor},
+            actor, audit,
+        )
+        if not updated:
+            raise ValidationError("Contact not found")
         return await self.get(account["account_id"])
 
     async def archive_contact(self, account, contact_id, actor, request_id):
