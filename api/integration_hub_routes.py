@@ -13,6 +13,7 @@ from integration_hub.service import AccountService
 from observability.db import get_db
 
 _RATE_LIMIT = int(os.environ.get("INTEGRATION_HUB_RATE_LIMIT", "120"))
+_PYLON_DETAIL_REQUESTS = {}
 
 
 def _enabled():
@@ -359,6 +360,74 @@ async def handle_search_pylon_customers(request):
     return await _run(request, action)
 
 
+async def _pylon_mapping(service, account_id):
+    return await service.repository.sync_sources.find_one({
+        "account_id": account_id, "source": "pylon", "archived_at": None, "status": "active",
+    })
+
+
+async def handle_list_pylon_issues(request):
+    async def action():
+        service, _, _, account = await _account_context(request, cost=2)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        mapping = await _pylon_mapping(service, account["account_id"])
+        if not mapping:
+            return _error(request, 409, "pylon_not_connected", "Connect a Pylon customer first")
+        from tools.pylon import list_account_issues_page
+        limit = min(50, max(1, int(request.query.get("limit", "25"))))
+        query = request.query.get("query", "").strip()
+        if len(query) > 100:
+            raise ValidationError("query must be 100 characters or less")
+        result = await list_account_issues_page(
+            mapping["external_id"], limit=limit, cursor=request.query.get("cursor"),
+            state=request.query.get("status"), assignee_id=request.query.get("assignee"),
+            query=query or None,
+        )
+        if result.get("error"):
+            raise RuntimeError(result["error"])
+        return _ok(request, result)
+    return await _run(request, action)
+
+
+async def handle_get_pylon_issue(request):
+    async def action():
+        service, _, _, account = await _account_context(request, cost=4)
+        if not account:
+            return _error(request, 404, "not_found", "Account not found")
+        mapping = await _pylon_mapping(service, account["account_id"])
+        if not mapping:
+            return _error(request, 409, "pylon_not_connected", "Connect a Pylon customer first")
+        from tools.pylon import get_issue, get_messages
+        import asyncio
+        issue_id = request.match_info["issue_id"]
+        request_key = (account["account_id"], issue_id)
+        task = _PYLON_DETAIL_REQUESTS.get(request_key)
+        if task is None:
+            task = asyncio.ensure_future(asyncio.gather(
+                get_issue(issue_id), get_messages(issue_id),
+            ))
+            _PYLON_DETAIL_REQUESTS[request_key] = task
+        try:
+            issue_result, messages_result = await task
+        finally:
+            if task.done():
+                _PYLON_DETAIL_REQUESTS.pop(request_key, None)
+        if issue_result.get("error"):
+            raise RuntimeError(issue_result["error"])
+        if messages_result.get("error"):
+            raise RuntimeError(messages_result["error"])
+        issue = issue_result.get("data") or issue_result
+        issue_account_id = (issue.get("account") or {}).get("id") or issue.get("account_id")
+        if issue_account_id and str(issue_account_id) != str(mapping["external_id"]):
+            return _error(request, 404, "not_found", "Issue not found for this client")
+        messages = messages_result.get("data") or messages_result.get("messages") or []
+        if isinstance(messages, dict):
+            messages = messages.get("data", [])
+        return _ok(request, {"issue": issue, "messages": messages[:200]})
+    return await _run(request, action)
+
+
 async def handle_sync_source(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit", cost=10)
@@ -400,5 +469,7 @@ def setup_integration_hub_routes(app):
     app.router.add_get(f"{p}/accounts/{{account_id}}/sync-jobs", handle_list_sync_jobs)
     app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources", handle_create_sync_source)
     app.router.add_get(f"{p}/pylon/customers", handle_search_pylon_customers)
+    app.router.add_get(f"{p}/accounts/{{account_id}}/pylon/issues", handle_list_pylon_issues)
+    app.router.add_get(f"{p}/accounts/{{account_id}}/pylon/issues/{{issue_id}}", handle_get_pylon_issue)
     app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources/{{mapping_id}}/sync", handle_sync_source)
     app.router.add_post(f"{p}/accounts/{{account_id}}/interactions", handle_ingest_interaction)

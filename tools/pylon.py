@@ -60,19 +60,24 @@ async def _api_get(path: str) -> dict[str, Any]:
     url = f"{PYLON_BASE_URL}{path}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, headers=_headers(), timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 401:
-                    return {"error": "Pylon API key is invalid or expired."}
-                if resp.status == 404:
-                    return {"error": f"Not found: {path}"}
-                if resp.status == 429:
-                    return {"error": "Pylon rate limit reached. Try again shortly."}
-                if resp.status != 200:
-                    text = await resp.text()
-                    return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
-                return await resp.json()
+            for attempt in range(3):
+                async with session.get(
+                    url, headers=_headers(), timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 401:
+                        return {"error": "Pylon API key is invalid or expired."}
+                    if resp.status == 404:
+                        return {"error": f"Not found: {path}"}
+                    if resp.status == 429:
+                        if attempt == 2:
+                            return {"error": "Pylon rate limit reached. Try again shortly."}
+                        retry_after = min(30, max(1, int(resp.headers.get("Retry-After", "2"))))
+                        await asyncio.sleep(retry_after * (attempt + 1))
+                        continue
+                    if resp.status != 200:
+                        text = await resp.text()
+                        return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
+                    return await resp.json()
     except aiohttp.ClientError as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
@@ -82,17 +87,22 @@ async def _api_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
     url = f"{PYLON_BASE_URL}{path}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url, headers=_headers(), json=body, timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 401:
-                    return {"error": "Pylon API key is invalid or expired."}
-                if resp.status == 429:
-                    return {"error": "Pylon rate limit reached. Try again shortly."}
-                if resp.status not in (200, 201):
-                    text = await resp.text()
-                    return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
-                return await resp.json()
+            for attempt in range(3):
+                async with session.post(
+                    url, headers=_headers(), json=body, timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 401:
+                        return {"error": "Pylon API key is invalid or expired."}
+                    if resp.status == 429:
+                        if attempt == 2:
+                            return {"error": "Pylon rate limit reached. Try again shortly."}
+                        retry_after = min(30, max(1, int(resp.headers.get("Retry-After", "2"))))
+                        await asyncio.sleep(retry_after * (attempt + 1))
+                        continue
+                    if resp.status not in (200, 201):
+                        text = await resp.text()
+                        return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
+                    return await resp.json()
     except aiohttp.ClientError as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
@@ -349,6 +359,57 @@ async def list_issues(
         "period": f"last {days} days",
         "count": len(summaries),
         "issues": summaries,
+    }
+
+
+async def list_account_issues_page(
+    account_id: str,
+    *,
+    limit: int = 25,
+    cursor: str | None = None,
+    state: str | None = None,
+    assignee_id: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    """Fetch one lightweight, server-filtered issue page for a Pylon account."""
+    filters: list[dict[str, Any]] = [
+        {"field": "account_id", "operator": "equals", "value": account_id},
+    ]
+    if state:
+        filters.append({"field": "state", "operator": "in", "value": [state]})
+    if assignee_id:
+        filters.append({"field": "assignee_id", "operator": "equals", "value": assignee_id})
+    if query:
+        filters.append({"field": "title", "operator": "string_contains", "value": query[:100]})
+    body: dict[str, Any] = {
+        "filter": {"op": "and", "value": filters},
+        "limit": min(50, max(1, limit)),
+    }
+    if cursor:
+        body["cursor"] = cursor
+    result = await _api_post("/issues/search", body)
+    if result.get("error"):
+        return result
+    issues = []
+    for issue in result.get("data", []):
+        issues.append({
+            "id": str(issue.get("id") or ""),
+            "title": issue.get("title") or "Untitled issue",
+            "state": issue.get("state") or "unknown",
+            "assignee": issue.get("assignee"),
+            "created_at": issue.get("created_at"),
+            "updated_at": issue.get("updated_at"),
+            "account_id": (issue.get("account") or {}).get("id") or issue.get("account_id"),
+            "url": issue.get("url") or issue.get("web_url")
+                   or f"https://app.usepylon.com/issues/{issue.get('id')}",
+        })
+    pagination = result.get("pagination") or {}
+    return {
+        "issues": issues,
+        "pagination": {
+            "next_cursor": pagination.get("cursor") if pagination.get("has_next_page") else None,
+            "has_next_page": bool(pagination.get("has_next_page")),
+        },
     }
 
 

@@ -315,6 +315,42 @@ export function searchPylonCustomers(query: string) {
   );
 }
 
+export interface PylonIssueSummary {
+  id: string;
+  title: string;
+  state: string;
+  assignee?: { id?: string; name?: string; email?: string } | string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  url?: string | null;
+}
+
+export interface PylonIssueDetail {
+  issue: PylonIssueSummary & Record<string, unknown>;
+  messages: Array<Record<string, unknown>>;
+}
+
+export function fetchPylonIssues(
+  accountId: string,
+  params: { cursor?: string; status?: string; query?: string; limit?: number } = {},
+) {
+  const query = new URLSearchParams();
+  query.set("limit", String(params.limit || 25));
+  if (params.cursor) query.set("cursor", params.cursor);
+  if (params.status) query.set("status", params.status);
+  if (params.query) query.set("query", params.query);
+  return request<{
+    issues: PylonIssueSummary[];
+    pagination: { next_cursor: string | null; has_next_page: boolean };
+  }>(`/api/integration-hub/accounts/${accountId}/pylon/issues?${query.toString()}`);
+}
+
+export function fetchPylonIssue(accountId: string, issueId: string) {
+  return request<PylonIssueDetail>(
+    `/api/integration-hub/accounts/${accountId}/pylon/issues/${encodeURIComponent(issueId)}`,
+  );
+}
+
 export function createIntegrationSyncSource(accountId: string, input: {
   source: IntegrationSyncSource["source"];
   tenant_id: string;

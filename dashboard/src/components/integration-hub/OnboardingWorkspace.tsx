@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   createIntegrationActivity,
   fetchIntegrationAccount,
@@ -10,6 +10,8 @@ import {
   createIntegrationSyncSource,
   syncIntegrationSource,
   searchPylonCustomers,
+  fetchPylonIssue,
+  fetchPylonIssues,
   archiveIntegrationProject,
   archiveIntegrationSourceLink,
   archiveIntegrationWorkItem,
@@ -17,6 +19,7 @@ import {
   INTEGRATION_HEALTH,
   IntegrationAccount,
   IntegrationSourceLink, IntegrationSyncSource, IntegrationWorkItemInput, PylonCustomerMatch,
+  PylonIssueDetail, PylonIssueSummary,
   IntegrationWorkItemType,
   updateIntegrationAccount,
   updateIntegrationWorkItem,
@@ -70,6 +73,43 @@ export default function OnboardingWorkspace({
   const [pylonMatches, setPylonMatches] = useState<PylonCustomerMatch[]>([]);
   const [searchingPylon, setSearchingPylon] = useState(false);
   const [pylonSearchCompleted, setPylonSearchCompleted] = useState(false);
+  const [pylonIssues, setPylonIssues] = useState<PylonIssueSummary[]>([]);
+  const [pylonIssueCursor, setPylonIssueCursor] = useState<string | null>(null);
+  const [pylonIssueQuery, setPylonIssueQuery] = useState("");
+  const [pylonIssueStatus, setPylonIssueStatus] = useState("");
+  const [loadingPylonIssues, setLoadingPylonIssues] = useState(false);
+  const [selectedPylonIssue, setSelectedPylonIssue] = useState<PylonIssueDetail | null>(null);
+  const [loadingPylonIssueId, setLoadingPylonIssueId] = useState<string | null>(null);
+  const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
+
+  async function loadPylonIssues(cursor?: string, append = false) {
+    setLoadingPylonIssues(true); setError(null);
+    try {
+      const result = await fetchPylonIssues(account.account_id, {
+        cursor, status: pylonIssueStatus || undefined,
+        query: pylonIssueQuery.trim() || undefined, limit: 25,
+      });
+      setPylonIssues((current) => append ? [...current, ...result.issues] : result.issues);
+      setPylonIssueCursor(result.pagination.next_cursor);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load Pylon issues");
+    } finally { setLoadingPylonIssues(false); }
+  }
+
+  async function openPylonIssue(issueId: string) {
+    setLoadingPylonIssueId(issueId); setError(null);
+    try { setSelectedPylonIssue(await fetchPylonIssue(account.account_id, issueId)); }
+    catch (err) { setError(err instanceof Error ? err.message : "Could not load Pylon issue"); }
+    finally { setLoadingPylonIssueId(null); }
+  }
+
+  useEffect(() => {
+    if (!pylonConnected) return;
+    const timer = window.setTimeout(() => { void loadPylonIssues(); }, 300);
+    return () => window.clearTimeout(timer);
+  // Search/filter changes intentionally trigger a debounced server-side fetch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.account_id, pylonConnected, pylonIssueQuery, pylonIssueStatus]);
 
   async function findPylonCustomers() {
     setSearchingPylon(true); setPylonSearchCompleted(false); setError(null);
@@ -318,19 +358,43 @@ export default function OnboardingWorkspace({
             </div>
           ))}
         </div>
+        {pylonConnected && <div className="mt-4 rounded-lg border">
+          <div className="flex flex-wrap gap-2 border-b p-3">
+            <Input className="max-w-sm" maxLength={100} placeholder="Search issues" value={pylonIssueQuery} onChange={(event) => setPylonIssueQuery(event.target.value)} />
+            <select className="h-9 rounded-md border bg-background px-3 text-sm" value={pylonIssueStatus} onChange={(event) => setPylonIssueStatus(event.target.value)}>
+              <option value="">All statuses</option><option value="new">New</option><option value="waiting_on_you">Waiting on Plotline</option><option value="waiting_on_customer">Waiting on customer</option><option value="closed">Closed</option>
+            </select>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="p-3">Issue</th><th className="p-3">Status</th><th className="p-3">Assignee</th><th className="p-3">Updated</th><th className="p-3">Ticket</th></tr></thead>
+              <tbody>
+                {pylonIssues.map((issue) => <tr key={issue.id} className="cursor-pointer border-b hover:bg-muted/30" onClick={() => openPylonIssue(issue.id)}>
+                  <td className="p-3 font-medium">{loadingPylonIssueId === issue.id ? "Loading..." : issue.title}</td>
+                  <td className="p-3"><Badge variant="outline">{formatIntegrationLabel(issue.state)}</Badge></td>
+                  <td className="p-3">{typeof issue.assignee === "string" ? issue.assignee : issue.assignee?.name || issue.assignee?.email || "Unassigned"}</td>
+                  <td className="p-3 text-muted-foreground">{issue.updated_at ? new Date(issue.updated_at).toLocaleString() : "Unknown"}</td>
+                  <td className="p-3">{issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" className="text-primary underline" onClick={(event) => event.stopPropagation()}>Open</a> : "Unavailable"}</td>
+                </tr>)}
+              </tbody>
+            </table>
+            {!pylonIssues.length && !loadingPylonIssues && <p className="p-4 text-sm text-muted-foreground">No Pylon issues match these filters.</p>}
+          </div>
+          {pylonIssueCursor && <div className="border-t p-3"><Button type="button" variant="outline" size="sm" disabled={loadingPylonIssues} onClick={() => loadPylonIssues(pylonIssueCursor, true)}>{loadingPylonIssues ? "Loading..." : "Load more"}</Button></div>}
+        </div>}
+        {selectedPylonIssue && <div className="mt-3 rounded-lg border p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div><p className="font-medium">{selectedPylonIssue.issue.title}</p><p className="text-xs text-muted-foreground">{selectedPylonIssue.messages.length} messages loaded on demand</p></div>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedPylonIssue(null)}>Close</Button>
+          </div>
+          <div className="mt-3 max-h-96 space-y-2 overflow-y-auto">
+            {selectedPylonIssue.messages.map((message, index) => <div key={String(message.id || index)} className="rounded-md bg-muted/40 p-3 text-sm">
+              <p className="whitespace-pre-wrap">{String(message.body || message.text || message.body_html || "Message")}</p>
+            </div>)}
+          </div>
+          {selectedPylonIssue.issue.url && <a className="mt-3 inline-block text-sm text-primary underline" href={selectedPylonIssue.issue.url} target="_blank" rel="noreferrer">View ticket in Pylon</a>}
+        </div>}
         <div className="mt-3 space-y-2">
-          {(account.conversations || []).map((conversation) => (
-            <div key={`${conversation.source}:${conversation.conversation_id}`} className="rounded-lg border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">Pylon conversation</Badge>
-                <Badge variant={conversation.state === "waiting_on_plotline" ? "destructive" : "outline"}>{formatIntegrationLabel(conversation.state)}</Badge>
-                {conversation.issue_status && <Badge variant="outline">{formatIntegrationLabel(conversation.issue_status)}</Badge>}
-              </div>
-              <p className="mt-2 text-sm font-medium">{conversation.issue_title || conversation.summary}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Last activity {new Date(conversation.last_interaction_at).toLocaleString()}{conversation.requires_response ? " · Follow-up required" : ""}</p>
-              {conversation.source_url && <a className="mt-2 inline-block text-xs text-primary underline" href={conversation.source_url} target="_blank" rel="noreferrer">Open in Pylon</a>}
-            </div>
-          ))}
           {(account.interactions || []).map((interaction) => (
             <div key={interaction.interaction_id} className="rounded-lg border p-3">
               <div className="flex flex-wrap items-center gap-2">

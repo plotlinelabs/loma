@@ -233,6 +233,50 @@ async def test_pylon_customer_discovery_groups_issues_by_stable_account_id(monke
 
 
 @pytest.mark.asyncio
+async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypatch):
+    captured = {}
+
+    async def api_post(path, body):
+        captured.update(path=path, body=body)
+        return {
+            "data": [{
+                "id": "issue-1", "title": "SDK issue", "state": "waiting_on_you",
+                "updated_at": "2026-07-28T10:00:00Z",
+                "account": {"id": "account-1"},
+                "url": "https://app.usepylon.com/issues/issue-1",
+            }],
+            "pagination": {"has_next_page": True, "cursor": "next-page"},
+        }
+
+    monkeypatch.setattr("tools.pylon._api_post", api_post)
+    from tools.pylon import list_account_issues_page
+    result = await list_account_issues_page(
+        "account-1", limit=25, cursor="current-page",
+        state="waiting_on_you", query="SDK",
+    )
+
+    assert captured["path"] == "/issues/search"
+    assert captured["body"]["cursor"] == "current-page"
+    assert captured["body"]["limit"] == 25
+    filters = captured["body"]["filter"]["value"]
+    assert {"field": "account_id", "operator": "equals", "value": "account-1"} in filters
+    assert result["issues"][0]["id"] == "issue-1"
+    assert result["pagination"]["next_cursor"] == "next-page"
+
+
+@pytest.mark.asyncio
+async def test_pylon_issue_page_caps_external_page_size(monkeypatch):
+    async def api_post(_path, body):
+        assert body["limit"] == 50
+        return {"data": [], "pagination": {"has_next_page": False}}
+
+    monkeypatch.setattr("tools.pylon._api_post", api_post)
+    from tools.pylon import list_account_issues_page
+    result = await list_account_issues_page("account-1", limit=500)
+    assert result["pagination"]["next_cursor"] is None
+
+
+@pytest.mark.asyncio
 async def test_pylon_customer_mapping_imports_all_issue_threads_read_only(monkeypatch):
     from integration_hub import read_only_sync
     async def list_issues(**_kwargs):
