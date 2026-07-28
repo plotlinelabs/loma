@@ -492,10 +492,22 @@ async def list_account_issues_page(
         assignee_id = issue.get("assignee_id")
         return {"id": assignee_id} if assignee_id else None
 
+    def assignee_id(issue: dict[str, Any]) -> str | None:
+        """Extract the user ID from every assignee shape returned by Pylon."""
+        direct_id = issue.get("assignee_id")
+        if direct_id:
+            return str(direct_id)
+        assignee = assignee_summary(issue)
+        if isinstance(assignee, str):
+            return assignee
+        if isinstance(assignee, dict) and assignee.get("id"):
+            return str(assignee["id"])
+        return None
+
     assignee_ids = {
-        str(issue.get("assignee_id"))
+        user_id
         for issue in result.get("data", [])
-        if issue.get("assignee_id")
+        if (user_id := assignee_id(issue))
     }
     assignee_directory: dict[str, dict[str, Any]] = {}
     if assignee_ids:

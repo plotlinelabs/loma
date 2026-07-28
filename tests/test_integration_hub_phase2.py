@@ -250,7 +250,16 @@ async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypat
             "pagination": {"has_next_page": True, "cursor": "next-page"},
         }
 
+    async def api_get(path):
+        assert path == "/users"
+        return {"data": [{
+            "id": "user-1",
+            "name": "Vamsi",
+            "email": "vamsi@plotline.so",
+        }]}
+
     monkeypatch.setattr("tools.pylon._api_post", api_post)
+    monkeypatch.setattr("tools.pylon._api_get", api_get)
     from tools.pylon import list_account_issues_page
     result = await list_account_issues_page(
         "account-1", limit=25, cursor="current-page",
@@ -264,12 +273,51 @@ async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypat
     filters = captured["body"]["filter"]["subfilters"]
     assert {"field": "account_id", "operator": "equals", "value": "account-1"} in filters
     assert result["issues"][0]["id"] == "issue-1"
-    assert result["issues"][0]["assignee"] == {"id": "user-1", "name": "Vamsi"}
+    assert result["issues"][0]["assignee"] == {
+        "id": "user-1",
+        "name": "Vamsi",
+        "email": "vamsi@plotline.so",
+    }
     assert result["issues"][0]["url"] == (
         "https://app.usepylon.com/support/issues/views/"
         "ab8a8a4e-a550-4c1b-9479-c00066f233cb?issueNumber=2850"
     )
     assert result["pagination"]["next_cursor"] == "next-page"
+
+
+@pytest.mark.asyncio
+async def test_pylon_issue_page_resolves_nested_assignee_id(monkeypatch):
+    async def api_post(_path, _body):
+        return {
+            "data": [{
+                "id": "issue-1",
+                "title": "Campaign issue",
+                "state": "waiting_on_you",
+                "assignee": {"id": "user-1"},
+                "account": {"id": "account-1"},
+            }],
+            "pagination": {"has_next_page": False},
+        }
+
+    async def api_get(path):
+        assert path == "/users"
+        return {"data": [{
+            "id": "user-1",
+            "name": "Sindu",
+            "email": "sindu.sayani@plotline.so",
+        }]}
+
+    monkeypatch.setattr("tools.pylon._api_post", api_post)
+    monkeypatch.setattr("tools.pylon._api_get", api_get)
+    from tools.pylon import list_account_issues_page
+
+    result = await list_account_issues_page("account-1")
+
+    assert result["issues"][0]["assignee"] == {
+        "id": "user-1",
+        "name": "Sindu",
+        "email": "sindu.sayani@plotline.so",
+    }
 
 
 @pytest.mark.asyncio
