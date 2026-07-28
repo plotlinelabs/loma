@@ -19,6 +19,7 @@ Usage (called by the agent via Bash):
 import asyncio
 import json
 import os
+import re
 import sys
 import logging
 from datetime import datetime, timedelta, timezone
@@ -180,25 +181,47 @@ async def discover_client_recordings(
     company_name: str, contact_emails: list[str] | None = None
 ) -> dict[str, Any]:
     """Find likely client meetings without importing or changing anything in Grain."""
-    terms = [company_name.strip()]
-    for email in contact_emails or []:
-        domain = email.rsplit("@", 1)[-1].split(".", 1)[0]
-        if domain and domain.casefold() not in {"gmail", "outlook", "yahoo", "hotmail"}:
-            terms.append(domain)
+    def normalized(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+    generic_domains = {
+        "gmail.com", "outlook.com", "yahoo.com", "hotmail.com", "plotline.so",
+    }
+    emails = {
+        email.strip().casefold()
+        for email in contact_emails or []
+        if "@" in email and not email.casefold().endswith("@plotline.so")
+    }
+    domains = {
+        email.rsplit("@", 1)[-1]
+        for email in emails
+        if email.rsplit("@", 1)[-1] not in generic_domains
+    }
+    terms = [company_name.strip(), *(domain.split(".", 1)[0] for domain in domains)]
     recordings: dict[str, dict[str, Any]] = {}
     for term in dict.fromkeys(term for term in terms if term):
         result = await search_recordings(term)
         if result.get("error"):
             continue
         for recording in result.get("recordings", []):
-            recordings[recording["id"]] = recording
-    emails = {email.casefold() for email in contact_emails or []}
+            participant_emails = {
+                (participant.get("email") or "").strip().casefold()
+                for participant in recording.get("participants", [])
+            }
+            participant_domains = {
+                email.rsplit("@", 1)[-1]
+                for email in participant_emails
+                if "@" in email
+            }
+            title_matches = (
+                bool(normalized(company_name))
+                and normalized(company_name) in normalized(recording.get("title") or "")
+            )
+            contact_matches = bool(emails & participant_emails)
+            domain_matches = bool(domains & participant_domains)
+            if title_matches or contact_matches or domain_matches:
+                recordings[recording["id"]] = recording
     rows = list(recordings.values())
-    if emails:
-        rows.sort(key=lambda row: any(
-            (participant.get("email") or "").casefold() in emails
-            for participant in row.get("participants", [])
-        ), reverse=True)
     rows.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
     return {"recordings": rows[:50]}
 
