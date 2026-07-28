@@ -105,6 +105,7 @@ def normalize_source_mapping(data):
     allowed_config = {
         "thread_ts", "source_url", "limit", "customer_user_ids",
         "plotline_user_ids", "recording_ids", "sync_interval_minutes",
+        "customer_name", "issue_ids",
     }
     if set(config) - allowed_config:
         raise ValidationError("config contains unsupported fields")
@@ -116,7 +117,7 @@ def normalize_source_mapping(data):
         or not 15 <= config["sync_interval_minutes"] <= 1440
     ):
         raise ValidationError("config.sync_interval_minutes must be between 15 and 1440")
-    for field in ("customer_user_ids", "plotline_user_ids", "recording_ids"):
+    for field in ("customer_user_ids", "plotline_user_ids", "recording_ids", "issue_ids"):
         if field in config:
             config[field] = _text_list(config[field], f"config.{field}", maximum_items=100)
     return {

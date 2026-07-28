@@ -114,29 +114,85 @@ async def _grain(mapping, _actor):
 
 
 async def _pylon(mapping, _actor):
-    from tools.pylon import get_issue, get_messages
-    issue, messages = await asyncio.gather(get_issue(mapping["external_id"]), get_messages(mapping["external_id"]))
-    for result in (issue, messages):
+    from tools.pylon import get_issue, get_messages, list_issues
+    config = mapping.get("config", {})
+    issue_ids = list(config.get("issue_ids", []))
+    if not issue_ids:
+        result = await list_issues(days=3650, limit=100, max_pages=20)
         if result.get("error"):
             raise SyncError(result["error"])
-    rows = messages.get("data") or messages.get("messages") or []
-    if isinstance(rows, dict):
-        rows = rows.get("data", [])
-    issue_data = issue.get("data") or issue
-    conversation_id = str(issue_data.get("id") or mapping["external_id"])
-    return [
-        _interaction("pylon", mapping["tenant_id"], row.get("id"),
-                     row.get("created_at") or row.get("timestamp"),
-                     row.get("body_html") or row.get("body") or row.get("text") or "Pylon message",
-                     row.get("url"),
-                     "customer_to_plotline" if row.get("source") == "customer" else "plotline_to_customer",
-                     conversation_id, {
-                         "issue_id": conversation_id, "issue_title": issue_data.get("title"),
-                         "issue_status": issue_data.get("state") or issue_data.get("status"),
-                         "assignee": issue_data.get("assignee"),
-                     })
-        for row in rows if row.get("id")
-    ]
+        issue_ids = [
+            row["id"] for row in result.get("issues", [])
+            if row.get("customer_id") == mapping["external_id"]
+            or (not row.get("customer_id") and row.get("customer") == config.get("customer_name"))
+        ]
+    checkpoint = (mapping.get("checkpoint") or {}).get("last_occurred_at")
+    interactions = []
+    for issue_id in issue_ids[:500]:
+        issue, messages = await asyncio.gather(get_issue(issue_id), get_messages(issue_id))
+        for result in (issue, messages):
+            if result.get("error"):
+                raise SyncError(result["error"])
+        rows = messages.get("data") or messages.get("messages") or []
+        if isinstance(rows, dict):
+            rows = rows.get("data", [])
+        issue_data = issue.get("data") or issue
+        conversation_id = str(issue_data.get("id") or issue_id)
+        issue_state = str(issue_data.get("state") or issue_data.get("status") or "").lower()
+        for row in rows:
+            if not row.get("id"):
+                continue
+            direction = (
+                "customer_to_plotline"
+                if row.get("source") in {"customer", "email", "slack_customer"}
+                or row.get("sender_type") in {"customer", "contact"}
+                else "plotline_to_customer"
+            )
+            item = _interaction(
+                "pylon", mapping["tenant_id"], row["id"],
+                row.get("created_at") or row.get("timestamp"),
+                row.get("body_html") or row.get("body") or row.get("text") or "Pylon message",
+                row.get("url") or issue_data.get("url"), direction, conversation_id, {
+                    "issue_id": conversation_id, "issue_title": issue_data.get("title"),
+                    "issue_status": issue_state, "assignee": issue_data.get("assignee"),
+                    "customer": issue_data.get("account"), "message": row,
+                },
+            )
+            if issue_state in {"closed", "resolved"}:
+                item.update(requires_response=False, conversation_state="resolved")
+            elif direction == "customer_to_plotline":
+                item.update(requires_response=True, conversation_state="waiting_on_plotline")
+            else:
+                item.update(requires_response=False, conversation_state="waiting_on_customer")
+            interactions.append(item)
+    interactions.sort(key=lambda row: row["occurred_at"])
+    return [row for row in interactions
+            if not checkpoint or row["occurred_at"].isoformat() > checkpoint]
+
+
+async def discover_pylon_customers(query, days=3650):
+    """Discover Pylon customers without exposing any write operation."""
+    from tools.pylon import list_issues
+    result = await list_issues(days=days, limit=100, max_pages=20)
+    if result.get("error"):
+        raise SyncError(result["error"])
+    query = (query or "").strip().lower()
+    customers = {}
+    for issue in result.get("issues", []):
+        name = (issue.get("customer") or "").strip()
+        customer_id = (issue.get("customer_id") or "").strip()
+        if not name or not customer_id or (query and query not in name.lower()):
+            continue
+        entry = customers.setdefault(customer_id, {
+            "customer_id": customer_id, "name": name, "issue_count": 0,
+            "preview_issues": [],
+        })
+        entry["issue_count"] += 1
+        if len(entry["preview_issues"]) < 5:
+            entry["preview_issues"].append({
+                key: issue.get(key) for key in ("id", "title", "state", "updated_at")
+            })
+    return sorted(customers.values(), key=lambda row: row["name"].lower())[:50]
 
 
 READERS = {"slack": _slack, "grain": _grain, "pylon": _pylon}

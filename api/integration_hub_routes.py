@@ -349,6 +349,16 @@ async def handle_create_sync_source(request):
     return await _run(request, action)
 
 
+async def handle_search_pylon_customers(request):
+    async def action():
+        await _context(request, cost=10); _require_module(request)
+        from integration_hub.read_only_sync import discover_pylon_customers
+        query = request.query.get("query", "")
+        if len(query) > 100: raise ValidationError("query must be 100 characters or less")
+        return _ok(request, {"customers": await discover_pylon_customers(query)})
+    return await _run(request, action)
+
+
 async def handle_sync_source(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit", cost=10)
@@ -389,5 +399,6 @@ def setup_integration_hub_routes(app):
     app.router.add_get(f"{p}/accounts/{{account_id}}/sync-sources", handle_list_sync_sources)
     app.router.add_get(f"{p}/accounts/{{account_id}}/sync-jobs", handle_list_sync_jobs)
     app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources", handle_create_sync_source)
+    app.router.add_get(f"{p}/pylon/customers", handle_search_pylon_customers)
     app.router.add_post(f"{p}/accounts/{{account_id}}/sync-sources/{{mapping_id}}/sync", handle_sync_source)
     app.router.add_post(f"{p}/accounts/{{account_id}}/interactions", handle_ingest_interaction)

@@ -339,7 +339,10 @@ async def list_issues(
             "state": issue.get("state", ""),
             "team_id": issue.get("team_id", ""),
             "created_at": issue.get("created_at", ""),
+            "updated_at": issue.get("updated_at", ""),
+            "assignee": issue.get("assignee"),
             "customer": (issue.get("account") or {}).get("name", ""),
+            "customer_id": (issue.get("account") or {}).get("id", ""),
         })
 
     return {

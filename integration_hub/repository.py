@@ -204,7 +204,7 @@ class AccountRepository:
             return None
         account_id = account["account_id"]
         active = {"account_id": account_id, "archived_at": None}
-        projects, tasks, milestones, risks, sources, sync_sources, interactions, activities = await __import__("asyncio").gather(
+        projects, tasks, milestones, risks, sources, sync_sources, interactions, activities, conversations, findings = await __import__("asyncio").gather(
             self.projects.find(active).sort("created_at", 1).to_list(None),
             self.tasks.find(active).sort("created_at", 1).to_list(None),
             self.milestones.find(active).sort("created_at", 1).to_list(None),
@@ -213,6 +213,8 @@ class AccountRepository:
             self.sync_sources.find(active).sort("created_at", 1).to_list(None),
             self.interactions.find({"account_id": account_id}).sort("occurred_at", -1).limit(100).to_list(100),
             self.timeline.find({"account_id": account_id}).sort("created_at", -1).limit(200).to_list(200),
+            self.conversations.find({"account_id": account_id}).sort("last_interaction_at", -1).limit(100).to_list(100),
+            self.findings.find({"account_id": account_id}).sort("created_at", -1).limit(100).to_list(100),
         )
         result = dict(account)
         result["projects"] = projects
@@ -221,6 +223,8 @@ class AccountRepository:
         result["sync_sources"] = sync_sources
         result["interactions"] = interactions
         result["activities"] = list(reversed(activities))
+        result["conversations"] = conversations
+        result["findings"] = findings
         return result
 
 
@@ -320,6 +324,11 @@ class AccountRepository:
                         "last_interaction_at": interaction["occurred_at"],
                         "state": interaction["conversation_state"],
                         "summary": interaction["summary"],
+                        "requires_response": interaction["requires_response"],
+                        "source_url": interaction.get("source_url"),
+                        "issue_title": interaction.get("raw", {}).get("issue_title"),
+                        "issue_status": interaction.get("raw", {}).get("issue_status"),
+                        "assignee": interaction.get("raw", {}).get("assignee"),
                         "updated_at": interaction["ingested_at"],
                     }, "$setOnInsert": {
                         "created_at": interaction["ingested_at"],

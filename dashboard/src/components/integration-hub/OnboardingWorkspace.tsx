@@ -9,13 +9,14 @@ import {
   createIntegrationWorkItem,
   createIntegrationSyncSource,
   syncIntegrationSource,
+  searchPylonCustomers,
   archiveIntegrationProject,
   archiveIntegrationSourceLink,
   archiveIntegrationWorkItem,
   formatIntegrationLabel,
   INTEGRATION_HEALTH,
   IntegrationAccount,
-  IntegrationSourceLink, IntegrationSyncSource, IntegrationWorkItemInput,
+  IntegrationSourceLink, IntegrationSyncSource, IntegrationWorkItemInput, PylonCustomerMatch,
   IntegrationWorkItemType,
   updateIntegrationAccount,
   updateIntegrationWorkItem,
@@ -65,6 +66,31 @@ export default function OnboardingWorkspace({
   const [projectPlaybook, setProjectPlaybook] = useState("mobile_sdk");
   const [syncSource, setSyncSource] = useState<{ source: IntegrationSyncSource["source"]; tenant_id: string; external_id: string; label: string }>({ source: "slack", tenant_id: "plotline", external_id: "", label: "" });
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [pylonQuery, setPylonQuery] = useState("");
+  const [pylonMatches, setPylonMatches] = useState<PylonCustomerMatch[]>([]);
+  const [searchingPylon, setSearchingPylon] = useState(false);
+
+  async function findPylonCustomers() {
+    setSearchingPylon(true); setError(null);
+    try {
+      const result = await searchPylonCustomers(pylonQuery);
+      setPylonMatches(result.customers);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not search Pylon customers"); }
+    finally { setSearchingPylon(false); }
+  }
+
+  async function connectPylon(customer: PylonCustomerMatch) {
+    setSaving(true); setError(null);
+    try {
+      await createIntegrationSyncSource(account.account_id, {
+        source: "pylon", tenant_id: "pylon", external_id: customer.customer_id,
+        label: customer.name, config: { customer_name: customer.name },
+      });
+      const refreshed = await fetchIntegrationAccount(account.account_id);
+      onChange(refreshed.account); setPylonMatches([]); setPylonQuery("");
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not connect Pylon customer"); }
+    finally { setSaving(false); }
+  }
 
   async function addProject(event: FormEvent) {
     event.preventDefault();
@@ -264,6 +290,22 @@ export default function OnboardingWorkspace({
           <Button type="submit" size="sm" disabled={saving}>Add read-only source</Button>
         </form>
         <p className="mt-2 text-xs text-muted-foreground">Uses existing Loma credentials. Sync only reads external data and cannot send messages or change source records.</p>
+        <div className="mt-3 rounded-lg border p-3">
+          <p className="text-sm font-medium">Connect a Pylon customer</p>
+          <p className="text-xs text-muted-foreground">Search and map one customer. Only that customer&apos;s issues and full message threads are imported.</p>
+          <div className="mt-2 flex gap-2">
+            <Input maxLength={100} placeholder="Client name in Pylon" value={pylonQuery} onChange={(event) => setPylonQuery(event.target.value)} />
+            <Button type="button" variant="outline" size="sm" disabled={searchingPylon || !pylonQuery.trim()} onClick={findPylonCustomers}>{searchingPylon ? "Searching..." : "Search Pylon"}</Button>
+          </div>
+          <div className="mt-2 space-y-2">
+            {pylonMatches.map((customer) => (
+              <div key={customer.customer_id} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 p-2">
+                <div><p className="text-sm font-medium">{customer.name}</p><p className="text-xs text-muted-foreground">{customer.issue_count} recent issues · {customer.preview_issues.slice(0, 2).map((issue) => issue.title).join(", ")}</p></div>
+                <Button type="button" size="sm" disabled={saving} onClick={() => connectPylon(customer)}>Connect read-only</Button>
+              </div>
+            ))}
+          </div>
+        </div>
         <div className="mt-3 space-y-2">
           {(account.sync_sources || []).map((mapping) => (
             <div key={mapping.mapping_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
@@ -273,6 +315,18 @@ export default function OnboardingWorkspace({
           ))}
         </div>
         <div className="mt-3 space-y-2">
+          {(account.conversations || []).map((conversation) => (
+            <div key={`${conversation.source}:${conversation.conversation_id}`} className="rounded-lg border p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="secondary">Pylon conversation</Badge>
+                <Badge variant={conversation.state === "waiting_on_plotline" ? "destructive" : "outline"}>{formatIntegrationLabel(conversation.state)}</Badge>
+                {conversation.issue_status && <Badge variant="outline">{formatIntegrationLabel(conversation.issue_status)}</Badge>}
+              </div>
+              <p className="mt-2 text-sm font-medium">{conversation.issue_title || conversation.summary}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Last activity {new Date(conversation.last_interaction_at).toLocaleString()}{conversation.requires_response ? " · Follow-up required" : ""}</p>
+              {conversation.source_url && <a className="mt-2 inline-block text-xs text-primary underline" href={conversation.source_url} target="_blank" rel="noreferrer">Open in Pylon</a>}
+            </div>
+          ))}
           {(account.interactions || []).map((interaction) => (
             <div key={interaction.interaction_id} className="rounded-lg border p-3">
               <div className="flex flex-wrap items-center gap-2">

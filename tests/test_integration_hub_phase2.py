@@ -212,3 +212,54 @@ def test_connector_analysis_marks_customer_issues_as_waiting():
     assert row["requires_response"] is True
     assert row["conversation_state"] == "waiting_on_plotline"
     assert row["evidence"]["source_id"] == "1.1"
+
+
+@pytest.mark.asyncio
+async def test_pylon_customer_discovery_groups_issues_by_stable_account_id(monkeypatch):
+    from integration_hub import read_only_sync
+    async def list_issues(**_kwargs):
+        return {"issues": [
+            {"id": "i1", "title": "SDK error", "state": "open",
+             "customer": "Acme", "customer_id": "account-1"},
+            {"id": "i2", "title": "Follow-up", "state": "waiting_on_customer",
+             "customer": "Acme", "customer_id": "account-1"},
+            {"id": "i3", "title": "Other", "state": "open",
+             "customer": "Other Co", "customer_id": "account-2"},
+        ]}
+    monkeypatch.setattr("tools.pylon.list_issues", list_issues)
+    rows = await read_only_sync.discover_pylon_customers("acm")
+    assert rows == [{
+        "customer_id": "account-1", "name": "Acme", "issue_count": 2,
+        "preview_issues": [
+            {"id": "i1", "title": "SDK error", "state": "open", "updated_at": None},
+            {"id": "i2", "title": "Follow-up", "state": "waiting_on_customer", "updated_at": None},
+        ],
+    }]
+
+
+@pytest.mark.asyncio
+async def test_pylon_customer_mapping_imports_all_issue_threads_read_only(monkeypatch):
+    from integration_hub import read_only_sync
+    async def list_issues(**_kwargs):
+        return {"issues": [
+            {"id": "i1", "customer": "Acme", "customer_id": "account-1"},
+            {"id": "i2", "customer": "Other", "customer_id": "account-2"},
+        ]}
+    async def get_issue(issue_id):
+        return {"data": {"id": issue_id, "title": "SDK issue", "state": "open"}}
+    async def get_messages(issue_id):
+        return {"data": [
+            {"id": f"{issue_id}-m1", "created_at": "2026-07-27T10:00:00Z",
+             "source": "customer", "body": "Can you help?"},
+            {"id": f"{issue_id}-m2", "created_at": "2026-07-27T11:00:00Z",
+             "source": "agent", "body": "We are checking."},
+        ]}
+    monkeypatch.setattr("tools.pylon.list_issues", list_issues)
+    monkeypatch.setattr("tools.pylon.get_issue", get_issue)
+    monkeypatch.setattr("tools.pylon.get_messages", get_messages)
+    rows = await read_only_sync._pylon({
+        "external_id": "account-1", "tenant_id": "pylon", "config": {"customer_name": "Acme"},
+    }, "user@example.com")
+    assert [row["source_id"] for row in rows] == ["i1-m1", "i1-m2"]
+    assert rows[-1]["conversation_state"] == "waiting_on_customer"
+    assert all(row["conversation_id"] == "i1" for row in rows)

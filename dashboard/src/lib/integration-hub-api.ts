@@ -44,6 +44,31 @@ export interface IntegrationAccount {
   projects: IntegrationProject[];
   interactions: IntegrationInteraction[];
   sync_sources: IntegrationSyncSource[];
+  conversations: IntegrationConversation[];
+  findings: IntegrationFinding[];
+}
+
+export interface IntegrationConversation {
+  conversation_id: string;
+  source: string;
+  issue_title?: string | null;
+  issue_status?: string | null;
+  assignee?: unknown;
+  state: IntegrationInteraction["conversation_state"];
+  requires_response: boolean;
+  summary: string;
+  source_url?: string | null;
+  last_interaction_at: string;
+}
+
+export interface IntegrationFinding {
+  finding_id: string;
+  classification: string;
+  summary: string;
+  requires_response: boolean;
+  conversation_state: IntegrationInteraction["conversation_state"];
+  confidence: number;
+  review_status: "unreviewed" | "confirmed" | "corrected";
 }
 
 export interface IntegrationInteraction {
@@ -273,7 +298,20 @@ export interface IntegrationSyncSource {
   sync_status: "never_synced" | "succeeded" | "failed";
   last_error: string | null;
   last_synced_at: string | null;
-  config: { thread_ts?: string; source_url?: string; limit?: number };
+  config: { thread_ts?: string; source_url?: string; limit?: number; customer_name?: string; issue_ids?: string[] };
+}
+
+export interface PylonCustomerMatch {
+  customer_id: string;
+  name: string;
+  issue_count: number;
+  preview_issues: Array<{ id: string; title: string; state: string; updated_at: string }>;
+}
+
+export function searchPylonCustomers(query: string) {
+  return request<{ customers: PylonCustomerMatch[] }>(
+    `/api/integration-hub/pylon/customers?query=${encodeURIComponent(query)}`,
+  );
 }
 
 export function createIntegrationSyncSource(accountId: string, input: {
