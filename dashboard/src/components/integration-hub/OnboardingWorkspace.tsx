@@ -96,8 +96,8 @@ export default function OnboardingWorkspace({
   const [grainSummary, setGrainSummary] = useState<{ id: string; summary: string; transcript: string; actionItems: GrainMeeting["action_items"] } | null>(null);
 
   function pylonAssignee(issue: PylonIssueSummary) {
-    if (typeof issue.assignee === "string") return issue.assignee;
-    return issue.assignee?.name || issue.assignee?.email || issue.assignee?.id || "Unassigned";
+    if (typeof issue.assignee === "string") return "Assigned user";
+    return issue.assignee?.name || issue.assignee?.email || (issue.assignee?.id ? "Assigned user" : "Unassigned");
   }
 
   async function loadPylonIssues(cursor?: string, append = false) {
