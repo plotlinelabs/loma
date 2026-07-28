@@ -319,7 +319,6 @@ export default function OnboardingWorkspace({
               Read-only activity imported from connected customer communication sources.
             </p>
           </div>
-          <Badge variant="outline">{(account.interactions || []).length} recent</Badge>
         </div>
 
         <form onSubmit={addSyncSource} className="mt-4 grid gap-2 md:grid-cols-[150px_1fr_1fr_auto]">
@@ -394,31 +393,6 @@ export default function OnboardingWorkspace({
           </div>
           {selectedPylonIssue.issue.url && <a className="mt-3 inline-block text-sm text-primary underline" href={selectedPylonIssue.issue.url} target="_blank" rel="noreferrer">View ticket in Pylon</a>}
         </div>}
-        <div className="mt-3 space-y-2">
-          {(account.interactions || []).map((interaction) => (
-            <div key={interaction.interaction_id} className="rounded-lg border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">{formatIntegrationLabel(interaction.source)}</Badge>
-                <Badge variant={interaction.conversation_state === "waiting_on_plotline" ? "destructive" : "outline"}>
-                  {formatIntegrationLabel(interaction.conversation_state)}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  {new Date(interaction.occurred_at).toLocaleString()}
-                </span>
-              </div>
-              <p className="mt-2 text-sm">{interaction.summary}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {interaction.classification ? formatIntegrationLabel(interaction.classification) : "Unclassified"}
-                {" · "}{Math.round(interaction.confidence * 100)}% confidence
-              </p>
-            </div>
-          ))}
-          {(account.interactions || []).length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No communication has been ingested. Source connectors remain read-only and do not update onboarding records automatically.
-            </p>
-          )}
-        </div>
       </Card>
       <Card className="p-4">
         <h2 className="font-heading text-base font-medium">Projects and playbooks</h2>

@@ -398,7 +398,7 @@ async def handle_get_pylon_issue(request):
         mapping = await _pylon_mapping(service, account["account_id"])
         if not mapping:
             return _error(request, 409, "pylon_not_connected", "Connect a Pylon customer first")
-        from tools.pylon import get_issue, get_messages
+        from tools.pylon import get_issue, get_messages, issue_web_url
         import asyncio
         issue_id = request.match_info["issue_id"]
         request_key = (account["account_id"], issue_id)
@@ -421,6 +421,7 @@ async def handle_get_pylon_issue(request):
         issue_account_id = (issue.get("account") or {}).get("id") or issue.get("account_id")
         if issue_account_id and str(issue_account_id) != str(mapping["external_id"]):
             return _error(request, 404, "not_found", "Issue not found for this client")
+        issue["url"] = issue_web_url(issue)
         messages = messages_result.get("data") or messages_result.get("messages") or []
         if isinstance(messages, dict):
             messages = messages.get("data", [])

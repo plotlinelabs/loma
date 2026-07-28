@@ -283,6 +283,21 @@ async def get_threads(issue_id: str) -> dict[str, Any]:
     return await _api_get(f"/issues/{issue_id}/threads")
 
 
+def issue_web_url(issue: dict[str, Any]) -> str | None:
+    """Return the Plotline Pylon issue URL used by the support workspace."""
+    number = issue.get("number")
+    if number is None:
+        return issue.get("link") or issue.get("url") or issue.get("web_url")
+    view_id = os.getenv(
+        "PYLON_SUPPORT_VIEW_ID",
+        "ab8a8a4e-a550-4c1b-9479-c00066f233cb",
+    )
+    return (
+        f"https://app.usepylon.com/support/issues/views/{view_id}"
+        f"?issueNumber={number}"
+    )
+
+
 async def get_teams() -> dict[str, Any]:
     """Fetch all teams."""
     return await _api_get("/teams")
@@ -398,14 +413,14 @@ async def list_account_issues_page(
     for issue in result.get("data", []):
         issues.append({
             "id": str(issue.get("id") or ""),
+            "number": issue.get("number"),
             "title": issue.get("title") or "Untitled issue",
             "state": issue.get("state") or "unknown",
             "assignee": issue.get("assignee"),
             "created_at": issue.get("created_at"),
             "updated_at": issue.get("updated_at"),
             "account_id": (issue.get("account") or {}).get("id") or issue.get("account_id"),
-            "url": issue.get("url") or issue.get("web_url")
-                   or f"https://app.usepylon.com/issues/{issue.get('id')}",
+            "url": issue_web_url(issue),
         })
     pagination = result.get("pagination") or {}
     return {

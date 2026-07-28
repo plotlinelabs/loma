@@ -241,9 +241,10 @@ async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypat
         return {
             "data": [{
                 "id": "issue-1", "title": "SDK issue", "state": "waiting_on_you",
+                "number": 2850,
                 "updated_at": "2026-07-28T10:00:00Z",
                 "account": {"id": "account-1"},
-                "url": "https://app.usepylon.com/issues/issue-1",
+                "link": "https://app.usepylon.com/issues?issueNumber=2850",
             }],
             "pagination": {"has_next_page": True, "cursor": "next-page"},
         }
@@ -262,6 +263,10 @@ async def test_pylon_issue_page_is_account_scoped_and_cursor_paginated(monkeypat
     filters = captured["body"]["filter"]["subfilters"]
     assert {"field": "account_id", "operator": "equals", "value": "account-1"} in filters
     assert result["issues"][0]["id"] == "issue-1"
+    assert result["issues"][0]["url"] == (
+        "https://app.usepylon.com/support/issues/views/"
+        "ab8a8a4e-a550-4c1b-9479-c00066f233cb?issueNumber=2850"
+    )
     assert result["pagination"]["next_cursor"] == "next-page"
 
 
