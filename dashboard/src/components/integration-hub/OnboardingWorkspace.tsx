@@ -81,6 +81,7 @@ export default function OnboardingWorkspace({
   const [selectedPylonIssue, setSelectedPylonIssue] = useState<PylonIssueDetail | null>(null);
   const [loadingPylonIssueId, setLoadingPylonIssueId] = useState<string | null>(null);
   const autoSearchedPylon = useRef(false);
+  const pylonIssueRequest = useRef(0);
   const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
   const urgentPylonIssues = useMemo(
     () => pylonIssues.filter((issue) => ["new", "waiting_on_you", "waiting_on_plotline"].includes(issue.state)),
@@ -97,17 +98,24 @@ export default function OnboardingWorkspace({
   }
 
   async function loadPylonIssues(cursor?: string, append = false) {
+    const requestId = ++pylonIssueRequest.current;
     setLoadingPylonIssues(true); setError(null);
     try {
       const result = await fetchPylonIssues(account.account_id, {
-        cursor, status: pylonIssueStatus || undefined,
+        cursor,
+        status: pylonIssueStatus === "historical"
+          ? "waiting_on_customer,closed,resolved"
+          : pylonIssueStatus || undefined,
         query: pylonIssueQuery.trim() || undefined, limit: 25,
       });
+      if (requestId !== pylonIssueRequest.current) return;
       setPylonIssues((current) => append ? [...current, ...result.issues] : result.issues);
       setPylonIssueCursor(result.pagination.next_cursor);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load Pylon issues");
-    } finally { setLoadingPylonIssues(false); }
+    } finally {
+      if (requestId === pylonIssueRequest.current) setLoadingPylonIssues(false);
+    }
   }
 
   async function openPylonIssue(issueId: string) {
@@ -119,6 +127,9 @@ export default function OnboardingWorkspace({
 
   useEffect(() => {
     if (!pylonConnected) return;
+    setPylonIssues([]);
+    setPylonIssueCursor(null);
+    setSelectedPylonIssue(null);
     const timer = window.setTimeout(() => { void loadPylonIssues(); }, 300);
     return () => window.clearTimeout(timer);
   // Search/filter changes intentionally trigger a debounced server-side fetch.
@@ -415,8 +426,12 @@ export default function OnboardingWorkspace({
             <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedPylonIssue(null)}>Close</Button>
           </div>
           <div className="mt-3 max-h-96 space-y-2 overflow-y-auto">
-            {selectedPylonIssue.messages.map((message, index) => <div key={String(message.id || index)} className="rounded-md bg-muted/40 p-3 text-sm">
-              <p className="whitespace-pre-wrap">{String(message.body || message.text || message.body_html || "Message")}</p>
+            {selectedPylonIssue.messages.map((message, index) => <div key={message.id || String(index)} className="rounded-md bg-muted/40 p-3 text-sm">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>{message.author}{message.is_private ? " · Internal note" : ""}</span>
+                <span>{message.timestamp ? new Date(message.timestamp).toLocaleString() : ""}</span>
+              </div>
+              <p className="whitespace-pre-wrap">{message.body || "Message content unavailable"}</p>
             </div>)}
           </div>
           {selectedPylonIssue.issue.url && <a className="mt-3 inline-block text-sm text-primary underline" href={selectedPylonIssue.issue.url} target="_blank" rel="noreferrer">View ticket in Pylon</a>}
@@ -425,7 +440,7 @@ export default function OnboardingWorkspace({
           <div className="flex flex-wrap gap-2 border-b p-3">
             <Input className="max-w-sm" maxLength={100} placeholder="Search issues" value={pylonIssueQuery} onChange={(event) => setPylonIssueQuery(event.target.value)} />
             <select className="h-9 rounded-md border bg-background px-3 text-sm" value={pylonIssueStatus} onChange={(event) => setPylonIssueStatus(event.target.value)}>
-              <option value="">Waiting on customer and resolved</option><option value="waiting_on_customer">Waiting on customer</option><option value="closed">Closed</option><option value="resolved">Resolved</option>
+              <option value="">All issues</option><option value="historical">Waiting on customer and resolved</option><option value="waiting_on_customer">Waiting on customer</option><option value="closed">Closed</option><option value="resolved">Resolved</option>
             </select>
           </div>
           <div className="overflow-x-auto">

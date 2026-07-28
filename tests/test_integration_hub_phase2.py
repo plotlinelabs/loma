@@ -285,6 +285,47 @@ async def test_pylon_issue_page_caps_external_page_size(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pylon_issue_page_supports_combined_status_filter(monkeypatch):
+    async def api_post(_path, body):
+        state_filter = next(
+            item for item in body["filter"]["subfilters"]
+            if item["field"] == "state"
+        )
+        assert state_filter["value"] == [
+            "waiting_on_customer", "closed", "resolved",
+        ]
+        return {"data": [], "pagination": {"has_next_page": False}}
+
+    monkeypatch.setattr("tools.pylon._api_post", api_post)
+    from tools.pylon import list_account_issues_page
+    await list_account_issues_page(
+        "account-1", state="waiting_on_customer,closed,resolved"
+    )
+
+
+def test_pylon_message_normalization_returns_real_safe_content():
+    from tools.pylon import normalize_message
+
+    message = normalize_message({
+        "id": "message-1",
+        "message_html": "<p>Hello <strong>team</strong>,</p><p>SDK is failing.</p>",
+        "timestamp": "2026-07-28T10:00:00Z",
+        "author": {"name": "Customer"},
+        "source": "email",
+        "is_private": False,
+    })
+
+    assert message == {
+        "id": "message-1",
+        "body": "Hello team,\nSDK is failing.",
+        "author": "Customer",
+        "timestamp": "2026-07-28T10:00:00Z",
+        "source": "email",
+        "is_private": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_pylon_issue_page_uses_plain_filter_for_account_only(monkeypatch):
     async def api_post(_path, body):
         assert body["filter"] == {

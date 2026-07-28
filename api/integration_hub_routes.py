@@ -398,7 +398,7 @@ async def handle_get_pylon_issue(request):
         mapping = await _pylon_mapping(service, account["account_id"])
         if not mapping:
             return _error(request, 409, "pylon_not_connected", "Connect a Pylon customer first")
-        from tools.pylon import get_issue, get_messages, issue_web_url
+        from tools.pylon import get_issue, get_messages, issue_web_url, normalize_message
         import asyncio
         issue_id = request.match_info["issue_id"]
         request_key = (account["account_id"], issue_id)
@@ -425,7 +425,10 @@ async def handle_get_pylon_issue(request):
         messages = messages_result.get("data") or messages_result.get("messages") or []
         if isinstance(messages, dict):
             messages = messages.get("data", [])
-        return _ok(request, {"issue": issue, "messages": messages[:200]})
+        return _ok(request, {
+            "issue": issue,
+            "messages": [normalize_message(message) for message in messages[:200]],
+        })
     return await _run(request, action)
 
 

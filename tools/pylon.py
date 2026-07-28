@@ -22,9 +22,11 @@ Usage (called by the agent via Bash):
 """
 
 import asyncio
+import html
 import json
 import mimetypes
 import os
+import re
 import sys
 import logging
 from datetime import datetime, timedelta, timezone
@@ -278,6 +280,33 @@ async def get_messages(issue_id: str) -> dict[str, Any]:
     return await _api_get(f"/issues/{issue_id}/messages")
 
 
+def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Return the safe, display-ready fields from a Pylon message."""
+    raw_body = (
+        message.get("message_html")
+        or message.get("body_html")
+        or message.get("body")
+        or message.get("text")
+        or ""
+    )
+    body = re.sub(r"(?i)<br\s*/?>", "\n", str(raw_body))
+    body = re.sub(r"(?i)</(?:p|div|li|blockquote)>", "\n", body)
+    body = re.sub(r"<[^>]+>", "", body)
+    body = html.unescape(body)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    author = message.get("author") or {}
+    if not isinstance(author, dict):
+        author = {}
+    return {
+        "id": str(message.get("id") or ""),
+        "body": body,
+        "author": author.get("name") or "Unknown sender",
+        "timestamp": message.get("timestamp") or message.get("created_at"),
+        "source": message.get("source"),
+        "is_private": bool(message.get("is_private", False)),
+    }
+
+
 async def get_threads(issue_id: str) -> dict[str, Any]:
     """Fetch all threads for an issue."""
     return await _api_get(f"/issues/{issue_id}/threads")
@@ -391,7 +420,8 @@ async def list_account_issues_page(
         {"field": "account_id", "operator": "equals", "value": account_id},
     ]
     if state:
-        filters.append({"field": "state", "operator": "in", "value": [state]})
+        states = [value.strip() for value in state.split(",") if value.strip()]
+        filters.append({"field": "state", "operator": "in", "value": states})
     if assignee_id:
         filters.append({"field": "assignee_id", "operator": "equals", "value": assignee_id})
     if query:

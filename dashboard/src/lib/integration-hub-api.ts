@@ -337,7 +337,14 @@ export interface PylonIssueSummary {
 
 export interface PylonIssueDetail {
   issue: PylonIssueSummary & Record<string, unknown>;
-  messages: Array<Record<string, unknown>>;
+  messages: Array<{
+    id: string;
+    body: string;
+    author: string;
+    timestamp?: string | null;
+    source?: string | null;
+    is_private: boolean;
+  }>;
 }
 
 export function fetchPylonIssues(
