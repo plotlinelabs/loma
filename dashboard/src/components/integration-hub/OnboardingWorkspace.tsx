@@ -22,7 +22,8 @@ import {
   IntegrationWorkItemType,
   updateIntegrationAccount,
   updateIntegrationWorkItem,
-  createIntegrationContact, updateIntegrationContact, inviteIntegrationContact,
+  createIntegrationContact, updateIntegrationContact, provisionIntegrationContact,
+  revokeIntegrationContactAccess,
   archiveIntegrationContact,
   discoverGrainMeetings, fetchGrainMeetingSummary, GrainMeeting,
 } from "@/lib/integration-hub-api";
@@ -109,7 +110,7 @@ export default function OnboardingWorkspace({
   const autoSearchedPylon = useRef(false);
   const pylonIssueRequest = useRef(0);
   const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
-  const emptyContact = { name: "", email: "", role: "", role_description: "", phone: "", dashboard_access: "", access_duration_days: "", organization_ids: "", access_url: "" };
+  const emptyContact = { name: "", email: "", role: "", role_description: "", phone: "", dashboard_access: "", access_duration_days: "", organization_id: "", product_ids: "" };
   const [contact, setContact] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [domainInput, setDomainInput] = useState((account.client_email_domains || []).join(", "));
@@ -222,8 +223,8 @@ export default function OnboardingWorkspace({
         role: contact.role || null, role_description: contact.role_description || null,
         phone: contact.phone || null, dashboard_access: contact.dashboard_access || null,
         access_duration_days: contact.access_duration_days ? Number(contact.access_duration_days) as 1 | 3 | 5 | 7 | 14 : null,
-        organization_ids: contact.organization_ids.split(",").map((item) => item.trim()).filter(Boolean),
-        access_url: contact.access_url || null,
+        organization_id: contact.organization_id || null,
+        product_ids: contact.product_ids.split(",").map((item) => item.trim()).filter(Boolean),
       };
       const result = editingContactId
         ? await updateIntegrationContact(account.account_id, editingContactId, account.version, payload)
@@ -241,8 +242,8 @@ export default function OnboardingWorkspace({
       role_description: item.role_description || "", phone: item.phone || "",
       dashboard_access: item.dashboard_access || "",
       access_duration_days: item.access_duration_days ? String(item.access_duration_days) : "",
-      organization_ids: (item.organization_ids || []).join(", "),
-      access_url: item.access_url || "",
+      organization_id: item.organization_id || "",
+      product_ids: (item.product_ids || []).join(", "),
     });
   }
 
@@ -256,13 +257,23 @@ export default function OnboardingWorkspace({
     finally { setSaving(false); }
   }
 
-  async function sendInvite(contactId: string) {
+  async function provisionAccess(contactId: string) {
     setSaving(true); setError(null);
     try {
-      if (!window.confirm("Send this dashboard access invitation now?")) return;
-      const result = await inviteIntegrationContact(account.account_id, contactId, account.version);
+      if (!window.confirm("Grant access to the selected Plotline products?")) return;
+      const result = await provisionIntegrationContact(account.account_id, contactId, account.version);
       onChange(result.account);
-    } catch (err) { setError(err instanceof Error ? err.message : "Could not send dashboard invite"); }
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not grant dashboard access"); }
+    finally { setSaving(false); }
+  }
+
+  async function revokeAccess(contactId: string) {
+    setSaving(true); setError(null);
+    try {
+      if (!window.confirm("Revoke access to the selected Plotline products?")) return;
+      const result = await revokeIntegrationContactAccess(account.account_id, contactId, account.version);
+      onChange(result.account);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not revoke dashboard access"); }
     finally { setSaving(false); }
   }
 
@@ -614,7 +625,7 @@ export default function OnboardingWorkspace({
                 <SelectItem value="viewer">Viewer</SelectItem>
               </SelectContent>
             </Select>
-            {contact.dashboard_access && <>
+            {contact.dashboard_access && contact.email.toLowerCase().endsWith(`@${INTERNAL_EMAIL_DOMAIN}`) && <>
               <Label htmlFor="dashboard-access-duration">Access duration</Label>
               <Select value={contact.access_duration_days || undefined} onValueChange={(value) => setContact({ ...contact, access_duration_days: value })}>
                 <SelectTrigger id="dashboard-access-duration" className="w-full"><SelectValue placeholder="Select duration" /></SelectTrigger>
@@ -623,8 +634,10 @@ export default function OnboardingWorkspace({
                 </SelectContent>
               </Select>
             </>}
-            <Input placeholder="Organization IDs, comma separated" value={contact.organization_ids} onChange={(event) => setContact({ ...contact, organization_ids: event.target.value })} />
-            <Input type="url" placeholder="Dashboard access URL" value={contact.access_url} onChange={(event) => setContact({ ...contact, access_url: event.target.value })} />
+            <Input placeholder="Organization ID" value={contact.organization_id} onChange={(event) => setContact({ ...contact, organization_id: event.target.value })} />
+            <Input placeholder="Product IDs, comma separated" value={contact.product_ids} onChange={(event) => setContact({ ...contact, product_ids: event.target.value })} />
+            {contact.dashboard_access && !contact.email.toLowerCase().endsWith(`@${INTERNAL_EMAIL_DOMAIN}`) &&
+              <p className="text-xs text-muted-foreground">Client access is permanent until manually revoked.</p>}
           </div>
           <div className="flex gap-2 md:col-span-2">
             <Button type="submit" size="sm" disabled={saving}>{editingContactId ? "Save user" : "Add user"}</Button>
@@ -646,13 +659,14 @@ export default function OnboardingWorkspace({
                 <p className="mt-1 text-xs text-muted-foreground">
                   Access: {item.dashboard_access || "Not configured"}
                   {item.access_duration_days ? ` · ${item.access_duration_days} days` : ""}
-                  {(item.organization_ids || []).length ? ` · Orgs: ${item.organization_ids.join(", ")}` : ""}
+                  {(item.product_ids || []).length ? ` · Products: ${item.product_ids.join(", ")}` : ""}
                 </p>
                 {item.access_expires_at && <p className="text-xs text-muted-foreground">Expires {new Date(item.access_expires_at).toLocaleString()}</p>}
-                {item.invite_sent_at && <p className="text-xs text-emerald-600">Invite sent {new Date(item.invite_sent_at).toLocaleString()}</p>}
+                {item.access_status && <p className="text-xs text-emerald-600">Provisioning: {formatIntegrationLabel(item.access_status)}</p>}
               </div>
               <div className="flex gap-1">
-                {item.access_url && item.dashboard_access && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => sendInvite(item.contact_id)}>Send access link</Button>}
+                {item.dashboard_access && item.access_status !== "active" && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => provisionAccess(item.contact_id)}>Grant access</Button>}
+                {item.access_status === "active" && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => revokeAccess(item.contact_id)}>Revoke access</Button>}
                 <Button type="button" variant="ghost" size="icon-sm" aria-label={`Edit ${item.name}`} onClick={() => editContact(item)}><RiEditLine /></Button>
                 <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${item.name}`} onClick={() => removeContact(item.contact_id)}><RiDeleteBinLine /></Button>
               </div>

@@ -192,6 +192,10 @@ async def init_observability():
         [("account_id", 1), ("email", 1)],
         unique=True, partialFilterExpression={"archived_at": None},
     )
+    await _db.integration_contacts.create_index(
+        [("access_status", 1), ("access_expires_at", 1)],
+        partialFilterExpression={"access_status": "active"},
+    )
     await _db.integration_idempotency.create_index([("actor", 1), ("key", 1)], unique=True)
     await _db.integration_idempotency.create_index("created_at", expireAfterSeconds=86400)
     await _db.integration_rate_limits.create_index(

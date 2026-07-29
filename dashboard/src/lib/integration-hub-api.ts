@@ -63,8 +63,10 @@ export interface IntegrationContact {
   access_starts_at: string | null;
   access_expires_at: string | null;
   revoked_at: string | null;
-  organization_ids: string[];
-  access_url: string | null;
+  organization_id: string | null;
+  product_ids: string[];
+  dashboard_member_id: string | null;
+  provisioning_error: string | null;
   invite_sent_at: string | null;
   created_at: string;
 }
@@ -410,7 +412,7 @@ export function fetchPylonIssue(accountId: string, issueId: string) {
 export function createIntegrationContact(
   accountId: string,
   version: number,
-  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "access_duration_days" | "organization_ids" | "access_url">,
+  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "access_duration_days" | "organization_id" | "product_ids">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts`,
@@ -422,7 +424,7 @@ export function updateIntegrationContact(
   accountId: string,
   contactId: string,
   version: number,
-  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "access_duration_days" | "organization_ids" | "access_url">,
+  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "access_duration_days" | "organization_id" | "product_ids">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts/${contactId}`,
@@ -430,9 +432,16 @@ export function updateIntegrationContact(
   );
 }
 
-export function inviteIntegrationContact(accountId: string, contactId: string, version: number) {
+export function provisionIntegrationContact(accountId: string, contactId: string, version: number) {
   return request<{ account: IntegrationAccount }>(
-    `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/invite`,
+    `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/provision`,
+    { method: "POST", headers: { "If-Match": `"${version}"` } },
+  );
+}
+
+export function revokeIntegrationContactAccess(accountId: string, contactId: string, version: number) {
+  return request<{ account: IntegrationAccount }>(
+    `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/revoke`,
     { method: "POST", headers: { "If-Match": `"${version}"` } },
   );
 }

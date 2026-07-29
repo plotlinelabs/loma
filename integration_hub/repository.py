@@ -314,6 +314,27 @@ class AccountRepository:
             return result
         return await self._transaction(operation)
 
+    async def finish_contact_expiry(self, contact_id, status, error=None):
+        now = datetime.now(timezone.utc)
+        contact = await self.contacts.find_one_and_update(
+            {"contact_id": contact_id, "access_status": "revoking"},
+            {"$set": {
+                "access_status": status,
+                "revoked_at": now.isoformat() if status == "expired" else None,
+                "provisioning_error": error or "",
+                "updated_at": now,
+                "updated_by": "integration-hub-access-worker",
+            }},
+            return_document=ReturnDocument.AFTER,
+        )
+        if contact:
+            await self.accounts.update_one(
+                {"account_id": contact["account_id"]},
+                {"$set": {"updated_at": now, "updated_by": "integration-hub-access-worker"},
+                 "$inc": {"version": 1}},
+            )
+        return contact
+
 
     async def list_sync_sources(self, account_id):
         return await self.sync_sources.find({"account_id": account_id, "archived_at": None}).sort("created_at", 1).to_list(None)

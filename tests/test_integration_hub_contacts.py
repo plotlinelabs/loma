@@ -17,7 +17,7 @@ def test_client_email_domains_are_normalized_and_internal_is_reserved(monkeypatc
 def test_contact_supports_pilot_role_and_dashboard_access():
     contact = normalize_contact({
         "name": "Customer owner",
-        "email": "owner@acme.com",
+        "email": "owner@plotline.so",
         "role": "Product lead",
         "role_description": "Owns pilot success criteria",
         "dashboard_access": "Admin",
@@ -28,20 +28,32 @@ def test_contact_supports_pilot_role_and_dashboard_access():
     assert contact["role_description"] == "Owns pilot success criteria"
     assert contact["dashboard_access"] == "admin"
     assert contact["access_duration_days"] == 7
-    assert contact["organization_ids"] == ["org-1", "org-2"]
+    assert contact["product_ids"] == ["org-1", "org-2"]
 
 
 def test_contact_dashboard_access_requires_supported_duration():
     with pytest.raises(ValidationError, match="access_duration_days is required"):
         normalize_contact({
             "name": "Customer Admin",
-            "email": "admin@example.com",
+            "email": "admin@plotline.so",
             "dashboard_access": "publisher",
         })
+
+
+def test_client_dashboard_access_is_permanent():
+    contact = normalize_contact({
+        "name": "Client Admin",
+        "email": "admin@acme.com",
+        "dashboard_access": "publisher",
+        "access_duration_days": 7,
+        "product_ids": ["product-1"],
+    })
+    assert contact["access_duration_days"] is None
+    assert contact["product_ids"] == ["product-1"]
     with pytest.raises(ValidationError, match="must be one of"):
         normalize_contact({
             "name": "Customer Admin",
-            "email": "admin@example.com",
+            "email": "admin@plotline.so",
             "dashboard_access": "publisher",
             "access_duration_days": 30,
         })

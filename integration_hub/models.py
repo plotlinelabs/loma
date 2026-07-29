@@ -329,8 +329,14 @@ def normalize_contact(data):
         or access_duration_days not in DASHBOARD_ACCESS_DURATIONS
     ):
         raise ValidationError("access_duration_days must be one of 1, 3, 5, 7, or 14")
-    if dashboard_access and access_duration_days is None:
-        raise ValidationError("access_duration_days is required for dashboard access")
+    internal_domain = (
+        os.environ.get("INTERNAL_EMAIL_DOMAIN") or ("plot" + "line.so")
+    ).strip().lower().lstrip("@")
+    is_internal = email.rsplit("@", 1)[1] == internal_domain
+    if dashboard_access and is_internal and access_duration_days is None:
+        raise ValidationError("access_duration_days is required for internal dashboard access")
+    if not is_internal:
+        access_duration_days = None
     return {
         "name": name,
         "email": email,
@@ -343,8 +349,13 @@ def normalize_contact(data):
         "access_starts_at": _text(data.get("access_starts_at"), "access_starts_at", maximum=100),
         "access_expires_at": _text(data.get("access_expires_at"), "access_expires_at", maximum=100),
         "revoked_at": _text(data.get("revoked_at"), "revoked_at", maximum=100),
-        "organization_ids": _text_list(data.get("organization_ids"), "organization_ids", maximum_items=20),
-        "access_url": _text(data.get("access_url"), "access_url", maximum=2048),
+        "product_ids": _text_list(
+            data.get("product_ids", data.get("organization_ids")),
+            "product_ids", maximum_items=20,
+        ),
+        "organization_id": _text(data.get("organization_id"), "organization_id", maximum=100),
+        "dashboard_member_id": _text(data.get("dashboard_member_id"), "dashboard_member_id", maximum=100),
+        "provisioning_error": _text(data.get("provisioning_error"), "provisioning_error", maximum=1000),
         "invite_sent_at": _text(data.get("invite_sent_at"), "invite_sent_at", maximum=100),
     }
 

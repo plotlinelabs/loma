@@ -4,7 +4,6 @@ import re
 import uuid
 import logging
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
 
 from aiohttp import web
 from pymongo import ReturnDocument
@@ -493,7 +492,7 @@ async def handle_update_contact(request):
     return await _run(request, action)
 
 
-async def handle_invite_contact(request):
+async def handle_provision_contact(request):
     async def action():
         service, actor, _, account = await _account_context(request, "edit", cost=5)
         if not account:
@@ -505,58 +504,79 @@ async def handle_invite_contact(request):
         ), None)
         if not contact:
             return _error(request, 404, "not_found", "Contact not found")
-        access_url = contact.get("access_url")
-        if not access_url:
-            return _error(request, 422, "access_url_required",
-                          "Add a dashboard access URL before sending an invite")
-        parsed_url = urlparse(access_url)
-        allowed_hosts = {
-            host.strip().lower() for host in
-            os.environ.get("INTEGRATION_HUB_INVITE_HOSTS", "app.lomahq.com").split(",")
-            if host.strip()
-        }
-        hostname = (parsed_url.hostname or "").lower()
-        host_allowed = any(
-            hostname == allowed or hostname.endswith("." + allowed)
-            for allowed in allowed_hosts
-        )
-        if parsed_url.scheme != "https" or not parsed_url.hostname or (
-            not host_allowed
-        ):
-            return _error(request, 422, "invalid_access_url",
-                          "Dashboard access URL must use HTTPS and an approved host")
         expected_version = _if_match(request)
-        invited_at = datetime.now(timezone.utc)
+        granted_at = datetime.now(timezone.utc)
         duration_days = contact.get("access_duration_days")
-        if not contact.get("dashboard_access") or not duration_days:
+        product_ids = contact.get("product_ids") or contact.get("organization_ids") or []
+        if not contact.get("dashboard_access") or not product_ids:
             return _error(
                 request, 422, "dashboard_access_required",
-                "Choose an access role and duration before sending an invite",
+                "Choose an access role and at least one product before granting access",
             )
+        internal_domain = (
+            os.environ.get("INTERNAL_EMAIL_DOMAIN") or ("plot" + "line.so")
+        ).lower().lstrip("@")
+        is_internal = contact["email"].rsplit("@", 1)[1] == internal_domain
+        if is_internal and not duration_days:
+            return _error(request, 422, "access_duration_required",
+                          "Choose an access duration for an internal user")
+        from tools.plotline_access import grant, PlotlineAccessError
+        member_id = None
+        try:
+            for product_id in product_ids:
+                result = await grant(
+                    product_id, contact["email"], contact["name"],
+                    contact["dashboard_access"],
+                )
+                member_id = member_id or result.get("memberId")
+        except PlotlineAccessError as exc:
+            return _error(request, 502, "provisioning_failed", str(exc))
         updated = await service.update_contact(
             account, contact["contact_id"],
             {**{key: contact.get(key) for key in (
                 "name", "email", "role", "role_description", "phone",
-                "dashboard_access", "access_duration_days", "organization_ids",
-                "access_url",
-            )}, "invite_sent_at": invited_at.isoformat(),
-                "access_starts_at": invited_at.isoformat(),
+                "dashboard_access", "access_duration_days", "product_ids",
+                "organization_id",
+            )}, "dashboard_member_id": member_id or "",
+                "access_starts_at": granted_at.isoformat(),
                 "access_expires_at": (
-                    invited_at + timedelta(days=duration_days)
-                ).isoformat(),
-                "access_status": "invite_sent"},
+                    (granted_at + timedelta(days=duration_days)).isoformat()
+                    if is_internal else ""
+                ),
+                "access_status": "active", "provisioning_error": ""},
             actor, request["request_id"], expected_version,
         )
-        from tools.gmail import send_email
+        return _ok(request, {"account": updated}, version=updated["version"])
+    return await _run(request, action)
+
+
+async def handle_revoke_contact_access(request):
+    async def action():
+        service, actor, _, account = await _account_context(request, "edit", cost=5)
+        hydrated = await service.get(account["account_id"]) if account else None
+        contact = next((item for item in (hydrated or {}).get("contacts", [])
+                        if item["contact_id"] == request.match_info["contact_id"]), None)
+        if not contact:
+            return _error(request, 404, "not_found", "Contact not found")
+        member_id = contact.get("dashboard_member_id")
+        if not member_id:
+            return _error(request, 422, "not_provisioned", "Dashboard access is not active")
+        from tools.plotline_access import revoke, PlotlineAccessError
         try:
-            await send_email(
-                actor, contact["email"],
-                f"{account['name']} dashboard access",
-                f"Hi {contact['name']},\n\nYour dashboard access is ready: {access_url}\n\nRegards,\nLoma",
-            )
-        except Exception:
-            logger.exception("Integration Hub dashboard invitation failed")
-            raise
+            for product_id in contact.get("product_ids", []):
+                await revoke(product_id, member_id)
+        except PlotlineAccessError as exc:
+            return _error(request, 502, "revocation_failed", str(exc))
+        updated = await service.update_contact(
+            account, contact["contact_id"],
+            {**{key: contact.get(key) for key in (
+                "name", "email", "role", "role_description", "phone",
+                "dashboard_access", "access_duration_days", "product_ids",
+                "organization_id", "dashboard_member_id",
+            )}, "access_status": "revoked",
+                "revoked_at": datetime.now(timezone.utc).isoformat()},
+            actor, request["request_id"], _if_match(request),
+        )
         return _ok(request, {"account": updated}, version=updated["version"])
     return await _run(request, action)
 
@@ -649,7 +669,8 @@ def setup_integration_hub_routes(app):
     app.router.add_get(f"{p}/accounts/{{account_id}}/pylon/issues/{{issue_id}}", handle_get_pylon_issue)
     app.router.add_post(f"{p}/accounts/{{account_id}}/contacts", handle_create_contact)
     app.router.add_patch(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}", handle_update_contact)
-    app.router.add_post(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}/invite", handle_invite_contact)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}/provision", handle_provision_contact)
+    app.router.add_post(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}/revoke", handle_revoke_contact_access)
     app.router.add_post(f"{p}/accounts/{{account_id}}/contacts/{{contact_id}}/archive", handle_archive_contact)
     app.router.add_get(f"{p}/accounts/{{account_id}}/grain/meetings", handle_discover_grain_meetings)
     app.router.add_get(f"{p}/accounts/{{account_id}}/grain/meetings/{{recording_id}}/summary", handle_get_grain_summary)

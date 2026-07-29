@@ -132,6 +132,7 @@ async def process_one(db):
 
 async def worker_loop(app):
     last_schedule = None
+    last_access_expiry = None
     while True:
         db = app.get("integration_hub_db")
         if db is None:
@@ -142,6 +143,12 @@ async def worker_loop(app):
             if db is not None and (last_schedule is None or (now - last_schedule).total_seconds() >= 60):
                 await AccountRepository(db).schedule_due_syncs(now)
                 last_schedule = now
+            if db is not None and (
+                last_access_expiry is None or
+                (now - last_access_expiry).total_seconds() >= 60
+            ):
+                await expire_dashboard_access(db, now)
+                last_access_expiry = now
             processed = await process_one(db) if db is not None else False
             await asyncio.sleep(0 if processed else 5)
         except asyncio.CancelledError:
@@ -149,6 +156,30 @@ async def worker_loop(app):
         except Exception:
             logger.exception("Integration Hub sync worker iteration failed")
             await asyncio.sleep(5)
+
+
+async def expire_dashboard_access(db, now=None):
+    """Revoke expired temporary access. Client contacts have no expiry."""
+    now = now or datetime.now(timezone.utc)
+    contact = await db.integration_contacts.find_one_and_update(
+        {"access_status": "active", "access_expires_at": {"$lte": now.isoformat()},
+         "archived_at": None},
+        {"$set": {"access_status": "revoking"}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not contact:
+        return False
+    from tools.plotline_access import revoke, PlotlineAccessError
+    repository = AccountRepository(db)
+    try:
+        for product_id in contact.get("product_ids", []):
+            await revoke(product_id, contact["dashboard_member_id"])
+        await repository.finish_contact_expiry(contact["contact_id"], "expired")
+    except PlotlineAccessError as exc:
+        await repository.finish_contact_expiry(
+            contact["contact_id"], "revocation_failed", str(exc)[:1000]
+        )
+    return True
 
 
 async def worker_context(app):
