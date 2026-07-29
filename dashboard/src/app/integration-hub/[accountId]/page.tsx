@@ -19,6 +19,10 @@ import { Button } from "@/components/ui/button";
 
 export default function IntegrationAccountPage() {
   const { accountId } = useParams<{ accountId: string }>();
+  return <IntegrationAccountDetail key={accountId} accountId={accountId} />;
+}
+
+function IntegrationAccountDetail({ accountId }: { accountId: string }) {
   const [account, setAccount] = useState<IntegrationAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState<
@@ -27,12 +31,6 @@ export default function IntegrationAccountPage() {
 
   useEffect(() => {
     let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) {
-        setAccount(null);
-        setError(null);
-      }
-    });
     fetchIntegrationAccount(accountId)
       .then((data) => { if (!cancelled) setAccount(data.account); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Could not load client"); });
@@ -116,7 +114,7 @@ export default function IntegrationAccountPage() {
         </div>
       </div>}
       {section !== "overview" && (
-        <OnboardingWorkspace key={accountId} account={account} onChange={setAccount} section={section} />
+        <OnboardingWorkspace account={account} onChange={setAccount} section={section} />
       )}
     </div>
   );

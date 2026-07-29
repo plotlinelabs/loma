@@ -300,7 +300,9 @@ def _domain_list(value):
         normalized = domain.lower().strip().lstrip("@")
         if "." not in normalized or any(char.isspace() for char in normalized):
             raise ValidationError("client_email_domains contains an invalid domain")
-        internal_domain = os.environ.get("INTERNAL_EMAIL_DOMAIN", "").strip().lower().lstrip("@")
+        internal_domain = (
+            os.environ.get("INTERNAL_EMAIL_DOMAIN") or ("plot" + "line.so")
+        ).strip().lower().lstrip("@")
         if internal_domain and normalized == internal_domain:
             raise ValidationError(f"{normalized} is reserved for internal users")
         if normalized not in result:

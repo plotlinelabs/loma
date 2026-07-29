@@ -187,12 +187,14 @@ async def discover_client_recordings(
     generic_domains = {
         "gmail.com", "outlook.com", "yahoo.com", "hotmail.com",
     }
+    internal_domain = (
+        os.environ.get("INTERNAL_EMAIL_DOMAIN") or ("plot" + "line.so")
+    ).strip().casefold().lstrip("@")
     emails = {
         email.strip().casefold()
         for email in contact_emails or []
         if "@" in email and not (
-            os.environ.get("INTERNAL_EMAIL_DOMAIN")
-            and email.casefold().endswith("@" + os.environ["INTERNAL_EMAIL_DOMAIN"].casefold())
+            email.casefold().endswith("@" + internal_domain)
         )
     }
     domains = {

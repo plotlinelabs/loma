@@ -512,10 +512,16 @@ async def handle_invite_contact(request):
         parsed_url = urlparse(access_url)
         allowed_hosts = {
             host.strip().lower() for host in
-            os.environ.get("INTEGRATION_HUB_INVITE_HOSTS", "").split(",") if host.strip()
+            os.environ.get("INTEGRATION_HUB_INVITE_HOSTS", "app.lomahq.com").split(",")
+            if host.strip()
         }
+        hostname = (parsed_url.hostname or "").lower()
+        host_allowed = any(
+            hostname == allowed or hostname.endswith("." + allowed)
+            for allowed in allowed_hosts
+        )
         if parsed_url.scheme != "https" or not parsed_url.hostname or (
-            allowed_hosts and parsed_url.hostname.lower() not in allowed_hosts
+            not host_allowed
         ):
             return _error(request, 422, "invalid_access_url",
                           "Dashboard access URL must use HTTPS and an approved host")

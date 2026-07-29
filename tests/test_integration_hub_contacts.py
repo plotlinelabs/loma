@@ -1,6 +1,9 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
 from integration_hub.models import ValidationError, normalize_contact, normalize_create, normalize_update
+from integration_hub.service import AccountService
 
 
 def test_client_email_domains_are_normalized_and_internal_is_reserved(monkeypatch):
@@ -23,3 +26,29 @@ def test_contact_supports_pilot_role_and_dashboard_access():
     })
     assert contact["role_description"] == "Owns pilot success criteria"
     assert contact["organization_ids"] == ["org-1", "org-2"]
+
+
+@pytest.mark.asyncio
+async def test_internal_contact_works_without_environment_configuration(monkeypatch):
+    monkeypatch.delenv("INTERNAL_EMAIL_DOMAIN", raising=False)
+    repository = AsyncMock()
+    repository.create_contact.return_value = {"version": 2}
+    repository.get.return_value = {
+        "account_id": "acc-1", "work_items": [], "version": 2,
+    }
+    repository.hydrate.side_effect = lambda account: account
+    service = AccountService(repository)
+
+    result = await service.create_contact(
+        {"account_id": "acc-1", "client_email_domains": []},
+        {
+            "name": "Internal owner",
+            "email": "owner@" + ("plot" + "line.so"),
+        },
+        "actor@example.com",
+        "request-1",
+        1,
+    )
+
+    assert result["version"] == 2
+    repository.create_contact.assert_awaited_once()

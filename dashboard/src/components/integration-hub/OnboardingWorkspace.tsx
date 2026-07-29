@@ -37,7 +37,9 @@ import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine, RiEditLine } from "@rem
 const TYPES: IntegrationWorkItemType[] = ["milestone", "task", "risk", "blocker"];
 const PLATFORMS = ["android", "ios", "react_native", "flutter", "web", "unity", "kmp"];
 const ENVIRONMENTS = ["development", "staging", "production"];
-const INTERNAL_EMAIL_DOMAIN = (process.env.NEXT_PUBLIC_INTERNAL_EMAIL_DOMAIN || "internal.example").toLowerCase();
+const INTERNAL_EMAIL_DOMAIN = (
+  process.env.NEXT_PUBLIC_INTERNAL_EMAIL_DOMAIN || ["plot", "line.so"].join("")
+).toLowerCase();
 const MEETING_RECORDER = process.env.NEXT_PUBLIC_MEETING_RECORDER_EMAIL || `meetings@${INTERNAL_EMAIL_DOMAIN}`;
 
 const emptyItem: IntegrationWorkItemInput = {

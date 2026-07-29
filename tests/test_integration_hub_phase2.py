@@ -103,6 +103,9 @@ def test_sync_mapping_is_limited_to_pull_only_sources():
 @pytest.mark.asyncio
 async def test_pull_dispatches_only_registered_readers(monkeypatch):
     from integration_hub import read_only_sync
+    assert set(read_only_sync.READERS) == {"slack", "grain", "pylon"}
+    assert all(reader.__module__ == read_only_sync.__name__
+               for reader in read_only_sync.READERS.values())
     called = []
     async def reader(mapping, actor):
         called.append((mapping["external_id"], actor))
@@ -111,11 +114,10 @@ async def test_pull_dispatches_only_registered_readers(monkeypatch):
     result = await read_only_sync.pull({"source": "slack", "external_id": "C1"}, "user@example.com")
     assert result == []
     assert called == [("C1", "user@example.com")]
-    assert not any(name.startswith(("send", "update", "create", "reply", "post")) for name in read_only_sync.READERS)
 
 
 @pytest.mark.asyncio
-async def test_sync_deduplicates_pulled_records(monkeypatch):
+async def test_sync_source_reports_inserted_record_count(monkeypatch):
     from integration_hub.service import AccountService
     service = AccountService(None)
     records = [{"source": "slack", "tenant_id": "T", "source_id": "1"}]
