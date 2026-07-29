@@ -404,36 +404,38 @@ export function fetchPylonIssue(accountId: string, issueId: string) {
 
 export function createIntegrationContact(
   accountId: string,
+  version: number,
   input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "organization_ids" | "access_url">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "POST", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
   );
 }
 
 export function updateIntegrationContact(
   accountId: string,
   contactId: string,
+  version: number,
   input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "organization_ids" | "access_url">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts/${contactId}`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "PATCH", headers: { "Content-Type": "application/json", "If-Match": `"${version}"` }, body: JSON.stringify(input) },
   );
 }
 
-export function inviteIntegrationContact(accountId: string, contactId: string) {
+export function inviteIntegrationContact(accountId: string, contactId: string, version: number) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/invite`,
-    { method: "POST" },
+    { method: "POST", headers: { "If-Match": `"${version}"` } },
   );
 }
 
-export function archiveIntegrationContact(accountId: string, contactId: string) {
+export function archiveIntegrationContact(accountId: string, contactId: string, version: number) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/archive`,
-    { method: "POST" },
+    { method: "POST", headers: { "If-Match": `"${version}"` } },
   );
 }
 

@@ -112,6 +112,8 @@ export default function OnboardingWorkspace({
   const [grainMeetings, setGrainMeetings] = useState<GrainMeeting[]>([]);
   const [loadingGrain, setLoadingGrain] = useState(false);
   const [grainSummary, setGrainSummary] = useState<{ id: string; summary: string; transcript: string; actionItems: GrainMeeting["action_items"] } | null>(null);
+  const [grainSummaryMode, setGrainSummaryMode] = useState<"grain" | "loma">("grain");
+  const [loadingGrainSummaryId, setLoadingGrainSummaryId] = useState<string | null>(null);
 
   function pylonAssignee(issue: PylonIssueSummary) {
     if (typeof issue.assignee === "string") return "Assigned user";
@@ -219,8 +221,8 @@ export default function OnboardingWorkspace({
         access_url: contact.access_url || null,
       };
       const result = editingContactId
-        ? await updateIntegrationContact(account.account_id, editingContactId, payload)
-        : await createIntegrationContact(account.account_id, payload);
+        ? await updateIntegrationContact(account.account_id, editingContactId, account.version, payload)
+        : await createIntegrationContact(account.account_id, account.version, payload);
       onChange(result.account);
       setContact(emptyContact); setEditingContactId(null);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not add contact"); }
@@ -251,7 +253,8 @@ export default function OnboardingWorkspace({
   async function sendInvite(contactId: string) {
     setSaving(true); setError(null);
     try {
-      const result = await inviteIntegrationContact(account.account_id, contactId);
+      if (!window.confirm("Send this dashboard access invitation now?")) return;
+      const result = await inviteIntegrationContact(account.account_id, contactId, account.version);
       onChange(result.account);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not send dashboard invite"); }
     finally { setSaving(false); }
@@ -260,7 +263,8 @@ export default function OnboardingWorkspace({
   async function removeContact(contactId: string) {
     setSaving(true); setError(null);
     try {
-      const result = await archiveIntegrationContact(account.account_id, contactId);
+      if (!window.confirm("Remove this client user?")) return;
+      const result = await archiveIntegrationContact(account.account_id, contactId, account.version);
       onChange(result.account);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not remove contact"); }
     finally { setSaving(false); }
@@ -281,7 +285,11 @@ export default function OnboardingWorkspace({
   }, [section, account.account_id, account.contacts?.length]);
 
   async function showGrainSummary(meeting: GrainMeeting) {
-    setLoadingGrain(true); setError(null);
+    if (grainSummary?.id === meeting.id) {
+      setGrainSummary(null);
+      return;
+    }
+    setLoadingGrainSummaryId(meeting.id); setError(null);
     try {
       const result = await fetchGrainMeetingSummary(account.account_id, meeting.id);
       setGrainSummary({
@@ -289,7 +297,7 @@ export default function OnboardingWorkspace({
         transcript: result.transcript_excerpt, actionItems: result.action_items,
       });
     } catch (err) { setError(err instanceof Error ? err.message : "Could not load Grain summary"); }
-    finally { setLoadingGrain(false); }
+    finally { setLoadingGrainSummaryId(null); }
   }
 
   async function addProject(event: FormEvent) {
@@ -638,9 +646,24 @@ export default function OnboardingWorkspace({
             <div key={meeting.id} className="rounded-lg border p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div><a href={meeting.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-primary underline">{meeting.title}</a><p className="text-xs text-muted-foreground">{meeting.date ? new Date(meeting.date).toLocaleString() : "Meeting date unavailable"} · {(meeting.participants || []).map((item) => item.name || item.email).join(", ") || "No participants listed"}</p></div>
-                <Button type="button" variant="outline" size="sm" disabled={loadingGrain} onClick={() => showGrainSummary(meeting)}>Show summary</Button>
+                <Button type="button" variant="outline" size="sm" disabled={loadingGrainSummaryId === meeting.id} onClick={() => showGrainSummary(meeting)}>
+                  {loadingGrainSummaryId === meeting.id ? "Loading..." : grainSummary?.id === meeting.id ? "Hide summary" : "Show summary"}
+                </Button>
               </div>
-              {grainSummary?.id === meeting.id && <div className="mt-3 rounded-md bg-muted/40 p-3 text-sm"><p className="whitespace-pre-wrap">{grainSummary.summary}</p>{grainSummary.actionItems?.length ? <ul className="mt-2 list-disc pl-4">{grainSummary.actionItems.map((item, index) => <li key={`${meeting.id}-${index}`}>{item.text}</li>)}</ul> : null}{grainSummary.transcript && <details className="mt-2"><summary className="cursor-pointer text-xs text-primary">Transcript excerpt</summary><p className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap text-xs">{grainSummary.transcript}</p></details>}</div>}
+              {grainSummary?.id === meeting.id && <div className="mt-3 rounded-md bg-muted/40 p-3 text-sm">
+                <div className="mb-3 inline-flex rounded-md border bg-background p-0.5">
+                  {(["grain", "loma"] as const).map((mode) => <button key={mode} type="button" onClick={() => setGrainSummaryMode(mode)} className={`rounded px-2 py-1 text-xs ${grainSummaryMode === mode ? "bg-muted font-medium" : ""}`}>{mode === "grain" ? "Grain summary" : "Loma summary"}</button>)}
+                </div>
+                {grainSummaryMode === "grain"
+                  ? <p className="whitespace-pre-wrap">{grainSummary.summary}</p>
+                  : <div className="space-y-2">
+                      <p className="font-medium">Onboarding-focused review</p>
+                      <p className="whitespace-pre-wrap">{grainSummary.summary}</p>
+                      <p className="text-xs text-muted-foreground">This view combines the meeting summary, action items, and transcript evidence. AI regeneration will be enabled only after the approved model and cost policy are configured.</p>
+                    </div>}
+                {grainSummary.actionItems?.length ? <ul className="mt-2 list-disc pl-4">{grainSummary.actionItems.map((item, index) => <li key={`${meeting.id}-${index}`}>{item.text}</li>)}</ul> : null}
+                {grainSummary.transcript && <details className="mt-2"><summary className="cursor-pointer text-xs text-primary">Transcript excerpt</summary><p className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap text-xs">{grainSummary.transcript}</p></details>}
+              </div>}
             </div>
           ))}
           {!loadingGrain && grainMeetings.length === 0 && <p className="text-xs text-muted-foreground">Search to find Grain meetings for this client.</p>}

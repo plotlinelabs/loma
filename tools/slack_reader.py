@@ -248,18 +248,23 @@ def read_history(
         return {"error": error}
 
     try:
-        if thread_ts:
-            result = client.conversations_replies(
-                channel=channel_id,
-                ts=thread_ts,
-                limit=min(limit, 200),
-            )
-        else:
-            result = client.conversations_history(
-                channel=channel_id,
-                limit=min(limit, 200),
-            )
-        messages = result.get("messages", [])
+        messages = []
+        cursor = None
+        while len(messages) < min(limit, 1000):
+            kwargs = {
+                "channel": channel_id,
+                "limit": min(200, min(limit, 1000) - len(messages)),
+            }
+            if cursor:
+                kwargs["cursor"] = cursor
+            if thread_ts:
+                result = client.conversations_replies(ts=thread_ts, **kwargs)
+            else:
+                result = client.conversations_history(**kwargs)
+            messages.extend(result.get("messages", []))
+            cursor = (result.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                break
     except SlackApiError as e:
         error_msg = e.response.get("error", str(e))
         if error_msg == "channel_not_found":

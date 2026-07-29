@@ -2,6 +2,7 @@
 import os
 import re
 import uuid
+import logging
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -11,11 +12,13 @@ from pymongo import ReturnDocument
 from api.auth_helpers import get_system_role, get_user_email
 from integration_hub.models import HEALTH_STATES, PLAYBOOKS, STAGES, ValidationError
 from integration_hub.repository import AccountRepository
+from integration_hub.read_only_sync import SyncError
 from integration_hub.service import AccountService
 from observability.db import get_db
 
 _RATE_LIMIT = int(os.environ.get("INTEGRATION_HUB_RATE_LIMIT", "120"))
 _PYLON_DETAIL_REQUESTS = {}
+logger = logging.getLogger(__name__)
 
 
 def _enabled():
@@ -105,9 +108,13 @@ async def _account_context(request, permission="read", include_archived=False, c
 async def _run(request, handler):
     try: return await handler()
     except (ValidationError, ValueError) as exc: return _error(request, 400, "validation_error", str(exc))
+    except SyncError as exc:
+        logger.warning("Integration Hub upstream sync failed", exc_info=exc)
+        return _error(request, 502, "upstream_error", "Connected service request failed")
     except RuntimeError as exc:
         if str(exc) == "version_conflict": return _error(request, 412, "precondition_failed", "Resource changed; reload and retry")
-        return _error(request, 502, "upstream_error", "Connected service request failed")
+        logger.exception("Integration Hub request failed")
+        raise
     except web.HTTPException as exc:
         request.setdefault("request_id", str(uuid.uuid4()))
         response = _error(request, exc.status, "http_error", exc.text or exc.reason)
@@ -395,7 +402,7 @@ async def handle_list_pylon_issues(request):
             query=query or None,
         )
         if result.get("error"):
-            raise RuntimeError(result["error"])
+            raise SyncError(result["error"])
         return _ok(request, result)
     return await _run(request, action)
 
@@ -424,9 +431,9 @@ async def handle_get_pylon_issue(request):
             if task.done():
                 _PYLON_DETAIL_REQUESTS.pop(request_key, None)
         if issue_result.get("error"):
-            raise RuntimeError(issue_result["error"])
+            raise SyncError(issue_result["error"])
         if messages_result.get("error"):
-            raise RuntimeError(messages_result["error"])
+            raise SyncError(messages_result["error"])
         issue = issue_result.get("data") or issue_result
         issue_account_id = (issue.get("account") or {}).get("id") or issue.get("account_id")
         if not issue_account_id or str(issue_account_id) != str(mapping["external_id"]):
@@ -454,7 +461,7 @@ async def handle_create_contact(request):
         if not account:
             return _error(request, 404, "not_found", "Account not found")
         updated = await service.create_contact(
-            account, await _json(request), actor, request["request_id"],
+            account, await _json(request), actor, request["request_id"], _if_match(request),
         )
         return _ok(request, {"account": updated}, 201, updated["version"])
     return await _run(request, action)
@@ -467,6 +474,7 @@ async def handle_archive_contact(request):
             return _error(request, 404, "not_found", "Account not found")
         updated = await service.archive_contact(
             account, request.match_info["contact_id"], actor, request["request_id"],
+            _if_match(request),
         )
         return _ok(request, {"account": updated}, version=updated["version"])
     return await _run(request, action)
@@ -479,7 +487,7 @@ async def handle_update_contact(request):
             return _error(request, 404, "not_found", "Account not found")
         updated = await service.update_contact(
             account, request.match_info["contact_id"], await _json(request),
-            actor, request["request_id"],
+            actor, request["request_id"], _if_match(request),
         )
         return _ok(request, {"account": updated}, version=updated["version"])
     return await _run(request, action)
@@ -511,20 +519,25 @@ async def handle_invite_contact(request):
         ):
             return _error(request, 422, "invalid_access_url",
                           "Dashboard access URL must use HTTPS and an approved host")
-        from tools.gmail import send_email
-        await send_email(
-            actor, contact["email"],
-            f"{account['name']} dashboard access",
-            f"Hi {contact['name']},\n\nYour dashboard access is ready: {access_url}",
-        )
+        expected_version = _if_match(request)
         updated = await service.update_contact(
             account, contact["contact_id"],
             {**{key: contact.get(key) for key in (
                 "name", "email", "role", "role_description", "phone",
                 "dashboard_access", "organization_ids", "access_url",
             )}, "invite_sent_at": datetime.now(timezone.utc).isoformat()},
-            actor, request["request_id"],
+            actor, request["request_id"], expected_version,
         )
+        from tools.gmail import send_email
+        try:
+            await send_email(
+                actor, contact["email"],
+                f"{account['name']} dashboard access",
+                f"Hi {contact['name']},\n\nYour dashboard access is ready: {access_url}\n\nRegards,\nLoma",
+            )
+        except Exception:
+            logger.exception("Integration Hub dashboard invitation failed")
+            raise
         return _ok(request, {"account": updated}, version=updated["version"])
     return await _run(request, action)
 

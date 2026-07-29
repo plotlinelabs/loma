@@ -4,12 +4,19 @@ This module intentionally exposes no write operation. It reuses the same credent
 Loma's existing integrations, but is isolated from agent execution and webhook responders.
 """
 import asyncio
+import hashlib
+import json
 from datetime import datetime, timezone
 from functools import partial
 
 
 class SyncError(RuntimeError):
     pass
+
+
+def _stable_slack_id(message):
+    canonical = json.dumps(message, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()[:24]
 
 
 def _parse_timestamp(value):
@@ -68,7 +75,7 @@ async def _slack(mapping, _actor):
     from tools.slack_reader import read_history
     config = mapping.get("config", {})
     result = await asyncio.to_thread(
-        partial(read_history, mapping["external_id"], limit=min(int(config.get("limit", 50)), 200),
+        partial(read_history, mapping["external_id"], limit=min(int(config.get("limit", 200)), 1000),
                 thread_ts=config.get("thread_ts"))
     )
     if result.get("error"):
@@ -78,7 +85,7 @@ async def _slack(mapping, _actor):
     checkpoint = _checkpoint(mapping)
     rows = [
         _interaction("slack", result.get("channel_id") or mapping["tenant_id"],
-                     f'{result.get("channel_id", mapping["external_id"])}:{msg.get("ts") or msg.get("client_msg_id")}',
+                     f'{result.get("channel_id", mapping["external_id"])}:{msg.get("ts") or msg.get("client_msg_id") or _stable_slack_id(msg)}',
                      msg.get("ts") or msg.get("timestamp"),
                      f'{msg.get("user", "Unknown")}: {msg.get("text", "")}',
                      config.get("source_url"),
@@ -86,7 +93,7 @@ async def _slack(mapping, _actor):
                      ("outbound" if msg.get("user_id") in internal_ids else "internal"),
                      msg.get("thread_ts") or config.get("thread_ts") or msg.get("ts"),
                      msg)
-        for index, msg in enumerate(result.get("messages", [])) if msg.get("text")
+        for msg in result.get("messages", []) if msg.get("text")
     ]
     return [row for row in rows if not checkpoint or row["occurred_at"] >= checkpoint]
 
@@ -133,10 +140,19 @@ async def _pylon(mapping, _actor):
     if not issue_ids:
         if not mapping.get("external_id"):
             raise SyncError("Pylon customer mapping is missing")
-        result = await list_account_issues_page(mapping["external_id"], limit=100)
-        if result.get("error"):
-            raise SyncError(result["error"])
-        issue_ids = [row["id"] for row in result.get("issues", [])]
+        cursor = None
+        for _ in range(20):
+            result = await list_account_issues_page(
+                mapping["external_id"], limit=100, cursor=cursor
+            )
+            if result.get("error"):
+                raise SyncError(result["error"])
+            issue_ids.extend(row["id"] for row in result.get("issues", []))
+            cursor = result.get("next_cursor")
+            if not cursor:
+                break
+        if cursor:
+            raise SyncError("Pylon issue history exceeded the safe sync page limit")
     checkpoint = _checkpoint(mapping)
     interactions = []
     for issue_id in issue_ids[:500]:

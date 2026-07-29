@@ -55,7 +55,7 @@ class AccountService:
             raise
         return response, created
 
-    async def create_contact(self, account, data, actor, request_id):
+    async def create_contact(self, account, data, actor, request_id, expected_version):
         now = datetime.now(timezone.utc)
         contact_id = self._id("contact")
         normalized = normalize_contact(data)
@@ -74,10 +74,12 @@ class AccountService:
             account["account_id"], actor, "contact", contact_id,
             "contact.created", request_id,
         )
-        await self.repository.create_contact(contact, audit)
+        parent = await self.repository.create_contact(contact, audit, expected_version)
+        if not parent:
+            raise RuntimeError("version_conflict")
         return await self.get(account["account_id"])
 
-    async def update_contact(self, account, contact_id, data, actor, request_id):
+    async def update_contact(self, account, contact_id, data, actor, request_id, expected_version):
         normalized = normalize_contact(data)
         domain = normalized["email"].rsplit("@", 1)[1]
         allowed_domains = account.get("client_email_domains") or []
@@ -91,19 +93,19 @@ class AccountService:
         updated = await self.repository.update_contact(
             account["account_id"], contact_id,
             {**normalized, "updated_at": datetime.now(timezone.utc), "updated_by": actor},
-            actor, audit,
+            actor, audit, expected_version,
         )
         if not updated:
             raise ValidationError("Contact not found")
         return await self.get(account["account_id"])
 
-    async def archive_contact(self, account, contact_id, actor, request_id):
+    async def archive_contact(self, account, contact_id, actor, request_id, expected_version):
         audit = self._audit(
             account["account_id"], actor, "contact", contact_id,
             "contact.archived", request_id,
         )
         contact = await self.repository.archive_contact(
-            account["account_id"], contact_id, actor, audit,
+            account["account_id"], contact_id, actor, audit, expected_version,
         )
         if not contact:
             raise ValidationError("Contact not found")
@@ -172,6 +174,7 @@ class AccountService:
             "updated_at": now, "updated_by": actor,
         }, expected_version, audit)
         if not updated: raise RuntimeError("version_conflict")
+        await self.repository.purge_archived_account_ingestion(account["account_id"], now)
         return self.enrich(updated)
 
     async def restore(self, account, actor, expected_version, request_id):

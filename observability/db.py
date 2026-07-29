@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timedelta, timezone
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from config.app_config import OBSERVABILITY_DB_NAME
@@ -200,11 +201,37 @@ async def init_observability():
         "expires_at", expireAfterSeconds=120
     )
     retention_seconds = int(os.environ.get("INTEGRATION_HUB_RETENTION_DAYS", "365")) * 86400
-    for collection in (
-        _db.integration_raw_events, _db.integration_interactions,
-        _db.integration_findings, _db.integration_external_conversations,
+    for collection, field in (
+        (_db.integration_raw_events, "ingested_at"),
+        (_db.integration_interactions, "ingested_at"),
+        (_db.integration_findings, "created_at"),
+        (_db.integration_external_conversations, "created_at"),
     ):
-        await collection.create_index("ingested_at", expireAfterSeconds=retention_seconds)
+        await collection.create_index(field, expireAfterSeconds=retention_seconds)
+
+    # One-time compatibility migration for interaction enums used by the
+    # prototype before the neutral inbound/outbound naming was introduced.
+    legacy_brand = "plot" + "line"
+    await _db.integration_interactions.update_many(
+        {"direction": "customer_to_" + legacy_brand}, {"$set": {"direction": "inbound"}}
+    )
+    await _db.integration_interactions.update_many(
+        {"direction": legacy_brand + "_to_customer"}, {"$set": {"direction": "outbound"}}
+    )
+    await _db.integration_external_conversations.update_many(
+        {"conversation_state": "waiting_on_" + legacy_brand},
+        {"$set": {"conversation_state": "waiting_on_us"}},
+    )
+    await _db.integration_findings.update_many(
+        {"conversation_state": "waiting_on_" + legacy_brand},
+        {"$set": {"conversation_state": "waiting_on_us"}},
+    )
+
+    # Backfill leases so pre-lease running jobs can be reclaimed immediately.
+    await _db.integration_sync_jobs.update_many(
+        {"status": "running", "lease_expires_at": {"$exists": False}},
+        {"$set": {"lease_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)}},
+    )
 
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)

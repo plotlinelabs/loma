@@ -250,10 +250,11 @@ class AccountRepository:
     async def find_active_by_name_key(self, name_key):
         return await self.collection.find_one({"name_key": name_key, "archived_at": None})
 
-    async def create_contact(self, contact, audit_entry):
+    async def create_contact(self, contact, audit_entry, expected_version):
         async def operation(session):
             parent = await self.collection.find_one_and_update(
-                {"account_id": contact["account_id"], "archived_at": None},
+                {"account_id": contact["account_id"], "archived_at": None,
+                 "version": expected_version},
                 {"$set": {
                     "updated_at": contact["created_at"],
                     "updated_by": contact["created_by"],
@@ -267,7 +268,7 @@ class AccountRepository:
             return parent
         return await self._transaction(operation)
 
-    async def archive_contact(self, account_id, contact_id, actor, audit_entry):
+    async def archive_contact(self, account_id, contact_id, actor, audit_entry, expected_version):
         now = datetime.now(timezone.utc)
         async def operation(session):
             existing = await self.contacts.find_one(
@@ -277,7 +278,7 @@ class AccountRepository:
             if not existing:
                 return None
             parent = await self.collection.find_one_and_update(
-                {"account_id": account_id, "archived_at": None},
+                {"account_id": account_id, "archived_at": None, "version": expected_version},
                 {"$set": {"updated_at": now, "updated_by": actor}, "$inc": {"version": 1}},
                 return_document=ReturnDocument.AFTER, session=session,
             )
@@ -293,10 +294,11 @@ class AccountRepository:
             return result if result else None
         return await self._transaction(operation)
 
-    async def update_contact(self, account_id, contact_id, updates, actor, audit_entry):
+    async def update_contact(self, account_id, contact_id, updates, actor, audit_entry,
+                             expected_version):
         async def operation(session):
             parent = await self.collection.find_one_and_update(
-                {"account_id": account_id, "archived_at": None},
+                {"account_id": account_id, "archived_at": None, "version": expected_version},
                 {"$set": {"updated_at": updates["updated_at"], "updated_by": actor},
                  "$inc": {"version": 1}},
                 return_document=ReturnDocument.AFTER, session=session,
@@ -482,6 +484,22 @@ class AccountRepository:
             await self.audit.insert_one(audit_entry, session=session)
             return after
         return await self._transaction(operation)
+
+    async def purge_archived_account_ingestion(self, account_id, archived_at):
+        """Remove copied external PII and stop future pulls for an archived account."""
+        await self.sync_sources.update_many(
+            {"account_id": account_id, "archived_at": None},
+            {"$set": {"status": "paused", "archived_at": archived_at}},
+        )
+        await self.sync_jobs.update_many(
+            {"account_id": account_id, "status": {"$in": ["queued", "running"]}},
+            {"$set": {"status": "cancelled", "finished_at": archived_at,
+                      "lease_expires_at": None}},
+        )
+        for collection in (
+            self.raw_events, self.interactions, self.findings, self.conversations,
+        ):
+            await collection.delete_many({"account_id": account_id})
 
     async def create_timeline_activity(self, account_id, activity, updates,
                                        expected_version, audit_entry):
