@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
-from integration_hub.models import calculate_account_health
+from integration_hub.models import ValidationError, calculate_account_health
 
 
 RESOURCE_COLLECTIONS = {
@@ -314,7 +314,7 @@ class AccountRepository:
             return result
         return await self._transaction(operation)
 
-    async def finish_contact_expiry(self, contact_id, status, error=None):
+    async def finish_contact_expiry(self, contact_id, status, error=None, audit_entry=None):
         now = datetime.now(timezone.utc)
         contact = await self.contacts.find_one_and_update(
             {"contact_id": contact_id, "access_status": "revoking"},
@@ -328,12 +328,37 @@ class AccountRepository:
             return_document=ReturnDocument.AFTER,
         )
         if contact:
-            await self.accounts.update_one(
+            await self.collection.update_one(
                 {"account_id": contact["account_id"]},
                 {"$set": {"updated_at": now, "updated_by": "integration-hub-access-worker"},
                  "$inc": {"version": 1}},
             )
+            if audit_entry:
+                await self.audit.insert_one(audit_entry)
         return contact
+
+    async def update_contact_access(self, account_id, contact_id, updates, actor, audit_entry,
+                                    expected_version):
+        """Update server-owned access state and its audit entry atomically."""
+        now = datetime.now(timezone.utc)
+        async def operation(session):
+            parent = await self.collection.find_one_and_update(
+                {"account_id": account_id, "archived_at": None, "version": expected_version},
+                {"$set": {"updated_at": now, "updated_by": actor}, "$inc": {"version": 1}},
+                return_document=ReturnDocument.AFTER, session=session,
+            )
+            if not parent:
+                return None
+            contact = await self.contacts.find_one_and_update(
+                {"account_id": account_id, "contact_id": contact_id, "archived_at": None},
+                {"$set": {**updates, "updated_at": now, "updated_by": actor}},
+                return_document=ReturnDocument.AFTER, session=session,
+            )
+            if not contact:
+                raise ValidationError("Contact not found")
+            await self.audit.insert_one(audit_entry, session=session)
+            return parent
+        return await self._transaction(operation)
 
 
     async def list_sync_sources(self, account_id):

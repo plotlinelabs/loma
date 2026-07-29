@@ -14,10 +14,11 @@ def test_client_email_domains_are_normalized_and_internal_is_reserved(monkeypatc
         normalize_update({"client_email_domains": ["internal.example"]})
 
 
-def test_contact_supports_pilot_role_and_dashboard_access():
+def test_contact_supports_pilot_role_and_dashboard_access(monkeypatch):
+    monkeypatch.setenv("INTERNAL_EMAIL_DOMAIN", "internal.example")
     contact = normalize_contact({
         "name": "Customer owner",
-        "email": "owner@plotline.so",
+        "email": "owner@internal.example",
         "role": "Product lead",
         "role_description": "Owns pilot success criteria",
         "dashboard_access": "Admin",
@@ -31,16 +32,18 @@ def test_contact_supports_pilot_role_and_dashboard_access():
     assert contact["product_ids"] == ["org-1", "org-2"]
 
 
-def test_contact_dashboard_access_requires_supported_duration():
+def test_contact_dashboard_access_requires_supported_duration(monkeypatch):
+    monkeypatch.setenv("INTERNAL_EMAIL_DOMAIN", "internal.example")
     with pytest.raises(ValidationError, match="access_duration_days is required"):
         normalize_contact({
             "name": "Customer Admin",
-            "email": "admin@plotline.so",
+            "email": "admin@internal.example",
             "dashboard_access": "publisher",
         })
 
 
-def test_client_dashboard_access_is_permanent():
+def test_client_dashboard_access_is_permanent(monkeypatch):
+    monkeypatch.setenv("INTERNAL_EMAIL_DOMAIN", "internal.example")
     contact = normalize_contact({
         "name": "Client Admin",
         "email": "admin@acme.com",
@@ -53,7 +56,7 @@ def test_client_dashboard_access_is_permanent():
     with pytest.raises(ValidationError, match="must be one of"):
         normalize_contact({
             "name": "Customer Admin",
-            "email": "admin@plotline.so",
+            "email": "admin@internal.example",
             "dashboard_access": "publisher",
             "access_duration_days": 30,
         })
@@ -83,3 +86,39 @@ async def test_internal_contact_works_without_environment_configuration(monkeypa
 
     assert result["version"] == 2
     repository.create_contact.assert_awaited_once()
+
+
+def test_contact_rejects_server_managed_access_fields():
+    with pytest.raises(ValidationError, match="Server-managed fields"):
+        normalize_contact({
+            "name": "Client owner", "email": "owner@acme.com",
+            "access_status": "active", "dashboard_member_id": "forged",
+        })
+
+
+@pytest.mark.asyncio
+async def test_contact_edit_preserves_server_managed_access_state():
+    repository = AsyncMock()
+    repository.contacts.find_one.return_value = {
+        "contact_id": "contact-1", "account_id": "acc-1",
+        "name": "Owner", "email": "owner@acme.com", "phone": "old",
+        "dashboard_access": "publisher", "product_ids": ["product-1"],
+        "access_status": "active", "dashboard_member_id": "member-1",
+        "product_grants": [{"product_id": "product-1", "member_id": "member-1"}],
+    }
+    repository.update_contact.return_value = {"contact_id": "contact-1"}
+    repository.get.return_value = {"account_id": "acc-1", "version": 2, "work_items": []}
+    repository.hydrate.side_effect = lambda account: account
+    service = AccountService(repository)
+
+    await service.update_contact(
+        {"account_id": "acc-1", "client_email_domains": ["acme.com"]},
+        "contact-1", {"name": "Owner", "email": "owner@acme.com", "phone": "new"},
+        "actor@example.com", "request-1", 1,
+    )
+
+    updates = repository.update_contact.await_args.args[2]
+    assert "access_status" not in updates
+    assert "dashboard_member_id" not in updates
+    assert updates["dashboard_access"] == "publisher"
+    assert updates["product_ids"] == ["product-1"]

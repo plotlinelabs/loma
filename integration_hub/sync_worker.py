@@ -161,25 +161,58 @@ async def worker_loop(app):
 async def expire_dashboard_access(db, now=None):
     """Revoke expired temporary access. Client contacts have no expiry."""
     now = now or datetime.now(timezone.utc)
-    contact = await db.integration_contacts.find_one_and_update(
-        {"access_status": "active", "access_expires_at": {"$lte": now.isoformat()},
-         "archived_at": None},
-        {"$set": {"access_status": "revoking"}},
-        return_document=ReturnDocument.AFTER,
-    )
-    if not contact:
-        return False
-    from tools.plotline_access import revoke, PlotlineAccessError
+    from tools.product_access import revoke, ProductAccessError
     repository = AccountRepository(db)
-    try:
-        for product_id in contact.get("product_ids", []):
-            await revoke(product_id, contact["dashboard_member_id"])
-        await repository.finish_contact_expiry(contact["contact_id"], "expired")
-    except PlotlineAccessError as exc:
-        await repository.finish_contact_expiry(
-            contact["contact_id"], "revocation_failed", str(exc)[:1000]
+    processed = 0
+    for _ in range(25):
+        contact = await db.integration_contacts.find_one_and_update(
+            {"archived_at": None, "$or": [
+                {"access_status": "active", "access_expires_at": {"$lte": now.isoformat()}},
+                {"access_status": {"$in": ["revoking", "revocation_failed"]},
+                 "next_retry_at": {"$not": {"$gt": now}}},
+            ]},
+            {"$set": {"access_status": "revoking", "next_retry_at": None},
+             "$inc": {"revocation_attempts": 1}},
+            return_document=ReturnDocument.AFTER,
         )
-    return True
+        if not contact:
+            break
+        processed += 1
+        grants = contact.get("product_grants") or []
+        try:
+            if not grants:
+                raise ProductAccessError("No product grants are recorded for this contact")
+            for grant_row in grants:
+                try:
+                    await revoke(grant_row["product_id"], grant_row["member_id"])
+                except ProductAccessError as exc:
+                    if exc.status != 404:
+                        raise
+            audit = {
+                "audit_id": f"audit_access_expiry_{contact['contact_id']}_{int(now.timestamp())}",
+                "account_id": contact["account_id"], "actor": "integration-hub-access-worker",
+                "resource_type": "contact_access", "resource_id": contact["contact_id"],
+                "action": "access.expired", "request_id": "scheduled-access-expiry",
+                "created_at": now,
+            }
+            await repository.finish_contact_expiry(
+                contact["contact_id"], "expired", audit_entry=audit
+            )
+        except Exception as exc:
+            attempts = int(contact.get("revocation_attempts") or 1)
+            terminal = attempts >= 5 and not isinstance(
+                exc, (ConnectionError, TimeoutError, asyncio.TimeoutError)
+            )
+            retry_at = now + timedelta(seconds=min(3600, 2 ** min(attempts, 10)))
+            await db.integration_contacts.update_one(
+                {"contact_id": contact["contact_id"], "access_status": "revoking"},
+                {"$set": {
+                    "access_status": "revocation_failed",
+                    "provisioning_error": str(exc)[:1000],
+                    "next_retry_at": None if terminal else retry_at,
+                }},
+            )
+    return processed > 0
 
 
 async def worker_context(app):

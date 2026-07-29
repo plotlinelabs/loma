@@ -39,6 +39,7 @@ export interface IntegrationAccount {
   go_live_criteria: string | null;
   completion_percentage: number;
   client_email_domains: string[];
+  approved_product_ids: string[];
   work_items: IntegrationWorkItem[];
   activities: IntegrationActivity[];
   source_links: IntegrationSourceLink[];
@@ -167,7 +168,8 @@ export type IntegrationAccountInput = Pick<IntegrationAccount, "name"> &
   Partial<Pick<IntegrationAccount, "owner_email" | "stage" | "health" |
     "health_reason" | "target_go_live_at" | "current_blocker" | "next_action" |
     "platforms" | "environments" | "stakeholders" | "go_live_criteria" |
-    "completion_percentage" | "health_override_enabled" | "client_email_domains">>;
+    "completion_percentage" | "health_override_enabled" | "client_email_domains" |
+    "approved_product_ids">>;
 
 export interface IntegrationAction extends IntegrationWorkItem {
   account_id: string;

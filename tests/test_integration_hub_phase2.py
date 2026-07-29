@@ -325,7 +325,7 @@ async def test_pylon_issue_page_resolves_nested_assignee_id(monkeypatch):
 @pytest.mark.asyncio
 async def test_pylon_issue_page_caps_external_page_size(monkeypatch):
     async def api_post(_path, body):
-        assert body["limit"] == 50
+        assert body["limit"] == 100
         return {"data": [], "pagination": {"has_next_page": False}}
 
     monkeypatch.setattr("tools.pylon._api_post", api_post)

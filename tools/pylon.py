@@ -506,7 +506,7 @@ async def list_account_issues_page(
             if len(filters) > 1
             else filters[0]
         ),
-        "limit": min(50, max(1, limit)),
+        "limit": min(100, max(1, limit)),
     }
     if cursor:
         body["cursor"] = cursor

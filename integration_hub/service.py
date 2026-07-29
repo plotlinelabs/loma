@@ -86,7 +86,16 @@ class AccountService:
         return await self.get(account["account_id"])
 
     async def update_contact(self, account, contact_id, data, actor, request_id, expected_version):
-        normalized = normalize_contact(data)
+        existing = await self.repository.contacts.find_one({
+            "account_id": account["account_id"], "contact_id": contact_id, "archived_at": None,
+        })
+        if not existing:
+            raise ValidationError("Contact not found")
+        editable = {key: existing.get(key) for key in (
+            "name", "email", "role", "role_description", "phone", "dashboard_access",
+            "access_duration_days", "product_ids", "organization_id",
+        )}
+        normalized = normalize_contact({**editable, **data})
         domain = normalized["email"].rsplit("@", 1)[1]
         allowed_domains = account.get("client_email_domains") or []
         internal_domain = self._internal_email_domain()
@@ -102,7 +111,7 @@ class AccountService:
             actor, audit, expected_version,
         )
         if not updated:
-            raise ValidationError("Contact not found")
+            raise RuntimeError("version_conflict")
         return await self.get(account["account_id"])
 
     async def archive_contact(self, account, contact_id, actor, request_id, expected_version):
@@ -115,6 +124,24 @@ class AccountService:
         )
         if not contact:
             raise ValidationError("Contact not found")
+        return await self.get(account["account_id"])
+
+    async def update_contact_access(self, account, contact_id, updates, actor, request_id,
+                                    expected_version, action):
+        audit = self._audit(
+            account["account_id"], actor, "contact_access", contact_id, action, request_id,
+        )
+        audit["after"] = {
+            "product_ids": updates.get("product_ids"),
+            "product_grants": updates.get("product_grants"),
+            "access_status": updates.get("access_status"),
+            "access_expires_at": updates.get("access_expires_at"),
+        }
+        parent = await self.repository.update_contact_access(
+            account["account_id"], contact_id, updates, actor, audit, expected_version,
+        )
+        if not parent:
+            raise RuntimeError("version_conflict")
         return await self.get(account["account_id"])
 
     async def list(self, *legacy_context, stage=None, health=None, search=None,

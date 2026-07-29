@@ -148,7 +148,8 @@ async def _pylon(mapping, _actor):
             if result.get("error"):
                 raise SyncError(result["error"])
             issue_ids.extend(row["id"] for row in result.get("issues", []))
-            cursor = result.get("next_cursor")
+            pagination = result.get("pagination") or {}
+            cursor = pagination.get("next_cursor")
             if not cursor:
                 break
         if cursor:

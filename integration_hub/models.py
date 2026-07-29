@@ -230,6 +230,9 @@ def normalize_create(data):
         "go_live_criteria": _text(data.get("go_live_criteria"), "go_live_criteria"),
         "completion_percentage": 0,
         "client_email_domains": _domain_list(data.get("client_email_domains")),
+        "approved_product_ids": _text_list(
+            data.get("approved_product_ids"), "approved_product_ids", maximum_items=50
+        ),
     }
 
 
@@ -241,6 +244,7 @@ def normalize_update(data):
         "completion_percentage", "health_override_enabled",
         "status",
         "client_email_domains",
+        "approved_product_ids",
     }
     unknown = set(data) - allowed
     if unknown:
@@ -292,6 +296,10 @@ def normalize_update(data):
         result["completion_percentage"] = value
     if "client_email_domains" in data:
         result["client_email_domains"] = _domain_list(data["client_email_domains"])
+    if "approved_product_ids" in data:
+        result["approved_product_ids"] = _text_list(
+            data["approved_product_ids"], "approved_product_ids", maximum_items=50
+        )
     return result
 
 
@@ -312,7 +320,34 @@ def _domain_list(value):
     return result
 
 
-def normalize_contact(data):
+CONTACT_EDITABLE_FIELDS = {
+    "name", "email", "role", "role_description", "phone", "dashboard_access",
+    "access_duration_days", "product_ids", "organization_id",
+}
+CONTACT_SERVER_FIELDS = {
+    "access_status", "access_starts_at", "access_expires_at", "revoked_at",
+    "dashboard_member_id", "provisioning_error", "product_grants",
+    "revocation_attempts", "next_retry_at",
+}
+
+
+def normalize_contact(data, *, partial=False):
+    forbidden = set(data) & CONTACT_SERVER_FIELDS
+    if forbidden:
+        raise ValidationError(
+            f"Server-managed fields cannot be changed: {', '.join(sorted(forbidden))}"
+        )
+    unknown = set(data) - CONTACT_EDITABLE_FIELDS - {"organization_ids", "access_url", "invite_sent_at"}
+    if unknown:
+        raise ValidationError(f"Unknown fields: {', '.join(sorted(unknown))}")
+    if partial:
+        result = {}
+        for field in CONTACT_EDITABLE_FIELDS:
+            if field in data:
+                result.update(normalize_contact({**data, "name": data.get("name", "x"),
+                                                 "email": data.get("email", "x@example.com")}))
+                return {key: value for key, value in result.items() if key in data}
+        return result
     name = _text(data.get("name"), "name", required=True, maximum=200)
     email = normalize_email(data.get("email"))
     if not email:
@@ -345,18 +380,11 @@ def normalize_contact(data):
         "phone": _text(data.get("phone"), "phone", maximum=50),
         "dashboard_access": dashboard_access,
         "access_duration_days": access_duration_days,
-        "access_status": _text(data.get("access_status"), "access_status", maximum=50),
-        "access_starts_at": _text(data.get("access_starts_at"), "access_starts_at", maximum=100),
-        "access_expires_at": _text(data.get("access_expires_at"), "access_expires_at", maximum=100),
-        "revoked_at": _text(data.get("revoked_at"), "revoked_at", maximum=100),
         "product_ids": _text_list(
             data.get("product_ids", data.get("organization_ids")),
             "product_ids", maximum_items=20,
         ),
         "organization_id": _text(data.get("organization_id"), "organization_id", maximum=100),
-        "dashboard_member_id": _text(data.get("dashboard_member_id"), "dashboard_member_id", maximum=100),
-        "provisioning_error": _text(data.get("provisioning_error"), "provisioning_error", maximum=1000),
-        "invite_sent_at": _text(data.get("invite_sent_at"), "invite_sent_at", maximum=100),
     }
 
 

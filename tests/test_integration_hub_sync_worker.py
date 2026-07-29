@@ -62,3 +62,38 @@ async def test_worker_context_uses_same_explicit_kill_switch_as_api(monkeypatch)
         await context.__anext__()
 
     loop.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_expiry_revokes_batch_and_updates_parent(monkeypatch):
+    now = datetime.now(timezone.utc)
+    contact = {
+        "contact_id": "contact-1", "account_id": "account-1",
+        "access_status": "revoking", "revocation_attempts": 1,
+        "product_grants": [{"product_id": "product-1", "member_id": "member-1"}],
+    }
+    contacts = AsyncMock()
+    contacts.find_one_and_update.side_effect = [contact, contact, None]
+    contacts.update_one = AsyncMock()
+    accounts = AsyncMock()
+    audit = AsyncMock()
+    db = type("ExpiryDB", (), {
+        "integration_contacts": contacts,
+        "integration_accounts": accounts,
+        "integration_audit_log": audit,
+    })()
+    # Repository construction touches these collection attributes.
+    for name in (
+        "integration_projects", "integration_tasks", "integration_milestones", "integration_source_mappings", "integration_timeline",
+        "integration_risks", "integration_source_links", "integration_sync_sources",
+        "integration_sync_jobs", "integration_interactions", "integration_raw_events",
+        "integration_external_conversations", "integration_findings",
+        "integration_activities", "integration_idempotency",
+    ):
+        setattr(db, name, AsyncMock())
+    revoke = AsyncMock()
+    monkeypatch.setattr("tools.product_access.revoke", revoke)
+
+    assert await sync_worker.expire_dashboard_access(db, now) is True
+    revoke.assert_awaited_once_with("product-1", "member-1")
+    accounts.update_one.assert_awaited_once()
+    audit.insert_one.assert_awaited_once()

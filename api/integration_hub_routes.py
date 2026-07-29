@@ -173,7 +173,13 @@ async def handle_update_account(request):
         service, actor, _, account = await _account_context(request, "edit")
         if not account:
             return _error(request, 404, "not_found", "Account not found")
-        updated = await service.update(account, await _json(request), actor, _if_match(request), request["request_id"])
+        payload = await _json(request)
+        if "approved_product_ids" in payload and _module_role(request) != "Admin":
+            return _error(request, 403, "forbidden",
+                          "Only administrators can approve products")
+        updated = await service.update(
+            account, payload, actor, _if_match(request), request["request_id"]
+        )
         return _ok(request, {"account": updated}, version=updated["version"])
     return await _run(request, action)
 
@@ -183,6 +189,19 @@ async def _lifecycle_account(request, restore=False):
         service, actor, _, account = await _account_context(request, "edit", True)
         if not account:
             return _error(request, 404, "not_found", "Account not found")
+        if not restore:
+            active_access = await service.repository.contacts.count_documents({
+                "account_id": account["account_id"], "archived_at": None,
+                "access_status": {"$in": [
+                    "active", "partially_granted", "revoking", "revocation_failed",
+                ]},
+            })
+            if active_access:
+                return _error(
+                    request, 409, "access_must_be_revoked",
+                    "Revoke all dashboard access before archiving this account",
+                    {"active_contacts": active_access},
+                )
         body = await _json(request) if request.can_read_body else {}
         updated = await (service.restore(account, actor, _if_match(request), request["request_id"])
                          if restore else service.archive(account, actor, _if_match(request), request["request_id"], body.get("reason")))
@@ -471,6 +490,16 @@ async def handle_archive_contact(request):
         service, actor, _, account = await _account_context(request, "edit")
         if not account:
             return _error(request, 404, "not_found", "Account not found")
+        hydrated = await service.get(account["account_id"])
+        contact = next((row for row in hydrated.get("contacts", [])
+                        if row["contact_id"] == request.match_info["contact_id"]), None)
+        if contact and contact.get("access_status") in {
+            "active", "partially_granted", "revoking", "revocation_failed"
+        }:
+            return _error(
+                request, 409, "access_must_be_revoked",
+                "Revoke dashboard access before archiving this contact",
+            )
         updated = await service.archive_contact(
             account, request.match_info["contact_id"], actor, request["request_id"],
             _if_match(request),
@@ -504,7 +533,13 @@ async def handle_provision_contact(request):
         ), None)
         if not contact:
             return _error(request, 404, "not_found", "Contact not found")
+        if _module_role(request) != "Admin":
+            return _error(request, 403, "forbidden", "Administrator access is required")
+        if account.get("archived_at") or contact.get("archived_at"):
+            return _error(request, 409, "archived", "Archived records cannot be provisioned")
         expected_version = _if_match(request)
+        if expected_version != account["version"]:
+            raise RuntimeError("version_conflict")
         granted_at = datetime.now(timezone.utc)
         duration_days = contact.get("access_duration_days")
         product_ids = contact.get("product_ids") or contact.get("organization_ids") or []
@@ -513,6 +548,14 @@ async def handle_provision_contact(request):
                 request, 422, "dashboard_access_required",
                 "Choose an access role and at least one product before granting access",
             )
+        approved_products = set(account.get("approved_product_ids") or [])
+        unknown_products = sorted(set(product_ids) - approved_products)
+        if unknown_products:
+            return _error(
+                request, 422, "product_not_approved",
+                "Every product must be approved for this onboarding account",
+                {"product_ids": unknown_products},
+            )
         internal_domain = (
             os.environ.get("INTERNAL_EMAIL_DOMAIN") or ("plot" + "line.so")
         ).lower().lstrip("@")
@@ -520,33 +563,58 @@ async def handle_provision_contact(request):
         if is_internal and not duration_days:
             return _error(request, 422, "access_duration_required",
                           "Choose an access duration for an internal user")
-        from tools.plotline_access import grant, PlotlineAccessError
-        member_id = None
+        requested_audit = service._audit(
+            account["account_id"], actor, "contact_access", contact["contact_id"],
+            "access.grant_requested", request["request_id"],
+        )
+        requested_audit["after"] = {
+            "product_ids": product_ids, "role": contact["dashboard_access"],
+            "access_duration_days": duration_days,
+        }
+        await service.repository.audit.insert_one(requested_audit)
+        from tools.product_access import grant, ProductAccessError
+        grants = []
+        failures = []
         try:
             for product_id in product_ids:
-                result = await grant(
-                    product_id, contact["email"], contact["name"],
-                    contact["dashboard_access"],
-                )
-                member_id = member_id or result.get("memberId")
-        except PlotlineAccessError as exc:
+                try:
+                    result = await grant(
+                        product_id, contact["email"], contact["name"],
+                        contact["dashboard_access"],
+                    )
+                    member_id = result.get("memberId")
+                    if not member_id:
+                        raise ProductAccessError("Dashboard API did not return a member ID")
+                    grants.append({
+                        "product_id": product_id, "member_id": str(member_id),
+                        "role": contact["dashboard_access"], "status": "active",
+                        "granted_at": granted_at.isoformat(),
+                    })
+                except ProductAccessError as exc:
+                    failures.append({"product_id": product_id, "error": str(exc)})
+        except ProductAccessError as exc:
             return _error(request, 502, "provisioning_failed", str(exc))
-        updated = await service.update_contact(
+        updated = await service.update_contact_access(
             account, contact["contact_id"],
-            {**{key: contact.get(key) for key in (
-                "name", "email", "role", "role_description", "phone",
-                "dashboard_access", "access_duration_days", "product_ids",
-                "organization_id",
-            )}, "dashboard_member_id": member_id or "",
+            {"product_grants": grants,
                 "access_starts_at": granted_at.isoformat(),
                 "access_expires_at": (
                     (granted_at + timedelta(days=duration_days)).isoformat()
                     if is_internal else ""
                 ),
-                "access_status": "active", "provisioning_error": ""},
+                "access_status": "active" if not failures else (
+                    "partially_granted" if grants else "grant_failed"
+                ),
+                "provisioning_error": "; ".join(
+                    f"{row['product_id']}: {row['error']}" for row in failures
+                )},
             actor, request["request_id"], expected_version,
+            "access.granted" if not failures else "access.partially_granted",
         )
-        return _ok(request, {"account": updated}, version=updated["version"])
+        return _ok(
+            request, {"account": updated, "grants": grants, "failures": failures},
+            200 if not failures else 207, updated["version"],
+        )
     return await _run(request, action)
 
 
@@ -558,24 +626,39 @@ async def handle_revoke_contact_access(request):
                         if item["contact_id"] == request.match_info["contact_id"]), None)
         if not contact:
             return _error(request, 404, "not_found", "Contact not found")
-        member_id = contact.get("dashboard_member_id")
-        if not member_id:
+        if _module_role(request) != "Admin":
+            return _error(request, 403, "forbidden", "Administrator access is required")
+        expected_version = _if_match(request)
+        if expected_version != account["version"]:
+            raise RuntimeError("version_conflict")
+        grants = contact.get("product_grants") or []
+        if not grants:
             return _error(request, 422, "not_provisioned", "Dashboard access is not active")
-        from tools.plotline_access import revoke, PlotlineAccessError
+        requested_audit = service._audit(
+            account["account_id"], actor, "contact_access", contact["contact_id"],
+            "access.revoke_requested", request["request_id"],
+        )
+        requested_audit["after"] = {
+            "product_ids": [row["product_id"] for row in grants],
+        }
+        await service.repository.audit.insert_one(requested_audit)
+        from tools.product_access import revoke, ProductAccessError
         try:
-            for product_id in contact.get("product_ids", []):
-                await revoke(product_id, member_id)
-        except PlotlineAccessError as exc:
+            for grant_row in grants:
+                try:
+                    await revoke(grant_row["product_id"], grant_row["member_id"])
+                except ProductAccessError as exc:
+                    if exc.status != 404:
+                        raise
+        except ProductAccessError as exc:
             return _error(request, 502, "revocation_failed", str(exc))
-        updated = await service.update_contact(
+        updated = await service.update_contact_access(
             account, contact["contact_id"],
-            {**{key: contact.get(key) for key in (
-                "name", "email", "role", "role_description", "phone",
-                "dashboard_access", "access_duration_days", "product_ids",
-                "organization_id", "dashboard_member_id",
-            )}, "access_status": "revoked",
+            {"access_status": "revoked", "product_grants": [
+                {**row, "status": "revoked"} for row in grants
+            ],
                 "revoked_at": datetime.now(timezone.utc).isoformat()},
-            actor, request["request_id"], _if_match(request),
+            actor, request["request_id"], expected_version, "access.revoked",
         )
         return _ok(request, {"account": updated}, version=updated["version"])
     return await _run(request, action)

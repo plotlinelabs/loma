@@ -114,6 +114,9 @@ export default function OnboardingWorkspace({
   const [contact, setContact] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [domainInput, setDomainInput] = useState((account.client_email_domains || []).join(", "));
+  const [approvedProductsInput, setApprovedProductsInput] = useState(
+    (account.approved_product_ids || []).join(", ")
+  );
   const [grainMeetings, setGrainMeetings] = useState<GrainMeeting[]>([]);
   const [loadingGrain, setLoadingGrain] = useState(false);
   const [grainSummary, setGrainSummary] = useState<{ id: string; summary: string; transcript: string; actionItems: GrainMeeting["action_items"] } | null>(null);
@@ -251,7 +254,11 @@ export default function OnboardingWorkspace({
     setSaving(true); setError(null);
     try {
       const domains = domainInput.split(",").map((item) => item.trim().replace(/^@/, "")).filter(Boolean);
-      const result = await updateIntegrationAccount(account.account_id, { name: account.name, client_email_domains: domains }, account.version);
+      const approvedProducts = approvedProductsInput.split(",").map((item) => item.trim()).filter(Boolean);
+      const result = await updateIntegrationAccount(account.account_id, {
+        name: account.name, client_email_domains: domains,
+        approved_product_ids: approvedProducts,
+      }, account.version);
       onChange(result.account);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not save client email domains"); }
     finally { setSaving(false); }
@@ -260,7 +267,7 @@ export default function OnboardingWorkspace({
   async function provisionAccess(contactId: string) {
     setSaving(true); setError(null);
     try {
-      if (!window.confirm("Grant access to the selected Plotline products?")) return;
+      if (!window.confirm("Grant access to the selected approved products?")) return;
       const result = await provisionIntegrationContact(account.account_id, contactId, account.version);
       onChange(result.account);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not grant dashboard access"); }
@@ -270,7 +277,7 @@ export default function OnboardingWorkspace({
   async function revokeAccess(contactId: string) {
     setSaving(true); setError(null);
     try {
-      if (!window.confirm("Revoke access to the selected Plotline products?")) return;
+      if (!window.confirm("Revoke access to the selected approved products?")) return;
       const result = await revokeIntegrationContactAccess(account.account_id, contactId, account.version);
       onChange(result.account);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not revoke dashboard access"); }
@@ -602,6 +609,16 @@ export default function OnboardingWorkspace({
             <Button type="button" variant="outline" size="sm" disabled={saving} onClick={saveDomains}>Save domains</Button>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">Only configured client domains can be stored. Internal users are grouped separately.</p>
+          <Label className="mt-3 block">Approved product IDs</Label>
+          <Input
+            className="mt-2"
+            placeholder="product-id-1, product-id-2"
+            value={approvedProductsInput}
+            onChange={(event) => setApprovedProductsInput(event.target.value)}
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Access can only be granted to products explicitly registered for this client.
+          </p>
         </div>
         <form onSubmit={addContact} className="mt-3 grid gap-2 md:grid-cols-2">
           <Input required placeholder="Name" value={contact.name} onChange={(event) => setContact({ ...contact, name: event.target.value })} />
