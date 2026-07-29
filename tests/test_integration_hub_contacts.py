@@ -21,11 +21,30 @@ def test_contact_supports_pilot_role_and_dashboard_access():
         "role": "Product lead",
         "role_description": "Owns pilot success criteria",
         "dashboard_access": "Admin",
+        "access_duration_days": 7,
         "organization_ids": ["org-1", "org-2"],
         "access_url": "https://app.example.com",
     })
     assert contact["role_description"] == "Owns pilot success criteria"
+    assert contact["dashboard_access"] == "admin"
+    assert contact["access_duration_days"] == 7
     assert contact["organization_ids"] == ["org-1", "org-2"]
+
+
+def test_contact_dashboard_access_requires_supported_duration():
+    with pytest.raises(ValidationError, match="access_duration_days is required"):
+        normalize_contact({
+            "name": "Customer Admin",
+            "email": "admin@example.com",
+            "dashboard_access": "publisher",
+        })
+    with pytest.raises(ValidationError, match="must be one of"):
+        normalize_contact({
+            "name": "Customer Admin",
+            "email": "admin@example.com",
+            "dashboard_access": "publisher",
+            "access_duration_days": 30,
+        })
 
 
 @pytest.mark.asyncio

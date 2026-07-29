@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine, RiEditLine } from "@remixicon/react";
 
@@ -41,6 +42,7 @@ const INTERNAL_EMAIL_DOMAIN = (
   process.env.NEXT_PUBLIC_INTERNAL_EMAIL_DOMAIN || ["plot", "line.so"].join("")
 ).toLowerCase();
 const MEETING_RECORDER = process.env.NEXT_PUBLIC_MEETING_RECORDER_EMAIL || `meetings@${INTERNAL_EMAIL_DOMAIN}`;
+const ACCESS_DURATIONS = [1, 3, 5, 7, 14] as const;
 
 const emptyItem: IntegrationWorkItemInput = {
   type: "task",
@@ -107,7 +109,7 @@ export default function OnboardingWorkspace({
   const autoSearchedPylon = useRef(false);
   const pylonIssueRequest = useRef(0);
   const pylonConnected = (account.sync_sources || []).some((source) => source.source === "pylon");
-  const emptyContact = { name: "", email: "", role: "", role_description: "", phone: "", dashboard_access: "", organization_ids: "", access_url: "" };
+  const emptyContact = { name: "", email: "", role: "", role_description: "", phone: "", dashboard_access: "", access_duration_days: "", organization_ids: "", access_url: "" };
   const [contact, setContact] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [domainInput, setDomainInput] = useState((account.client_email_domains || []).join(", "));
@@ -219,6 +221,7 @@ export default function OnboardingWorkspace({
         ...contact,
         role: contact.role || null, role_description: contact.role_description || null,
         phone: contact.phone || null, dashboard_access: contact.dashboard_access || null,
+        access_duration_days: contact.access_duration_days ? Number(contact.access_duration_days) as 1 | 3 | 5 | 7 | 14 : null,
         organization_ids: contact.organization_ids.split(",").map((item) => item.trim()).filter(Boolean),
         access_url: contact.access_url || null,
       };
@@ -237,6 +240,7 @@ export default function OnboardingWorkspace({
       name: item.name, email: item.email, role: item.role || "",
       role_description: item.role_description || "", phone: item.phone || "",
       dashboard_access: item.dashboard_access || "",
+      access_duration_days: item.access_duration_days ? String(item.access_duration_days) : "",
       organization_ids: (item.organization_ids || []).join(", "),
       access_url: item.access_url || "",
     });
@@ -591,11 +595,34 @@ export default function OnboardingWorkspace({
         <form onSubmit={addContact} className="mt-3 grid gap-2 md:grid-cols-2">
           <Input required placeholder="Name" value={contact.name} onChange={(event) => setContact({ ...contact, name: event.target.value })} />
           <Input required type="email" placeholder="Email" value={contact.email} onChange={(event) => setContact({ ...contact, email: event.target.value })} />
+          {contact.email.includes("@") && <p className="text-xs text-muted-foreground md:col-span-2">
+            {contact.email.toLowerCase().endsWith(`@${INTERNAL_EMAIL_DOMAIN}`)
+              ? "Recognized as an Internal user"
+              : "Recognized as a Client user"}
+          </p>}
           <Input placeholder="Role or title" value={contact.role} onChange={(event) => setContact({ ...contact, role: event.target.value })} />
           <Input placeholder="Phone" value={contact.phone} onChange={(event) => setContact({ ...contact, phone: event.target.value })} />
           <Textarea placeholder="Role in the pilot and why this person matters" value={contact.role_description} onChange={(event) => setContact({ ...contact, role_description: event.target.value })} />
           <div className="space-y-2">
-            <Input placeholder="Dashboard access type, e.g. Admin or Viewer" value={contact.dashboard_access} onChange={(event) => setContact({ ...contact, dashboard_access: event.target.value })} />
+            <Label htmlFor="dashboard-access-role">Dashboard access</Label>
+            <Select value={contact.dashboard_access || "none"} onValueChange={(value) => setContact({ ...contact, dashboard_access: value === "none" ? "" : value, access_duration_days: value === "none" ? "" : contact.access_duration_days })}>
+              <SelectTrigger id="dashboard-access-role" className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Stakeholder only, no dashboard access</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+                <SelectItem value="publisher">Publisher</SelectItem>
+                <SelectItem value="viewer">Viewer</SelectItem>
+              </SelectContent>
+            </Select>
+            {contact.dashboard_access && <>
+              <Label htmlFor="dashboard-access-duration">Access duration</Label>
+              <Select value={contact.access_duration_days || undefined} onValueChange={(value) => setContact({ ...contact, access_duration_days: value })}>
+                <SelectTrigger id="dashboard-access-duration" className="w-full"><SelectValue placeholder="Select duration" /></SelectTrigger>
+                <SelectContent>
+                  {ACCESS_DURATIONS.map((days) => <SelectItem key={days} value={String(days)}>{days} day{days === 1 ? "" : "s"}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </>}
             <Input placeholder="Organization IDs, comma separated" value={contact.organization_ids} onChange={(event) => setContact({ ...contact, organization_ids: event.target.value })} />
             <Input type="url" placeholder="Dashboard access URL" value={contact.access_url} onChange={(event) => setContact({ ...contact, access_url: event.target.value })} />
           </div>
@@ -618,12 +645,14 @@ export default function OnboardingWorkspace({
                 {item.role_description && <p className="text-xs text-muted-foreground">{item.role_description}</p>}
                 <p className="mt-1 text-xs text-muted-foreground">
                   Access: {item.dashboard_access || "Not configured"}
+                  {item.access_duration_days ? ` · ${item.access_duration_days} days` : ""}
                   {(item.organization_ids || []).length ? ` · Orgs: ${item.organization_ids.join(", ")}` : ""}
                 </p>
+                {item.access_expires_at && <p className="text-xs text-muted-foreground">Expires {new Date(item.access_expires_at).toLocaleString()}</p>}
                 {item.invite_sent_at && <p className="text-xs text-emerald-600">Invite sent {new Date(item.invite_sent_at).toLocaleString()}</p>}
               </div>
               <div className="flex gap-1">
-                {item.access_url && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => sendInvite(item.contact_id)}>Send access</Button>}
+                {item.access_url && item.dashboard_access && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => sendInvite(item.contact_id)}>Send access link</Button>}
                 <Button type="button" variant="ghost" size="icon-sm" aria-label={`Edit ${item.name}`} onClick={() => editContact(item)}><RiEditLine /></Button>
                 <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${item.name}`} onClick={() => removeContact(item.contact_id)}><RiDeleteBinLine /></Button>
               </div>

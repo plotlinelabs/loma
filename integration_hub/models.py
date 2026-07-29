@@ -38,6 +38,8 @@ CONVERSATION_STATES = (
 INTERACTION_DIRECTIONS = ("inbound", "outbound", "internal")
 PROJECT_STATUSES = ("active", "paused", "completed", "cancelled")
 ACCOUNT_STATUSES = ("active", "inactive", "archived")
+DASHBOARD_ACCESS_ROLES = ("admin", "publisher", "viewer")
+DASHBOARD_ACCESS_DURATIONS = (1, 3, 5, 7, 14)
 PLAYBOOKS = {
     "mobile_sdk": {
         "name": "Mobile SDK onboarding",
@@ -315,13 +317,32 @@ def normalize_contact(data):
     email = normalize_email(data.get("email"))
     if not email:
         raise ValidationError("email is required")
+    dashboard_access = _text(data.get("dashboard_access"), "dashboard_access", maximum=100)
+    if dashboard_access:
+        dashboard_access = dashboard_access.lower()
+        if dashboard_access not in DASHBOARD_ACCESS_ROLES:
+            raise ValidationError("dashboard_access is invalid")
+    access_duration_days = data.get("access_duration_days")
+    if access_duration_days is not None and (
+        isinstance(access_duration_days, bool)
+        or not isinstance(access_duration_days, int)
+        or access_duration_days not in DASHBOARD_ACCESS_DURATIONS
+    ):
+        raise ValidationError("access_duration_days must be one of 1, 3, 5, 7, or 14")
+    if dashboard_access and access_duration_days is None:
+        raise ValidationError("access_duration_days is required for dashboard access")
     return {
         "name": name,
         "email": email,
         "role": _text(data.get("role"), "role", maximum=200),
         "role_description": _text(data.get("role_description"), "role_description", maximum=1000),
         "phone": _text(data.get("phone"), "phone", maximum=50),
-        "dashboard_access": _text(data.get("dashboard_access"), "dashboard_access", maximum=100),
+        "dashboard_access": dashboard_access,
+        "access_duration_days": access_duration_days,
+        "access_status": _text(data.get("access_status"), "access_status", maximum=50),
+        "access_starts_at": _text(data.get("access_starts_at"), "access_starts_at", maximum=100),
+        "access_expires_at": _text(data.get("access_expires_at"), "access_expires_at", maximum=100),
+        "revoked_at": _text(data.get("revoked_at"), "revoked_at", maximum=100),
         "organization_ids": _text_list(data.get("organization_ids"), "organization_ids", maximum_items=20),
         "access_url": _text(data.get("access_url"), "access_url", maximum=2048),
         "invite_sent_at": _text(data.get("invite_sent_at"), "invite_sent_at", maximum=100),

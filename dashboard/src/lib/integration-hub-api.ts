@@ -58,6 +58,11 @@ export interface IntegrationContact {
   role_description: string | null;
   phone: string | null;
   dashboard_access: string | null;
+  access_duration_days: 1 | 3 | 5 | 7 | 14 | null;
+  access_status: string | null;
+  access_starts_at: string | null;
+  access_expires_at: string | null;
+  revoked_at: string | null;
   organization_ids: string[];
   access_url: string | null;
   invite_sent_at: string | null;
@@ -405,7 +410,7 @@ export function fetchPylonIssue(accountId: string, issueId: string) {
 export function createIntegrationContact(
   accountId: string,
   version: number,
-  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "organization_ids" | "access_url">,
+  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "access_duration_days" | "organization_ids" | "access_url">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts`,
@@ -417,7 +422,7 @@ export function updateIntegrationContact(
   accountId: string,
   contactId: string,
   version: number,
-  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "organization_ids" | "access_url">,
+  input: Pick<IntegrationContact, "name" | "email" | "role" | "role_description" | "phone" | "dashboard_access" | "access_duration_days" | "organization_ids" | "access_url">,
 ) {
   return request<{ account: IntegrationAccount }>(
     `/api/integration-hub/accounts/${accountId}/contacts/${contactId}`,

@@ -3,7 +3,7 @@ import os
 import re
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from aiohttp import web
@@ -526,12 +526,25 @@ async def handle_invite_contact(request):
             return _error(request, 422, "invalid_access_url",
                           "Dashboard access URL must use HTTPS and an approved host")
         expected_version = _if_match(request)
+        invited_at = datetime.now(timezone.utc)
+        duration_days = contact.get("access_duration_days")
+        if not contact.get("dashboard_access") or not duration_days:
+            return _error(
+                request, 422, "dashboard_access_required",
+                "Choose an access role and duration before sending an invite",
+            )
         updated = await service.update_contact(
             account, contact["contact_id"],
             {**{key: contact.get(key) for key in (
                 "name", "email", "role", "role_description", "phone",
-                "dashboard_access", "organization_ids", "access_url",
-            )}, "invite_sent_at": datetime.now(timezone.utc).isoformat()},
+                "dashboard_access", "access_duration_days", "organization_ids",
+                "access_url",
+            )}, "invite_sent_at": invited_at.isoformat(),
+                "access_starts_at": invited_at.isoformat(),
+                "access_expires_at": (
+                    invited_at + timedelta(days=duration_days)
+                ).isoformat(),
+                "access_status": "invite_sent"},
             actor, request["request_id"], expected_version,
         )
         from tools.gmail import send_email
