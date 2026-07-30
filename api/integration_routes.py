@@ -296,14 +296,19 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
 
         if not client_id and oauth_config.get("registration_endpoint"):
             from api.oauth_routes import _oauth_redirect_uri
-            redirect_uri = f"{os.environ.get('APP_BASE_URL', '').rstrip('/')}/api/oauth/custom-mcp/{slug}/callback"
+            redirect_uri = _oauth_redirect_uri(request, f"custom-mcp/{slug}")
             reg_result = await register_oauth_client(
                 registration_endpoint=oauth_config["registration_endpoint"],
                 redirect_uri=redirect_uri,
             )
             if reg_result is None:
                 return web.json_response(
-                    {"error": "OAuth dynamic client registration failed. Provide client_id manually."},
+                    {"error": "OAuth dynamic client registration failed (network error). Provide client_id manually."},
+                    status=400,
+                )
+            if "error" in reg_result:
+                return web.json_response(
+                    {"error": f"OAuth dynamic client registration failed: {reg_result['error']}. Provide client_id manually."},
                     status=400,
                 )
             client_id = reg_result["client_id"]
