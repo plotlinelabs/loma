@@ -19,6 +19,8 @@ from api.oauth_helpers import (
     SLACK_USER_SCOPES,
     create_oauth_state,
     verify_oauth_state,
+    extract_code_verifier,
+    generate_pkce_pair,
     store_google_tokens,
     revoke_google_tokens,
     store_slack_tokens,
@@ -541,13 +543,16 @@ async def handle_custom_mcp_authorize(request: web.Request) -> web.Response:
         return web.json_response({"error": "Connector missing OAuth client credentials"}, status=500)
 
     redirect_uri = _oauth_redirect_uri(request, f"custom-mcp/{provider}")
-    state = create_oauth_state(email)
+    code_verifier, code_challenge = generate_pkce_pair()
+    state = create_oauth_state(email, code_verifier=code_verifier)
 
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     }
     scopes = oauth_cfg.get("scopes")
     if scopes:
@@ -579,6 +584,8 @@ async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
     if email is None:
         return _callback_error("Invalid or expired authorization state", provider=provider)
 
+    code_verifier = extract_code_verifier(state)
+
     integration = await db.integrations.find_one({
         "provider": provider, "is_custom": True, "auth_mode": "oauth",
     })
@@ -597,6 +604,7 @@ async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
         client_secret=client_secret,
         redirect_uri=redirect_uri,
         auth_method=oauth_cfg.get("token_endpoint_auth_method", "client_secret_post"),
+        code_verifier=code_verifier,
     )
     if token_data is None:
         return _callback_error("Failed to exchange authorization code", provider=provider)

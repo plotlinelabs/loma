@@ -4,11 +4,13 @@ Tokens are encrypted at rest using Fernet symmetric encryption.
 The encryption key is read from OAUTH_ENCRYPTION_KEY env var.
 """
 
+import base64
 import hashlib
 import hmac
 import json
 import logging
 import os
+import secrets
 import time
 from datetime import datetime, timezone
 
@@ -87,21 +89,34 @@ def decrypt_token(encrypted: str) -> str:
         raise ValueError("Failed to decrypt token — key may have changed")
 
 
+# ── PKCE (RFC 7636) ──────────────────────────────────────────────────────
+
+
+def generate_pkce_pair() -> tuple[str, str]:
+    """Generate a PKCE code_verifier and S256 code_challenge."""
+    code_verifier = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return code_verifier, code_challenge
+
+
 # ── HMAC state for CSRF protection ───────────────────────────────────────
 
 
-def create_oauth_state(email: str) -> str:
+def create_oauth_state(email: str, code_verifier: str | None = None) -> str:
     """Create an HMAC-signed OAuth state parameter.
 
     Encodes user email + timestamp, signed with OAUTH_ENCRYPTION_KEY.
+    Optionally embeds a PKCE code_verifier for retrieval during callback.
     """
     key = os.environ.get("OAUTH_ENCRYPTION_KEY", "").strip().strip("'\"")
     ts = str(int(time.time()))
     payload = f"{email}:{ts}"
     sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    state_data = json.dumps({"email": email, "ts": ts, "sig": sig})
-    import base64
-    return base64.urlsafe_b64encode(state_data.encode()).decode()
+    state_data: dict = {"email": email, "ts": ts, "sig": sig}
+    if code_verifier:
+        state_data["cv"] = code_verifier
+    return base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
 
 
 def verify_oauth_state(state: str, max_age: int = 600) -> str | None:
@@ -109,7 +124,6 @@ def verify_oauth_state(state: str, max_age: int = 600) -> str | None:
 
     Returns None if invalid or expired (default: 10 minute max age).
     """
-    import base64
     try:
         state_data = json.loads(base64.urlsafe_b64decode(state).decode())
     except Exception:
@@ -141,6 +155,15 @@ def verify_oauth_state(state: str, max_age: int = 600) -> str | None:
         return None
 
     return email
+
+
+def extract_code_verifier(state: str) -> str | None:
+    """Extract the PKCE code_verifier from an OAuth state, if present."""
+    try:
+        state_data = json.loads(base64.urlsafe_b64decode(state).decode())
+        return state_data.get("cv")
+    except Exception:
+        return None
 
 
 # ── Token storage ─────────────────────────────────────────────────────────
@@ -397,6 +420,7 @@ async def _exchange_oauth_code(
     client_secret: str,
     redirect_uri: str,
     auth_method: str = "client_secret_post",
+    code_verifier: str | None = None,
 ) -> dict | None:
     """Exchange an authorization code for tokens at any OAuth provider."""
     data = {
@@ -404,15 +428,19 @@ async def _exchange_oauth_code(
         "code": code,
         "redirect_uri": redirect_uri,
     }
+    if code_verifier:
+        data["code_verifier"] = code_verifier
     headers: dict[str, str] = {}
 
     if auth_method == "client_secret_basic":
-        import base64
         credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {credentials}"
+    elif auth_method == "none":
+        data["client_id"] = client_id
     else:
         data["client_id"] = client_id
-        data["client_secret"] = client_secret
+        if client_secret:
+            data["client_secret"] = client_secret
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -445,12 +473,14 @@ async def _refresh_oauth_token(
     headers: dict[str, str] = {}
 
     if auth_method == "client_secret_basic":
-        import base64
         credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {credentials}"
+    elif auth_method == "none":
+        data["client_id"] = client_id
     else:
         data["client_id"] = client_id
-        data["client_secret"] = client_secret
+        if client_secret:
+            data["client_secret"] = client_secret
 
     try:
         async with aiohttp.ClientSession() as session:
