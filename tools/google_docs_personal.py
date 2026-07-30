@@ -216,6 +216,7 @@ async def copy_doc(user_email: str, document_id: str, title: str = "") -> dict:
         fileId=document_id,
         body=metadata,
         fields="id,name,webViewLink",
+        supportsAllDrives=True,
     ).execute()
 
     return {
