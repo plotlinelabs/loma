@@ -505,7 +505,9 @@ async def register_oauth_client(
 ) -> dict | None:
     """Dynamically register as an OAuth client (RFC 7591).
 
-    Returns {"client_id": ..., "client_secret": ...} or None on failure.
+    Returns {"client_id": ..., "client_secret": ..., "error": None} on
+    success, or {"error": "..."} on failure for surfacing to the user.
+    Returns None only on network-level failures.
     """
     body = {
         "client_name": client_name,
@@ -524,11 +526,16 @@ async def register_oauth_client(
                 if resp.status not in (200, 201):
                     text = await resp.text()
                     logger.error("OAuth client registration failed (%d): %s", resp.status, text[:300])
-                    return None
+                    detail = ""
+                    try:
+                        detail = json.loads(text).get("error_description") or json.loads(text).get("error", "")
+                    except Exception:
+                        detail = text[:200]
+                    return {"error": f"Registration rejected ({resp.status}): {detail}".strip(": ")}
                 data = await resp.json()
                 if not data.get("client_id"):
                     logger.error("OAuth registration returned no client_id")
-                    return None
+                    return {"error": "Registration succeeded but returned no client_id"}
                 return {
                     "client_id": data["client_id"],
                     "client_secret": data.get("client_secret", ""),
