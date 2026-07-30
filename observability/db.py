@@ -231,6 +231,32 @@ async def init_observability():
         {"$set": {"conversation_state": "waiting_on_us"}},
     )
 
+    # Access grants created before per-product grant tracking used one member ID.
+    # Preserve a revocation path for those records during the schema transition.
+    await _db.integration_contacts.update_many(
+        {
+            "dashboard_member_id": {"$nin": [None, ""]},
+            "product_ids.0": {"$exists": True},
+            "$or": [{"product_grants": {"$exists": False}}, {"product_grants": []}],
+        },
+        [{
+            "$set": {
+                "product_grants": {
+                    "$map": {
+                        "input": "$product_ids",
+                        "as": "product_id",
+                        "in": {
+                            "product_id": "$$product_id",
+                            "member_id": "$dashboard_member_id",
+                            "role": "$dashboard_access",
+                            "status": "active",
+                        },
+                    },
+                },
+            },
+        }],
+    )
+
     # Backfill leases so pre-lease running jobs can be reclaimed immediately.
     await _db.integration_sync_jobs.update_many(
         {"status": "running", "lease_expires_at": {"$exists": False}},

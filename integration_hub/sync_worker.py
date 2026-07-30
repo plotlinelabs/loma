@@ -166,8 +166,10 @@ async def expire_dashboard_access(db, now=None):
     processed = 0
     for _ in range(25):
         contact = await db.integration_contacts.find_one_and_update(
-            {"archived_at": None, "$or": [
-                {"access_status": "active", "access_expires_at": {"$lte": now.isoformat()}},
+            {"archived_at": None, "revocation_terminal": {"$ne": True}, "$or": [
+                {"access_status": {"$in": ["active", "partially_granted"]},
+                 "access_expires_at": {"$type": "string", "$ne": "",
+                                       "$lte": now.isoformat()}},
                 {"access_status": {"$in": ["revoking", "revocation_failed"]},
                  "next_retry_at": {"$not": {"$gt": now}}},
             ]},
@@ -179,6 +181,11 @@ async def expire_dashboard_access(db, now=None):
             break
         processed += 1
         grants = contact.get("product_grants") or []
+        if not grants and contact.get("dashboard_member_id"):
+            grants = [
+                {"product_id": product_id, "member_id": contact["dashboard_member_id"]}
+                for product_id in (contact.get("product_ids") or [])
+            ]
         try:
             if not grants:
                 raise ProductAccessError("No product grants are recorded for this contact")
@@ -186,7 +193,7 @@ async def expire_dashboard_access(db, now=None):
                 try:
                     await revoke(grant_row["product_id"], grant_row["member_id"])
                 except ProductAccessError as exc:
-                    if exc.status != 404:
+                    if exc.status != 404 or "member" not in str(exc).lower():
                         raise
             audit = {
                 "audit_id": f"audit_access_expiry_{contact['contact_id']}_{int(now.timestamp())}",
@@ -200,9 +207,7 @@ async def expire_dashboard_access(db, now=None):
             )
         except Exception as exc:
             attempts = int(contact.get("revocation_attempts") or 1)
-            terminal = attempts >= 5 and not isinstance(
-                exc, (ConnectionError, TimeoutError, asyncio.TimeoutError)
-            )
+            terminal = attempts >= 5
             retry_at = now + timedelta(seconds=min(3600, 2 ** min(attempts, 10)))
             await db.integration_contacts.update_one(
                 {"contact_id": contact["contact_id"], "access_status": "revoking"},
@@ -210,6 +215,7 @@ async def expire_dashboard_access(db, now=None):
                     "access_status": "revocation_failed",
                     "provisioning_error": str(exc)[:1000],
                     "next_retry_at": None if terminal else retry_at,
+                    "revocation_terminal": terminal,
                 }},
             )
     return processed > 0

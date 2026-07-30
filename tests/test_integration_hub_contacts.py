@@ -122,3 +122,27 @@ async def test_contact_edit_preserves_server_managed_access_state():
     assert "dashboard_member_id" not in updates
     assert updates["dashboard_access"] == "publisher"
     assert updates["product_ids"] == ["product-1"]
+
+
+@pytest.mark.asyncio
+async def test_active_contact_rejects_access_identity_changes():
+    repository = AsyncMock()
+    repository.contacts.find_one.return_value = {
+        "contact_id": "contact-1", "account_id": "acc-1",
+        "name": "Owner", "email": "owner@acme.com",
+        "dashboard_access": "publisher", "access_duration_days": None,
+        "product_ids": ["product-1"], "organization_id": "org-1",
+        "access_status": "active",
+    }
+    service = AccountService(repository)
+
+    with pytest.raises(ValidationError, match="Revoke dashboard access"):
+        await service.update_contact(
+            {"account_id": "acc-1", "client_email_domains": ["acme.com"]},
+            "contact-1",
+            {"name": "Owner", "email": "owner@acme.com",
+             "dashboard_access": "admin", "product_ids": ["product-1"]},
+            "actor@example.com", "request-1", 1,
+        )
+
+    repository.update_contact.assert_not_awaited()

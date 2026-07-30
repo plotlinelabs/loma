@@ -91,6 +91,21 @@ class AccountService:
         })
         if not existing:
             raise ValidationError("Contact not found")
+        protected_access_fields = {
+            "email", "dashboard_access", "access_duration_days",
+            "product_ids", "organization_id",
+        }
+        changed_access_fields = {
+            field for field in protected_access_fields.intersection(data)
+            if data.get(field) != existing.get(field)
+        }
+        if existing.get("access_status") in {
+            "provisioning", "active", "partially_granted", "revoking",
+            "revocation_failed", "grant_failed",
+        } and changed_access_fields:
+            raise ValidationError(
+                "Revoke dashboard access before changing the user, role, products, or duration"
+            )
         editable = {key: existing.get(key) for key in (
             "name", "email", "role", "role_description", "phone", "dashboard_access",
             "access_duration_days", "product_ids", "organization_id",

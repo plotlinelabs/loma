@@ -270,6 +270,9 @@ export default function OnboardingWorkspace({
       if (!window.confirm("Grant access to the selected approved products?")) return;
       const result = await provisionIntegrationContact(account.account_id, contactId, account.version);
       onChange(result.account);
+      if (result.failures.length) {
+        setError(`Access failed for: ${result.failures.map((item) => item.product_id).join(", ")}`);
+      }
     } catch (err) { setError(err instanceof Error ? err.message : "Could not grant dashboard access"); }
     finally { setSaving(false); }
   }
@@ -679,11 +682,11 @@ export default function OnboardingWorkspace({
                   {(item.product_ids || []).length ? ` · Products: ${item.product_ids.join(", ")}` : ""}
                 </p>
                 {item.access_expires_at && <p className="text-xs text-muted-foreground">Expires {new Date(item.access_expires_at).toLocaleString()}</p>}
-                {item.access_status && <p className="text-xs text-emerald-600">Provisioning: {formatIntegrationLabel(item.access_status)}</p>}
+                {item.access_status && <p className={`text-xs ${["active", "revoked", "expired"].includes(item.access_status) ? "text-emerald-600" : "text-destructive"}`}>Provisioning: {formatIntegrationLabel(item.access_status)}</p>}
               </div>
               <div className="flex gap-1">
-                {item.dashboard_access && item.access_status !== "active" && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => provisionAccess(item.contact_id)}>Grant access</Button>}
-                {item.access_status === "active" && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => revokeAccess(item.contact_id)}>Revoke access</Button>}
+                {item.dashboard_access && !["provisioning", "active", "partially_granted", "revoking", "revocation_failed"].includes(item.access_status || "") && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => provisionAccess(item.contact_id)}>Grant access</Button>}
+                {["active", "partially_granted", "revoking", "revocation_failed"].includes(item.access_status || "") && <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => revokeAccess(item.contact_id)}>Revoke access</Button>}
                 <Button type="button" variant="ghost" size="icon-sm" aria-label={`Edit ${item.name}`} onClick={() => editContact(item)}><RiEditLine /></Button>
                 <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${item.name}`} onClick={() => removeContact(item.contact_id)}><RiDeleteBinLine /></Button>
               </div>

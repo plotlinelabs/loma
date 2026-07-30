@@ -21,7 +21,13 @@ async def team_action(product_id, action, data):
     url = os.environ["PRODUCT_ACCESS_API_URL"].rstrip("/") + "/internal/team"
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
         async with session.post(url, headers=headers, json={"action": action, "data": data}) as response:
-            payload = await response.json(content_type=None)
+            try:
+                payload = await response.json(content_type=None)
+            except (ValueError, aiohttp.ClientError) as exc:
+                raise ProductAccessError(
+                    f"Dashboard API returned an invalid response ({response.status})",
+                    response.status,
+                ) from exc
             if response.status >= 400:
                 error = payload.get("error", {}) if isinstance(payload, dict) else {}
                 raise ProductAccessError(

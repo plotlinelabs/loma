@@ -435,7 +435,7 @@ export function updateIntegrationContact(
 }
 
 export function provisionIntegrationContact(accountId: string, contactId: string, version: number) {
-  return request<{ account: IntegrationAccount }>(
+  return request<{ account: IntegrationAccount; failures: Array<{ product_id: string; error: string }> }>(
     `/api/integration-hub/accounts/${accountId}/contacts/${contactId}/provision`,
     { method: "POST", headers: { "If-Match": `"${version}"` } },
   );

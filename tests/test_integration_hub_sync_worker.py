@@ -97,3 +97,8 @@ async def test_expiry_revokes_batch_and_updates_parent(monkeypatch):
     revoke.assert_awaited_once_with("product-1", "member-1")
     accounts.update_one.assert_awaited_once()
     audit.insert_one.assert_awaited_once()
+    claim = contacts.find_one_and_update.await_args_list[0].args[0]
+    due_access = claim["$or"][0]
+    assert due_access["access_status"]["$in"] == ["active", "partially_granted"]
+    assert due_access["access_expires_at"]["$ne"] == ""
+    assert due_access["access_expires_at"]["$type"] == "string"

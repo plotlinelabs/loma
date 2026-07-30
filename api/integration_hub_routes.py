@@ -540,6 +540,14 @@ async def handle_provision_contact(request):
         expected_version = _if_match(request)
         if expected_version != account["version"]:
             raise RuntimeError("version_conflict")
+        if contact.get("access_status") in {
+            "provisioning", "active", "partially_granted", "revoking",
+            "revocation_failed",
+        }:
+            return _error(
+                request, 409, "access_already_provisioned",
+                "Revoke existing dashboard access before granting it again",
+            )
         granted_at = datetime.now(timezone.utc)
         duration_days = contact.get("access_duration_days")
         product_ids = contact.get("product_ids") or contact.get("organization_ids") or []
@@ -563,48 +571,48 @@ async def handle_provision_contact(request):
         if is_internal and not duration_days:
             return _error(request, 422, "access_duration_required",
                           "Choose an access duration for an internal user")
-        requested_audit = service._audit(
-            account["account_id"], actor, "contact_access", contact["contact_id"],
-            "access.grant_requested", request["request_id"],
+        # Reserve the operation with the caller's ETag before any external write.
+        # This prevents two concurrent requests from issuing duplicate invitations.
+        reserved = await service.update_contact_access(
+            account, contact["contact_id"],
+            {"access_status": "provisioning", "provisioning_error": None},
+            actor, request["request_id"], expected_version, "access.grant_requested",
         )
-        requested_audit["after"] = {
-            "product_ids": product_ids, "role": contact["dashboard_access"],
-            "access_duration_days": duration_days,
-        }
-        await service.repository.audit.insert_one(requested_audit)
+        expected_version = reserved["version"]
+        account = reserved
         from tools.product_access import grant, ProductAccessError
         grants = []
         failures = []
-        try:
-            for product_id in product_ids:
-                try:
-                    result = await grant(
-                        product_id, contact["email"], contact["name"],
-                        contact["dashboard_access"],
-                    )
-                    member_id = result.get("memberId")
-                    if not member_id:
-                        raise ProductAccessError("Dashboard API did not return a member ID")
-                    grants.append({
-                        "product_id": product_id, "member_id": str(member_id),
-                        "role": contact["dashboard_access"], "status": "active",
-                        "granted_at": granted_at.isoformat(),
-                    })
-                except ProductAccessError as exc:
-                    failures.append({"product_id": product_id, "error": str(exc)})
-        except ProductAccessError as exc:
-            return _error(request, 502, "provisioning_failed", str(exc))
+        for product_id in product_ids:
+            try:
+                result = await grant(
+                    product_id, contact["email"], contact["name"],
+                    contact["dashboard_access"],
+                )
+                member_id = result.get("memberId")
+                if not member_id:
+                    raise ProductAccessError("Dashboard API did not return a member ID")
+                grants.append({
+                    "product_id": product_id, "member_id": str(member_id),
+                    "role": contact["dashboard_access"], "status": "active",
+                    "granted_at": granted_at.isoformat(),
+                })
+            except Exception as exc:
+                failures.append({"product_id": product_id, "error": str(exc)})
         updated = await service.update_contact_access(
             account, contact["contact_id"],
             {"product_grants": grants,
                 "access_starts_at": granted_at.isoformat(),
                 "access_expires_at": (
                     (granted_at + timedelta(days=duration_days)).isoformat()
-                    if is_internal else ""
+                    if is_internal else None
                 ),
                 "access_status": "active" if not failures else (
                     "partially_granted" if grants else "grant_failed"
                 ),
+                "revocation_attempts": 0,
+                "revocation_terminal": False,
+                "next_retry_at": None,
                 "provisioning_error": "; ".join(
                     f"{row['product_id']}: {row['error']}" for row in failures
                 )},
@@ -632,6 +640,16 @@ async def handle_revoke_contact_access(request):
         if expected_version != account["version"]:
             raise RuntimeError("version_conflict")
         grants = contact.get("product_grants") or []
+        if not grants and contact.get("dashboard_member_id"):
+            grants = [
+                {
+                    "product_id": product_id,
+                    "member_id": contact["dashboard_member_id"],
+                    "role": contact.get("dashboard_access"),
+                    "status": "active",
+                }
+                for product_id in (contact.get("product_ids") or [])
+            ]
         if not grants:
             return _error(request, 422, "not_provisioned", "Dashboard access is not active")
         requested_audit = service._audit(
@@ -648,10 +666,22 @@ async def handle_revoke_contact_access(request):
                 try:
                     await revoke(grant_row["product_id"], grant_row["member_id"])
                 except ProductAccessError as exc:
-                    if exc.status != 404:
+                    if exc.status != 404 or "member" not in str(exc).lower():
                         raise
-        except ProductAccessError as exc:
-            return _error(request, 502, "revocation_failed", str(exc))
+        except Exception as exc:
+            failed = await service.update_contact_access(
+                account, contact["contact_id"],
+                {"access_status": "revocation_failed",
+                 "provisioning_error": str(exc)[:1000],
+                 "next_retry_at": datetime.now(timezone.utc).isoformat(),
+                 "revocation_terminal": False},
+                actor, request["request_id"], expected_version, "access.revocation_failed",
+            )
+            return _error(
+                request, 502, "revocation_failed",
+                "Dashboard access could not be confirmed as revoked",
+                {"account_version": failed["version"]},
+            )
         updated = await service.update_contact_access(
             account, contact["contact_id"],
             {"access_status": "revoked", "product_grants": [
