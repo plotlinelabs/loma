@@ -11,7 +11,6 @@ from uuid import uuid4
 from aiohttp import web
 from bson import ObjectId
 from pymongo import UpdateOne
-from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from api.auth_helpers import get_user_email, require_operator_or_above
@@ -105,7 +104,10 @@ def classify_product(billing_id: str | None, contract: dict[str, Any] | None, ac
 
 
 async def _load_contract(
-    billing_id: str | None, semaphore: asyncio.Semaphore, *, raise_on_error: bool = False
+    billing_id: str | None,
+    semaphore: asyncio.Semaphore,
+    *,
+    errored: set[str] | None = None,
 ):
     if not billing_id:
         return None
@@ -120,14 +122,61 @@ async def _load_contract(
         payload, error = _upstream_payload(await get_contract(billing_id))
     if error:
         logger.warning("MonetizeNow contract lookup failed for %s: %s", billing_id, error)
-        if raise_on_error:
-            raise RuntimeError(f"MonetizeNow contract lookup failed for {billing_id}: {error}")
+        # Record the failure so callers can preserve last-known state instead of
+        # misclassifying (or aborting a whole sweep on) a transient upstream error.
+        if errored is not None:
+            errored.add(billing_id)
         return None
     _contract_cache[billing_id] = (now + _CONTRACT_CACHE_TTL_SECONDS, payload)
     _contract_cache.move_to_end(billing_id)
     while len(_contract_cache) > _CONTRACT_CACHE_MAX_ENTRIES:
         _contract_cache.popitem(last=False)
     return payload
+
+
+async def _load_contracts(billing_ids: list[str]) -> tuple[dict[str, Any], set[str]]:
+    """Fetch many contracts tolerantly.
+
+    A single upstream failure never aborts the batch; the failed billing ids are
+    returned in the second element so the caller can preserve their last-known
+    classification rather than falsely marking them invalid or poisoning a sweep.
+    """
+    semaphore = asyncio.Semaphore(12)
+    errored: set[str] = set()
+    contracts = await asyncio.gather(
+        *[_load_contract(value, semaphore, errored=errored) for value in billing_ids]
+    )
+    return dict(zip(billing_ids, contracts)), errored
+
+
+def _snapshot_operation(
+    product_id: str,
+    org_id: str,
+    checked_at: datetime,
+    *,
+    status: str | None,
+    run_id: str | None = None,
+) -> UpdateOne:
+    """Build an idempotent snapshot upsert.
+
+    When ``status`` is None the upstream lookup failed for this product, so we
+    keep any existing status untouched (only ``$setOnInsert`` a neutral
+    ``unknown`` that no filter matches) while still stamping ``checked_at``/
+    ``run_id`` so a background sweep does not prune the row as an orphan.
+    """
+    fields: dict[str, Any] = {
+        "product_id": product_id,
+        "organization_id": org_id,
+        "checked_at": checked_at,
+    }
+    if run_id is not None:
+        fields["run_id"] = run_id
+    update: dict[str, Any] = {"$set": fields}
+    if status is None:
+        update["$setOnInsert"] = {"status": "unknown"}
+    else:
+        fields["status"] = status
+    return UpdateOne({"product_id": product_id}, update, upsert=True)
 
 
 async def _store_status_snapshots(loma_db: Any, organizations: list[dict[str, Any]]) -> None:
@@ -156,6 +205,74 @@ async def _ensure_snapshot_indexes(loma_db: Any) -> None:
     await loma_db.billing_product_statuses.create_index([("status", 1), ("organization_id", 1)])
 
 
+async def _acquire_reconciliation_lease(loma_db: Any, now: datetime) -> bool:
+    """Atomically take the reconciliation lease so only one instance sweeps.
+
+    Relies on MongoDB per-document atomicity: the update either takes over an
+    expired/absent lease (matched->modified, or upserted) or, when another
+    instance already holds an unexpired lease, the unique ``_id`` forces a
+    DuplicateKeyError. Acquisition is decided by ``modified_count``/``upserted_id``
+    rather than reading back ``owner``, so the expiry-takeover path cannot let two
+    instances believe they both won.
+    """
+    try:
+        result = await loma_db.billing_reconciliation_leases.update_one(
+            {"_id": "status_snapshot", "$or": [
+                {"lease_expires_at": {"$lte": now}},
+                {"lease_expires_at": {"$exists": False}},
+            ]},
+            {"$set": {
+                "owner": _RECONCILIATION_OWNER,
+                "lease_expires_at": now + timedelta(minutes=30),
+            }},
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        return False
+    return bool(result.modified_count or result.upserted_id)
+
+
+async def _reconcile_org_batch(
+    plotline_db: Any,
+    loma_db: Any,
+    org_docs: list[dict[str, Any]],
+    run_id: str,
+    checked_at: datetime,
+) -> None:
+    org_ids = [org["_id"] for org in org_docs]
+    product_docs = await plotline_db.products.find(
+        {"orgId": {"$in": org_ids}}, {"orgId": 1, "billingId": 1}
+    ).to_list(None)
+    mappings = await loma_db.billing_account_mappings.find(
+        {"organization_id": {"$in": [_id(value) for value in org_ids]}}
+    ).to_list(None)
+    mapping_by_org = {item["organization_id"]: item for item in mappings}
+    billing_ids = list(dict.fromkeys(
+        product.get("billingId") for product in product_docs if product.get("billingId")
+    ))
+    contract_by_id, errored_billing_ids = await _load_contracts(billing_ids)
+    operations = []
+    for product in product_docs:
+        org_id = _id(product.get("orgId"))
+        billing_id = product.get("billingId")
+        product_id = _id(product.get("_id"))
+        if billing_id and billing_id in errored_billing_ids:
+            operations.append(_snapshot_operation(
+                product_id, org_id, checked_at, status=None, run_id=run_id
+            ))
+            continue
+        status = classify_product(
+            billing_id,
+            contract_by_id.get(billing_id),
+            (mapping_by_org.get(org_id) or {}).get("monetize_now_account_id"),
+        )
+        operations.append(_snapshot_operation(
+            product_id, org_id, checked_at, status=status, run_id=run_id
+        ))
+    if operations:
+        await loma_db.billing_product_statuses.bulk_write(operations, ordered=False)
+
+
 async def _reconcile_all_statuses() -> None:
     """Build a complete status snapshot in bounded batches for filter worklists."""
     plotline_db, loma_db = get_plotline_db(), get_db()
@@ -164,30 +281,14 @@ async def _reconcile_all_statuses() -> None:
     await _ensure_snapshot_indexes(loma_db)
     run_id = str(uuid4())
     checked_at = datetime.now(timezone.utc)
-    try:
-        lease = await loma_db.billing_reconciliation_leases.find_one_and_update(
-            {"_id": "status_snapshot", "$or": [
-                {"lease_expires_at": {"$lte": checked_at}},
-                {"lease_expires_at": {"$exists": False}},
-                {"owner": _RECONCILIATION_OWNER},
-            ]},
-            {"$set": {
-                "owner": _RECONCILIATION_OWNER,
-                "lease_expires_at": checked_at + timedelta(minutes=30),
-            }},
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
-        )
-    except DuplicateKeyError:
-        # Another instance owns the unexpired lease.
-        return
-    if not lease or lease.get("owner") != _RECONCILIATION_OWNER:
+    if not await _acquire_reconciliation_lease(loma_db, checked_at):
         return
     existing_state = await loma_db.billing_reconciliation_state.find_one({"_id": "status_snapshot"})
+    was_ready = (existing_state or {}).get("state") == "ready"
     await loma_db.billing_reconciliation_state.update_one(
         {"_id": "status_snapshot"},
         {"$set": {
-            "state": "ready" if (existing_state or {}).get("state") == "ready" else "running",
+            "state": "ready" if was_ready else "running",
             "started_at": checked_at,
             "run_id": run_id,
         }},
@@ -199,43 +300,11 @@ async def _reconcile_all_statuses() -> None:
             org_docs = await cursor.to_list(_RECONCILIATION_BATCH_SIZE)
             if not org_docs:
                 break
-            org_ids = [org["_id"] for org in org_docs]
-            product_docs = await plotline_db.products.find(
-                {"orgId": {"$in": org_ids}}, {"orgId": 1, "billingId": 1}
-            ).to_list(None)
-            mappings = await loma_db.billing_account_mappings.find(
-                {"organization_id": {"$in": [_id(value) for value in org_ids]}}
-            ).to_list(None)
-            mapping_by_org = {item["organization_id"]: item for item in mappings}
-            semaphore = asyncio.Semaphore(12)
-            billing_ids = list(dict.fromkeys(
-                product.get("billingId") for product in product_docs if product.get("billingId")
-            ))
-            contracts = await asyncio.gather(*[
-                _load_contract(value, semaphore, raise_on_error=True) for value in billing_ids
-            ])
-            contract_by_id = dict(zip(billing_ids, contracts))
-            operations = []
-            for product in product_docs:
-                org_id = _id(product.get("orgId"))
-                billing_id = product.get("billingId")
-                status = classify_product(
-                    billing_id,
-                    contract_by_id.get(billing_id),
-                    (mapping_by_org.get(org_id) or {}).get("monetize_now_account_id"),
-                )
-                operations.append(UpdateOne(
-                    {"product_id": _id(product.get("_id"))},
-                    {"$set": {
-                        "product_id": _id(product.get("_id")), "organization_id": org_id,
-                        "status": status, "checked_at": checked_at, "run_id": run_id,
-                    }},
-                    upsert=True,
-                ))
-            if operations:
-                await loma_db.billing_product_statuses.bulk_write(operations, ordered=False)
-        # Rows not touched by a complete run refer to products that no longer exist.
-        await loma_db.billing_product_statuses.delete_many({"run_id": {"$ne": run_id}})
+            await _reconcile_org_batch(plotline_db, loma_db, org_docs, run_id, checked_at)
+        # Rows untouched by this complete run refer to products that no longer
+        # exist. Interactive writes during the run carry a newer checked_at, so
+        # keying cleanup on checked_at (not run_id) preserves them.
+        await loma_db.billing_product_statuses.delete_many({"checked_at": {"$lt": checked_at}})
         await loma_db.billing_reconciliation_state.update_one(
             {"_id": "status_snapshot"},
             {"$set": {"state": "ready", "completed_at": datetime.now(timezone.utc), "run_id": run_id}},
@@ -245,7 +314,7 @@ async def _reconcile_all_statuses() -> None:
         await loma_db.billing_reconciliation_state.update_one(
             {"_id": "status_snapshot"},
             {"$set": {
-                "state": "ready" if (existing_state or {}).get("state") == "ready" else "failed",
+                "state": "ready" if was_ready else "failed",
                 "failed_at": datetime.now(timezone.utc),
                 "run_id": run_id,
             }},
@@ -277,26 +346,22 @@ async def _reconcile_organization(plotline_db: Any, loma_db: Any, org_id: str) -
     ).to_list(None)
     mapping = await loma_db.billing_account_mappings.find_one({"organization_id": org_id})
     account_id = (mapping or {}).get("monetize_now_account_id")
-    semaphore = asyncio.Semaphore(12)
     billing_ids = list(dict.fromkeys(
         product.get("billingId") for product in products if product.get("billingId")
     ))
-    contracts = await asyncio.gather(*[
-        _load_contract(value, semaphore, raise_on_error=True) for value in billing_ids
-    ])
-    contract_by_id = dict(zip(billing_ids, contracts))
+    contract_by_id, errored_billing_ids = await _load_contracts(billing_ids)
     checked_at = datetime.now(timezone.utc)
-    operations = [UpdateOne(
-        {"product_id": _id(product.get("_id"))},
-        {"$set": {
-            "product_id": _id(product.get("_id")), "organization_id": org_id,
-            "status": classify_product(
-                product.get("billingId"), contract_by_id.get(product.get("billingId")), account_id
-            ),
-            "checked_at": checked_at,
-        }},
-        upsert=True,
-    ) for product in products]
+    operations = []
+    for product in products:
+        product_id = _id(product.get("_id"))
+        billing_id = product.get("billingId")
+        if billing_id and billing_id in errored_billing_ids:
+            operations.append(_snapshot_operation(product_id, org_id, checked_at, status=None))
+            continue
+        operations.append(_snapshot_operation(
+            product_id, org_id, checked_at,
+            status=classify_product(billing_id, contract_by_id.get(billing_id), account_id),
+        ))
     if operations:
         await loma_db.billing_product_statuses.bulk_write(operations, ordered=False)
     await loma_db.billing_product_statuses.delete_many({
@@ -359,12 +424,6 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
         {"organization_id": {"$in": [_id(value) for value in org_ids]}}
     ).to_list(None)
     mapping_by_org = {item["organization_id"]: item for item in mappings}
-    snapshot_by_product: dict[str, str] = {}
-    if status_filter != "all":
-        snapshots = await loma_db.billing_product_statuses.find({
-            "organization_id": {"$in": [_id(value) for value in org_ids]}
-        }).to_list(None)
-        snapshot_by_product = {item["product_id"]: item["status"] for item in snapshots}
 
     semaphore = asyncio.Semaphore(12)
     unique_billing_ids = list(dict.fromkeys(
@@ -384,9 +443,10 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
             "id": product_id,
             "name": product.get("name") or "Unnamed product",
             "billingId": billing_id,
-            # Filtered worklists use one coherent snapshot for membership, totals,
-            # and displayed status. The background reconciler refreshes it.
-            "status": snapshot_by_product.get(product_id, live_status),
+            # Snapshots decide filter membership and totals; the row itself shows the
+            # live status computed from the contract fetched this request, so a
+            # product's status and its contract card never contradict each other.
+            "status": live_status,
             "contract": _contract_view(contract) if contract else None,
         })
 

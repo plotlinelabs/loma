@@ -115,3 +115,111 @@ async def test_snapshot_indexes_cover_worklist_queries():
     assert collection.create_index.await_args_list[1].args == ([
         ("status", 1), ("organization_id", 1)
     ],)
+
+
+def test_snapshot_operation_preserves_status_when_upstream_failed():
+    from datetime import datetime, timezone
+
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    healthy = billing_mapping_routes._snapshot_operation(
+        "p1", "o1", now, status="correctly_linked", run_id="r1"
+    )
+    assert healthy._filter == {"product_id": "p1"}
+    assert healthy._doc["$set"]["status"] == "correctly_linked"
+    assert healthy._doc["$set"]["run_id"] == "r1"
+    assert "$setOnInsert" not in healthy._doc
+
+    # Upstream failure: never overwrite a known status; only seed a neutral
+    # "unknown" on insert, but still stamp run_id so the sweep keeps the row.
+    errored = billing_mapping_routes._snapshot_operation("p1", "o1", now, status=None, run_id="r1")
+    assert "status" not in errored._doc["$set"]
+    assert errored._doc["$setOnInsert"] == {"status": "unknown"}
+    assert errored._doc["$set"]["run_id"] == "r1"
+
+
+@pytest.mark.asyncio
+async def test_load_contracts_reports_upstream_errors(monkeypatch):
+    _contract_cache.clear()
+
+    async def fake_get_contract(contract_id):
+        if contract_id == "ctr_bad":
+            return {"error": "timeout"}
+        return {"data": {"id": contract_id}}
+
+    monkeypatch.setattr(billing_mapping_routes, "get_contract", fake_get_contract)
+
+    contract_by_id, errored = await billing_mapping_routes._load_contracts(["ctr_ok", "ctr_bad"])
+
+    assert contract_by_id == {"ctr_ok": {"id": "ctr_ok"}, "ctr_bad": None}
+    assert errored == {"ctr_bad"}
+
+
+@pytest.mark.asyncio
+async def test_acquire_reconciliation_lease_grants_and_denies():
+    from datetime import datetime, timezone
+
+    from pymongo.errors import DuplicateKeyError
+
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    leases = MagicMock()
+    database = MagicMock(billing_reconciliation_leases=leases)
+
+    leases.update_one = AsyncMock(return_value=MagicMock(modified_count=1, upserted_id=None))
+    assert await billing_mapping_routes._acquire_reconciliation_lease(database, now) is True
+
+    leases.update_one = AsyncMock(return_value=MagicMock(modified_count=0, upserted_id="status_snapshot"))
+    assert await billing_mapping_routes._acquire_reconciliation_lease(database, now) is True
+
+    # Another unexpired lease already exists: no match, no takeover, no insert.
+    leases.update_one = AsyncMock(return_value=MagicMock(modified_count=0, upserted_id=None))
+    assert await billing_mapping_routes._acquire_reconciliation_lease(database, now) is False
+
+    # Concurrent insert lost the race on the unique _id.
+    leases.update_one = AsyncMock(side_effect=DuplicateKeyError("dup"))
+    assert await billing_mapping_routes._acquire_reconciliation_lease(database, now) is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_org_batch_tolerates_upstream_errors(monkeypatch):
+    _contract_cache.clear()
+    from datetime import datetime, timezone
+
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    async def fake_get_contract(contract_id):
+        if contract_id == "ctr_bad":
+            return {"error": "timeout"}
+        return {"data": {"id": contract_id, "status": "ACTIVE", "account": {"id": "acct_1"}}}
+
+    monkeypatch.setattr(billing_mapping_routes, "get_contract", fake_get_contract)
+
+    def cursor(docs):
+        result = MagicMock()
+        result.to_list = AsyncMock(return_value=docs)
+        return result
+
+    plotline_db = MagicMock()
+    plotline_db.products.find.return_value = cursor([
+        {"_id": "p_ok", "orgId": "o1", "billingId": "ctr_ok"},
+        {"_id": "p_bad", "orgId": "o1", "billingId": "ctr_bad"},
+    ])
+    loma_db = MagicMock()
+    loma_db.billing_account_mappings.find.return_value = cursor([
+        {"organization_id": "o1", "monetize_now_account_id": "acct_1"},
+    ])
+    loma_db.billing_product_statuses.bulk_write = AsyncMock()
+
+    # One failing contract must not raise or abort the whole batch.
+    await billing_mapping_routes._reconcile_org_batch(
+        plotline_db, loma_db, [{"_id": "o1"}], "run_1", now
+    )
+
+    loma_db.billing_product_statuses.bulk_write.assert_awaited_once()
+    operations = loma_db.billing_product_statuses.bulk_write.await_args.args[0]
+    by_product = {op._filter["product_id"]: op._doc for op in operations}
+    assert by_product["p_ok"]["$set"]["status"] == "correctly_linked"
+    assert by_product["p_ok"]["$set"]["run_id"] == "run_1"
+    assert "status" not in by_product["p_bad"]["$set"]
+    assert by_product["p_bad"]["$setOnInsert"] == {"status": "unknown"}
+    assert by_product["p_bad"]["$set"]["run_id"] == "run_1"
