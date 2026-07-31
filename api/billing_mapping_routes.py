@@ -25,7 +25,16 @@ _CONTRACT_CACHE_MAX_ENTRIES = 2048
 _contract_cache: OrderedDict[str, tuple[float, dict[str, Any] | None]] = OrderedDict()
 _RECONCILIATION_INTERVAL_SECONDS = 15 * 60
 _RECONCILIATION_BATCH_SIZE = 100
+_RECONCILIATION_LEASE_MINUTES = 30
 _RECONCILIATION_OWNER = str(uuid4())
+# The classifications a snapshot row can hold. "unknown" is only ever seeded when an
+# upstream lookup failed during reconciliation, so operators need a way to filter for
+# it: a genuinely broken product must never silently vanish from a worklist just
+# because MonetizeNow was flapping the last time it was checked.
+_WORKLIST_STATUSES = (
+    "correctly_linked", "contract_missing", "invalid_contract", "inactive_contract",
+    "account_mismatch", "account_not_linked", "unknown",
+)
 
 
 def _id(value: Any) -> str:
@@ -223,13 +232,27 @@ async def _acquire_reconciliation_lease(loma_db: Any, now: datetime) -> bool:
             ]},
             {"$set": {
                 "owner": _RECONCILIATION_OWNER,
-                "lease_expires_at": now + timedelta(minutes=30),
+                "lease_expires_at": now + timedelta(minutes=_RECONCILIATION_LEASE_MINUTES),
             }},
             upsert=True,
         )
     except DuplicateKeyError:
         return False
     return bool(result.modified_count or result.upserted_id)
+
+
+async def _renew_reconciliation_lease(loma_db: Any, now: datetime) -> bool:
+    """Extend our own lease; returns False if another instance has taken it over.
+
+    Scoped to ``owner`` so a sweep that outlives the lease TTL keeps the lease alive
+    batch by batch. If we no longer hold it (matched_count == 0), the caller aborts
+    instead of racing the new owner, whose cleanup would delete rows we just wrote.
+    """
+    result = await loma_db.billing_reconciliation_leases.update_one(
+        {"_id": "status_snapshot", "owner": _RECONCILIATION_OWNER},
+        {"$set": {"lease_expires_at": now + timedelta(minutes=_RECONCILIATION_LEASE_MINUTES)}},
+    )
+    return result.matched_count == 1
 
 
 async def _reconcile_org_batch(
@@ -280,8 +303,8 @@ async def _reconcile_all_statuses() -> None:
         return
     await _ensure_snapshot_indexes(loma_db)
     run_id = str(uuid4())
-    checked_at = datetime.now(timezone.utc)
-    if not await _acquire_reconciliation_lease(loma_db, checked_at):
+    run_start = datetime.now(timezone.utc)
+    if not await _acquire_reconciliation_lease(loma_db, run_start):
         return
     existing_state = await loma_db.billing_reconciliation_state.find_one({"_id": "status_snapshot"})
     was_ready = (existing_state or {}).get("state") == "ready"
@@ -289,7 +312,7 @@ async def _reconcile_all_statuses() -> None:
         {"_id": "status_snapshot"},
         {"$set": {
             "state": "ready" if was_ready else "running",
-            "started_at": checked_at,
+            "started_at": run_start,
             "run_id": run_id,
         }},
         upsert=True,
@@ -300,11 +323,21 @@ async def _reconcile_all_statuses() -> None:
             org_docs = await cursor.to_list(_RECONCILIATION_BATCH_SIZE)
             if not org_docs:
                 break
-            await _reconcile_org_batch(plotline_db, loma_db, org_docs, run_id, checked_at)
-        # Rows untouched by this complete run refer to products that no longer
-        # exist. Interactive writes during the run carry a newer checked_at, so
-        # keying cleanup on checked_at (not run_id) preserves them.
-        await loma_db.billing_product_statuses.delete_many({"checked_at": {"$lt": checked_at}})
+            # Renew before each batch so a sweep longer than the lease TTL is not
+            # taken over mid-run; if we have lost the lease, abort rather than race a
+            # second run whose cleanup would delete rows this run already wrote.
+            if not await _renew_reconciliation_lease(loma_db, datetime.now(timezone.utc)):
+                logger.warning("Lost billing reconciliation lease mid-sweep; aborting run %s", run_id)
+                return
+            # Stamp each batch with the real check time so "last reconciled" only ever
+            # moves forward, never backwards past an interactive write made mid-run.
+            await _reconcile_org_batch(
+                plotline_db, loma_db, org_docs, run_id, datetime.now(timezone.utc)
+            )
+        # Rows untouched by this complete run refer to products that no longer exist.
+        # Interactive writes during the run carry checked_at >= run_start, so keying
+        # cleanup on run_start (not the per-batch time) preserves them.
+        await loma_db.billing_product_statuses.delete_many({"checked_at": {"$lt": run_start}})
         await loma_db.billing_reconciliation_state.update_one(
             {"_id": "status_snapshot"},
             {"$set": {"state": "ready", "completed_at": datetime.now(timezone.utc), "run_id": run_id}},
@@ -382,10 +415,7 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
     except ValueError:
         return web.json_response({"error": "page and pageSize must be integers"}, status=400)
     status_filter = request.query.get("status", "all")
-    valid_statuses = {
-        "correctly_linked", "contract_missing", "invalid_contract", "inactive_contract",
-        "account_mismatch", "account_not_linked",
-    }
+    valid_statuses = set(_WORKLIST_STATUSES)
     if status_filter != "all" and status_filter not in valid_statuses:
         return web.json_response({"error": "Invalid status filter"}, status=400)
 
@@ -425,6 +455,17 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
     ).to_list(None)
     mapping_by_org = {item["organization_id"]: item for item in mappings}
 
+    # On filtered reads the snapshot is the source of truth for which orgs appear and
+    # for the header total, so display the snapshot status too. Otherwise a live
+    # re-classification can list an org under, say, "invalid contract" while every row
+    # renders a different (already-fixed) status and the total disagrees with the page.
+    snapshot_by_product: dict[str, dict[str, Any]] = {}
+    if status_filter != "all":
+        snapshots = await loma_db.billing_product_statuses.find(
+            {"product_id": {"$in": [_id(product.get("_id")) for product in product_docs]}}
+        ).to_list(None)
+        snapshot_by_product = {row["product_id"]: row for row in snapshots}
+
     semaphore = asyncio.Semaphore(12)
     unique_billing_ids = list(dict.fromkeys(
         product.get("billingId") for product in product_docs if product.get("billingId")
@@ -439,14 +480,20 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
         account_id = (mapping_by_org.get(org_id) or {}).get("monetize_now_account_id")
         product_id = _id(product.get("_id"))
         live_status = classify_product(billing_id, contract, account_id)
+        snapshot = snapshot_by_product.get(product_id)
+        # Filtered reads show the snapshot status (consistent with membership + total);
+        # "recheckPending" marks a row whose live contract now disagrees with that
+        # last-reconciled status, so the status label and contract card are never read
+        # as a hard contradiction. The unfiltered view always shows the live status.
+        display_status = snapshot["status"] if snapshot else live_status
+        checked_at = snapshot.get("checked_at") if snapshot else None
         products_by_org.setdefault(org_id, []).append({
             "id": product_id,
             "name": product.get("name") or "Unnamed product",
             "billingId": billing_id,
-            # Snapshots decide filter membership and totals; the row itself shows the
-            # live status computed from the contract fetched this request, so a
-            # product's status and its contract card never contradict each other.
-            "status": live_status,
+            "status": display_status,
+            "recheckPending": status_filter != "all" and display_status != live_status,
+            "statusAsOf": checked_at.isoformat() if hasattr(checked_at, "isoformat") else None,
             "contract": _contract_view(contract) if contract else None,
         })
 
@@ -461,10 +508,7 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
             "isBlocked": bool(org.get("isBlocked")),
             "monetizeNowAccountId": mapping.get("monetize_now_account_id"),
             "products": products,
-            "summary": {status: sum(p["status"] == status for p in products) for status in {
-                "correctly_linked", "contract_missing", "invalid_contract", "inactive_contract",
-                "account_mismatch", "account_not_linked",
-            }},
+            "summary": {status: sum(p["status"] == status for p in products) for status in _WORKLIST_STATUSES},
         })
     if status_filter == "all":
         await _store_status_snapshots(loma_db, organizations)

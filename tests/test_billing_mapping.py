@@ -2,6 +2,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from api.billing_mapping_routes import (
     _contract_account_id,
@@ -223,3 +224,121 @@ async def test_reconcile_org_batch_tolerates_upstream_errors(monkeypatch):
     assert "status" not in by_product["p_bad"]["$set"]
     assert by_product["p_bad"]["$setOnInsert"] == {"status": "unknown"}
     assert by_product["p_bad"]["$set"]["run_id"] == "run_1"
+
+
+class _FakeLeaseCollection:
+    """Minimal in-memory stand-in that enforces the Mongo semantics the lease relies
+    on: a unique ``_id`` (upsert on an existing doc that the filter did not match
+    raises ``DuplicateKeyError``) plus the conditional expiry ``$or``. This proves the
+    actual mutual-exclusion guarantee, not just the Python return-value mapping."""
+
+    def __init__(self):
+        self.doc = None
+
+    def _matches(self, filt):
+        if self.doc is None or self.doc.get("_id") != filt.get("_id"):
+            return False
+        if "owner" in filt and self.doc.get("owner") != filt["owner"]:
+            return False
+        if "$or" in filt:
+            now = filt["$or"][0]["lease_expires_at"]["$lte"]
+            expires = self.doc.get("lease_expires_at")
+            if not ("lease_expires_at" not in self.doc or (expires is not None and expires <= now)):
+                return False
+        return True
+
+    async def update_one(self, filt, update, upsert=False):
+        if self._matches(filt):
+            self.doc.update(update.get("$set", {}))
+            return MagicMock(modified_count=1, matched_count=1, upserted_id=None)
+        if upsert:
+            if self.doc is not None:
+                raise DuplicateKeyError("dup _id")
+            self.doc = {"_id": filt["_id"]}
+            self.doc.update(update.get("$set", {}))
+            return MagicMock(modified_count=0, matched_count=0, upserted_id=filt["_id"])
+        return MagicMock(modified_count=0, matched_count=0, upserted_id=None)
+
+
+def test_worklist_statuses_expose_unknown_for_filtering():
+    # A product whose upstream lookup failed is seeded "unknown"; operators must be
+    # able to filter for it so a genuinely broken product cannot silently vanish.
+    assert "unknown" in billing_mapping_routes._WORKLIST_STATUSES
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_lease_is_mutually_exclusive_over_fake_mongo(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    leases = _FakeLeaseCollection()
+    database = MagicMock(billing_reconciliation_leases=leases)
+
+    monkeypatch.setattr(billing_mapping_routes, "_RECONCILIATION_OWNER", "owner_a")
+    assert await billing_mapping_routes._acquire_reconciliation_lease(database, t0) is True
+
+    # A second instance cannot take an unexpired lease held by owner_a.
+    monkeypatch.setattr(billing_mapping_routes, "_RECONCILIATION_OWNER", "owner_b")
+    assert await billing_mapping_routes._acquire_reconciliation_lease(
+        database, t0 + timedelta(minutes=1)
+    ) is False
+
+    # After the TTL expires, exactly one other instance takes over.
+    later = t0 + timedelta(minutes=billing_mapping_routes._RECONCILIATION_LEASE_MINUTES + 1)
+    assert await billing_mapping_routes._acquire_reconciliation_lease(database, later) is True
+    assert leases.doc["owner"] == "owner_b"
+
+    # The evicted owner can no longer renew a lease it lost; the new owner can.
+    monkeypatch.setattr(billing_mapping_routes, "_RECONCILIATION_OWNER", "owner_a")
+    assert await billing_mapping_routes._renew_reconciliation_lease(database, later) is False
+    monkeypatch.setattr(billing_mapping_routes, "_RECONCILIATION_OWNER", "owner_b")
+    assert await billing_mapping_routes._renew_reconciliation_lease(database, later) is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_all_statuses_stamps_forward_and_cleans_from_run_start(monkeypatch):
+    captured = {}
+
+    def cursor(batches):
+        source = iter(batches)
+        handle = MagicMock()
+
+        async def to_list(_size):
+            try:
+                return next(source)
+            except StopIteration:
+                return []
+
+        handle.to_list = to_list
+        return handle
+
+    plotline = MagicMock()
+    plotline.orgs.find.return_value.sort.return_value = cursor([[{"_id": "o1"}], []])
+    loma = MagicMock()
+    loma.billing_product_statuses.create_index = AsyncMock()
+    loma.billing_product_statuses.delete_many = AsyncMock()
+    loma.billing_reconciliation_state.find_one = AsyncMock(return_value=None)
+    loma.billing_reconciliation_state.update_one = AsyncMock()
+    loma.billing_reconciliation_leases.delete_one = AsyncMock()
+
+    monkeypatch.setattr(billing_mapping_routes, "get_plotline_db", lambda: plotline)
+    monkeypatch.setattr(billing_mapping_routes, "get_db", lambda: loma)
+    monkeypatch.setattr(
+        billing_mapping_routes, "_acquire_reconciliation_lease", AsyncMock(return_value=True)
+    )
+    renew = AsyncMock(return_value=True)
+    monkeypatch.setattr(billing_mapping_routes, "_renew_reconciliation_lease", renew)
+
+    async def fake_batch(_pl, _lo, _docs, run_id, checked_at):
+        captured["checked_at"] = checked_at
+        captured["run_id"] = run_id
+
+    monkeypatch.setattr(billing_mapping_routes, "_reconcile_org_batch", fake_batch)
+
+    await billing_mapping_routes._reconcile_all_statuses()
+
+    # The lease is renewed before the batch runs, and cleanup deletes only rows older
+    # than the run start while the batch is stamped at/after that start (forward-only).
+    renew.assert_awaited()
+    run_start = loma.billing_product_statuses.delete_many.await_args.args[0]["checked_at"]["$lt"]
+    assert captured["checked_at"] >= run_start
