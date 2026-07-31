@@ -82,7 +82,7 @@ async def test_contract_cache_is_bounded(monkeypatch):
 @pytest.mark.asyncio
 async def test_status_snapshots_are_persisted_per_product():
     collection = MagicMock()
-    collection.update_one = AsyncMock()
+    collection.bulk_write = AsyncMock()
     database = MagicMock(billing_product_statuses=collection)
 
     await _store_status_snapshots(database, [{
@@ -93,8 +93,25 @@ async def test_status_snapshots_are_persisted_per_product():
         ],
     }])
 
-    assert collection.update_one.await_count == 2
-    first_filter, first_update = collection.update_one.await_args_list[0].args
-    assert first_filter == {"product_id": "product_1"}
-    assert first_update["$set"]["organization_id"] == "org_1"
-    assert first_update["$set"]["status"] == "invalid_contract"
+    collection.bulk_write.assert_awaited_once()
+    operations = collection.bulk_write.await_args.args[0]
+    assert len(operations) == 2
+    assert operations[0]._filter == {"product_id": "product_1"}
+    assert operations[0]._doc["$set"]["organization_id"] == "org_1"
+    assert operations[0]._doc["$set"]["status"] == "invalid_contract"
+    assert collection.bulk_write.await_args.kwargs == {"ordered": False}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_indexes_cover_worklist_queries():
+    collection = MagicMock()
+    collection.create_index = AsyncMock()
+    database = MagicMock(billing_product_statuses=collection)
+
+    await billing_mapping_routes._ensure_snapshot_indexes(database)
+
+    assert collection.create_index.await_args_list[0].args == ("product_id",)
+    assert collection.create_index.await_args_list[0].kwargs == {"unique": True}
+    assert collection.create_index.await_args_list[1].args == ([
+        ("status", 1), ("organization_id", 1)
+    ],)
