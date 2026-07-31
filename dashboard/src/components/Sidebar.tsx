@@ -31,6 +31,7 @@ import {
   RiBarChartBoxLine,
   RiSettings3Line,
   RiShieldCheckLine,
+  RiLinksLine,
   RiCloseLine,
   RiArrowDownSLine,
   RiSunLine,
@@ -104,6 +105,12 @@ const userMenuNav: NavItem[] = [
     href: "/analytics",
     minRole: "analyst",
     icon: <RiBarChartBoxLine size={16} />,
+  },
+  {
+    name: "Billing Mapping",
+    href: "/billing-mapping",
+    minRole: "maintainer",
+    icon: <RiLinksLine size={16} />,
   },
   {
     name: "Admin",

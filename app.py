@@ -39,6 +39,8 @@ from api.codex_auth_routes import setup_codex_auth_routes
 from api.file_routes import setup_file_routes
 from api.integration_routes import setup_integration_routes
 from api.prompt_settings_routes import setup_prompt_settings_routes
+from api.plotline_db import init_plotline_db
+from api.billing_mapping_routes import setup_billing_mapping_routes
 from recovery import start_recovery_loop, mark_all_running_interrupted
 from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
@@ -70,6 +72,7 @@ async def log_404_middleware(request, handler):
 async def main():
     # Initialize observability MongoDB
     await init_observability()
+    await init_plotline_db()
     # Ensure skill indexes exist (idempotent, covers new indexes on upgrades).
     from api import skill_service
     await skill_service.ensure_skill_indexes(get_db())
@@ -137,6 +140,7 @@ async def main():
     setup_file_routes(webhook_app)
     setup_integration_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
+    setup_billing_mapping_routes(webhook_app)
     async def on_shutdown(_app):
         await mark_all_running_interrupted()
 
