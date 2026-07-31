@@ -101,6 +101,15 @@ EOF
 echo "[preview] up ${COMPOSE_PROJECT_NAME} (backend=${BACKEND_HOST_PORT} dashboard=${DASHBOARD_HOST_PORT} nginx=${NGINX_HOST_PORT})"
 docker compose up -d --build
 
+# nginx resolves upstream hostnames once at worker startup and caches the result
+# for the life of the process: deploy/nginx/conf.d/loma.conf declares static
+# `upstream` blocks and sets no `resolver`. A rebuild recreates the backend and
+# dashboard containers with fresh container addresses, but the nginx service
+# pins an unchanged public image, so compose leaves the old proxy running with
+# the now-dead addresses. The stack then reports healthy while every /api/*
+# request returns 502. Recreate the proxy last so it re-resolves.
+docker compose up -d --force-recreate --no-deps nginx
+
 # --- Front-proxy vhost: route the PR subdomain to this stack's nginx ---
 mkdir -p "$VHOST_DIR"
 cat > "${VHOST_DIR}/pr-${PR}.conf" <<EOF
@@ -133,12 +142,35 @@ docker exec "$FRONT_PROXY_CONTAINER" nginx -s reload 2>/dev/null \
   || echo "[preview] warning: could not reload front proxy '${FRONT_PROXY_CONTAINER}'" >&2
 
 # --- Health check through this stack's own nginx ---
+# Probe the dashboard *and* the backend. "/" is served by Next.js, so checking it
+# alone reports success even when the backend is unreachable and every /api/*
+# call is failing with 502 -- which is exactly how a broken proxy upstream used
+# to ship green. "/webhooks/" proxies straight to the backend without the
+# auth_request subrequest, so any non-5xx answer (404 included) proves the
+# backend upstream is actually reachable.
+probe() {
+  curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    "http://127.0.0.1:${NGINX_HOST_PORT}${1}" 2>/dev/null || echo 000
+}
+
 ok=0
-for _ in $(seq 1 40); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${NGINX_HOST_PORT}/" || echo 000)
-  if [ "$code" != "000" ]; then ok=1; break; fi
+ui=000
+api=000
+for _ in $(seq 1 60); do
+  ui="$(probe /)"
+  api="$(probe /webhooks/__preview_health)"
+  if { [ "$ui" != 000 ] && [ "${ui#5}" = "$ui" ]; } &&
+     { [ "$api" != 000 ] && [ "${api#5}" = "$api" ]; }; then
+    ok=1
+    break
+  fi
   sleep 3
 done
-[ "$ok" = 1 ] || { echo "[preview] health check failed for ${COMPOSE_PROJECT_NAME}" >&2; docker compose ps; exit 1; }
+[ "$ok" = 1 ] || {
+  echo "[preview] health check failed for ${COMPOSE_PROJECT_NAME} (ui=${ui} backend=${api})" >&2
+  docker compose ps
+  docker compose logs --tail 80 loma-backend >&2 || true
+  exit 1
+}
 
 echo "[preview] ready: ${URL}"

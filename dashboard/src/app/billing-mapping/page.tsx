@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   RiAlertLine,
   RiArrowDownSLine,
@@ -9,6 +10,7 @@ import {
   RiRefreshLine,
 } from "@remixicon/react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useUser } from "@/lib/UserContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -191,6 +193,12 @@ function ProductRow({
 }
 
 export default function BillingMappingPage() {
+  const router = useRouter();
+  // Mirrors the server-side gate on /api/billing-mappings (require_operator_or_above)
+  // and the /admin page's client-side redirect, so the shell is not rendered to
+  // users whose API calls would only 403.
+  const { hasRole, loading: userLoading } = useUser();
+  const canView = hasRole("operator");
   const [organizations, setOrganizations] = useState<BillingOrganization[]>([]);
   const [totals, setTotals] = useState<Record<BillingStatus, number> | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
@@ -245,10 +253,15 @@ export default function BillingMappingPage() {
   );
 
   useEffect(() => {
+    if (userLoading) return;
+    if (!canView) {
+      router.replace("/");
+      return;
+    }
     void load(1);
     // Initial load only; subsequent loads are driven by explicit user actions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userLoading, canView]);
 
   async function loadContracts(orgId: string) {
     try {
@@ -293,6 +306,14 @@ export default function BillingMappingPage() {
     } finally {
       setSaving(null);
     }
+  }
+
+  if (userLoading || !canView) {
+    return (
+      <div className="flex items-center justify-center py-16 text-muted-foreground">
+        <RiLoader4Line className="h-5 w-5 animate-spin" />
+      </div>
+    );
   }
 
   return (
