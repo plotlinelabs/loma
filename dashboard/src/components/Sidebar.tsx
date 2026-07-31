@@ -97,6 +97,12 @@ const navigation: NavItem[] = [
     minRole: "analyst",
     icon: <RiDownloadLine size={16} />,
   },
+  {
+    name: "Billing Mapping",
+    href: "/billing-mapping",
+    minRole: "operator",
+    icon: <RiLinksLine size={16} />,
+  },
 ];
 
 const userMenuNav: NavItem[] = [
@@ -105,12 +111,6 @@ const userMenuNav: NavItem[] = [
     href: "/analytics",
     minRole: "analyst",
     icon: <RiBarChartBoxLine size={16} />,
-  },
-  {
-    name: "Billing Mapping",
-    href: "/billing-mapping",
-    minRole: "maintainer",
-    icon: <RiLinksLine size={16} />,
   },
   {
     name: "Admin",

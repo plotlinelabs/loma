@@ -7,7 +7,7 @@ from typing import Any
 from aiohttp import web
 from bson import ObjectId
 
-from api.auth_helpers import get_user_email, require_maintainer_or_above
+from api.auth_helpers import get_user_email, require_operator_or_above
 from api.plotline_db import get_plotline_db
 from observability.db import get_db
 from tools.monetize_now import account_contracts, get_account, get_contract
@@ -81,7 +81,7 @@ async def _load_contract(billing_id: str | None, semaphore: asyncio.Semaphore):
 
 
 async def handle_list_billing_mappings(request: web.Request) -> web.Response:
-    require_maintainer_or_above(request)
+    require_operator_or_above(request)
     plotline_db, loma_db = get_plotline_db(), get_db()
     if plotline_db is None or loma_db is None:
         return web.json_response({"error": "Billing mapping databases are not configured"}, status=503)
@@ -134,7 +134,7 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
 
 
 async def handle_set_account_mapping(request: web.Request) -> web.Response:
-    require_maintainer_or_above(request)
+    require_operator_or_above(request)
     plotline_db, loma_db = get_plotline_db(), get_db()
     if plotline_db is None or loma_db is None:
         return web.json_response({"error": "Billing mapping databases are not configured"}, status=503)
@@ -162,7 +162,7 @@ async def handle_set_account_mapping(request: web.Request) -> web.Response:
 
 
 async def handle_active_contracts(request: web.Request) -> web.Response:
-    require_maintainer_or_above(request)
+    require_operator_or_above(request)
     loma_db = get_db()
     org_id = request.match_info["organization_id"]
     mapping = await loma_db.billing_account_mappings.find_one({"organization_id": org_id}) if loma_db is not None else None
@@ -177,7 +177,7 @@ async def handle_active_contracts(request: web.Request) -> web.Response:
 
 
 async def handle_set_product_contract(request: web.Request) -> web.Response:
-    require_maintainer_or_above(request)
+    require_operator_or_above(request)
     plotline_db, loma_db = get_plotline_db(), get_db()
     if plotline_db is None or loma_db is None:
         return web.json_response({"error": "Billing mapping databases are not configured"}, status=503)
