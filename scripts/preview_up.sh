@@ -73,7 +73,7 @@ EOF
 # Preserve those settings across preview rebuilds instead of silently replacing
 # them with the shared preview-secrets file.
 if [[ -n "$PREVIOUS_ENV" ]]; then
-  for key in PLOTLINE_MONGODB_URI MONGODB_DASHBOARD_URI PLOTLINE_MONGODB_DB_NAME MONETIZE_NOW_API_KEY MONETIZE_NOW_BASE_URL; do
+  for key in DASHBOARD_MONGODB_URI MONGODB_DASHBOARD_URI DASHBOARD_MONGODB_DB_NAME MONETIZE_NOW_API_KEY MONETIZE_NOW_BASE_URL; do
     value="$(grep -E "^${key}=" "$PREVIOUS_ENV" | tail -1 | cut -d= -f2- || true)"
     if [[ -n "$value" ]]; then
       sed -i "/^${key}=/d" .env
