@@ -68,12 +68,19 @@ def _headers() -> dict[str, str]:
 
 async def _api_get(path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
     """Shared GET helper. Returns parsed JSON or {"error": "..."}."""
-    base = _get_base_url()
-    url = f"{base}{path}"
+    try:
+        base = _get_base_url()
+        url = f"{base}{path}"
+        headers = _headers()
+    except ValueError as exc:
+        # Missing/invalid MONETIZE_NOW_* config must degrade to the error contract
+        # every caller already handles, not raise into an unguarded gather() and
+        # surface as an opaque HTTP 500 (e.g. on the billing-mapping page load).
+        return {"error": str(exc)}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                url, headers=_headers(), params=params,
+                url, headers=headers, params=params,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 if resp.status == 401:

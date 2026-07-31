@@ -342,3 +342,91 @@ async def test_reconcile_all_statuses_stamps_forward_and_cleans_from_run_start(m
     renew.assert_awaited()
     run_start = loma.billing_product_statuses.delete_many.await_args.args[0]["checked_at"]["$lt"]
     assert captured["checked_at"] >= run_start
+
+
+@pytest.mark.asyncio
+async def test_monetizenow_missing_config_returns_error_not_raise(monkeypatch):
+    # Missing MONETIZE_NOW_* must degrade to the {"error": ...} contract every caller
+    # handles, never raise and surface as an opaque 500 on the billing page load.
+    from tools import monetize_now
+
+    monkeypatch.delenv("MONETIZE_NOW_API_KEY", raising=False)
+    monkeypatch.delenv("MONETIZE_NOW_BASE_URL", raising=False)
+
+    result = await monetize_now.get_contract("ctr_1")
+    assert isinstance(result, dict) and result.get("error")
+
+
+@pytest.mark.asyncio
+async def test_load_contract_tolerates_tool_exception(monkeypatch):
+    _contract_cache.clear()
+
+    async def boom(_contract_id):
+        raise RuntimeError("MONETIZE_NOW_API_KEY not set")
+
+    monkeypatch.setattr(billing_mapping_routes, "get_contract", boom)
+    errored: set[str] = set()
+
+    # A raising tool must not propagate: the contract loader records the failure and
+    # returns None so the page classifies conservatively instead of 500-ing.
+    result = await _load_contract("ctr_1", asyncio.Semaphore(1), errored=errored)
+    assert result is None
+    assert "ctr_1" in errored
+
+
+@pytest.mark.asyncio
+async def test_plotline_db_status_reports_missing_env(monkeypatch):
+    monkeypatch.delenv("PLOTLINE_MONGODB_URI", raising=False)
+    monkeypatch.delenv("MONGODB_DASHBOARD_URI", raising=False)
+    await plotline_db.init_plotline_db()
+    assert plotline_db.get_plotline_db_status() == "env-missing"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_releases_lease_when_state_write_fails(monkeypatch):
+    # Even if the very first state write throws, the lease must be released (finally)
+    # and the exception must not propagate out to kill the reconciliation task.
+    plotline = MagicMock()
+    loma = MagicMock()
+    loma.billing_reconciliation_state.find_one = AsyncMock(return_value=None)
+    loma.billing_reconciliation_state.update_one = AsyncMock(side_effect=RuntimeError("db blip"))
+    loma.billing_reconciliation_leases.delete_one = AsyncMock()
+
+    monkeypatch.setattr(billing_mapping_routes, "get_plotline_db", lambda: plotline)
+    monkeypatch.setattr(billing_mapping_routes, "get_db", lambda: loma)
+    monkeypatch.setattr(
+        billing_mapping_routes, "_acquire_reconciliation_lease", AsyncMock(return_value=True)
+    )
+
+    await billing_mapping_routes._reconcile_all_statuses()  # must not raise
+
+    loma.billing_reconciliation_leases.delete_one.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_loop_survives_a_failed_cycle(monkeypatch):
+    # One crashing sweep must not terminate the loop: the next tick still runs.
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+
+    sleeps = {"n": 0}
+
+    async def fake_sleep(_seconds):
+        sleeps["n"] += 1
+        if sleeps["n"] >= 2:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(billing_mapping_routes, "_reconcile_all_statuses", flaky)
+    monkeypatch.setattr(billing_mapping_routes.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(billing_mapping_routes, "get_db", lambda: None)
+
+    gen = billing_mapping_routes._reconciliation_context(MagicMock())
+    await gen.__anext__()  # startup: spawns the loop task
+    task = [t for t in asyncio.all_tasks() if t.get_name() == "billing-status-reconciliation"][0]
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert calls["n"] >= 2  # ran again after the first cycle raised

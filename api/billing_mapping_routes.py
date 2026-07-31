@@ -4,6 +4,7 @@ import asyncio
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import logging
+import os
 import time
 from typing import Any
 from uuid import uuid4
@@ -14,7 +15,7 @@ from pymongo import UpdateOne
 from pymongo.errors import DuplicateKeyError
 
 from api.auth_helpers import get_user_email, require_operator_or_above
-from api.plotline_db import get_plotline_db
+from api.plotline_db import get_plotline_db, get_plotline_db_status
 from observability.db import get_db
 from tools.monetize_now import account_contracts, get_account, get_contract
 
@@ -128,7 +129,10 @@ async def _load_contract(
     if cached:
         del _contract_cache[billing_id]
     async with semaphore:
-        payload, error = _upstream_payload(await get_contract(billing_id))
+        try:
+            payload, error = _upstream_payload(await get_contract(billing_id))
+        except Exception as exc:  # noqa: BLE001 - upstream/tool failure must never 500 the page
+            payload, error = None, str(exc)
     if error:
         logger.warning("MonetizeNow contract lookup failed for %s: %s", billing_id, error)
         # Record the failure so callers can preserve last-known state instead of
@@ -301,23 +305,26 @@ async def _reconcile_all_statuses() -> None:
     plotline_db, loma_db = get_plotline_db(), get_db()
     if plotline_db is None or loma_db is None:
         return
-    await _ensure_snapshot_indexes(loma_db)
     run_id = str(uuid4())
     run_start = datetime.now(timezone.utc)
     if not await _acquire_reconciliation_lease(loma_db, run_start):
         return
-    existing_state = await loma_db.billing_reconciliation_state.find_one({"_id": "status_snapshot"})
-    was_ready = (existing_state or {}).get("state") == "ready"
-    await loma_db.billing_reconciliation_state.update_one(
-        {"_id": "status_snapshot"},
-        {"$set": {
-            "state": "ready" if was_ready else "running",
-            "started_at": run_start,
-            "run_id": run_id,
-        }},
-        upsert=True,
-    )
+    # Everything after the lease is taken runs under try/finally so the lease is always
+    # released -- even if the initial state write throws -- and a single failure can
+    # never leave the lease held for its full TTL or kill the reconciliation task.
+    was_ready = False
     try:
+        existing_state = await loma_db.billing_reconciliation_state.find_one({"_id": "status_snapshot"})
+        was_ready = (existing_state or {}).get("state") == "ready"
+        await loma_db.billing_reconciliation_state.update_one(
+            {"_id": "status_snapshot"},
+            {"$set": {
+                "state": "ready" if was_ready else "running",
+                "started_at": run_start,
+                "run_id": run_id,
+            }},
+            upsert=True,
+        )
         cursor = plotline_db.orgs.find({}, {"_id": 1}).sort("_id", 1)
         while True:
             org_docs = await cursor.to_list(_RECONCILIATION_BATCH_SIZE)
@@ -344,14 +351,17 @@ async def _reconcile_all_statuses() -> None:
         )
     except Exception:
         logger.exception("Billing status reconciliation failed")
-        await loma_db.billing_reconciliation_state.update_one(
-            {"_id": "status_snapshot"},
-            {"$set": {
-                "state": "ready" if was_ready else "failed",
-                "failed_at": datetime.now(timezone.utc),
-                "run_id": run_id,
-            }},
-        )
+        try:
+            await loma_db.billing_reconciliation_state.update_one(
+                {"_id": "status_snapshot"},
+                {"$set": {
+                    "state": "ready" if was_ready else "failed",
+                    "failed_at": datetime.now(timezone.utc),
+                    "run_id": run_id,
+                }},
+            )
+        except Exception:
+            logger.exception("Could not record billing reconciliation failure state")
     finally:
         await loma_db.billing_reconciliation_leases.delete_one({
             "_id": "status_snapshot", "owner": _RECONCILIATION_OWNER
@@ -360,9 +370,23 @@ async def _reconcile_all_statuses() -> None:
 
 async def _reconciliation_context(_app: web.Application):
     """Continuously refresh the complete worklist without blocking app startup."""
+    loma_db = get_db()
+    if loma_db is not None:
+        # Create indexes once at startup rather than on every 15-min cycle, and never
+        # let an index-creation blip abort app startup.
+        try:
+            await _ensure_snapshot_indexes(loma_db)
+        except Exception:
+            logger.exception("Could not ensure billing snapshot indexes")
+
     async def loop():
         while True:
-            await _reconcile_all_statuses()
+            try:
+                await _reconcile_all_statuses()
+            except Exception:
+                # A single failed sweep must never terminate the reconciliation task;
+                # otherwise filtered worklists stay stuck at 503 until the app restarts.
+                logger.exception("Billing reconciliation cycle crashed; continuing")
             await asyncio.sleep(_RECONCILIATION_INTERVAL_SECONDS)
 
     task = asyncio.create_task(loop(), name="billing-status-reconciliation")
@@ -403,11 +427,45 @@ async def _reconcile_organization(plotline_db: Any, loma_db: Any, org_id: str) -
     })
 
 
+def _monetizenow_configured() -> bool:
+    return bool(os.environ.get("MONETIZE_NOW_API_KEY", "").strip()) and bool(
+        os.environ.get("MONETIZE_NOW_BASE_URL", "").strip()
+    )
+
+
+def _billing_unavailable_response() -> web.Response:
+    """Explain *why* billing mapping is unavailable without leaking any secret value.
+
+    Turns the opaque 503 operators hit on a misconfigured preview into an
+    actionable message naming the missing/unreachable dependency.
+    """
+    reason = get_plotline_db_status()
+    detail = {
+        "env-missing": "Set PLOTLINE_MONGODB_URI (or MONGODB_DASHBOARD_URI) on the backend.",
+        "connect-failed": "The dashboard MongoDB URI is set but unreachable; check the value, network access, and credentials.",
+    }.get(reason, "Billing mapping databases are not configured.")
+    return web.json_response(
+        {"error": "Billing mapping is unavailable", "reason": reason, "detail": detail},
+        status=503,
+    )
+
+
+async def handle_billing_health(request: web.Request) -> web.Response:
+    """Operator-facing config diagnostics: booleans/status strings only, never secret
+    values, so a misconfigured preview is diagnosable from the dashboard or a curl."""
+    require_operator_or_above(request)
+    return web.json_response({
+        "dashboardDb": get_plotline_db_status(),
+        "observabilityDb": "connected" if get_db() is not None else "unavailable",
+        "monetizeNowConfigured": _monetizenow_configured(),
+    })
+
+
 async def handle_list_billing_mappings(request: web.Request) -> web.Response:
     require_operator_or_above(request)
     plotline_db, loma_db = get_plotline_db(), get_db()
     if plotline_db is None or loma_db is None:
-        return web.json_response({"error": "Billing mapping databases are not configured"}, status=503)
+        return _billing_unavailable_response()
 
     try:
         page = max(1, int(request.query.get("page", "1")))
@@ -424,7 +482,7 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
     if status_filter == "all":
         total = await plotline_db.orgs.count_documents({})
         org_docs = await (
-            plotline_db.orgs.find({}, {"name": 1, "products": 1, "isBlocked": 1})
+            plotline_db.orgs.find({}, {"name": 1, "isBlocked": 1})
             .sort("name", 1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
         )
     else:
@@ -443,7 +501,7 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
         total = await plotline_db.orgs.count_documents({"_id": {"$in": object_ids}})
         org_docs = await (
             plotline_db.orgs.find(
-                {"_id": {"$in": object_ids}}, {"name": 1, "products": 1, "isBlocked": 1}
+                {"_id": {"$in": object_ids}}, {"name": 1, "isBlocked": 1}
             ).sort("name", 1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
         )
     org_ids = [org["_id"] for org in org_docs]
@@ -485,7 +543,7 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
         # "recheckPending" marks a row whose live contract now disagrees with that
         # last-reconciled status, so the status label and contract card are never read
         # as a hard contradiction. The unfiltered view always shows the live status.
-        display_status = snapshot["status"] if snapshot else live_status
+        display_status = snapshot.get("status", live_status) if snapshot else live_status
         checked_at = snapshot.get("checked_at") if snapshot else None
         products_by_org.setdefault(org_id, []).append({
             "id": product_id,
@@ -510,6 +568,16 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
             "products": products,
             "summary": {status: sum(p["status"] == status for p in products) for status in _WORKLIST_STATUSES},
         })
+    if status_filter != "all":
+        # Drop orgs whose visible products no longer contain a match: the only matching
+        # product may have been deleted upstream, or fixed and re-linked since the last
+        # reconcile. Otherwise an orphan snapshot keeps an org in the worklist with no
+        # actionable row. (Membership + total stay snapshot-derived; recheckPending and
+        # the ~15-min reconcile interval account for the lag.)
+        organizations = [
+            org for org in organizations
+            if any(product["status"] == status_filter for product in org["products"])
+        ]
     if status_filter == "all":
         await _store_status_snapshots(loma_db, organizations)
     return web.json_response({
@@ -522,7 +590,7 @@ async def handle_set_account_mapping(request: web.Request) -> web.Response:
     require_operator_or_above(request)
     plotline_db, loma_db = get_plotline_db(), get_db()
     if plotline_db is None or loma_db is None:
-        return web.json_response({"error": "Billing mapping databases are not configured"}, status=503)
+        return _billing_unavailable_response()
     org_id = request.match_info["organization_id"]
     if not ObjectId.is_valid(org_id) or not await plotline_db.orgs.find_one({"_id": ObjectId(org_id)}):
         return web.json_response({"error": "Organization not found"}, status=404)
@@ -593,7 +661,7 @@ async def handle_set_product_contract(request: web.Request) -> web.Response:
     require_operator_or_above(request)
     plotline_db, loma_db = get_plotline_db(), get_db()
     if plotline_db is None or loma_db is None:
-        return web.json_response({"error": "Billing mapping databases are not configured"}, status=503)
+        return _billing_unavailable_response()
     product_id = request.match_info["product_id"]
     if not ObjectId.is_valid(product_id):
         return web.json_response({"error": "Product not found"}, status=404)
@@ -682,6 +750,7 @@ async def handle_set_product_contract(request: web.Request) -> web.Response:
 
 def setup_billing_mapping_routes(app: web.Application):
     app.router.add_get("/api/billing-mappings", handle_list_billing_mappings)
+    app.router.add_get("/api/billing-mappings/health", handle_billing_health)
     app.router.add_put("/api/billing-mappings/organizations/{organization_id}/account", handle_set_account_mapping)
     app.router.add_get("/api/billing-mappings/organizations/{organization_id}/contracts", handle_active_contracts)
     app.router.add_put("/api/billing-mappings/products/{product_id}/contract", handle_set_product_contract)

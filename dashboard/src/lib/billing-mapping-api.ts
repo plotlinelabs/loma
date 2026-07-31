@@ -10,7 +10,7 @@ export interface BillingMappingsResponse { organizations: BillingOrganization[];
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, init);
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed: ${response.status}`);
+  if (!response.ok) throw new Error(data.detail || data.error || `Request failed: ${response.status}`);
   return data;
 }
 export async function fetchBillingMappings(page = 1, pageSize = 25, status = "all"): Promise<BillingMappingsResponse> {
