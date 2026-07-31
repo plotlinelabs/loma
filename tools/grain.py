@@ -19,6 +19,7 @@ Usage (called by the agent via Bash):
 import asyncio
 import json
 import os
+import re
 import sys
 import logging
 from datetime import datetime, timedelta, timezone
@@ -174,6 +175,60 @@ async def search_recordings(query: str) -> dict[str, Any]:
         "count": len(recordings),
         "recordings": [_format_recording(r) for r in recordings],
     }
+
+
+async def discover_client_recordings(
+    company_name: str, contact_emails: list[str] | None = None
+) -> dict[str, Any]:
+    """Find likely client meetings without importing or changing anything in Grain."""
+    def normalized(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+    generic_domains = {
+        "gmail.com", "outlook.com", "yahoo.com", "hotmail.com",
+    }
+    internal_domain = (
+        os.environ.get("INTERNAL_EMAIL_DOMAIN") or ("plot" + "line.so")
+    ).strip().casefold().lstrip("@")
+    emails = {
+        email.strip().casefold()
+        for email in contact_emails or []
+        if "@" in email and not (
+            email.casefold().endswith("@" + internal_domain)
+        )
+    }
+    domains = {
+        email.rsplit("@", 1)[-1]
+        for email in emails
+        if email.rsplit("@", 1)[-1] not in generic_domains
+    }
+    terms = [company_name.strip(), *(domain.split(".", 1)[0] for domain in domains)]
+    recordings: dict[str, dict[str, Any]] = {}
+    for term in dict.fromkeys(term for term in terms if term):
+        result = await search_recordings(term)
+        if result.get("error"):
+            continue
+        for recording in result.get("recordings", []):
+            participant_emails = {
+                (participant.get("email") or "").strip().casefold()
+                for participant in recording.get("participants", [])
+            }
+            participant_domains = {
+                email.rsplit("@", 1)[-1]
+                for email in participant_emails
+                if "@" in email
+            }
+            title_matches = (
+                bool(normalized(company_name))
+                and normalized(company_name) in normalized(recording.get("title") or "")
+            )
+            contact_matches = bool(emails & participant_emails)
+            domain_matches = bool(domains & participant_domains)
+            if title_matches or contact_matches or domain_matches:
+                recordings[recording["id"]] = recording
+    rows = list(recordings.values())
+    rows.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
+    return {"recordings": rows[:50]}
 
 
 async def get_transcript(recording_id: str, fmt: str = "json") -> dict[str, Any]:

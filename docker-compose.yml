@@ -38,6 +38,8 @@ services:
         # (NEXT_PUBLIC_*); set NEXT_PUBLIC_AUTH_PROVIDER in the project .env and
         # rebuild. The runtime AUTH_PROVIDER lives in dashboard/.env.
         NEXT_PUBLIC_AUTH_PROVIDER: ${NEXT_PUBLIC_AUTH_PROVIDER:-local}
+        NEXT_PUBLIC_INTERNAL_EMAIL_DOMAIN: ${NEXT_PUBLIC_INTERNAL_EMAIL_DOMAIN:-}
+        NEXT_PUBLIC_MEETING_RECORDER_EMAIL: ${NEXT_PUBLIC_MEETING_RECORDER_EMAIL:-}
     env_file: ./dashboard/.env
     environment:
       BACKEND_URL: http://loma-backend:3000

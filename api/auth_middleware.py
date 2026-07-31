@@ -51,7 +51,7 @@ async def auth_middleware(request, handler):
     if request.method == "OPTIONS":
         return await handler(request)
 
-    # API routes: attach user identity if available (never block)
+    # API routes: attach user identity if available.
     if request.path.startswith("/api/"):
         user_email = request.headers.get("X-User-Email", "").strip()
         using_preview_fallback = False

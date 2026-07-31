@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timedelta, timezone
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from config.app_config import OBSERVABILITY_DB_NAME
@@ -50,6 +51,12 @@ async def init_observability():
 
     # Governance: tool_configs collection
     await _db.tool_configs.create_index("tool_key", unique=True)
+    await _db.tool_configs.update_one(
+        {"tool_key": "integration_hub"},
+        {"$setOnInsert": {"tool_key": "integration_hub", "name": "Integration Hub",
+                          "auth_mode": "none", "roles": ["Admin", "Analyst", "Read-only", "Support"],
+                          "enabled": True}}, upsert=True,
+    )
 
     # OAuth tokens (per-user encrypted tokens for personal integrations)
     # Compound index: one token doc per user per provider (google, slack, etc.)
@@ -108,6 +115,153 @@ async def init_observability():
     await _db.projects.create_index("project_id", unique=True)
     await _db.projects.create_index("created_by")
     await _db.projects.create_index([("created_at", -1)])
+
+    # Integration Hub: bounded account documents and independent resources.
+    await _db.integration_accounts.create_index("account_id", unique=True)
+    await _db.integration_accounts.create_index(
+        "name_key", unique=True,
+        partialFilterExpression={"name_key": {"$type": "string"}, "archived_at": None},
+    )
+    await _db.integration_accounts.create_index([("status", 1), ("updated_at", -1), ("account_id", 1)])
+    await _db.integration_accounts.create_index([("stage", 1), ("updated_at", -1)])
+    await _db.integration_accounts.create_index([("owner_email", 1), ("updated_at", -1)])
+    # Migrate the prototype's global external-ID uniqueness. Shared channels
+    # and meetings may legitimately be linked to more than one account.
+    async for index in _db.integration_interactions.list_indexes():
+        keys = list(index.get("key", {}).items())
+        if index.get("unique") and keys == [
+            ("source", 1), ("tenant_id", 1), ("source_id", 1)
+        ]:
+            await _db.integration_interactions.drop_index(index["name"])
+    await _db.integration_interactions.create_index(
+        [("account_id", 1), ("source", 1), ("tenant_id", 1), ("source_id", 1)],
+        unique=True,
+    )
+    await _db.integration_interactions.create_index(
+        [("account_id", 1), ("occurred_at", -1), ("interaction_id", 1)]
+    )
+    await _db.integration_interactions.create_index([("conversation_state", 1), ("occurred_at", -1)])
+    for collection in (_db.integration_raw_events, _db.integration_interactions):
+        await collection.create_index(
+            [("account_id", 1), ("source", 1), ("tenant_id", 1), ("source_id", 1)],
+            unique=True,
+        )
+    await _db.integration_external_conversations.create_index(
+        [("account_id", 1), ("source", 1), ("tenant_id", 1), ("conversation_id", 1)],
+        unique=True,
+    )
+    await _db.integration_findings.create_index(
+        [("account_id", 1), ("review_status", 1), ("created_at", -1)]
+    )
+    await _db.integration_sync_sources.create_index("mapping_id", unique=True)
+    await _db.integration_sync_sources.create_index([("account_id", 1), ("source", 1), ("archived_at", 1)])
+    await _db.integration_sync_sources.create_index(
+        [("status", 1), ("archived_at", 1), ("next_sync_at", 1)]
+    )
+    await _db.integration_sync_jobs.create_index("job_id", unique=True)
+    await _db.integration_sync_jobs.create_index(
+        [("mapping_id", 1), ("status", 1), ("created_at", -1)]
+    )
+    await _db.integration_sync_jobs.create_index(
+        [("mapping_id", 1)], unique=True,
+        partialFilterExpression={"status": {"$in": ["queued", "running"]}},
+        name="one_active_sync_per_mapping",
+    )
+    await _db.integration_sync_jobs.create_index(
+        [("next_attempt_at", 1), ("status", 1)]
+    )
+    await _db.integration_sync_jobs.create_index([("status", 1), ("lease_expires_at", 1)])
+    for collection in (_db.integration_projects, _db.integration_tasks,
+                       _db.integration_milestones, _db.integration_risks,
+                       _db.integration_source_mappings):
+        await collection.create_index("resource_id", unique=True)
+        await collection.create_index([("account_id", 1), ("archived_at", 1), ("created_at", 1)])
+    await _db.integration_tasks.create_index([("owner_email", 1), ("status", 1), ("due_at", 1)])
+    await _db.integration_milestones.create_index([("owner_email", 1), ("status", 1), ("due_at", 1)])
+    await _db.integration_risks.create_index([("account_id", 1), ("status", 1), ("severity", 1)])
+    await _db.integration_audit_log.create_index("audit_id", unique=True)
+    await _db.integration_audit_log.create_index([("account_id", 1), ("created_at", -1), ("audit_id", 1)])
+    await _db.integration_timeline.create_index(
+        [("account_id", 1), ("created_at", -1), ("activity_id", 1)]
+    )
+    await _db.integration_contacts.create_index("contact_id", unique=True)
+    await _db.integration_contacts.create_index(
+        [("account_id", 1), ("archived_at", 1), ("name", 1)]
+    )
+    await _db.integration_contacts.create_index(
+        [("account_id", 1), ("email", 1)],
+        unique=True, partialFilterExpression={"archived_at": None},
+    )
+    await _db.integration_contacts.create_index(
+        [("access_status", 1), ("access_expires_at", 1)],
+        partialFilterExpression={"access_status": "active"},
+    )
+    await _db.integration_idempotency.create_index([("actor", 1), ("key", 1)], unique=True)
+    await _db.integration_idempotency.create_index("created_at", expireAfterSeconds=86400)
+    await _db.integration_rate_limits.create_index(
+        [("actor", 1), ("window", 1)], unique=True
+    )
+    await _db.integration_rate_limits.create_index(
+        "expires_at", expireAfterSeconds=120
+    )
+    retention_seconds = int(os.environ.get("INTEGRATION_HUB_RETENTION_DAYS", "365")) * 86400
+    for collection, field in (
+        (_db.integration_raw_events, "ingested_at"),
+        (_db.integration_interactions, "ingested_at"),
+        (_db.integration_findings, "created_at"),
+        (_db.integration_external_conversations, "created_at"),
+    ):
+        await collection.create_index(field, expireAfterSeconds=retention_seconds)
+
+    # One-time compatibility migration for interaction enums used by the
+    # prototype before the neutral inbound/outbound naming was introduced.
+    legacy_brand = "plot" + "line"
+    await _db.integration_interactions.update_many(
+        {"direction": "customer_to_" + legacy_brand}, {"$set": {"direction": "inbound"}}
+    )
+    await _db.integration_interactions.update_many(
+        {"direction": legacy_brand + "_to_customer"}, {"$set": {"direction": "outbound"}}
+    )
+    await _db.integration_external_conversations.update_many(
+        {"conversation_state": "waiting_on_" + legacy_brand},
+        {"$set": {"conversation_state": "waiting_on_us"}},
+    )
+    await _db.integration_findings.update_many(
+        {"conversation_state": "waiting_on_" + legacy_brand},
+        {"$set": {"conversation_state": "waiting_on_us"}},
+    )
+
+    # Access grants created before per-product grant tracking used one member ID.
+    # Preserve a revocation path for those records during the schema transition.
+    await _db.integration_contacts.update_many(
+        {
+            "dashboard_member_id": {"$nin": [None, ""]},
+            "product_ids.0": {"$exists": True},
+            "$or": [{"product_grants": {"$exists": False}}, {"product_grants": []}],
+        },
+        [{
+            "$set": {
+                "product_grants": {
+                    "$map": {
+                        "input": "$product_ids",
+                        "as": "product_id",
+                        "in": {
+                            "product_id": "$$product_id",
+                            "member_id": "$dashboard_member_id",
+                            "role": "$dashboard_access",
+                            "status": "active",
+                        },
+                    },
+                },
+            },
+        }],
+    )
+
+    # Backfill leases so pre-lease running jobs can be reclaimed immediately.
+    await _db.integration_sync_jobs.update_many(
+        {"status": "running", "lease_expires_at": {"$exists": False}},
+        {"$set": {"lease_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)}},
+    )
 
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)

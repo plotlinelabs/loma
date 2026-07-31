@@ -22,13 +22,16 @@ Usage (called by the agent via Bash):
 """
 
 import asyncio
+import html
 import json
 import mimetypes
 import os
+import re
 import sys
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import aiohttp
 
@@ -60,19 +63,24 @@ async def _api_get(path: str) -> dict[str, Any]:
     url = f"{PYLON_BASE_URL}{path}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, headers=_headers(), timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 401:
-                    return {"error": "Pylon API key is invalid or expired."}
-                if resp.status == 404:
-                    return {"error": f"Not found: {path}"}
-                if resp.status == 429:
-                    return {"error": "Pylon rate limit reached. Try again shortly."}
-                if resp.status != 200:
-                    text = await resp.text()
-                    return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
-                return await resp.json()
+            for attempt in range(3):
+                async with session.get(
+                    url, headers=_headers(), timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 401:
+                        return {"error": "Pylon API key is invalid or expired."}
+                    if resp.status == 404:
+                        return {"error": f"Not found: {path}"}
+                    if resp.status == 429:
+                        if attempt == 2:
+                            return {"error": "Pylon rate limit reached. Try again shortly."}
+                        retry_after = min(30, max(1, int(resp.headers.get("Retry-After", "2"))))
+                        await asyncio.sleep(retry_after * (attempt + 1))
+                        continue
+                    if resp.status != 200:
+                        text = await resp.text()
+                        return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
+                    return await resp.json()
     except aiohttp.ClientError as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
@@ -82,17 +90,22 @@ async def _api_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
     url = f"{PYLON_BASE_URL}{path}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url, headers=_headers(), json=body, timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 401:
-                    return {"error": "Pylon API key is invalid or expired."}
-                if resp.status == 429:
-                    return {"error": "Pylon rate limit reached. Try again shortly."}
-                if resp.status not in (200, 201):
-                    text = await resp.text()
-                    return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
-                return await resp.json()
+            for attempt in range(3):
+                async with session.post(
+                    url, headers=_headers(), json=body, timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 401:
+                        return {"error": "Pylon API key is invalid or expired."}
+                    if resp.status == 429:
+                        if attempt == 2:
+                            return {"error": "Pylon rate limit reached. Try again shortly."}
+                        retry_after = min(30, max(1, int(resp.headers.get("Retry-After", "2"))))
+                        await asyncio.sleep(retry_after * (attempt + 1))
+                        continue
+                    if resp.status not in (200, 201):
+                        text = await resp.text()
+                        return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
+                    return await resp.json()
     except aiohttp.ClientError as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
@@ -268,9 +281,89 @@ async def get_messages(issue_id: str) -> dict[str, Any]:
     return await _api_get(f"/issues/{issue_id}/messages")
 
 
+def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Return the safe, display-ready fields from a Pylon message."""
+    raw_body = (
+        message.get("message_html")
+        or message.get("body_html")
+        or message.get("body")
+        or message.get("text")
+        or ""
+    )
+    body = re.sub(r"(?i)<br\s*/?>", "\n", str(raw_body))
+    body = re.sub(r"(?i)</(?:p|div|li|blockquote)>", "\n", body)
+    body = re.sub(r"<[^>]+>", "", body)
+    body = html.unescape(body)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    author = message.get("author") or {}
+    if not isinstance(author, dict):
+        author = {}
+    raw_attachments = (
+        message.get("file_urls")
+        or message.get("attachment_urls")
+        or message.get("attachments")
+        or []
+    )
+    attachments = []
+    for attachment in raw_attachments:
+        url = attachment if isinstance(attachment, str) else (
+            attachment.get("url") or attachment.get("file_url")
+        )
+        if not url or urlparse(str(url)).scheme not in {"http", "https"}:
+            continue
+        supplied_name = attachment.get("name") if isinstance(attachment, dict) else None
+        decoded_path = unquote(urlparse(str(url)).path)
+        filename = supplied_name or decoded_path.rsplit("/", 1)[-1]
+        # Pylon asset paths commonly prefix the original filename with UUIDs.
+        filename = re.sub(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-",
+            "",
+            filename,
+            flags=re.I,
+        )
+        content_type = (
+            attachment.get("content_type") if isinstance(attachment, dict) else None
+        ) or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        attachments.append({
+            "url": str(url),
+            "name": filename or "Attachment",
+            "content_type": content_type,
+            "is_image": content_type.startswith("image/"),
+        })
+    return {
+        "id": str(message.get("id") or ""),
+        "body": body,
+        "author": author.get("name") or "Unknown sender",
+        "timestamp": message.get("timestamp") or message.get("created_at"),
+        "source": message.get("source"),
+        "is_private": bool(
+            message.get("is_private", False)
+            or message.get("private", False)
+            or message.get("message_type") in {"internal_note", "note"}
+            or message.get("source") in {"internal_note", "note"}
+        ),
+        "attachments": attachments,
+    }
+
+
 async def get_threads(issue_id: str) -> dict[str, Any]:
     """Fetch all threads for an issue."""
     return await _api_get(f"/issues/{issue_id}/threads")
+
+
+def issue_web_url(issue: dict[str, Any]) -> str | None:
+    """Return the issue URL used by the support workspace."""
+    number = issue.get("number")
+    if number is None:
+        return issue.get("link") or issue.get("url") or issue.get("web_url")
+    view_id = os.getenv(
+        "PYLON_SUPPORT_VIEW_ID",
+        "ab8a8a4e-a550-4c1b-9479-c00066f233cb",
+    )
+    return (
+        f"https://app.usepylon.com/support/issues/views/{view_id}"
+        f"?issueNumber={number}"
+    )
 
 
 async def get_teams() -> dict[str, Any]:
@@ -339,7 +432,10 @@ async def list_issues(
             "state": issue.get("state", ""),
             "team_id": issue.get("team_id", ""),
             "created_at": issue.get("created_at", ""),
+            "updated_at": issue.get("updated_at", ""),
+            "assignee": issue.get("assignee"),
             "customer": (issue.get("account") or {}).get("name", ""),
+            "customer_id": (issue.get("account") or {}).get("id", ""),
         })
 
     return {
@@ -347,6 +443,183 @@ async def list_issues(
         "count": len(summaries),
         "issues": summaries,
     }
+
+
+async def list_account_issues_page(
+    account_id: str,
+    *,
+    limit: int = 25,
+    cursor: str | None = None,
+    state: str | None = None,
+    assignee_id: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    """Fetch one lightweight, server-filtered issue page for a Pylon account."""
+    states = [value.strip() for value in (state or "").split(",") if value.strip()]
+    if len(states) > 1:
+        # Pylon's issue search intermittently returns 500 for an `in` state
+        # filter. Query each state independently and merge the bounded result.
+        pages = await asyncio.gather(*(
+            list_account_issues_page(
+                account_id,
+                limit=limit,
+                state=single_state,
+                assignee_id=assignee_id,
+                query=query,
+            )
+            for single_state in states
+        ))
+        error = next((page.get("error") for page in pages if page.get("error")), None)
+        if error:
+            return {"error": error}
+        issues_by_id = {
+            issue["id"]: issue
+            for page in pages
+            for issue in page.get("issues", [])
+        }
+        issues = sorted(
+            issues_by_id.values(),
+            key=lambda issue: issue.get("updated_at") or "",
+            reverse=True,
+        )[:limit]
+        return {
+            "issues": issues,
+            "pagination": {"next_cursor": None, "has_next_page": False},
+        }
+
+    filters: list[dict[str, Any]] = [
+        {"field": "account_id", "operator": "equals", "value": account_id},
+    ]
+    if states:
+        filters.append({
+            "field": "state",
+            "operator": "equals",
+            "value": states[0],
+        })
+    if assignee_id:
+        filters.append({"field": "assignee_id", "operator": "equals", "value": assignee_id})
+    if query:
+        filters.append({"field": "title", "operator": "string_contains", "value": query[:100]})
+    body: dict[str, Any] = {
+        "filter": (
+            {"operator": "and", "subfilters": filters}
+            if len(filters) > 1
+            else filters[0]
+        ),
+        "limit": min(100, max(1, limit)),
+    }
+    if cursor:
+        body["cursor"] = cursor
+    result = await _api_post("/issues/search", body)
+    if result.get("error"):
+        return result
+    def assignee_summary(issue: dict[str, Any]) -> Any:
+        """Normalize the assignee shapes returned by different Pylon API versions."""
+        assignee = (
+            issue.get("assignee")
+            or issue.get("assigned_to")
+            or issue.get("assignee_user")
+            or issue.get("user")
+        )
+        if assignee:
+            return assignee
+        assignee_id = issue.get("assignee_id")
+        return {"id": assignee_id} if assignee_id else None
+
+    def assignee_id(issue: dict[str, Any]) -> str | None:
+        """Extract the user ID from every assignee shape returned by Pylon."""
+        direct_id = issue.get("assignee_id")
+        if direct_id:
+            return str(direct_id)
+        assignee = assignee_summary(issue)
+        if isinstance(assignee, str):
+            return assignee
+        if isinstance(assignee, dict) and assignee.get("id"):
+            return str(assignee["id"])
+        return None
+
+    assignee_ids = {
+        user_id
+        for issue in result.get("data", [])
+        if (user_id := assignee_id(issue))
+    }
+    assignee_directory: dict[str, dict[str, Any]] = {}
+    if assignee_ids:
+        users_result = await _api_get("/users")
+        users = (
+            users_result.get("data")
+            or users_result.get("users")
+            or []
+        ) if not users_result.get("error") else []
+        assignee_directory = {
+            str(user.get("id")): user for user in users if str(user.get("id")) in assignee_ids
+        }
+        missing_ids = assignee_ids - set(assignee_directory)
+        if missing_ids:
+            fetched = await asyncio.gather(*(_api_get(f"/users/{user_id}") for user_id in missing_ids))
+            for user_id, user_result in zip(missing_ids, fetched):
+                if user_result.get("error"):
+                    continue
+                user = user_result.get("data") or user_result
+                if isinstance(user, dict):
+                    assignee_directory[user_id] = user
+
+    issues = []
+    for issue in result.get("data", []):
+        assignee = assignee_summary(issue)
+        if isinstance(assignee, str):
+            assignee = assignee_directory.get(assignee, {"id": assignee})
+        elif isinstance(assignee, dict) and assignee.get("id"):
+            assignee = {**assignee_directory.get(str(assignee["id"]), {}), **assignee}
+        issues.append({
+            "id": str(issue.get("id") or ""),
+            "number": issue.get("number"),
+            "title": issue.get("title") or "Untitled issue",
+            "state": issue.get("state") or "unknown",
+            "assignee": assignee,
+            "created_at": issue.get("created_at"),
+            "updated_at": issue.get("updated_at"),
+            "account_id": (issue.get("account") or {}).get("id") or issue.get("account_id"),
+            "url": issue_web_url(issue),
+        })
+    pagination = result.get("pagination") or {}
+    return {
+        "issues": issues,
+        "pagination": {
+            "next_cursor": pagination.get("cursor") if pagination.get("has_next_page") else None,
+            "has_next_page": bool(pagination.get("has_next_page")),
+        },
+    }
+
+
+async def search_accounts(query: str, limit: int = 50) -> dict[str, Any]:
+    """Search Pylon accounts by name without scanning the issue archive."""
+    query = (query or "").strip()
+    if not query:
+        return {"accounts": []}
+
+    result = await _api_post("/accounts/search", {
+        "filter": {
+            "field": "name",
+            "operator": "string_contains",
+            "value": query,
+        },
+        "limit": min(100, max(1, limit)),
+    })
+    if "error" in result:
+        return result
+
+    accounts = []
+    for account in result.get("data", []):
+        account_id = str(account.get("id") or "")
+        name = str(account.get("name") or "").strip()
+        if account_id and name:
+            accounts.append({
+                "customer_id": account_id,
+                "name": name,
+                "domains": account.get("domains") or [],
+            })
+    return {"accounts": accounts}
 
 
 async def reply(
