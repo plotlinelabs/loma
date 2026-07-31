@@ -1,6 +1,7 @@
 """Operator organization to MonetizeNow billing mapping API."""
 
 import asyncio
+from collections import OrderedDict
 from datetime import datetime, timezone
 import logging
 import time
@@ -17,8 +18,8 @@ from tools.monetize_now import account_contracts, get_account, get_contract
 ACTIVE = "ACTIVE"
 logger = logging.getLogger(__name__)
 _CONTRACT_CACHE_TTL_SECONDS = 60
-_contract_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
-_organization_locks: dict[str, asyncio.Lock] = {}
+_CONTRACT_CACHE_MAX_ENTRIES = 2048
+_contract_cache: OrderedDict[str, tuple[float, dict[str, Any] | None]] = OrderedDict()
 
 
 def _id(value: Any) -> str:
@@ -102,13 +103,19 @@ async def _load_contract(billing_id: str | None, semaphore: asyncio.Semaphore):
     cached = _contract_cache.get(billing_id)
     now = time.monotonic()
     if cached and cached[0] > now:
+        _contract_cache.move_to_end(billing_id)
         return cached[1]
+    if cached:
+        del _contract_cache[billing_id]
     async with semaphore:
         payload, error = _upstream_payload(await get_contract(billing_id))
     if error:
         logger.warning("MonetizeNow contract lookup failed for %s: %s", billing_id, error)
         return None
     _contract_cache[billing_id] = (now + _CONTRACT_CACHE_TTL_SECONDS, payload)
+    _contract_cache.move_to_end(billing_id)
+    while len(_contract_cache) > _CONTRACT_CACHE_MAX_ENTRIES:
+        _contract_cache.popitem(last=False)
     return payload
 
 
@@ -123,12 +130,28 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
         page_size = min(100, max(1, int(request.query.get("pageSize", "25"))))
     except ValueError:
         return web.json_response({"error": "page and pageSize must be integers"}, status=400)
-    query: dict[str, Any] = {}
-    total = await plotline_db.orgs.count_documents(query)
-    org_docs = await (
-        plotline_db.orgs.find(query, {"name": 1, "products": 1, "isBlocked": 1})
-        .sort("name", 1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
-    )
+    status_filter = request.query.get("status", "all")
+    valid_statuses = {
+        "correctly_linked", "contract_missing", "invalid_contract", "inactive_contract",
+        "account_mismatch", "account_not_linked",
+    }
+    if status_filter != "all" and status_filter not in valid_statuses:
+        return web.json_response({"error": "Invalid status filter"}, status=400)
+
+    # MonetizeNow contract state is external to MongoDB, so status-filtered pages
+    # must classify the complete organization set before applying pagination.
+    # Unfiltered requests retain database-level pagination for the common path.
+    if status_filter == "all":
+        total = await plotline_db.orgs.count_documents({})
+        org_docs = await (
+            plotline_db.orgs.find({}, {"name": 1, "products": 1, "isBlocked": 1})
+            .sort("name", 1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+        )
+    else:
+        org_docs = await plotline_db.orgs.find(
+            {}, {"name": 1, "products": 1, "isBlocked": 1}
+        ).sort("name", 1).to_list(None)
+        total = 0
     org_ids = [org["_id"] for org in org_docs]
     product_docs = await plotline_db.products.find(
         {"orgId": {"$in": org_ids}}, {"name": 1, "orgId": 1, "billingId": 1}
@@ -174,6 +197,14 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
                 "account_mismatch", "account_not_linked",
             }},
         })
+    if status_filter != "all":
+        organizations = [
+            org for org in organizations
+            if any(product["status"] == status_filter for product in org["products"])
+        ]
+        total = len(organizations)
+        start = (page - 1) * page_size
+        organizations = organizations[start:start + page_size]
     return web.json_response({
         "organizations": organizations,
         "pagination": {"page": page, "pageSize": page_size, "total": total, "hasNext": page * page_size < total},
@@ -202,13 +233,15 @@ async def handle_set_account_mapping(request: web.Request) -> web.Response:
     if not canonical_account_id:
         return web.json_response({"error": "MonetizeNow returned an account without an ID"}, status=502)
     now, actor = datetime.now(timezone.utc), get_user_email(request)
-    async with _organization_locks.setdefault(org_id, asyncio.Lock()):
-        old = await loma_db.billing_account_mappings.find_one({"organization_id": org_id})
-        await loma_db.billing_account_mappings.update_one(
-            {"organization_id": org_id},
-            {"$set": {"organization_id": org_id, "monetize_now_account_id": canonical_account_id, "updated_at": now, "updated_by": actor}},
-            upsert=True,
-        )
+    old = await loma_db.billing_account_mappings.find_one({"organization_id": org_id})
+    await loma_db.billing_account_mappings.update_one(
+        {"organization_id": org_id},
+        {
+            "$set": {"organization_id": org_id, "monetize_now_account_id": canonical_account_id, "updated_at": now, "updated_by": actor},
+            "$inc": {"mapping_revision": 1},
+        },
+        upsert=True,
+    )
     await loma_db.billing_mapping_audit.insert_one({
         "type": "account_mapping", "organization_id": org_id,
         "old_value": (old or {}).get("monetize_now_account_id"), "new_value": canonical_account_id,
@@ -265,6 +298,7 @@ async def handle_set_product_contract(request: web.Request) -> web.Response:
         return web.json_response({"error": f"MonetizeNow contract lookup failed: {upstream_error}"}, status=502)
     mapping = await loma_db.billing_account_mappings.find_one({"organization_id": _id(product.get("orgId"))})
     account_id = (mapping or {}).get("monetize_now_account_id")
+    mapping_revision = (mapping or {}).get("mapping_revision", 0)
     if not contract:
         return web.json_response({"error": "MonetizeNow contract not found"}, status=404)
     if str(contract.get("status") or "").upper() != ACTIVE:
@@ -273,26 +307,50 @@ async def handle_set_product_contract(request: web.Request) -> web.Response:
         return web.json_response({"error": "Contract does not belong to the mapped account"}, status=400)
     org_id = _id(product.get("orgId"))
     now, actor, old = datetime.now(timezone.utc), get_user_email(request), product.get("billingId")
-    async with _organization_locks.setdefault(org_id, asyncio.Lock()):
-        current_mapping = await loma_db.billing_account_mappings.find_one({"organization_id": org_id})
-        if (current_mapping or {}).get("monetize_now_account_id") != account_id:
-            return web.json_response({"error": "Account mapping changed; retry with the latest mapping"}, status=409)
-        update_result = await plotline_db.products.update_one(
-            {"_id": ObjectId(product_id), "orgId": product.get("orgId"), "billingId": old},
-            {"$set": {"billingId": contract_id, "updatedAt": now}},
-        )
-        if update_result.modified_count != 1 and old != contract_id:
-            return web.json_response({"error": "Product mapping changed; refresh and retry"}, status=409)
-        # The mapping and product live in separate databases, so a distributed
-        # transaction is unavailable. Detect a cross-process remap after the
-        # conditional write and undo our write rather than leave mismatched data.
-        mapping_after_write = await loma_db.billing_account_mappings.find_one({"organization_id": org_id})
-        if (mapping_after_write or {}).get("monetize_now_account_id") != account_id:
-            await plotline_db.products.update_one(
-                {"_id": ObjectId(product_id), "orgId": product.get("orgId"), "billingId": contract_id},
-                {"$set": {"billingId": old, "updatedAt": now}},
+    if old == contract_id:
+        return web.json_response({"productId": product_id, "contractId": contract_id})
+    old_updated_at = product.get("updatedAt")
+    revision_match: Any = mapping_revision if mapping_revision else {"$in": [0, None]}
+    current_mapping = await loma_db.billing_account_mappings.find_one({
+        "organization_id": org_id,
+        "monetize_now_account_id": account_id,
+        "mapping_revision": revision_match,
+    })
+    if not current_mapping:
+        return web.json_response({"error": "Account mapping changed; retry with the latest mapping"}, status=409)
+    update_result = await plotline_db.products.update_one(
+        {"_id": ObjectId(product_id), "orgId": product.get("orgId"), "billingId": old},
+        {"$set": {"billingId": contract_id, "updatedAt": now}},
+    )
+    if update_result.modified_count != 1 and old != contract_id:
+        return web.json_response({"error": "Product mapping changed; refresh and retry"}, status=409)
+
+    mapping_after_write = await loma_db.billing_account_mappings.find_one({
+        "organization_id": org_id,
+        "monetize_now_account_id": account_id,
+        "mapping_revision": revision_match,
+    })
+    if not mapping_after_write:
+        # These records live in separate MongoDB deployments, so no distributed
+        # transaction can make the two writes atomic. The monotonic revision
+        # detects cross-process remaps; this conditional rollback is best-effort.
+        rollback_update: dict[str, Any] = {"$set": {"billingId": old}}
+        if old_updated_at is None:
+            rollback_update["$unset"] = {"updatedAt": ""}
+        else:
+            rollback_update["$set"]["updatedAt"] = old_updated_at
+        try:
+            rollback = await plotline_db.products.update_one(
+                {"_id": ObjectId(product_id), "orgId": product.get("orgId"), "billingId": contract_id, "updatedAt": now},
+                rollback_update,
             )
-            return web.json_response({"error": "Account mapping changed; product update was reverted"}, status=409)
+        except Exception:
+            logger.exception("Failed to roll back stale contract mapping for product %s", product_id)
+            return web.json_response({"error": "Account mapping changed and automatic recovery failed"}, status=500)
+        if rollback.modified_count != 1:
+            logger.error("Could not roll back stale contract mapping for product %s because it changed again", product_id)
+            return web.json_response({"error": "Account mapping changed and product was concurrently modified"}, status=409)
+        return web.json_response({"error": "Account mapping changed; product update was reverted"}, status=409)
     await loma_db.billing_mapping_audit.insert_one({
         "type": "product_contract", "organization_id": org_id, "product_id": product_id,
         "old_value": old, "new_value": contract_id, "updated_at": now, "updated_by": actor,

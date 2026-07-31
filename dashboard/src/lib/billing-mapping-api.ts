@@ -13,7 +13,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) throw new Error(data.error || `Request failed: ${response.status}`);
   return data;
 }
-export async function fetchBillingMappings(page = 1, pageSize = 25): Promise<BillingMappingsResponse> { return request<BillingMappingsResponse>(`/api/billing-mappings?page=${page}&pageSize=${pageSize}`); }
+export async function fetchBillingMappings(page = 1, pageSize = 25, status = "all"): Promise<BillingMappingsResponse> {
+  const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (status !== "all") query.set("status", status);
+  return request<BillingMappingsResponse>(`/api/billing-mappings?${query}`);
+}
 export async function setBillingAccount(organizationId: string, accountId: string) { return request(`/api/billing-mappings/organizations/${organizationId}/account`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({accountId}) }); }
 export async function fetchActiveContracts(organizationId: string): Promise<BillingContract[]> { return (await request<{contracts: BillingContract[]}>(`/api/billing-mappings/organizations/${organizationId}/contracts`)).contracts; }
 export async function setProductContract(productId: string, contractId: string) { return request(`/api/billing-mappings/products/${productId}/contract`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({contractId}) }); }

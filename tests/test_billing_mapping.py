@@ -1,8 +1,17 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from api.billing_mapping_routes import _contract_account_id, _items, _upstream_payload, classify_product
+from api.billing_mapping_routes import (
+    _contract_account_id,
+    _contract_cache,
+    _items,
+    _load_contract,
+    _upstream_payload,
+    classify_product,
+)
+from api import billing_mapping_routes
 from api import plotline_db
 
 
@@ -49,3 +58,21 @@ async def test_plotline_db_connection_failure_is_optional(monkeypatch):
 
     assert plotline_db.get_plotline_db() is None
     client.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_contract_cache_is_bounded(monkeypatch):
+    _contract_cache.clear()
+    monkeypatch.setattr(billing_mapping_routes, "_CONTRACT_CACHE_MAX_ENTRIES", 2)
+    monkeypatch.setattr(
+        billing_mapping_routes,
+        "get_contract",
+        AsyncMock(side_effect=lambda contract_id: {"data": {"id": contract_id}}),
+    )
+    semaphore = asyncio.Semaphore(1)
+
+    await _load_contract("ctr_1", semaphore)
+    await _load_contract("ctr_2", semaphore)
+    await _load_contract("ctr_3", semaphore)
+
+    assert list(_contract_cache) == ["ctr_2", "ctr_3"]
