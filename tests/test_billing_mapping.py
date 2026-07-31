@@ -1,4 +1,8 @@
-from api.billing_mapping_routes import _contract_account_id, _items, classify_product
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from api.billing_mapping_routes import _contract_account_id, _items, _upstream_payload, classify_product
 from api import plotline_db
 
 
@@ -24,3 +28,24 @@ def test_plotline_db_accepts_existing_dashboard_uri(monkeypatch):
 
     monkeypatch.setenv("PLOTLINE_MONGODB_URI", "mongodb://override:27017/plotline")
     assert plotline_db._dashboard_mongodb_uri() == "mongodb://override:27017/plotline"
+
+
+def test_upstream_payload_distinguishes_errors_from_empty_results():
+    assert _upstream_payload({"error": "timeout"}) == (None, "timeout")
+    assert _upstream_payload({"data": {"id": "acct_1"}}) == ({"id": "acct_1"}, None)
+    assert _upstream_payload({"data": None}) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_plotline_db_connection_failure_is_optional(monkeypatch):
+    client = MagicMock()
+    database = MagicMock()
+    database.command = AsyncMock(side_effect=ConnectionError("unreachable"))
+    client.__getitem__.return_value = database
+    monkeypatch.setenv("PLOTLINE_MONGODB_URI", "mongodb://unreachable:27017/plotline")
+    monkeypatch.setattr(plotline_db, "AsyncIOMotorClient", lambda *args, **kwargs: client)
+
+    await plotline_db.init_plotline_db()
+
+    assert plotline_db.get_plotline_db() is None
+    client.close.assert_called_once()

@@ -31,11 +31,27 @@ async def init_plotline_db():
             "billing mapping disabled"
         )
         return
-    _client = AsyncIOMotorClient(uri)
-    database_name = os.environ.get("PLOTLINE_MONGODB_DB_NAME", "plotline").strip() or "plotline"
-    _db = _client[database_name]
-    await _db.command("ping")
+    try:
+        client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
+        database_name = os.environ.get("PLOTLINE_MONGODB_DB_NAME", "plotline").strip() or "plotline"
+        db = client[database_name]
+        await db.command("ping")
+    except Exception:
+        logger.exception("Plotline dashboard MongoDB unavailable; billing mapping disabled")
+        if "client" in locals():
+            client.close()
+        _client, _db = None, None
+        return
+    _client, _db = client, db
     logger.info("Plotline dashboard MongoDB connected")
+
+
+async def close_plotline_db():
+    """Close the optional Plotline connection during application shutdown."""
+    global _client, _db
+    if _client is not None:
+        _client.close()
+    _client, _db = None, None
 
 
 def get_plotline_db():
