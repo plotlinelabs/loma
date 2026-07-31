@@ -41,6 +41,12 @@ CONNECTION_VARS = frozenset({
     "OAUTH_ENCRYPTION_KEY",
 })
 
+PLOTLINE_CONNECTION_VARS = frozenset({
+    "PLOTLINE_MONGODB_URI",
+    "MONGODB_DASHBOARD_URI",
+    "PLOTLINE_MONGODB_DB_NAME",
+})
+
 OPENCODE_PROVIDER_VARS = frozenset({"OPENCODE_API_KEY", "OPENAI_API_KEY"})
 
 # Valid env var key pattern
@@ -312,6 +318,13 @@ async def handle_update_env(request: web.Request) -> web.Response:
             await reset_opencode_runtime("provider API key changed")
         except Exception:
             logger.warning("Failed to reset OpenCode runtime after provider key update", exc_info=True)
+
+    if any(c["key"] in PLOTLINE_CONNECTION_VARS for c in changes):
+        try:
+            from api.plotline_db import init_plotline_db
+            await init_plotline_db()
+        except Exception:
+            logger.warning("Failed to reconnect Plotline MongoDB after environment update", exc_info=True)
 
     # Write audit log
     db = get_db()

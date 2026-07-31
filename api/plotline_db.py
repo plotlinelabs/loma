@@ -23,8 +23,12 @@ def _dashboard_mongodb_uri() -> str:
 
 
 async def init_plotline_db():
-    """Initialize the optional Plotline dashboard database connection."""
+    """Initialize or reconnect the optional Plotline dashboard database."""
     global _client, _db, _status
+    old_client = _client
+    _client, _db = None, None
+    if old_client is not None:
+        old_client.close()
     # Production and preview hosts historically expose this connection as
     # MONGODB_DASHBOARD_URI. Keep the feature-specific name as an override,
     # but do not require a brand-new secret name just for this page.

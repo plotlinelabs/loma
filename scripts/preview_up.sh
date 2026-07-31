@@ -44,6 +44,11 @@ SECRET_CACHE="${STATE_DIR}/.auth-secret-pr-${PR}"
 AUTH_SECRET="$(cat "$SECRET_CACHE")"
 
 MONGO_URI="$(read_secret OBSERVABILITY_MONGODB_URI)"
+PREVIOUS_ENV=""
+if [[ -f .env ]]; then
+  PREVIOUS_ENV="$(mktemp)"
+  cp .env "$PREVIOUS_ENV"
+fi
 setup_value="$(read_secret LOMA_SETUP_TOKEN)"
 
 # --- Backend .env: live integration secrets + preview overrides ---
@@ -63,6 +68,23 @@ LOMA_ENABLE_SLACK=false
 NEXT_PUBLIC_AUTH_PROVIDER=local
 EOF
 } > .env
+
+# Admin -> Environment is the supported configuration surface for Billing Mapping.
+# Preserve those settings across preview rebuilds instead of silently replacing
+# them with the shared preview-secrets file.
+if [[ -n "$PREVIOUS_ENV" ]]; then
+  for key in PLOTLINE_MONGODB_URI MONGODB_DASHBOARD_URI PLOTLINE_MONGODB_DB_NAME MONETIZE_NOW_API_KEY MONETIZE_NOW_BASE_URL; do
+    value="$(grep -E "^${key}=" "$PREVIOUS_ENV" | tail -1 | cut -d= -f2- || true)"
+    if [[ -n "$value" ]]; then
+      sed -i "/^${key}=/d" .env
+      printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+  done
+  rm -f "$PREVIOUS_ENV"
+fi
+
+# Make preview behavior explicit for application feature/role checks.
+printf 'PREVIEW_MODE=true\n' >> .env
 
 # --- Dashboard .env ---
 cat > dashboard/.env <<EOF

@@ -97,12 +97,6 @@ const navigation: NavItem[] = [
     minRole: "analyst",
     icon: <RiDownloadLine size={16} />,
   },
-  {
-    name: "Billing Mapping",
-    href: "/billing-mapping",
-    minRole: "operator",
-    icon: <RiLinksLine size={16} />,
-  },
 ];
 
 const userMenuNav: NavItem[] = [
@@ -360,6 +354,7 @@ export default function Sidebar({
   const { needsInputCount } = useTaskAttention();
   const badgeCounts: Record<string, number> = { tasks: needsInputCount };
   const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
+  const [billingExpanded, setBillingExpanded] = useState(pathname.startsWith("/billing-mapping"));
 
   // Filter nav items by role
   const visibleNav = navigation.filter((item) => !item.minRole || hasRole(item.minRole));
@@ -492,6 +487,56 @@ export default function Sidebar({
               );
             })}
           </nav>
+
+          {/* Billing Mapping is an operator section on desktop and in the mobile drawer. */}
+          {hasRole("operator") && (
+            <div className="px-3 mt-1">
+              {collapsed ? (
+                <Link
+                  href="/billing-mapping"
+                  prefetch
+                  onClick={onClose}
+                  title="Billing Mapping"
+                  className={cn(
+                    "flex items-center justify-center mx-auto w-10 rounded-lg py-1.5 transition-colors",
+                    pathname.startsWith("/billing-mapping")
+                      ? "bg-brand-100/80 text-brand-700"
+                      : "text-muted-foreground hover:bg-accent-200/15 hover:text-foreground",
+                  )}
+                >
+                  <RiLinksLine size={16} />
+                </Link>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setBillingExpanded((value) => !value)}
+                    aria-expanded={billingExpanded}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent-200/15 hover:text-foreground max-md:px-3 max-md:py-2.5 max-md:text-[16px]"
+                  >
+                    <RiLinksLine size={16} className="max-md:h-5 max-md:w-5" />
+                    <span>Billing Mapping</span>
+                    <RiArrowDownSLine size={15} className={cn("ml-auto transition-transform", billingExpanded && "rotate-180")} />
+                  </button>
+                  {billingExpanded && (
+                    <Link
+                      href="/billing-mapping"
+                      prefetch
+                      onClick={onClose}
+                      className={cn(
+                        "mt-0.5 flex items-center rounded-lg py-1 pl-8 pr-2 text-xs transition-colors max-md:py-2 max-md:pl-11 max-md:text-[15px]",
+                        pathname.startsWith("/billing-mapping")
+                          ? "bg-brand-100/80 font-medium text-brand-700"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      Organization contracts
+                    </Link>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* Projects */}
           {!collapsed && projects.length > 0 && (
