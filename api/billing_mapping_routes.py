@@ -119,6 +119,23 @@ async def _load_contract(billing_id: str | None, semaphore: asyncio.Semaphore):
     return payload
 
 
+async def _store_status_snapshots(loma_db: Any, organizations: list[dict[str, Any]]) -> None:
+    """Persist last-known classifications so filtered reads never fan out upstream."""
+    checked_at = datetime.now(timezone.utc)
+    for organization in organizations:
+        for product in organization["products"]:
+            await loma_db.billing_product_statuses.update_one(
+                {"product_id": product["id"]},
+                {"$set": {
+                    "product_id": product["id"],
+                    "organization_id": organization["id"],
+                    "status": product["status"],
+                    "checked_at": checked_at,
+                }},
+                upsert=True,
+            )
+
+
 async def handle_list_billing_mappings(request: web.Request) -> web.Response:
     require_operator_or_above(request)
     plotline_db, loma_db = get_plotline_db(), get_db()
@@ -138,9 +155,8 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
     if status_filter != "all" and status_filter not in valid_statuses:
         return web.json_response({"error": "Invalid status filter"}, status=400)
 
-    # MonetizeNow contract state is external to MongoDB, so status-filtered pages
-    # must classify the complete organization set before applying pagination.
-    # Unfiltered requests retain database-level pagination for the common path.
+    # Filtered reads use the persisted last-known reconciliation state. Live
+    # MonetizeNow lookups are limited to the visible page and refresh snapshots.
     if status_filter == "all":
         total = await plotline_db.orgs.count_documents({})
         org_docs = await (
@@ -148,10 +164,16 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
             .sort("name", 1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
         )
     else:
-        org_docs = await plotline_db.orgs.find(
-            {}, {"name": 1, "products": 1, "isBlocked": 1}
-        ).sort("name", 1).to_list(None)
-        total = 0
+        matching_org_ids = await loma_db.billing_product_statuses.distinct(
+            "organization_id", {"status": status_filter}
+        )
+        object_ids = [ObjectId(value) for value in matching_org_ids if ObjectId.is_valid(value)]
+        total = await plotline_db.orgs.count_documents({"_id": {"$in": object_ids}})
+        org_docs = await (
+            plotline_db.orgs.find(
+                {"_id": {"$in": object_ids}}, {"name": 1, "products": 1, "isBlocked": 1}
+            ).sort("name", 1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+        )
     org_ids = [org["_id"] for org in org_docs]
     product_docs = await plotline_db.products.find(
         {"orgId": {"$in": org_ids}}, {"name": 1, "orgId": 1, "billingId": 1}
@@ -197,14 +219,7 @@ async def handle_list_billing_mappings(request: web.Request) -> web.Response:
                 "account_mismatch", "account_not_linked",
             }},
         })
-    if status_filter != "all":
-        organizations = [
-            org for org in organizations
-            if any(product["status"] == status_filter for product in org["products"])
-        ]
-        total = len(organizations)
-        start = (page - 1) * page_size
-        organizations = organizations[start:start + page_size]
+    await _store_status_snapshots(loma_db, organizations)
     return web.json_response({
         "organizations": organizations,
         "pagination": {"page": page, "pageSize": page_size, "total": total, "hasNext": page * page_size < total},
@@ -242,6 +257,7 @@ async def handle_set_account_mapping(request: web.Request) -> web.Response:
         },
         upsert=True,
     )
+    await loma_db.billing_product_statuses.delete_many({"organization_id": org_id})
     await loma_db.billing_mapping_audit.insert_one({
         "type": "account_mapping", "organization_id": org_id,
         "old_value": (old or {}).get("monetize_now_account_id"), "new_value": canonical_account_id,
@@ -328,7 +344,6 @@ async def handle_set_product_contract(request: web.Request) -> web.Response:
     mapping_after_write = await loma_db.billing_account_mappings.find_one({
         "organization_id": org_id,
         "monetize_now_account_id": account_id,
-        "mapping_revision": revision_match,
     })
     if not mapping_after_write:
         # These records live in separate MongoDB deployments, so no distributed
@@ -355,6 +370,16 @@ async def handle_set_product_contract(request: web.Request) -> web.Response:
         "type": "product_contract", "organization_id": org_id, "product_id": product_id,
         "old_value": old, "new_value": contract_id, "updated_at": now, "updated_by": actor,
     })
+    await loma_db.billing_product_statuses.update_one(
+        {"product_id": product_id},
+        {"$set": {
+            "product_id": product_id,
+            "organization_id": org_id,
+            "status": "correctly_linked",
+            "checked_at": now,
+        }},
+        upsert=True,
+    )
     return web.json_response({"productId": product_id, "contractId": contract_id})
 
 

@@ -8,6 +8,7 @@ from api.billing_mapping_routes import (
     _contract_cache,
     _items,
     _load_contract,
+    _store_status_snapshots,
     _upstream_payload,
     classify_product,
 )
@@ -76,3 +77,24 @@ async def test_contract_cache_is_bounded(monkeypatch):
     await _load_contract("ctr_3", semaphore)
 
     assert list(_contract_cache) == ["ctr_2", "ctr_3"]
+
+
+@pytest.mark.asyncio
+async def test_status_snapshots_are_persisted_per_product():
+    collection = MagicMock()
+    collection.update_one = AsyncMock()
+    database = MagicMock(billing_product_statuses=collection)
+
+    await _store_status_snapshots(database, [{
+        "id": "org_1",
+        "products": [
+            {"id": "product_1", "status": "invalid_contract"},
+            {"id": "product_2", "status": "correctly_linked"},
+        ],
+    }])
+
+    assert collection.update_one.await_count == 2
+    first_filter, first_update = collection.update_one.await_args_list[0].args
+    assert first_filter == {"product_id": "product_1"}
+    assert first_update["$set"]["organization_id"] == "org_1"
+    assert first_update["$set"]["status"] == "invalid_contract"
