@@ -38,6 +38,7 @@ from api.claude_auth_routes import setup_claude_auth_routes
 from api.codex_auth_routes import setup_codex_auth_routes
 from api.file_routes import setup_file_routes
 from api.integration_routes import setup_integration_routes
+from api.billing_routes import setup_billing_routes
 from api.prompt_settings_routes import setup_prompt_settings_routes
 from recovery import start_recovery_loop, mark_all_running_interrupted
 from scheduler.engine import init_scheduler
@@ -136,6 +137,7 @@ async def main():
     setup_codex_auth_routes(webhook_app)
     setup_file_routes(webhook_app)
     setup_integration_routes(webhook_app)
+    setup_billing_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
     async def on_shutdown(_app):
         await mark_all_running_interrupted()
