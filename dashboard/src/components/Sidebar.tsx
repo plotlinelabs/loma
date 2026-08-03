@@ -100,7 +100,6 @@ const navigation: NavItem[] = [
   {
     name: "Billing Mapping",
     href: "/billing-mapping",
-    minRole: "maintainer",
     icon: <RiBankCardLine size={16} />,
   },
 ];

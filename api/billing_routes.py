@@ -17,7 +17,7 @@ from aiohttp import web
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from observability.db import get_db
-from api.auth_helpers import require_maintainer_or_above, get_user_email
+from api.auth_helpers import get_user_email
 from tools.monetize_now import list_accounts, search_accounts
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,6 @@ def _normalize(name: str) -> str:
 
 async def handle_get_mapping(request: web.Request) -> web.Response:
     """GET /api/billing/mapping — all client orgs with their MonetizeNow link status."""
-    require_maintainer_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "DB not configured"}, status=503)
@@ -174,7 +173,6 @@ async def handle_get_mapping(request: web.Request) -> web.Response:
 
 async def handle_search_accounts(request: web.Request) -> web.Response:
     """GET /api/billing/accounts?q= — MonetizeNow account picker for manual linking."""
-    require_maintainer_or_above(request)
     query = (request.query.get("q") or "").strip()
     if not query:
         return web.json_response({"accounts": []})
@@ -188,7 +186,6 @@ async def handle_search_accounts(request: web.Request) -> web.Response:
 
 async def handle_link_org(request: web.Request) -> web.Response:
     """PUT /api/billing/mapping/{org_id} — manually link an org to a MonetizeNow account."""
-    require_maintainer_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "DB not configured"}, status=503)
@@ -217,7 +214,6 @@ async def handle_link_org(request: web.Request) -> web.Response:
 
 async def handle_unlink_org(request: web.Request) -> web.Response:
     """DELETE /api/billing/mapping/{org_id} — remove a manual link."""
-    require_maintainer_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "DB not configured"}, status=503)

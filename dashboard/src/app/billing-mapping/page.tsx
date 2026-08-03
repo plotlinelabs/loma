@@ -8,7 +8,6 @@ import {
   unlinkOrg,
 } from "../../lib/billing-api";
 import type { OrgMapping, MnAccount, MappingStatus } from "../../lib/billing-api";
-import { useUser } from "../../lib/UserContext";
 import { cn } from "@/lib/utils";
 import { statusColors } from "@/lib/status-colors";
 import { Button } from "@/components/ui/button";
@@ -135,8 +134,6 @@ function SkeletonRow() {
 }
 
 export default function BillingMappingPage() {
-  const { hasRole, loading: userLoading } = useUser();
-
   const [orgs, setOrgs] = useState<OrgMapping[]>([]);
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -172,14 +169,6 @@ export default function BillingMappingPage() {
     } finally {
       setUnlinking(null);
     }
-  }
-
-  if (!userLoading && !hasRole("maintainer")) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>Maintainer access required to view billing mapping.</AlertDescription>
-      </Alert>
-    );
   }
 
   const filtered = filter
