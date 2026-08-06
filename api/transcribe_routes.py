@@ -1,10 +1,16 @@
 """Speech-to-text route for composer dictation.
 
 The dashboard records audio with MediaRecorder (audio/mp4 on iOS Safari,
-audio/webm on Chrome) and posts the blob here; we forward it to OpenAI's
+audio/webm on Chrome) and posts the blob here; we forward it to a hosted
 transcription API and return plain text. Server-side so the API key stays
 private and quality beats on-device engines (Web Speech API is also broken
 in installed iOS PWAs, which is the primary dictation surface).
+
+Provider selection: Groq's Whisper Large v3 Turbo when GROQ_API_KEY is set
+(preferred - ~10x cheaper and faster), otherwise OpenAI's whisper-1. Both are
+pure speech-to-text Whisper models: unlike the previous gpt-4o-transcribe
+(a chat LLM), they cannot "answer" a spoken question instead of
+transcribing it.
 """
 import logging
 import os
@@ -18,10 +24,12 @@ from api.prompt_setting_defaults import get_default_prompt_setting
 
 logger = logging.getLogger(__name__)
 
+GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_TRANSCRIBE_MODEL = "whisper-large-v3-turbo"
 OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions"
-TRANSCRIBE_MODEL = "gpt-4o-transcribe"
+OPENAI_TRANSCRIBE_MODEL = "whisper-1"
 
-# OpenAI rejects >25MB; the client caps recordings at ~3 minutes anyway.
+# Both providers reject >25MB; the client caps recordings at ~3 minutes anyway.
 MAX_AUDIO_BYTES = 20 * 1024 * 1024
 # A tap-and-immediate-stop produces a few hundred bytes of container header —
 # not worth an API call.
@@ -43,10 +51,17 @@ async def handle_transcribe(request: web.Request) -> web.Response:
     if not get_user_email(request):
         return web.json_response({"error": "Not authenticated"}, status=401)
 
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+    openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if groq_key:
+        api_key, url, model, provider = (
+            groq_key, GROQ_TRANSCRIBE_URL, GROQ_TRANSCRIBE_MODEL, "Groq")
+    elif openai_key:
+        api_key, url, model, provider = (
+            openai_key, OPENAI_TRANSCRIBE_URL, OPENAI_TRANSCRIBE_MODEL, "OpenAI")
+    else:
         return web.json_response(
-            {"error": "Transcription is not configured (missing OPENAI_API_KEY)"},
+            {"error": "Transcription is not configured (set GROQ_API_KEY or OPENAI_API_KEY)"},
             status=503,
         )
 
@@ -71,7 +86,7 @@ async def handle_transcribe(request: web.Request) -> web.Response:
 
     form = aiohttp.FormData()
     form.add_field("file", audio, filename=filename, content_type=content_type)
-    form.add_field("model", TRANSCRIBE_MODEL)
+    form.add_field("model", model)
     vocab = _vocab_prompt()
     if vocab:
         form.add_field("prompt", vocab)
@@ -80,14 +95,14 @@ async def handle_transcribe(request: web.Request) -> web.Response:
         timeout = aiohttp.ClientTimeout(total=60)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                OPENAI_TRANSCRIBE_URL,
+                url,
                 data=form,
                 headers={"Authorization": f"Bearer {api_key}"},
             ) as resp:
                 payload = await resp.json(content_type=None)
                 if resp.status != 200:
                     message = (payload.get("error") or {}).get("message") or "Transcription failed"
-                    logger.error("[TRANSCRIBE] OpenAI %s: %s", resp.status, message)
+                    logger.error("[TRANSCRIBE] %s %s: %s", provider, resp.status, message)
                     return web.json_response({"error": message}, status=502)
     except Exception:
         logger.exception("[TRANSCRIBE] request failed")
