@@ -19,7 +19,7 @@ interface DictationButtonProps {
 }
 
 /** Mic toggle for composers: tap to record, tap again to stop + transcribe
- * (server-side, gpt-4o-transcribe). Hidden where MediaRecorder/getUserMedia
+ * (server-side, Deepgram Nova-3). Hidden where MediaRecorder/getUserMedia
  * are unavailable (e.g. plain HTTP). */
 export function DictationButton({ onText, disabled, className }: DictationButtonProps) {
   const { state, seconds, error, supported, toggle } = useDictation(onText);
