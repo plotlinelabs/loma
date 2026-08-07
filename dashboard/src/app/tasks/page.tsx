@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { RiAddLine, RiChatHistoryLine, RiMicLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line } from "@remixicon/react";
 import {
@@ -49,7 +49,6 @@ const POLL_INTERVAL_MS = 5000;
 export default function TasksPage() {
   const { status: sessionStatus } = useSession();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const isMobile = useIsMobile();
   const [board, setBoard] = useState<TasksBoardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,8 +71,10 @@ export default function TasksPage() {
   const busyRef = useRef(false);
 
   useEffect(() => {
-    if (searchParams.get("voice") === "1") setVoiceOpen(true);
-  }, [searchParams]);
+    if (new URLSearchParams(window.location.search).get("voice") === "1") {
+      setVoiceOpen(true);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isPushSupported()) return;
