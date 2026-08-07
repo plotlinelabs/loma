@@ -126,5 +126,5 @@ export function useDictation(onText: (text: string) => void) {
     setState("idle");
   }, [state]);
 
-  return { state, seconds, error, supported, toggle, cancel };
+  return { state, seconds, error, supported, start, toggle, cancel };
 }
