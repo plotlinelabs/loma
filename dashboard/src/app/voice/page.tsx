@@ -13,6 +13,8 @@ import {
 } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ModelPicker } from "@/components/composer/ModelPicker";
+import { useAgentModels } from "@/hooks/useAgentModels";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/hooks/useDictation";
 import {
@@ -50,6 +52,7 @@ export default function VoicePage() {
   const [speechOn, setSpeechOn] = useState(true);
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const { models, selectedModel, selectModel, loadState } = useAgentModels(undefined, false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const turnsRef = useRef<VoiceTurn[]>([]);
   turnsRef.current = turns;
@@ -86,7 +89,7 @@ export default function VoicePage() {
       setTurns((prev) => [...prev, { role: "user", content: trimmed }]);
       setThinking(true);
       try {
-        const res = await sendVoiceCommand(trimmed, history);
+        const res = await sendVoiceCommand(trimmed, history, selectedModel);
         setTurns((prev) => [
           ...prev,
           {
@@ -104,7 +107,7 @@ export default function VoicePage() {
         setThinking(false);
       }
     },
-    [speak],
+    [selectedModel, speak],
   );
 
   const dictation = useDictation((text) => void handleUtterance(text));
@@ -203,11 +206,20 @@ export default function VoicePage() {
 
       {/* Mic + text fallback */}
       <div className="shrink-0 border-t border-border px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mb-3 flex justify-center">
+          <ModelPicker
+            models={models}
+            selectedModel={selectedModel}
+            onSelect={selectModel}
+            loadState={loadState}
+            disabled={thinking || dictation.state === "recording"}
+          />
+        </div>
         <div className="flex flex-col items-center gap-2">
           <button
             type="button"
             onClick={dictation.toggle}
-            disabled={!dictation.supported || dictation.state === "transcribing" || thinking}
+            disabled={!selectedModel || !dictation.supported || dictation.state === "transcribing" || thinking}
             aria-label={dictation.state === "recording" ? "Stop recording" : "Start recording"}
             className={cn(
               "flex h-16 w-16 items-center justify-center rounded-full text-white shadow-lg transition-colors press-scale",
@@ -247,7 +259,7 @@ export default function VoicePage() {
             size="icon"
             variant="ghost"
             className="shrink-0"
-            disabled={!typed.trim() || thinking}
+            disabled={!selectedModel || !typed.trim() || thinking}
             aria-label="Send"
           >
             <RiSendPlaneFill size={18} />

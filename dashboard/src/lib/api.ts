@@ -1243,11 +1243,12 @@ export interface VoiceCommandResponse {
 export async function sendVoiceCommand(
   text: string,
   history: VoiceHistoryMessage[],
+  model: string,
 ): Promise<VoiceCommandResponse> {
   const res = await fetch(`${API_BASE}/api/voice/command`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, history }),
+    body: JSON.stringify({ text, history, model }),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `Voice command failed: ${res.status}`);

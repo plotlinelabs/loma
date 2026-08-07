@@ -32,7 +32,7 @@ export type ModelLoadState = "loading" | "ready" | "error";
  * task's chosen model) > saved preference > backend default. Selecting a
  * model persists it as the saved preference.
  */
-export function useAgentModels(initialModel?: string) {
+export function useAgentModels(initialModel?: string, chooseDefault = true) {
   const [models, setModels] = useState<AgentModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [loadState, setLoadState] = useState<ModelLoadState>("loading");
@@ -55,6 +55,8 @@ export function useAgentModels(initialModel?: string) {
         const initialIsValid = initialModel && list.some((model) => model.id === initialModel);
         const nextModel = initialIsValid
           ? initialModel
+          : !chooseDefault
+            ? ""
           : savedIsValid
             ? saved
             : catalog.default_model || list[0]?.id || "";
@@ -73,8 +75,7 @@ export function useAgentModels(initialModel?: string) {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialModel]);
+  }, [initialModel, chooseDefault]);
 
   const selectModel = (value: string) => {
     setSelectedModel(value);

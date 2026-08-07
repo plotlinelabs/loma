@@ -42,8 +42,6 @@ from api.task_routes import (
 
 logger = logging.getLogger(__name__)
 
-VOICE_LLM_MODEL = os.environ.get(
-    "VOICE_LLM_MODEL", "opencode-go/deepseek-v4-flash")
 VOICE_LLM_TIMEOUT_S = 45
 MAX_UTTERANCE_LEN = 4000
 MAX_HISTORY_TURNS = 24
@@ -160,7 +158,7 @@ Rules:
 - Phrase speech assuming the action succeeds (e.g. "Done — I've started that task.")."""
 
 
-async def _call_voice_llm(prompt: str) -> dict | None:
+async def _call_voice_llm(prompt: str, model: str) -> dict | None:
     """Run the utterance through the app's configured OpenCode runtime."""
     try:
         from agent.opencode_runtime import (
@@ -169,7 +167,7 @@ async def _call_voice_llm(prompt: str) -> dict | None:
             _request_json,
             _split_model,
         )
-        provider_id, model_id = _split_model(VOICE_LLM_MODEL)
+        provider_id, model_id = _split_model(model)
         session_id = await _create_session("Loma voice command")
         response = await _request_json(
             "POST",
@@ -452,8 +450,11 @@ async def handle_voice_command(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     text = (body.get("text") or "").strip()
+    model = (body.get("model") or "").strip()
     if not text:
         return web.json_response({"error": "Missing text"}, status=400)
+    if not model or "/" not in model:
+        return web.json_response({"error": "Select a model first"}, status=400)
     if len(text) > MAX_UTTERANCE_LEN:
         text = text[:MAX_UTTERANCE_LEN]
 
@@ -468,7 +469,7 @@ async def handle_voice_command(request: web.Request) -> web.Response:
     snapshot, refs = await _board_snapshot(db, user_email)
 
     parsed = await _call_voice_llm(
-        _llm_prompt(snapshot, board["lanes"], history, text))
+        _llm_prompt(snapshot, board["lanes"], history, text), model)
     if not parsed or not isinstance(parsed.get("speech"), str):
         return web.json_response({
             "speech": "Sorry, I had trouble processing that. Could you say it again?",

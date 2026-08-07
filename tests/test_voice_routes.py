@@ -202,7 +202,8 @@ async def test_handle_voice_command_executes_llm_action(monkeypatch):
     }))
 
     response = await voice_routes.handle_voice_command(
-        _FakeRequest({"text": "create a task to review invoices", "history": []}))
+        _FakeRequest({"text": "create a task to review invoices", "history": [],
+                      "model": "openai/gpt-5.5"}))
 
     assert response.status == 200
     import json
@@ -225,7 +226,8 @@ async def test_handle_voice_command_coerces_unknown_action(monkeypatch):
     }))
 
     response = await voice_routes.handle_voice_command(
-        _FakeRequest({"text": "delete everything", "history": []}))
+        _FakeRequest({"text": "delete everything", "history": [],
+                      "model": "openai/gpt-5.5"}))
 
     import json
     payload = json.loads(response.text)
@@ -246,7 +248,8 @@ async def test_call_voice_llm_uses_opencode_runtime(monkeypatch):
     })
     monkeypatch.setattr(runtime, "_request_json", request)
 
-    result = await voice_routes._call_voice_llm("How are you?")
+    result = await voice_routes._call_voice_llm(
+        "How are you?", "opencode-go/deepseek-v4-flash")
 
     assert result == {
         "speech": "I am doing well.",
@@ -257,3 +260,14 @@ async def test_call_voice_llm_uses_opencode_runtime(monkeypatch):
         "providerID": "opencode-go",
         "modelID": "deepseek-v4-flash",
     }
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_command_requires_model(monkeypatch):
+    monkeypatch.setattr(voice_routes, "get_db", lambda: _db())
+
+    response = await voice_routes.handle_voice_command(
+        _FakeRequest({"text": "what needs my attention?", "history": []}))
+
+    assert response.status == 400
+    assert "Select a model" in response.text
