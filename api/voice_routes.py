@@ -42,7 +42,8 @@ from api.task_routes import (
 
 logger = logging.getLogger(__name__)
 
-VOICE_LLM_MODEL = "claude-haiku-4-5-20251001"
+VOICE_LLM_MODEL = os.environ.get(
+    "VOICE_LLM_MODEL", "opencode-go/deepseek-v4-flash")
 VOICE_LLM_TIMEOUT_S = 45
 MAX_UTTERANCE_LEN = 4000
 MAX_HISTORY_TURNS = 24
@@ -160,28 +161,32 @@ Rules:
 
 
 async def _call_voice_llm(prompt: str) -> dict | None:
-    """Run the utterance through claude -p and parse the JSON reply."""
+    """Run the utterance through the app's configured OpenCode runtime."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
-            "--model", VOICE_LLM_MODEL,
-            "--max-turns", "1",
-            "--output-format", "json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        from agent.opencode_runtime import (
+            PROJECT_ROOT,
+            _create_session,
+            _request_json,
+            _split_model,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=VOICE_LLM_TIMEOUT_S)
-        if proc.returncode != 0:
-            logger.warning("[VOICE] LLM CLI failed (rc=%d): %s",
-                           proc.returncode, stderr.decode()[:500])
-            return None
-        output = stdout.decode().strip()
-        try:
-            envelope = json.loads(output)
-            raw = envelope.get("result", output)
-        except json.JSONDecodeError:
-            raw = output
+        provider_id, model_id = _split_model(VOICE_LLM_MODEL)
+        session_id = await _create_session("Loma voice command")
+        response = await _request_json(
+            "POST",
+            f"/session/{session_id}/message",
+            json_body={
+                "model": {"providerID": provider_id, "modelID": model_id},
+                "system": "Return only the JSON object requested by the user prompt.",
+                "parts": [{"type": "text", "text": prompt}],
+            },
+            params={"directory": str(PROJECT_ROOT)},
+            timeout=VOICE_LLM_TIMEOUT_S,
+        )
+        raw = "".join(
+            part.get("text", "")
+            for part in response.get("parts", [])
+            if isinstance(part, dict) and part.get("type") == "text"
+        ).strip()
         # The model may wrap the JSON in code fences or prose — take the
         # outermost object.
         match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -189,9 +194,6 @@ async def _call_voice_llm(prompt: str) -> dict | None:
             return None
         parsed = json.loads(match.group(0))
         return parsed if isinstance(parsed, dict) else None
-    except asyncio.TimeoutError:
-        logger.warning("[VOICE] LLM call timed out")
-        return None
     except Exception as e:
         logger.warning("[VOICE] LLM call failed: %s", e)
         return None

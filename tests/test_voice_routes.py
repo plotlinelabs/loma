@@ -231,3 +231,29 @@ async def test_handle_voice_command_coerces_unknown_action(monkeypatch):
     payload = json.loads(response.text)
     assert payload["action"] == {"type": "none"}
     assert payload["executed"] is False
+
+
+@pytest.mark.asyncio
+async def test_call_voice_llm_uses_opencode_runtime(monkeypatch):
+    import agent.opencode_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_create_session", AsyncMock(return_value="session-1"))
+    request = AsyncMock(return_value={
+        "parts": [{
+            "type": "text",
+            "text": '{"speech":"I am doing well.","action":{"type":"none"}}',
+        }],
+    })
+    monkeypatch.setattr(runtime, "_request_json", request)
+
+    result = await voice_routes._call_voice_llm("How are you?")
+
+    assert result == {
+        "speech": "I am doing well.",
+        "action": {"type": "none"},
+    }
+    body = request.await_args.kwargs["json_body"]
+    assert body["model"] == {
+        "providerID": "opencode-go",
+        "modelID": "deepseek-v4-flash",
+    }
