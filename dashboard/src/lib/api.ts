@@ -1254,3 +1254,16 @@ export async function sendVoiceCommand(
   if (!res.ok) throw new Error(body.error || `Voice command failed: ${res.status}`);
   return body;
 }
+
+export async function generateVoiceSpeech(text: string, voice: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/api/voice/speech`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Speech generation failed: ${res.status}`);
+  }
+  return res.blob();
+}

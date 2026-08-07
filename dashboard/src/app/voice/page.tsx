@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { useDictation } from "@/hooks/useDictation";
 import {
   fetchTasksBoard,
+  generateVoiceSpeech,
   sendVoiceCommand,
   type Task,
   type VoiceAction,
@@ -44,12 +45,19 @@ interface VoiceTurn extends VoiceHistoryMessage {
 }
 
 const VOICE_HISTORY_KEY = "loma.voice.history";
+const VOICE_CHOICE_KEY = "loma.voice.choice";
+const VOICES = [
+  { id: "thalia", label: "Thalia · warm" },
+  { id: "apollo", label: "Apollo · confident" },
+  { id: "andromeda", label: "Andromeda · expressive" },
+  { id: "orion", label: "Orion · calm" },
+];
 
 /** Voice Mode — a hands-free, connected session over the tasks board.
  *
  * Push-to-talk: the mic button records (existing dictation pipeline →
  * /api/transcribe), the transcript goes to /api/voice/command, and the short
- * reply is spoken with the browser's speechSynthesis. A text composer is the
+ * reply is spoken with Deepgram Aura 2. A text composer is the
  * no-mic fallback (desktop, permissions denied, tests). */
 export default function VoicePage() {
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
@@ -58,6 +66,7 @@ export default function VoicePage() {
   const [connected, setConnected] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [typed, setTyped] = useState("");
+  const [voice, setVoice] = useState("thalia");
   const [error, setError] = useState<string | null>(null);
   const { models, selectedModel, selectModel, loadState } = useAgentModels(undefined, false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -67,8 +76,12 @@ export default function VoicePage() {
   speechOnRef.current = speechOn;
   const connectedRef = useRef(connected);
   connectedRef.current = connected;
+  const thinkingRef = useRef(thinking);
+  thinkingRef.current = thinking;
   const taskStatesRef = useRef<Map<string, string> | null>(null);
   const dictationStartRef = useRef<() => void>(() => {});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -77,37 +90,63 @@ export default function VoicePage() {
     } catch {
       sessionStorage.removeItem(VOICE_HISTORY_KEY);
     }
+    const savedVoice = localStorage.getItem(VOICE_CHOICE_KEY);
+    if (savedVoice && VOICES.some(({ id }) => id === savedVoice)) setVoice(savedVoice);
   }, []);
 
   useEffect(() => {
     if (turns.length) sessionStorage.setItem(VOICE_HISTORY_KEY, JSON.stringify(turns.slice(-24)));
   }, [turns]);
 
-  const speak = useCallback((text: string) => {
-    if (!speechOnRef.current || typeof speechSynthesis === "undefined") {
+  const stopSpeech = useCallback(() => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    audioUrlRef.current = null;
+    setSpeaking(false);
+  }, []);
+
+  const speak = useCallback(async (text: string) => {
+    if (!speechOnRef.current) {
       if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 250);
       return;
     }
     try {
-      speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.05;
-      utterance.onstart = () => setSpeaking(true);
-      utterance.onend = () => {
-        setSpeaking(false);
-        if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 250);
+      stopSpeech();
+      const blob = await generateVoiceSpeech(text, voice);
+      if (!speechOnRef.current) return;
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audioUrlRef.current = url;
+      audio.onplay = () => {
+        setSpeaking(true);
+        // In hands-free mode the mic remains active during playback. Browser
+        // echo cancellation prevents Loma's own voice from triggering VAD.
+        if (connectedRef.current) dictationStartRef.current();
       };
-      utterance.onerror = () => setSpeaking(false);
-      speechSynthesis.speak(utterance);
+      audio.onended = () => {
+        stopSpeech();
+        // If recording could not start while audio played, try once more now.
+        if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
+      };
+      audio.onerror = () => {
+        stopSpeech();
+        if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
+      };
+      await audio.play();
     } catch {
-      // TTS is best-effort — the reply is on screen either way.
+      stopSpeech();
+      setError("Natural voice playback failed");
+      if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
     }
-  }, []);
+  }, [stopSpeech, voice]);
 
   // Leaving the page stops any in-flight speech.
   useEffect(
     () => () => {
-      if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+      audioRef.current?.pause();
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
     },
     [],
   );
@@ -121,6 +160,7 @@ export default function VoicePage() {
       const history = turnsRef.current.map(({ role, content }) => ({ role, content }));
       setTurns((prev) => [...prev, { role: "user", content: trimmed }]);
       setThinking(true);
+      thinkingRef.current = true;
       try {
         const res = await sendVoiceCommand(trimmed, history, selectedModel);
         setTurns((prev) => [
@@ -132,6 +172,8 @@ export default function VoicePage() {
             executed: res.executed,
           },
         ]);
+        setThinking(false);
+        thinkingRef.current = false;
         speak(res.speech);
       } catch (e) {
         const message = e instanceof Error ? e.message : "Something went wrong";
@@ -139,14 +181,21 @@ export default function VoicePage() {
         if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 250);
       } finally {
         setThinking(false);
+        thinkingRef.current = false;
       }
     },
     [selectedModel, speak],
   );
 
-  const dictation = useDictation((text) => void handleUtterance(text));
+  const dictation = useDictation((text) => void handleUtterance(text), {
+    autoStop: true,
+    silenceMs: 1200,
+    onSpeechStart: () => {
+      if (audioRef.current && !audioRef.current.paused) stopSpeech();
+    },
+  });
   dictationStartRef.current = () => {
-    if (!thinking && selectedModel && dictation.supported && dictation.state === "idle") {
+    if (!thinkingRef.current && selectedModel && dictation.supported && dictation.state === "idle") {
       void dictation.start();
     }
   };
@@ -221,13 +270,12 @@ export default function VoicePage() {
             const next = !connected;
             setConnected(next);
             if (next) {
-              if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+              stopSpeech();
               setSpeaking(false);
               window.setTimeout(() => dictationStartRef.current(), 0);
             } else {
               dictation.cancel();
-              if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
-              setSpeaking(false);
+              stopSpeech();
             }
           }}
         >
@@ -239,7 +287,7 @@ export default function VoicePage() {
           size="icon"
           className="shrink-0"
           onClick={() => {
-            if (speechOn && typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+            if (speechOn) stopSpeech();
             setSpeechOn((on) => !on);
           }}
           aria-label={speechOn ? "Mute spoken replies" : "Unmute spoken replies"}
@@ -302,7 +350,7 @@ export default function VoicePage() {
 
       {/* Mic + text fallback */}
       <div className="shrink-0 border-t border-border px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
-        <div className="mb-3 flex justify-center">
+        <div className="mb-3 flex flex-wrap justify-center gap-2">
           <ModelPicker
             models={models}
             selectedModel={selectedModel}
@@ -310,14 +358,27 @@ export default function VoicePage() {
             loadState={loadState}
             disabled={thinking || dictation.state === "recording"}
           />
+          <select
+            aria-label="Voice"
+            value={voice}
+            onChange={(event) => {
+              setVoice(event.target.value);
+              localStorage.setItem(VOICE_CHOICE_KEY, event.target.value);
+            }}
+            disabled={speaking}
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+          >
+            {VOICES.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
         </div>
         <div className="flex flex-col items-center gap-2">
           <button
             type="button"
             onClick={() => {
-              if (speaking && typeof speechSynthesis !== "undefined") {
-                speechSynthesis.cancel();
-                setSpeaking(false);
+              if (speaking) {
+                stopSpeech();
                 void dictation.start();
                 return;
               }
@@ -338,7 +399,7 @@ export default function VoicePage() {
           </button>
           <span className="text-xs text-muted-foreground">
             {dictation.supported ? (
-              dictation.state === "recording" ? `${micState} · ${dictation.seconds}s` : micState
+              dictation.state === "recording" ? `${micState.replace("tap to stop", "stops after silence")} · ${dictation.seconds}s` : micState
             ) : (
               "No microphone available — type instead"
             )}
