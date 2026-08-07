@@ -191,11 +191,21 @@ export default function TasksPage() {
       <div className="pwa-header-offset flex items-center justify-between">
         <h1 className="text-lg font-semibold">Tasks</h1>
         <div className="flex items-center gap-1">
+          <Button
+            variant={voiceOpen ? "secondary" : "outline"}
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setVoiceOpen(true)}
+          >
+            <RiMicLine className={voiceOpen ? "h-4 w-4 text-emerald-500" : "h-4 w-4"} />
+            <span className="hidden sm:inline">Voice</span>
+          </Button>
           {board && board.tags.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant={activeTagFilterCount ? "secondary" : "ghost"} size="sm">
-                  <RiFilter3Line className="h-4 w-4" /> Tags{activeTagFilterCount ? ` (${activeTagFilterCount})` : ""}
+                  <RiFilter3Line className="h-4 w-4" />
+                  <span className="hidden sm:inline">Filters</span>{activeTagFilterCount ? ` (${activeTagFilterCount})` : ""}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-48">
@@ -233,15 +243,6 @@ export default function TasksPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button
-            variant={voiceOpen ? "secondary" : "outline"}
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setVoiceOpen(true)}
-          >
-            <RiMicLine className={voiceOpen ? "h-4 w-4 text-emerald-500" : "h-4 w-4"} />
-            <span className="hidden sm:inline">Voice</span>
-          </Button>
           <Button size="sm" onClick={() => void openNewTaskDrawer()}>
             <RiAddLine className="h-4 w-4" />
             New task
