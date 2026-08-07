@@ -5,6 +5,7 @@ import {
   RiCloseLine,
   RiCheckboxCircleFill,
   RiRadioButtonLine,
+  RiRestartLine,
   RiMicLine,
   RiSendPlaneFill,
   RiStopFill,
@@ -88,6 +89,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
   const speechQueueRef = useRef<string[]>([]);
   const speechGenerationRef = useRef(0);
   const pumpingSpeechRef = useRef(false);
+  const sessionGenerationRef = useRef(0);
 
   useEffect(() => {
     try {
@@ -176,6 +178,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
       // Silence detection and a manual stop can race. Only one voice command
       // may be submitted until the current request has settled.
       if (!trimmed || submittingRef.current) return;
+      const sessionGeneration = sessionGenerationRef.current;
       submittingRef.current = true;
       setError(null);
       // History = what the model saw before this utterance.
@@ -185,6 +188,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
       thinkingRef.current = true;
       try {
         const res = await sendVoiceCommand(trimmed, history, selectedModel);
+        if (sessionGeneration !== sessionGenerationRef.current) return;
         setTurns((prev) => [
           ...prev,
           {
@@ -199,13 +203,16 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
         speak(res.speech);
         if (res.executed) onBoardChange?.();
       } catch (e) {
+        if (sessionGeneration !== sessionGenerationRef.current) return;
         const message = e instanceof Error ? e.message : "Something went wrong";
         setError(message);
         if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 250);
       } finally {
-        submittingRef.current = false;
-        setThinking(false);
-        thinkingRef.current = false;
+        if (sessionGeneration === sessionGenerationRef.current) {
+          submittingRef.current = false;
+          setThinking(false);
+          thinkingRef.current = false;
+        }
       }
     },
     [onBoardChange, selectedModel, speak],
@@ -276,6 +283,21 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
               ? "Connected · listening resumes after each reply"
               : "Tap to speak";
 
+  const clearVoiceChat = () => {
+    sessionGenerationRef.current += 1;
+    submittingRef.current = false;
+    thinkingRef.current = false;
+    dictation.cancel();
+    stopSpeech();
+    taskStatesRef.current = null;
+    sessionStorage.removeItem(VOICE_HISTORY_KEY);
+    setTurns([]);
+    setTyped("");
+    setThinking(false);
+    setError(null);
+    if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Header */}
@@ -289,6 +311,17 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
             <p className="truncate text-[11px] text-muted-foreground">Live with your task board</p>
           </div>
         </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0 gap-1.5 px-2 text-xs"
+          onClick={clearVoiceChat}
+          aria-label="Clear voice chat and start fresh"
+          title="New voice chat"
+        >
+          <RiRestartLine size={16} />
+          <span className="hidden sm:inline">New chat</span>
+        </Button>
         <Button
           variant={connected ? "secondary" : "ghost"}
           size="icon"
