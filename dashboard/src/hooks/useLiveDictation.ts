@@ -7,7 +7,7 @@ export type LiveDictationState = "idle" | "connecting" | "recording";
 
 export function useLiveDictation(
   onText: (text: string) => void,
-  onSpeechStart?: () => void,
+  acceptTranscript?: (text: string) => boolean,
 ) {
   const [state, setState] = useState<LiveDictationState>("idle");
   const [seconds, setSeconds] = useState(0);
@@ -20,12 +20,12 @@ export function useLiveDictation(
   const startingRef = useRef(false);
   const transcriptRef = useRef("");
   const onTextRef = useRef(onText);
-  const onSpeechStartRef = useRef(onSpeechStart);
+  const acceptTranscriptRef = useRef(acceptTranscript);
 
   useEffect(() => {
     onTextRef.current = onText;
-    onSpeechStartRef.current = onSpeechStart;
-  }, [onText, onSpeechStart]);
+    acceptTranscriptRef.current = acceptTranscript;
+  }, [onText, acceptTranscript]);
 
   useEffect(() => {
     const available = typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia && typeof WebSocket !== "undefined";
@@ -69,12 +69,16 @@ export function useLiveDictation(
       socketRef.current = socket;
       socket.onmessage = (event) => {
         const message = JSON.parse(event.data);
-        if (message.type === "SpeechStarted") {
-          onSpeechStartRef.current?.();
-          return;
-        }
         if (message.type === "Results") {
           const text = message.channel?.alternatives?.[0]?.transcript?.trim();
+          // Do not treat Deepgram's raw SpeechStarted event as a barge-in. The
+          // device speaker can trigger it before echo cancellation settles.
+          // Wait for an actual transcript and let the caller reject text that
+          // matches the currently playing assistant response.
+          if (text && acceptTranscriptRef.current?.(text) === false) {
+            if (message.speech_final) transcriptRef.current = "";
+            return;
+          }
           if (text && message.is_final) transcriptRef.current = `${transcriptRef.current} ${text}`.trim();
           if (message.speech_final && transcriptRef.current) submit();
           return;

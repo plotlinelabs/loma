@@ -54,6 +54,21 @@ const VOICES = [
   { id: "antoni", label: "Antoni · calm" },
 ];
 
+function normalizedWords(text: string) {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+}
+
+/** Returns true when the microphone transcript is probably speaker playback.
+ * Browser acoustic echo cancellation removes most output, while this second
+ * guard catches the assistant words that still reach Deepgram on loudspeaker. */
+function isPlaybackEcho(transcript: string, spokenText: string) {
+  const heard = normalizedWords(transcript);
+  const spoken = new Set(normalizedWords(spokenText));
+  if (!heard.length || !spoken.size) return true;
+  const matching = heard.filter((word) => spoken.has(word)).length;
+  return matching / heard.length >= 0.7;
+}
+
 /** Voice Mode — a hands-free, connected session over the tasks board.
  *
  * Push-to-talk: the mic button records (existing dictation pipeline →
@@ -90,6 +105,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
   const speechGenerationRef = useRef(0);
   const pumpingSpeechRef = useRef(false);
   const sessionGenerationRef = useRef(0);
+  const spokenTextRef = useRef("");
 
   useEffect(() => {
     try {
@@ -116,6 +132,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
     audioRef.current = null;
     if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
     audioUrlRef.current = null;
+    spokenTextRef.current = "";
     setSpeaking(false);
   }, []);
 
@@ -132,6 +149,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
       while (speechQueueRef.current.length && generation === speechGenerationRef.current) {
         try {
           const next = speechQueueRef.current.shift()!;
+          spokenTextRef.current = next;
           const blob = await generateVoiceSpeech(next, voice, voiceSpeed);
           if (generation !== speechGenerationRef.current || !speechOnRef.current) break;
           const url = URL.createObjectURL(blob);
@@ -156,6 +174,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
         }
       }
       if (generation === speechGenerationRef.current) {
+        spokenTextRef.current = "";
         pumpingSpeechRef.current = false;
         setSpeaking(false);
         if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
@@ -218,8 +237,14 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
     [onBoardChange, selectedModel, speak],
   );
 
-  const dictation = useLiveDictation((text) => void handleUtterance(text), () => {
-      if (audioRef.current && !audioRef.current.paused) stopSpeech();
+  const dictation = useLiveDictation((text) => void handleUtterance(text), (transcript) => {
+    if (!audioRef.current || audioRef.current.paused) return true;
+    if (isPlaybackEcho(transcript, spokenTextRef.current)) return false;
+    // A transcript that does not resemble the assistant output is a real
+    // barge-in. Stop playback only after those words exist, rather than on a
+    // noise-level event that the speaker itself can trigger.
+    stopSpeech();
+    return true;
   });
   dictationStartRef.current = () => {
     if (!thinkingRef.current && selectedModel && dictation.supported && dictation.state === "idle") {
