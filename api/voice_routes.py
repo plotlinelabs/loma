@@ -54,6 +54,7 @@ FOLLOWUP_CONTEXT_CHARS = 1500
 VOICE_ACTIONS = (
     "none", "create_task", "start_task", "add_input",
     "mark_done", "park_task", "set_priority", "set_deadline",
+    "open_task", "close_task",
 )
 
 _SNAPSHOT_PROJECTION = {
@@ -138,7 +139,7 @@ Recent voice conversation:
 User's new utterance: {utterance}
 
 Reply with ONLY a JSON object, no other text:
-{{"speech": "<what to say out loud, 1-3 short sentences>", "actions": [{{"type": "<one of: create_task, start_task, add_input, mark_done, park_task, set_priority, set_deadline>", ...}}]}}
+{{"speech": "<what to say out loud, 1-3 short sentences>", "actions": [{{"type": "<one of: create_task, start_task, add_input, mark_done, park_task, set_priority, set_deadline, open_task, close_task>", ...}}]}}
 
 Action payloads (include only the fields for the chosen type):
 - For a question that needs no board change, return an empty actions array.
@@ -149,6 +150,8 @@ Action payloads (include only the fields for the chosen type):
 - park_task: {{"ref": "<ref>", "lane": "<lane id>"}} — shelve an active task back to a staging lane (lane optional).
 - set_priority: {{"ref": "<ref>", "priority": "low|medium|high|urgent|null"}}
 - set_deadline: {{"ref": "<ref>", "deadline": "YYYY-MM-DD or null"}}
+- open_task: {{"ref": "<ref>"}} — open that task's chat drawer beside Voice Mode so the user can see it.
+- close_task: {{}} — close the currently open task chat drawer. Use this when the user says "close it", "close the task", or similar while referring to the open preview.
 
 Rules:
 - "ref" MUST be copied exactly from the snapshot. Never invent refs.
@@ -258,6 +261,8 @@ async def _execute_action(db, user_email: str, action: dict,
     action_type = action.get("type") or "none"
     if action_type == "none":
         return True, None
+    if action_type == "close_task":
+        return True, None
 
     now = datetime.now(timezone.utc)
 
@@ -321,6 +326,13 @@ async def _execute_action(db, user_email: str, action: dict,
     })
     if not conversation:
         return False, "I couldn't find that task anymore."
+
+    if action_type == "open_task":
+        # Return the resolved id to the authenticated client. This avoids a
+        # second fuzzy match in the UI and only exposes a task already verified
+        # to belong to this user.
+        action["conversation_id"] = cid
+        return True, None
 
     status = conversation.get("status")
     task_status = conversation.get("task_status")

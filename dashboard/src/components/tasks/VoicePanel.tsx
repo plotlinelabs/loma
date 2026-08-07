@@ -37,6 +37,8 @@ const ACTION_LABELS: Record<string, string> = {
   park_task: "Task parked",
   set_priority: "Priority updated",
   set_deadline: "Deadline updated",
+  open_task: "Task opened",
+  close_task: "Task closed",
 };
 
 interface VoiceTurn extends VoiceHistoryMessage {
@@ -76,7 +78,7 @@ function isPlaybackEcho(transcript: string, spokenText: string) {
  * Deepgram live endpointing), and the short reply is spoken with ElevenLabs.
  * A text composer is the
  * no-mic fallback (desktop, permissions denied, tests). */
-export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; onBoardChange?: () => void }) {
+export function VoicePanel({ onClose, onBoardChange, onTaskAction }: { onClose: () => void; onBoardChange?: () => void; onTaskAction?: (action: VoiceAction) => void }) {
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
   const [thinking, setThinking] = useState(false);
   const [speechOn, setSpeechOn] = useState(true);
@@ -220,6 +222,9 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
         setThinking(false);
         thinkingRef.current = false;
         speak(res.speech);
+        res.actions.forEach((action) => {
+          if (action.type === "open_task" || action.type === "close_task") onTaskAction?.(action);
+        });
         if (res.executed) onBoardChange?.();
       } catch (e) {
         if (sessionGeneration !== sessionGenerationRef.current) return;
@@ -234,7 +239,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
         }
       }
     },
-    [onBoardChange, selectedModel, speak],
+    [onBoardChange, onTaskAction, selectedModel, speak],
   );
 
   const dictation = useLiveDictation((text) => void handleUtterance(text), (transcript) => {

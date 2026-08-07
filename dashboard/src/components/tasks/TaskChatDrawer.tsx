@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
+import { RiCloseLine, RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -106,50 +106,78 @@ export function TaskChatDrawer({
   open,
   onOpenChange,
   onTaskChange,
+  embedded = false,
 }: {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onTaskChange?: (task: Task) => void;
+  embedded?: boolean;
 }) {
+  const content = (
+    <>
+      <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
+        {task && (
+          <EditableTaskTitle
+            key={`${task.conversation_id}:${task.title || task.prompt}`}
+            task={task}
+            onTaskChange={onTaskChange}
+          />
+        )}
+        {embedded && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground"
+            onClick={() => onOpenChange(false)}
+            aria-label="Close task drawer"
+          >
+            <RiCloseLine size={16} />
+          </Button>
+        )}
+        {task && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" asChild>
+                <a
+                  href={`${basePath}/chat?continue=${task.conversation_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Open in full tab"
+                >
+                  <RiExternalLinkLine size={16} />
+                </a>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Open in full tab</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      {task && (
+        <DrawerConversation
+          key={task.conversation_id}
+          conversationId={task.conversation_id}
+        />
+      )}
+    </>
+  );
+
+  if (embedded) {
+    if (!open || !task) return null;
+    return (
+      <aside className="flex min-w-[420px] flex-1 flex-col overflow-hidden border-l border-border bg-background">
+        {content}
+      </aside>
+    );
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(1100px,92vw)]"
       >
-        <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
-          {task && (
-            <EditableTaskTitle
-              key={`${task.conversation_id}:${task.title || task.prompt}`}
-              task={task}
-              onTaskChange={onTaskChange}
-            />
-          )}
-          {task && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" className="text-muted-foreground" asChild>
-                  <a
-                    href={`${basePath}/chat?continue=${task.conversation_id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="Open in full tab"
-                  >
-                    <RiExternalLinkLine size={16} />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Open in full tab</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        {task && (
-          <DrawerConversation
-            key={task.conversation_id}
-            conversationId={task.conversation_id}
-          />
-        )}
+        {content}
       </SheetContent>
     </Sheet>
   );

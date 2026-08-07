@@ -19,6 +19,7 @@ import {
   updateTask,
   type Task,
   type TasksBoardResponse,
+  type VoiceAction,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -184,6 +185,21 @@ export default function TasksPage() {
     for (const lane of board.lanes) laneCounts[lane.id] = board.counts[lane.id] ?? 0;
   }
   const activeTagFilterCount = includedTagIds.length + excludedTagIds.length;
+  const taskDrawerEmbedded = voiceOpen && !isMobile;
+
+  const handleVoiceTaskAction = useCallback((action: VoiceAction) => {
+    if (action.type === "close_task") {
+      setChatDrawerOpen(false);
+      return;
+    }
+    if (action.type !== "open_task") return;
+    const conversationId = typeof action.conversation_id === "string" ? action.conversation_id : "";
+    const task = board?.tasks.find((candidate) => candidate.conversation_id === conversationId);
+    if (task) {
+      setChatTask(task);
+      setChatDrawerOpen(true);
+    }
+  }, [board]);
 
   return (
     <div className="relative flex h-full min-h-0 overflow-hidden">
@@ -384,27 +400,49 @@ export default function TasksPage() {
         laneCounts={laneCounts}
         onSaved={refresh}
       />
-      <TaskChatDrawer
-        task={chatTask}
-        open={chatDrawerOpen}
-        onOpenChange={(open) => {
-          setChatDrawerOpen(open);
-          if (!open) refresh();
-        }}
-        onTaskChange={(updatedTask) => {
-          setChatTask(updatedTask);
-          setBoard((current) => current ? {
-            ...current,
-            tasks: current.tasks.map((task) =>
-              task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
-            ),
-          } : current);
-        }}
-      />
+      {!taskDrawerEmbedded && (
+        <TaskChatDrawer
+          task={chatTask}
+          open={chatDrawerOpen}
+          onOpenChange={(open) => {
+            setChatDrawerOpen(open);
+            if (!open) refresh();
+          }}
+          onTaskChange={(updatedTask) => {
+            setChatTask(updatedTask);
+            setBoard((current) => current ? {
+              ...current,
+              tasks: current.tasks.map((task) =>
+                task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
+              ),
+            } : current);
+          }}
+        />
+      )}
       </div>
+      {taskDrawerEmbedded && (
+        <TaskChatDrawer
+          task={chatTask}
+          open={chatDrawerOpen}
+          onOpenChange={(open) => {
+            setChatDrawerOpen(open);
+            if (!open) refresh();
+          }}
+          onTaskChange={(updatedTask) => {
+            setChatTask(updatedTask);
+            setBoard((current) => current ? {
+              ...current,
+              tasks: current.tasks.map((task) =>
+                task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
+              ),
+            } : current);
+          }}
+          embedded
+        />
+      )}
       {voiceOpen && (
         <aside className="absolute inset-0 z-40 bg-background md:static md:z-auto md:w-[400px] md:shrink-0 md:border-l md:border-border">
-          <VoicePanel onClose={() => setVoiceOpen(false)} onBoardChange={refresh} />
+          <VoicePanel onClose={() => setVoiceOpen(false)} onBoardChange={refresh} onTaskAction={handleVoiceTaskAction} />
         </aside>
       )}
     </div>

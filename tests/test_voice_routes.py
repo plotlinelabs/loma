@@ -150,6 +150,32 @@ async def test_unknown_ref_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_open_task_resolves_owned_conversation_for_ui():
+    conversation = {
+        "conversation_id": "task-123456",
+        "metadata": {"user_name": "owner@example.com"},
+        "status": "completed",
+        "task_status": "active",
+    }
+    db = _db(conversation)
+    action = {"type": "open_task", "ref": "task-123"}
+
+    ok, override = await voice_routes._execute_action(
+        db, "owner@example.com", action, refs={"task-123": "task-123456"})
+
+    assert ok and override is None
+    assert action["conversation_id"] == "task-123456"
+
+
+@pytest.mark.asyncio
+async def test_close_task_does_not_require_a_task_reference():
+    ok, override = await voice_routes._execute_action(
+        _db(), "owner@example.com", {"type": "close_task"}, refs={})
+
+    assert ok and override is None
+
+
+@pytest.mark.asyncio
 async def test_set_priority_validates_values():
     conversation = {
         "conversation_id": "task-1",
