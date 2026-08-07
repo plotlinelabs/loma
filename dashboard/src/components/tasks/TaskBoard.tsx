@@ -28,12 +28,14 @@ interface TaskBoardProps {
   onEditDraft: (task: Task) => void;
   /** Open the new-task dialog with a lane preselected. */
   onAddTask: (laneId: string) => void;
+  /** Open a non-draft task's chat in the side drawer instead of a new tab. */
+  onOpenChat?: (task: Task) => void;
   onError: (message: string | null) => void;
   includedTagIds: string[];
   excludedTagIds: string[];
 }
 
-export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, includedTagIds, excludedTagIds }: TaskBoardProps) {
+export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds }: TaskBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const { models } = useAgentModels();
 
@@ -46,7 +48,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
     laneIds, columns, tasksByColumn,
     startTask, markDone, reopen, moveToLane, reorderInColumn,
     removeFromBoard, deleteDraft, forkTask, openTask, setTaskModel, setTaskPriority, setTaskDeadline, setTaskTags, createAndAssignTag,
-  } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, includedTagIds, excludedTagIds });
+  } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, onOpenChat, includedTagIds, excludedTagIds });
 
   const resolveColumn = (overId: string): string | null => {
     if (tasksByColumn[overId] !== undefined) return overId;

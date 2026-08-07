@@ -38,6 +38,7 @@ import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
 import { QuickAddTask } from "@/components/tasks/QuickAddTask";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { AddChatDialog } from "@/components/tasks/AddChatDialog";
+import { TaskChatDrawer } from "@/components/tasks/TaskChatDrawer";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -55,6 +56,10 @@ export default function TasksPage() {
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
+  // Desktop: clicking a non-draft card opens its chat in a side drawer so the
+  // board keeps its tab. Task is kept on close for the exit animation.
+  const [chatTask, setChatTask] = useState<Task | null>(null);
+  const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
   const [includedTagIds, setIncludedTagIds] = useState<string[]>([]);
   const [excludedTagIds, setExcludedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -295,6 +300,7 @@ export default function TasksPage() {
               onRefresh={refresh}
               onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
               onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+              onOpenChat={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
               onError={setError}
               includedTagIds={includedTagIds}
               excludedTagIds={excludedTagIds}
@@ -335,6 +341,14 @@ export default function TasksPage() {
         onOpenChange={setSettingsOpen}
         laneCounts={laneCounts}
         onSaved={refresh}
+      />
+      <TaskChatDrawer
+        task={chatTask}
+        open={chatDrawerOpen}
+        onOpenChange={(open) => {
+          setChatDrawerOpen(open);
+          if (!open) refresh();
+        }}
       />
     </div>
   );

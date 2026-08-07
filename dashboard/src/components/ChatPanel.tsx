@@ -544,6 +544,7 @@ export default function ChatPanel({
   autoSend,
   systemContext,
   initialStatus,
+  draftStorageKey,
   activeArtifactId,
   onArtifactOpen,
   onArtifactClose,
@@ -562,6 +563,9 @@ export default function ChatPanel({
   autoSend?: boolean;
   systemContext?: string;
   initialStatus?: string;
+  /** When set, unsent composer text is persisted to localStorage under this
+   * key and restored on mount — an accidental close never loses a draft. */
+  draftStorageKey?: string;
   /** Currently active artifact ID (for highlighting the active card) */
   activeArtifactId?: string | null;
   /** Callback when user clicks an artifact card */
@@ -663,6 +667,30 @@ export default function ChatPanel({
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Restore an unsent draft (e.g. the task drawer was closed by mistake).
+  // Server-provided prompts (staged board drafts) win over the local draft.
+  useEffect(() => {
+    if (!draftStorageKey || initialPrompt) return;
+    try {
+      const saved = window.localStorage.getItem(draftStorageKey);
+      if (saved) setInput((prev) => prev || saved);
+    } catch {
+      // localStorage unavailable (private mode) — drafts just don't persist.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftStorageKey]);
+
+  // Persist unsent composer text; sending (or clearing) removes the draft.
+  useEffect(() => {
+    if (!draftStorageKey) return;
+    try {
+      if (input.trim()) window.localStorage.setItem(draftStorageKey, input);
+      else window.localStorage.removeItem(draftStorageKey);
+    } catch {
+      // Ignore quota/private-mode failures.
+    }
+  }, [input, draftStorageKey]);
 
   useEffect(() => {
     if (!isStreaming) {
