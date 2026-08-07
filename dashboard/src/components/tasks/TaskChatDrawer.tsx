@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RiCloseLine, RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
+import { RiArrowUpLine, RiCloseLine, RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -10,6 +10,8 @@ import ChatWithArtifacts from "@/components/ChatWithArtifacts";
 import { rebuildItemsFromConversation, type ChatItem } from "@/components/ChatPanel";
 import type { Artifact } from "@/components/ArtifactViewer";
 import { basePath, fetchConversation, updateTask, type ChatFile, type Task } from "@/lib/api";
+
+const HISTORY_BATCH_SIZE = 40;
 
 /** Loads and renders one conversation inside the drawer. Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
@@ -22,6 +24,8 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
   const [draftPrompt, setDraftPrompt] = useState<string | null>(null);
   const [draftFiles, setDraftFiles] = useState<ChatFile[] | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [historyItemCount, setHistoryItemCount] = useState(0);
+  const [visibleHistoryLimit, setVisibleHistoryLimit] = useState(HISTORY_BATCH_SIZE);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +50,7 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
             data.artifacts,
           );
           setInitialItems(items);
+          setHistoryItemCount(items.length);
           setInitialArtifacts(artifacts);
           setInitialStatus(data.conversation.status);
         }
@@ -84,6 +89,18 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {historyItemCount > visibleHistoryLimit && (
+        <div className="flex flex-shrink-0 justify-center border-b border-border bg-muted/30 px-3 py-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setVisibleHistoryLimit((count) => count + HISTORY_BATCH_SIZE)}
+          >
+            <RiArrowUpLine size={15} />
+            Load earlier messages ({historyItemCount - visibleHistoryLimit} remaining)
+          </Button>
+        </div>
+      )}
       <ChatWithArtifacts
         initialItems={initialItems}
         initialArtifacts={initialArtifacts}
@@ -93,6 +110,7 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
         initialModel={model || undefined}
         initialStatus={initialStatus}
         draftStorageKey={`loma-task-draft-${conversationId}`}
+        historyItemLimit={visibleHistoryLimit}
       />
     </div>
   );
