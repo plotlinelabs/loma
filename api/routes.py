@@ -144,13 +144,9 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 )
 
 FAVORITE_MODEL_IDS = (
-    "opencode-go/deepseek-v4-flash",
-    "anthropic/claude-opus-5",
-    "anthropic/claude-opus-4-8",
+    "codex/gpt-5.6-sol",
     "anthropic/claude-fable-5",
-    "anthropic/claude-opus-4-7",
-    "anthropic/claude-opus-4-6",
-    "openai/gpt-5.5",
+    "opencode-go/deepseek-v4-flash",
 )
 
 FAVORITE_MODEL_TEMPLATES = {

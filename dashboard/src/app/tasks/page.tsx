@@ -38,6 +38,7 @@ import { MobileTaskBoard } from "@/components/tasks/MobileTaskBoard";
 import { QuickAddTask } from "@/components/tasks/QuickAddTask";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { AddChatDialog } from "@/components/tasks/AddChatDialog";
+import { TaskChatDrawer } from "@/components/tasks/TaskChatDrawer";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -55,6 +56,10 @@ export default function TasksPage() {
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
+  // Desktop: clicking a non-draft card opens its chat in a side drawer so the
+  // board keeps its tab. Task is kept on close for the exit animation.
+  const [chatTask, setChatTask] = useState<Task | null>(null);
+  const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
   const [includedTagIds, setIncludedTagIds] = useState<string[]>([]);
   const [excludedTagIds, setExcludedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -143,6 +148,29 @@ export default function TasksPage() {
     }
   };
 
+  const openNewTaskDrawer = async () => {
+    if (!board || busyRef.current) return;
+    busyRef.current = true;
+    setError(null);
+    try {
+      const todoLane = board.lanes.find(
+        (lane) => lane.id === "todo" || lane.name.trim().toLowerCase() === "todo",
+      ) || board.lanes[0];
+      const { task } = await createTask({
+        title: "New task",
+        prompt: "",
+        lane: todoLane?.id || "todo",
+      });
+      setBoard({ ...board, tasks: [task, ...board.tasks] });
+      setChatTask(task);
+      setChatDrawerOpen(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create task");
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
   const laneCounts: Record<string, number> = {};
   if (board) {
     for (const lane of board.lanes) laneCounts[lane.id] = board.counts[lane.id] ?? 0;
@@ -196,7 +224,7 @@ export default function TasksPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button size="sm" onClick={() => { setEditingTask(null); setNewTaskLane(undefined); setTaskDialogOpen(true); }}>
+          <Button size="sm" onClick={() => void openNewTaskDrawer()}>
             <RiAddLine className="h-4 w-4" />
             New task
           </Button>
@@ -293,8 +321,9 @@ export default function TasksPage() {
               board={board}
               onBoardChange={setBoard}
               onRefresh={refresh}
-              onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
-              onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+              onEditDraft={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
+              onAddTask={() => void openNewTaskDrawer()}
+              onOpenChat={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
               onError={setError}
               includedTagIds={includedTagIds}
               excludedTagIds={excludedTagIds}
@@ -335,6 +364,23 @@ export default function TasksPage() {
         onOpenChange={setSettingsOpen}
         laneCounts={laneCounts}
         onSaved={refresh}
+      />
+      <TaskChatDrawer
+        task={chatTask}
+        open={chatDrawerOpen}
+        onOpenChange={(open) => {
+          setChatDrawerOpen(open);
+          if (!open) refresh();
+        }}
+        onTaskChange={(updatedTask) => {
+          setChatTask(updatedTask);
+          setBoard((current) => current ? {
+            ...current,
+            tasks: current.tasks.map((task) =>
+              task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
+            ),
+          } : current);
+        }}
       />
     </div>
   );

@@ -16,6 +16,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { AgentModel } from "@/lib/api";
 import { favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks/useAgentModels";
 
+const FAVORITE_LABELS: Record<string, string> = {
+  "codex/gpt-5.6-sol": "GPT 5.6 Sol",
+  "anthropic/claude-fable-5": "Claude Fable 5",
+  "opencode-go/deepseek-v4-flash": "DeepSeek V4 Flash",
+};
+
 interface ModelPickerProps {
   models: AgentModel[];
   selectedModel: string;
@@ -133,6 +139,37 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
         className="w-[min(80vw,280px)] p-0 overflow-hidden rounded-xl"
       >
         <Command shouldFilter={false}>
+          {recommended.length > 0 && !search && (
+            <div className="border-b border-border p-2">
+              <div className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Favorites
+              </div>
+              <div className="grid gap-1">
+                {recommended.map((model) => {
+                  const isSelected = model.id === selectedModel;
+                  return (
+                    <button
+                      key={model.id}
+                      type="button"
+                      onClick={() => handleSelect(model.id)}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-[13px] transition-colors",
+                        isSelected
+                          ? "border-brand-500/40 bg-brand-500/10 font-medium text-foreground"
+                          : "border-transparent bg-muted/60 text-foreground hover:border-border hover:bg-muted",
+                      )}
+                    >
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {FAVORITE_LABELS[model.id] || model.model_id}
+                      </span>
+                      {isSelected && <RiCheckLine size={15} className="shrink-0 text-brand-600" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="border-b border-border p-1.5">
             <CommandInput
               value={search}
@@ -146,7 +183,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
                 No models match that search.
               </CommandEmpty>
 
-              {recommended.length > 0 && (
+              {search && recommended.length > 0 && (
                 <CommandGroup heading="Favorites">
                   {recommended.map(renderItem)}
                 </CommandGroup>

@@ -6,13 +6,9 @@ import { fetchAgentModels, type AgentModel } from "@/lib/api";
 const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 
 export const FAVORITE_MODEL_IDS = [
-  "opencode-go/deepseek-v4-flash",
-  "anthropic/claude-opus-5",
-  "anthropic/claude-opus-4-8",
+  "codex/gpt-5.6-sol",
   "anthropic/claude-fable-5",
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-6",
-  "openai/gpt-5.5",
+  "opencode-go/deepseek-v4-flash",
 ] as const;
 
 export function favoriteModelRank(model: AgentModel): number | null {
@@ -28,9 +24,9 @@ export type ModelLoadState = "loading" | "ready" | "error";
 
 /**
  * Agent-model catalog + selection, shared by the chat composer and the tasks
- * quick-add composer. Selection priority: explicit initialModel (e.g. a board
- * task's chosen model) > saved preference > backend default. Selecting a
- * model persists it as the saved preference.
+ * quick-add composer. Selection priority: saved preference > explicit
+ * initialModel (e.g. a board task's chosen model) > backend default. Callers
+ * can disable the backend default when an explicit choice is required.
  */
 export function useAgentModels(initialModel?: string, chooseDefault = true) {
   const [models, setModels] = useState<AgentModel[]>([]);
@@ -53,10 +49,10 @@ export function useAgentModels(initialModel?: string, chooseDefault = true) {
           : null;
         const savedIsValid = saved && list.some((model) => model.id === saved);
         const initialIsValid = initialModel && list.some((model) => model.id === initialModel);
-        const nextModel = initialIsValid
-          ? initialModel
-          : savedIsValid
-            ? saved
+        const nextModel = savedIsValid
+          ? saved
+          : initialIsValid
+            ? initialModel
             : chooseDefault
               ? catalog.default_model || list[0]?.id || ""
               : "";
