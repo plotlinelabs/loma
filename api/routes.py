@@ -1848,6 +1848,8 @@ def setup_api_routes(app: web.Application):
 
     from api.speech_routes import setup_speech_routes
     setup_speech_routes(app)
+    from api.voice_listen_routes import setup_voice_listen_routes
+    setup_voice_listen_routes(app)
 
     # Personal AI-usage routes (my spend + per-chat cost)
     from api.my_usage_routes import setup_my_usage_routes

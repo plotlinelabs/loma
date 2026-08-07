@@ -1256,15 +1256,27 @@ export async function sendVoiceCommand(
   return body;
 }
 
-export async function generateVoiceSpeech(text: string, voice: string): Promise<Blob> {
+export async function generateVoiceSpeech(text: string, voice: string, speed: number): Promise<Blob> {
   const res = await fetch(`${API_BASE}/api/voice/speech`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice }),
+    body: JSON.stringify({ text, voice, speed }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Speech generation failed: ${res.status}`);
   }
   return res.blob();
+}
+
+export async function createVoiceListenToken(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/voice/listen-token`, { method: "POST" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Live transcription failed: ${res.status}`);
+  return body.token;
+}
+
+export function voiceListenWebSocketUrl(token: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${API_BASE}/api/voice/listen?token=${encodeURIComponent(token)}`;
 }

@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { ModelPicker } from "@/components/composer/ModelPicker";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { cn } from "@/lib/utils";
-import { useDictation } from "@/hooks/useDictation";
+import { useLiveDictation } from "@/hooks/useLiveDictation";
 import {
   fetchTasksBoard,
   generateVoiceSpeech,
@@ -45,18 +45,20 @@ interface VoiceTurn extends VoiceHistoryMessage {
 
 const VOICE_HISTORY_KEY = "loma.voice.history";
 const VOICE_CHOICE_KEY = "loma.voice.choice";
+const VOICE_SPEED_KEY = "loma.voice.speed";
 const VOICES = [
-  { id: "thalia", label: "Thalia · warm" },
-  { id: "apollo", label: "Apollo · confident" },
-  { id: "andromeda", label: "Andromeda · expressive" },
-  { id: "orion", label: "Orion · calm" },
+  { id: "rachel", label: "Rachel · warm" },
+  { id: "adam", label: "Adam · confident" },
+  { id: "bella", label: "Bella · expressive" },
+  { id: "antoni", label: "Antoni · calm" },
 ];
 
 /** Voice Mode — a hands-free, connected session over the tasks board.
  *
  * Push-to-talk: the mic button records (existing dictation pipeline →
  * /api/transcribe), the transcript goes to /api/voice/command, and the short
- * reply is spoken with Deepgram Aura 2. A text composer is the
+ * Deepgram live endpointing), and the short reply is spoken with ElevenLabs.
+ * A text composer is the
  * no-mic fallback (desktop, permissions denied, tests). */
 export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; onBoardChange?: () => void }) {
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
@@ -65,7 +67,8 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
   const [connected, setConnected] = useState(true);
   const [speaking, setSpeaking] = useState(false);
   const [typed, setTyped] = useState("");
-  const [voice, setVoice] = useState("thalia");
+  const [voice, setVoice] = useState("rachel");
+  const [voiceSpeed, setVoiceSpeed] = useState(1.1);
   const [error, setError] = useState<string | null>(null);
   const { models, selectedModel, selectModel, loadState } = useAgentModels(undefined, false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +85,9 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const submittingRef = useRef(false);
+  const speechQueueRef = useRef<string[]>([]);
+  const speechGenerationRef = useRef(0);
+  const pumpingSpeechRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -92,6 +98,8 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
     }
     const savedVoice = localStorage.getItem(VOICE_CHOICE_KEY);
     if (savedVoice && VOICES.some(({ id }) => id === savedVoice)) setVoice(savedVoice);
+    const savedSpeed = Number(localStorage.getItem(VOICE_SPEED_KEY));
+    if (savedSpeed >= 0.7 && savedSpeed <= 1.2) setVoiceSpeed(savedSpeed);
   }, []);
 
   useEffect(() => {
@@ -99,6 +107,9 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
   }, [turns]);
 
   const stopSpeech = useCallback(() => {
+    speechGenerationRef.current += 1;
+    speechQueueRef.current = [];
+    pumpingSpeechRef.current = false;
     audioRef.current?.pause();
     audioRef.current = null;
     if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
@@ -106,41 +117,49 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
     setSpeaking(false);
   }, []);
 
-  const speak = useCallback(async (text: string) => {
+  const speak = useCallback((text: string) => {
     if (!speechOnRef.current) {
       if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 250);
       return;
     }
-    try {
-      stopSpeech();
-      const blob = await generateVoiceSpeech(text, voice);
-      if (!speechOnRef.current) return;
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audioUrlRef.current = url;
-      audio.onplay = () => {
-        setSpeaking(true);
-        // In hands-free mode the mic remains active during playback. Browser
-        // echo cancellation prevents Loma's own voice from triggering VAD.
-        if (connectedRef.current) dictationStartRef.current();
-      };
-      audio.onended = () => {
-        stopSpeech();
-        // If recording could not start while audio played, try once more now.
+    speechQueueRef.current.push(text);
+    if (pumpingSpeechRef.current) return;
+    const generation = speechGenerationRef.current;
+    pumpingSpeechRef.current = true;
+    void (async () => {
+      while (speechQueueRef.current.length && generation === speechGenerationRef.current) {
+        try {
+          const next = speechQueueRef.current.shift()!;
+          const blob = await generateVoiceSpeech(next, voice, voiceSpeed);
+          if (generation !== speechGenerationRef.current || !speechOnRef.current) break;
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audioUrlRef.current = url;
+          await new Promise<void>((resolve, reject) => {
+            audio.onplay = () => {
+              setSpeaking(true);
+              if (connectedRef.current) dictationStartRef.current();
+            };
+            audio.onended = () => resolve();
+            audio.onerror = () => reject(new Error("playback failed"));
+            void audio.play().catch(reject);
+          });
+          audio.pause();
+          URL.revokeObjectURL(url);
+          audioRef.current = null;
+          audioUrlRef.current = null;
+        } catch {
+          if (generation === speechGenerationRef.current) setError("Natural voice playback failed");
+        }
+      }
+      if (generation === speechGenerationRef.current) {
+        pumpingSpeechRef.current = false;
+        setSpeaking(false);
         if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
-      };
-      audio.onerror = () => {
-        stopSpeech();
-        if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
-      };
-      await audio.play();
-    } catch {
-      stopSpeech();
-      setError("Natural voice playback failed");
-      if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 150);
-    }
-  }, [stopSpeech, voice]);
+      }
+    })();
+  }, [voice, voiceSpeed]);
 
   // Leaving the page stops any in-flight speech.
   useEffect(
@@ -192,12 +211,8 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
     [onBoardChange, selectedModel, speak],
   );
 
-  const dictation = useDictation((text) => void handleUtterance(text), {
-    autoStop: true,
-    silenceMs: 1200,
-    onSpeechStart: () => {
+  const dictation = useLiveDictation((text) => void handleUtterance(text), () => {
       if (audioRef.current && !audioRef.current.paused) stopSpeech();
-    },
   });
   dictationStartRef.current = () => {
     if (!thinkingRef.current && selectedModel && dictation.supported && dictation.state === "idle") {
@@ -251,8 +266,8 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
   const micState =
     dictation.state === "recording"
       ? "Listening… tap to stop"
-      : dictation.state === "transcribing"
-        ? "Transcribing…"
+        : dictation.state === "connecting"
+          ? "Connecting…"
         : thinking
           ? "Thinking…"
           : speaking
@@ -394,6 +409,21 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
               <option key={option.id} value={option.id}>{option.label}</option>
             ))}
           </select>
+          <select
+            aria-label="Voice speed"
+            value={voiceSpeed}
+            onChange={(event) => {
+              const speed = Number(event.target.value);
+              setVoiceSpeed(speed);
+              localStorage.setItem(VOICE_SPEED_KEY, String(speed));
+            }}
+            disabled={speaking}
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="1">1.0×</option>
+            <option value="1.1">1.1×</option>
+            <option value="1.2">1.2×</option>
+          </select>
         </div>
         <div className="flex flex-col items-center gap-2">
           <button
@@ -406,7 +436,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
               }
               dictation.toggle();
             }}
-            disabled={!selectedModel || !dictation.supported || dictation.state === "transcribing" || (thinking && !speaking)}
+            disabled={!selectedModel || !dictation.supported || dictation.state === "connecting" || (thinking && !speaking)}
             aria-label={dictation.state === "recording" ? "Stop recording" : "Start recording"}
             className={cn(
               "flex h-16 w-16 items-center justify-center rounded-full text-white shadow-lg transition-colors press-scale",
@@ -421,7 +451,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
           </button>
           <span className="text-xs text-muted-foreground">
             {dictation.supported ? (
-              dictation.state === "recording" ? `${micState.replace("tap to stop", "stops after silence")} · ${dictation.seconds}s` : micState
+              dictation.state === "recording" ? `${micState.replace("tap to stop", "stops automatically")} · ${dictation.seconds}s` : micState
             ) : (
               "No microphone available — type instead"
             )}
