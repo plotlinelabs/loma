@@ -38,7 +38,6 @@ import {
   RiMoonLine,
   RiMenuFoldLine,
   RiMenuUnfoldLine,
-  RiMicLine,
   RiExpandUpDownLine,
 } from "@remixicon/react";
 
@@ -63,11 +62,6 @@ const navigation: NavItem[] = [
     name: "Chat",
     href: "/chat",
     icon: <RiChat1Line size={16} />,
-  },
-  {
-    name: "Voice",
-    href: "/voice",
-    icon: <RiMicLine size={16} />,
   },
   {
     name: "Activity",
