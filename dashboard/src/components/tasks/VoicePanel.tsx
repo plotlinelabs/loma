@@ -39,7 +39,7 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 interface VoiceTurn extends VoiceHistoryMessage {
-  action?: VoiceAction;
+  actions?: VoiceAction[];
   executed?: boolean;
 }
 
@@ -171,7 +171,7 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
           {
             role: "assistant",
             content: res.speech,
-            action: res.action,
+            actions: res.actions,
             executed: res.executed,
           },
         ]);
@@ -344,12 +344,12 @@ export function VoicePanel({ onClose, onBoardChange }: { onClose: () => void; on
               )}
             >
               <p className="whitespace-pre-wrap">{turn.content}</p>
-              {turn.executed && turn.action && ACTION_LABELS[turn.action.type] && (
-                <span className="mt-1.5 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+              {turn.executed && turn.actions?.map((action, index) => ACTION_LABELS[action.type] && (
+                <span key={`${action.type}-${index}`} className="mt-1.5 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
                   <RiCheckboxCircleFill size={14} />
-                  {ACTION_LABELS[turn.action.type]}
+                  {ACTION_LABELS[action.type]}
                 </span>
-              )}
+              ))}
             </div>
           </div>
         ))}

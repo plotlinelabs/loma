@@ -209,8 +209,41 @@ async def test_handle_voice_command_executes_llm_action(monkeypatch):
     import json
     payload = json.loads(response.text)
     assert payload["executed"] is True
+    assert payload["executed_count"] == 1
     assert payload["speech"] == "Created a draft for the invoice review."
+    assert payload["actions"][0]["type"] == "create_task"
     db.conversations.insert_one.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_command_executes_multiple_actions(monkeypatch):
+    db = _db()
+    db.conversations.find = lambda *a, **k: SimpleNamespace(
+        sort=lambda *a2, **k2: SimpleNamespace(
+            to_list=AsyncMock(return_value=[])))
+    monkeypatch.setattr(voice_routes, "get_db", lambda: db)
+    monkeypatch.setattr(voice_routes, "_call_voice_llm", AsyncMock(return_value={
+        "speech": "Created tasks for Mercury and Jupiter.",
+        "actions": [
+            {"type": "create_task", "prompt": "Write about Mercury",
+             "title": "Mercury", "start": False},
+            {"type": "create_task", "prompt": "Write about Jupiter",
+             "title": "Jupiter", "start": False},
+        ],
+    }))
+
+    response = await voice_routes.handle_voice_command(
+        _FakeRequest({"text": "create tasks about Mercury and Jupiter",
+                      "history": [], "model": "openai/gpt-5.5"}))
+
+    import json
+    payload = json.loads(response.text)
+    assert payload["executed"] is True
+    assert payload["executed_count"] == 2
+    assert len(payload["actions"]) == 2
+    assert db.conversations.insert_one.await_count == 2
+    inserted = [call.args[0] for call in db.conversations.insert_one.await_args_list]
+    assert [task["title"] for task in inserted] == ["Mercury", "Jupiter"]
 
 
 @pytest.mark.asyncio
@@ -231,7 +264,7 @@ async def test_handle_voice_command_coerces_unknown_action(monkeypatch):
 
     import json
     payload = json.loads(response.text)
-    assert payload["action"] == {"type": "none"}
+    assert payload["actions"] == []
     assert payload["executed"] is False
 
 

@@ -1234,12 +1234,13 @@ export interface VoiceAction {
 
 export interface VoiceCommandResponse {
   speech: string;
-  action: VoiceAction;
+  actions: VoiceAction[];
   executed: boolean;
+  executed_count: number;
 }
 
 /** One voice-session turn: the utterance plus recent history in, a short
- * spoken reply (and an optional executed board action) out. */
+ * spoken reply and any executed board actions out. */
 export async function sendVoiceCommand(
   text: string,
   history: VoiceHistoryMessage[],

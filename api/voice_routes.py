@@ -7,10 +7,9 @@ reply plus an optional board action that we execute server-side.
 Design notes:
   - The endpoint is stateless: the client sends the recent voice-session
     history with every request, so nothing new is persisted for a session.
-  - One LLM call per utterance (same `claude -p` CLI pattern as
-    _generate_title_llm in api/routes.py): the model sees a compact snapshot
-    of the caller's board and must reply with strict JSON —
-    {"speech": "...", "action": {"type": ...}}.
+  - One LLM call per utterance: the model sees a compact snapshot of the
+    caller's board and must reply with strict JSON containing an ordered
+    `actions` array.
   - Actions reuse the tasks-board semantics from api/task_routes.py
     (create drafts / quick-start, follow-up input, done/park/priority/
     deadline). Task references are the first 8 chars of the conversation id
@@ -139,10 +138,10 @@ Recent voice conversation:
 User's new utterance: {utterance}
 
 Reply with ONLY a JSON object, no other text:
-{{"speech": "<what to say out loud, 1-3 short sentences>", "action": {{"type": "<one of: none, create_task, start_task, add_input, mark_done, park_task, set_priority, set_deadline>", ...}}}}
+{{"speech": "<what to say out loud, 1-3 short sentences>", "actions": [{{"type": "<one of: create_task, start_task, add_input, mark_done, park_task, set_priority, set_deadline>", ...}}]}}
 
 Action payloads (include only the fields for the chosen type):
-- none: answer questions about tasks (status, what finished, summaries) using the snapshot above. No extra fields.
+- For a question that needs no board change, return an empty actions array.
 - create_task: {{"prompt": "<full task instructions>", "title": "<short title>", "start": true|false}} — start=true runs it immediately, false stages a draft. Before creating, check the snapshot for an existing similar task; if one plausibly matches, ask instead of creating a duplicate (type none).
 - start_task: {{"ref": "<ref>"}} — run a staged draft now.
 - add_input: {{"ref": "<ref>", "input": "<the extra instructions>"}} — send follow-up input to an existing task. Not allowed while the task is "working".
@@ -153,9 +152,10 @@ Action payloads (include only the fields for the chosen type):
 
 Rules:
 - "ref" MUST be copied exactly from the snapshot. Never invent refs.
-- If the user's reference to a task is ambiguous (several plausible matches), use type none and ask which one they mean, naming the candidate titles.
-- If the user asks for something outside these actions, use type none and say briefly what you can do.
-- Phrase speech assuming the action succeeds (e.g. "Done — I've started that task.")."""
+- If the user's reference to a task is ambiguous (several plausible matches), return an empty actions array and ask which one they mean, naming the candidate titles.
+- Return one action for every operation the user requests. For example, creating two tasks requires two create_task actions. Preserve the user's requested order and do not combine separate tasks into one action.
+- If the user asks for something outside these actions, return an empty actions array and say briefly what you can do.
+- Phrase speech assuming every action succeeds (e.g. "Done, I've created both tasks.")."""
 
 
 async def _call_voice_llm(prompt: str, model: str) -> dict | None:
@@ -434,7 +434,7 @@ async def handle_voice_command(request: web.Request) -> web.Response:
     """POST /api/voice/command — one voice-session turn.
 
     Body: {"text": "<utterance>", "history": [{"role", "content"}, ...]}
-    Returns: {"speech": "...", "action": {...}, "executed": bool}
+    Returns: {"speech": "...", "actions": [...], "executed": bool}
     """
     db = get_db()
     if db is None:
@@ -473,27 +473,48 @@ async def handle_voice_command(request: web.Request) -> web.Response:
     if not parsed or not isinstance(parsed.get("speech"), str):
         return web.json_response({
             "speech": "Sorry, I had trouble processing that. Could you say it again?",
-            "action": {"type": "none"},
+            "actions": [],
             "executed": False,
         })
 
     speech = parsed["speech"].strip()
-    action = parsed.get("action") if isinstance(parsed.get("action"), dict) else {"type": "none"}
-    if action.get("type") not in VOICE_ACTIONS:
-        action = {"type": "none"}
+    raw_actions = parsed.get("actions")
+    # Accept the old shape while saved/test model responses roll over to the
+    # array contract.
+    if not isinstance(raw_actions, list):
+        legacy_action = parsed.get("action")
+        raw_actions = [legacy_action] if isinstance(legacy_action, dict) else []
+    actions = [
+        action for action in raw_actions
+        if isinstance(action, dict)
+        and action.get("type") in VOICE_ACTIONS
+        and action.get("type") != "none"
+    ]
 
-    try:
-        ok, override = await _execute_action(db, user_email, action, refs)
-    except Exception:
-        logger.exception("[VOICE] action execution failed")
-        ok, override = False, "Something went wrong applying that change. Please try again."
-    if not ok and override:
-        speech = override
+    succeeded = 0
+    errors: list[str] = []
+    for action in actions:
+        try:
+            ok, override = await _execute_action(db, user_email, action, refs)
+        except Exception:
+            logger.exception("[VOICE] action execution failed")
+            ok, override = False, "Something went wrong applying that change. Please try again."
+        if ok:
+            succeeded += 1
+        elif override:
+            errors.append(override)
+
+    if errors:
+        speech = (
+            f"I completed {succeeded} of {len(actions)} changes. {errors[0]}"
+            if succeeded else errors[0]
+        )
 
     return web.json_response({
         "speech": speech or "Okay.",
-        "action": action,
-        "executed": ok and action.get("type") != "none",
+        "actions": actions,
+        "executed": succeeded > 0,
+        "executed_count": succeeded,
     })
 
 
