@@ -26,7 +26,7 @@ interface TaskBoardProps {
   onBoardChange: (board: TasksBoardResponse) => void;
   onRefresh: () => void;
   onEditDraft: (task: Task) => void;
-  /** Open the new-task dialog with a lane preselected. */
+  /** Create a new task and open it in the side drawer. */
   onAddTask: (laneId: string) => void;
   /** Open a non-draft task's chat in the side drawer instead of a new tab. */
   onOpenChat?: (task: Task) => void;

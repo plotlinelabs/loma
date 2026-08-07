@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RiExternalLinkLine, RiLoader4Line } from "@remixicon/react";
+import { RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import ChatWithArtifacts from "@/components/ChatWithArtifacts";
 import { rebuildItemsFromConversation, type ChatItem } from "@/components/ChatPanel";
 import type { Artifact } from "@/components/ArtifactViewer";
-import { basePath, fetchConversation, type ChatFile, type Task } from "@/lib/api";
+import { basePath, fetchConversation, updateTask, type ChatFile, type Task } from "@/lib/api";
 
 /** Loads and renders one conversation inside the drawer. Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
@@ -105,10 +105,12 @@ export function TaskChatDrawer({
   task,
   open,
   onOpenChange,
+  onTaskChange,
 }: {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onTaskChange?: (task: Task) => void;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -117,9 +119,13 @@ export function TaskChatDrawer({
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(1100px,92vw)]"
       >
         <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
-          <SheetTitle className="min-w-0 flex-1 truncate font-heading text-base font-semibold">
-            {task ? task.title || task.prompt : "Task"}
-          </SheetTitle>
+          {task && (
+            <EditableTaskTitle
+              key={`${task.conversation_id}:${task.title || task.prompt}`}
+              task={task}
+              onTaskChange={onTaskChange}
+            />
+          )}
           {task && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -146,5 +152,62 @@ export function TaskChatDrawer({
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: (task: Task) => void }) {
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [title, setTitle] = useState(task.title || task.prompt || "New task");
+
+  const saveTitle = async () => {
+    if (!task) return;
+    const nextTitle = title.trim() || "New task";
+    setTitle(nextTitle);
+    setEditingTitle(false);
+    if (nextTitle === task.title) return;
+    try {
+      const { task: updatedTask } = await updateTask(task.conversation_id, { title: nextTitle });
+      onTaskChange?.(updatedTask || { ...task, title: nextTitle });
+    } catch {
+      setTitle(task.title || task.prompt || "New task");
+    }
+  };
+
+  return (
+    <div className="min-w-0 flex-1">
+            {editingTitle ? (
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                onBlur={() => void saveTitle()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void saveTitle();
+                  if (event.key === "Escape") {
+                    setTitle(task?.title || task?.prompt || "New task");
+                    setEditingTitle(false);
+                  }
+                }}
+                aria-label="Task title"
+                maxLength={200}
+                autoFocus
+                className="h-8 w-full max-w-md rounded-md border border-input bg-background px-2 font-heading text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            ) : (
+              <div className="flex min-w-0 items-center gap-1">
+                <SheetTitle
+                  className="min-w-0 truncate font-heading text-base font-semibold"
+                  onClick={() => setEditingTitle(true)}
+                  title="Click to rename"
+                >
+                  {task ? task.title || task.prompt || "New task" : "Task"}
+                </SheetTitle>
+                {task && (
+                  <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground" onClick={() => setEditingTitle(true)} aria-label="Rename task">
+                    <RiPencilLine size={14} />
+                  </Button>
+                )}
+              </div>
+            )}
+    </div>
   );
 }

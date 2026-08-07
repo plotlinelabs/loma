@@ -148,6 +148,29 @@ export default function TasksPage() {
     }
   };
 
+  const openNewTaskDrawer = async () => {
+    if (!board || busyRef.current) return;
+    busyRef.current = true;
+    setError(null);
+    try {
+      const todoLane = board.lanes.find(
+        (lane) => lane.id === "todo" || lane.name.trim().toLowerCase() === "todo",
+      ) || board.lanes[0];
+      const { task } = await createTask({
+        title: "New task",
+        prompt: "",
+        lane: todoLane?.id || "todo",
+      });
+      setBoard({ ...board, tasks: [task, ...board.tasks] });
+      setChatTask(task);
+      setChatDrawerOpen(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create task");
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
   const laneCounts: Record<string, number> = {};
   if (board) {
     for (const lane of board.lanes) laneCounts[lane.id] = board.counts[lane.id] ?? 0;
@@ -201,7 +224,7 @@ export default function TasksPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button size="sm" onClick={() => { setEditingTask(null); setNewTaskLane(undefined); setTaskDialogOpen(true); }}>
+          <Button size="sm" onClick={() => void openNewTaskDrawer()}>
             <RiAddLine className="h-4 w-4" />
             New task
           </Button>
@@ -298,8 +321,8 @@ export default function TasksPage() {
               board={board}
               onBoardChange={setBoard}
               onRefresh={refresh}
-              onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
-              onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+              onEditDraft={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
+              onAddTask={() => void openNewTaskDrawer()}
               onOpenChat={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
               onError={setError}
               includedTagIds={includedTagIds}
@@ -348,6 +371,15 @@ export default function TasksPage() {
         onOpenChange={(open) => {
           setChatDrawerOpen(open);
           if (!open) refresh();
+        }}
+        onTaskChange={(updatedTask) => {
+          setChatTask(updatedTask);
+          setBoard((current) => current ? {
+            ...current,
+            tasks: current.tasks.map((task) =>
+              task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
+            ),
+          } : current);
         }}
       />
     </div>

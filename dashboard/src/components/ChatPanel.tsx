@@ -692,6 +692,19 @@ export default function ChatPanel({
     }
   }, [input, draftStorageKey]);
 
+  // Write through during typing as well as in the effect above. This keeps a
+  // draft safe even when the drawer is closed immediately after the last key.
+  const updateComposerInput = (value: string) => {
+    setInput(value);
+    if (!draftStorageKey) return;
+    try {
+      if (value.trim()) window.localStorage.setItem(draftStorageKey, value);
+      else window.localStorage.removeItem(draftStorageKey);
+    } catch {
+      // Ignore quota/private-mode failures.
+    }
+  };
+
   useEffect(() => {
     if (!isStreaming) {
       setItems((prev) => removeTransientStatusItems(prev));
@@ -1344,7 +1357,7 @@ export default function ChatPanel({
                 <Textarea
                   ref={inputRef}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => updateComposerInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   onFocus={() => {
@@ -1659,7 +1672,7 @@ export default function ChatPanel({
                 <Textarea
                   ref={inputRef}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => updateComposerInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   onFocus={() => {
