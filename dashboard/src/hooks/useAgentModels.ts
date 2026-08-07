@@ -55,11 +55,11 @@ export function useAgentModels(initialModel?: string, chooseDefault = true) {
         const initialIsValid = initialModel && list.some((model) => model.id === initialModel);
         const nextModel = initialIsValid
           ? initialModel
-          : !chooseDefault
-            ? ""
           : savedIsValid
             ? saved
-            : catalog.default_model || list[0]?.id || "";
+            : chooseDefault
+              ? catalog.default_model || list[0]?.id || ""
+              : "";
         setSelectedModel(nextModel);
         setLoadState("ready");
       } catch (e) {

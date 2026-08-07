@@ -63,7 +63,7 @@ export default function VoicePage() {
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
   const [thinking, setThinking] = useState(false);
   const [speechOn, setSpeechOn] = useState(true);
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(true);
   const [speaking, setSpeaking] = useState(false);
   const [typed, setTyped] = useState("");
   const [voice, setVoice] = useState("thalia");
@@ -82,6 +82,7 @@ export default function VoicePage() {
   const dictationStartRef = useRef<() => void>(() => {});
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -154,7 +155,10 @@ export default function VoicePage() {
   const handleUtterance = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      // Silence detection and a manual stop can race. Only one voice command
+      // may be submitted until the current request has settled.
+      if (!trimmed || submittingRef.current) return;
+      submittingRef.current = true;
       setError(null);
       // History = what the model saw before this utterance.
       const history = turnsRef.current.map(({ role, content }) => ({ role, content }));
@@ -180,6 +184,7 @@ export default function VoicePage() {
         setError(message);
         if (connectedRef.current) window.setTimeout(() => dictationStartRef.current(), 250);
       } finally {
+        submittingRef.current = false;
         setThinking(false);
         thinkingRef.current = false;
       }
@@ -199,6 +204,14 @@ export default function VoicePage() {
       void dictation.start();
     }
   };
+
+  // Voice Mode is hands-free by default. Start listening as soon as the
+  // persisted model catalog and microphone capability are ready.
+  useEffect(() => {
+    if (!connected || !selectedModel || !dictation.supported) return;
+    const timer = window.setTimeout(() => dictationStartRef.current(), 0);
+    return () => window.clearTimeout(timer);
+  }, [connected, selectedModel, dictation.supported]);
 
   // Announce task transitions while this connected session is open.
   useEffect(() => {

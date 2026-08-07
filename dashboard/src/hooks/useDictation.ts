@@ -34,6 +34,11 @@ export function useDictation(onText: (text: string) => void, options: DictationO
   const discardRef = useRef(false);
   const analyserFrameRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  // `start()` may be requested by playback start, playback end, and the
+  // connected-session effect in the same render. React state has not updated
+  // yet at that point, so use a synchronous lock to ensure only one recorder
+  // and one transcription can exist at a time.
+  const startingRef = useRef(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const onTextRef = useRef(onText);
@@ -68,6 +73,8 @@ export function useDictation(onText: (text: string) => void, options: DictationO
   );
 
   const start = useCallback(async () => {
+    if (startingRef.current || recorderRef.current) return;
+    startingRef.current = true;
     setError(null);
     let stream: MediaStream;
     try {
@@ -76,6 +83,7 @@ export function useDictation(onText: (text: string) => void, options: DictationO
       });
     } catch {
       setError("Microphone access denied");
+      startingRef.current = false;
       return;
     }
     const mimeType = MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported(m));
@@ -112,6 +120,7 @@ export function useDictation(onText: (text: string) => void, options: DictationO
     streamRef.current = stream;
     recorderRef.current = recorder;
     recorder.start();
+    startingRef.current = false;
 
     if (optionsRef.current.autoStop) {
       const AudioContextClass = window.AudioContext;
