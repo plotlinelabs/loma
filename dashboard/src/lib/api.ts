@@ -1219,3 +1219,37 @@ export async function fetchConversationCost(conversationId: string): Promise<Con
   if (!res.ok) throw new Error(`Failed to fetch cost: ${res.status}`);
   return res.json();
 }
+
+// ---------- Voice mode ----------
+
+export interface VoiceHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface VoiceAction {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface VoiceCommandResponse {
+  speech: string;
+  action: VoiceAction;
+  executed: boolean;
+}
+
+/** One voice-session turn: the utterance plus recent history in, a short
+ * spoken reply (and an optional executed board action) out. */
+export async function sendVoiceCommand(
+  text: string,
+  history: VoiceHistoryMessage[],
+): Promise<VoiceCommandResponse> {
+  const res = await fetch(`${API_BASE}/api/voice/command`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, history }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Voice command failed: ${res.status}`);
+  return body;
+}
