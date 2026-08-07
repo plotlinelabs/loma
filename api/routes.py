@@ -509,12 +509,18 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
     # If using $text search, sort by relevance score; otherwise by time
     if search and has_text_index and "$text" in query:
         conversations = await db.conversations.find(
-            final_query, {"score": {"$meta": "textScore"}}
+            final_query,
+            {"messages": 0, "final_response": 0, "score": {"$meta": "textScore"}},
         ).sort(
             [("score", {"$meta": "textScore"})]
         ).skip((page - 1) * per_page).limit(per_page).to_list(per_page)
     else:
-        conversations = await db.conversations.find(final_query) \
+        # List views only render conversation metadata. Excluding history here
+        # prevents the global sidebar/activity fetch from downloading megabytes
+        # for long-running tasks on every page navigation.
+        conversations = await db.conversations.find(
+            final_query, {"messages": 0, "final_response": 0}
+        ) \
             .sort("started_at", -1) \
             .skip((page - 1) * per_page) \
             .limit(per_page) \
@@ -536,7 +542,17 @@ async def handle_get_conversation(request: web.Request) -> web.Response:
         return web.json_response({"error": "Observability not configured"}, status=503)
 
     cid = request.match_info["conversation_id"]
-    conversation = await db.conversations.find_one({"conversation_id": cid, "deleted": {"$ne": True}})
+    history_limit_raw = request.query.get("history_limit")
+    history_limit = None
+    if history_limit_raw:
+        try:
+            history_limit = max(1, min(int(history_limit_raw), 120))
+        except ValueError:
+            return web.json_response({"error": "history_limit must be an integer"}, status=400)
+
+    conversation = await db.conversations.find_one(
+        {"conversation_id": cid, "deleted": {"$ne": True}}
+    )
     if not conversation:
         return web.json_response({"error": "Not found"}, status=404)
 
@@ -545,17 +561,38 @@ async def handle_get_conversation(request: web.Request) -> web.Response:
     if not user_email or not _check_conversation_access(conversation, user_email, system_role):
         return web.json_response({"error": "Not found"}, status=404)
 
-    turns = await db.turns.find({"conversation_id": cid}) \
-        .sort("turn_number", 1) \
-        .to_list(None)
+    if history_limit and len(conversation.get("messages") or []) > history_limit + 1:
+        # The task drawer only needs a recent window. Sending the full messages
+        # array for long-running tasks can be megabytes and crash the browser
+        # before the client has a chance to paginate the rendered items.
+        conversation["messages"] = conversation["messages"][-(history_limit + 1):]
+
+    total_turns = None
+    if history_limit:
+        total_turns = await db.turns.count_documents({"conversation_id": cid})
+        turns = await db.turns.find({"conversation_id": cid}) \
+            .sort("turn_number", -1) \
+            .limit(history_limit) \
+            .to_list(history_limit)
+        turns.reverse()
+    else:
+        turns = await db.turns.find({"conversation_id": cid}) \
+            .sort("turn_number", 1) \
+            .to_list(None)
 
     # Include persisted artifacts if available
-    artifacts = await db.artifacts.find({"conversation_id": cid}).to_list(None)
+    artifacts_query = db.artifacts.find({"conversation_id": cid}).sort("timestamp", -1)
+    if history_limit:
+        artifacts_query = artifacts_query.limit(history_limit)
+    artifacts = await artifacts_query.to_list(history_limit)
+    artifacts.reverse()
 
     return web.json_response({
         "conversation": _serialize(conversation),
         "turns": _serialize(turns),
         "artifacts": _serialize(artifacts),
+        "history_total_turns": total_turns,
+        "history_truncated": bool(history_limit and total_turns and total_turns > len(turns)),
     })
 
 

@@ -31,7 +31,7 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const data = await fetchConversation(conversationId);
+        const data = await fetchConversation(conversationId, { historyLimit: visibleHistoryLimit });
         if (cancelled) return;
         setModel(data.conversation.model || null);
         if (data.conversation.task_status === "todo" && !data.conversation.status) {
@@ -42,15 +42,19 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
           setDraftPrompt(data.conversation.prompt);
           setDraftFiles(data.conversation.draft_files || null);
         } else {
+          const recentMessages = data.conversation.messages;
+          const recentPrompt = data.history_truncated
+            ? recentMessages?.find((message) => message.role === "user")?.content || data.conversation.prompt
+            : data.conversation.prompt;
           const { items, artifacts } = rebuildItemsFromConversation(
-            data.conversation.messages,
-            data.conversation.prompt,
+            recentMessages,
+            recentPrompt,
             data.conversation.final_response,
             data.turns,
             data.artifacts,
           );
           setInitialItems(items);
-          setHistoryItemCount(items.length);
+          setHistoryItemCount(data.history_total_turns || items.length);
           setInitialArtifacts(artifacts);
           setInitialStatus(data.conversation.status);
         }
@@ -64,7 +68,7 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+  }, [conversationId, visibleHistoryLimit]);
 
   if (loading) {
     return (
@@ -140,6 +144,7 @@ export function TaskChatDrawer({
             key={`${task.conversation_id}:${task.title || task.prompt}`}
             task={task}
             onTaskChange={onTaskChange}
+            embedded={embedded}
           />
         )}
         {embedded && (
@@ -201,7 +206,7 @@ export function TaskChatDrawer({
   );
 }
 
-function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: (task: Task) => void }) {
+function EditableTaskTitle({ task, onTaskChange, embedded = false }: { task: Task; onTaskChange?: (task: Task) => void; embedded?: boolean }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [title, setTitle] = useState(task.title || task.prompt || "New task");
 
@@ -240,13 +245,23 @@ function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: 
               />
             ) : (
               <div className="flex min-w-0 items-center gap-1">
-                <SheetTitle
-                  className="min-w-0 truncate font-heading text-base font-semibold"
-                  onClick={() => setEditingTitle(true)}
-                  title="Click to rename"
-                >
-                  {task ? task.title || task.prompt || "New task" : "Task"}
-                </SheetTitle>
+                {embedded ? (
+                  <h2
+                    className="min-w-0 truncate font-heading text-base font-semibold"
+                    onClick={() => setEditingTitle(true)}
+                    title="Click to rename"
+                  >
+                    {task ? task.title || task.prompt || "New task" : "Task"}
+                  </h2>
+                ) : (
+                  <SheetTitle
+                    className="min-w-0 truncate font-heading text-base font-semibold"
+                    onClick={() => setEditingTitle(true)}
+                    title="Click to rename"
+                  >
+                    {task ? task.title || task.prompt || "New task" : "Task"}
+                  </SheetTitle>
+                )}
                 {task && (
                   <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground" onClick={() => setEditingTitle(true)} aria-label="Rename task">
                     <RiPencilLine size={14} />

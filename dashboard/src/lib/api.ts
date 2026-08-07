@@ -104,6 +104,8 @@ export interface ConversationDetailResponse {
   conversation: Conversation;
   turns: Turn[];
   artifacts?: PersistedArtifact[];
+  history_total_turns?: number | null;
+  history_truncated?: boolean;
 }
 
 export interface StatsResponse {
@@ -196,8 +198,14 @@ export async function fetchConversations(params: {
   return res.json();
 }
 
-export async function fetchConversation(id: string): Promise<ConversationDetailResponse> {
-  const res = await fetch(`${API_BASE}/api/conversations/${id}`);
+export async function fetchConversation(
+  id: string,
+  options: { historyLimit?: number } = {},
+): Promise<ConversationDetailResponse> {
+  const params = new URLSearchParams();
+  if (options.historyLimit) params.set("history_limit", String(options.historyLimit));
+  const query = params.size ? `?${params}` : "";
+  const res = await fetch(`${API_BASE}/api/conversations/${id}${query}`);
   if (!res.ok) throw new Error(`Failed to fetch conversation: ${res.status}`);
   return res.json();
 }
