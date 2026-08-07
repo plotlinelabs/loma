@@ -82,6 +82,7 @@ export default function ChatWithArtifacts({
   systemContext,
   initialStatus,
   onConversationCreated,
+  draftStorageKey,
 }: {
   initialItems?: ChatItem[];
   initialArtifacts?: Artifact[];
@@ -93,6 +94,8 @@ export default function ChatWithArtifacts({
   systemContext?: string;
   initialStatus?: string;
   onConversationCreated?: (conversationId: string) => void;
+  /** localStorage key for persisting unsent composer text (see ChatPanel) */
+  draftStorageKey?: string;
 }) {
   // ── Artifact state ──────────────────────────────────────────────────────
   const [artifacts, setArtifacts] = useState<Artifact[]>(initialArtifacts || []);
@@ -160,6 +163,7 @@ export default function ChatWithArtifacts({
           autoSend={autoSend}
           systemContext={systemContext}
           initialStatus={initialStatus}
+          draftStorageKey={draftStorageKey}
           activeArtifactId={activeArtifactId}
           onArtifactOpen={handleArtifactOpen}
           onArtifactClose={handleArtifactClose}

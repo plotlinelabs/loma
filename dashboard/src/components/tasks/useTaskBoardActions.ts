@@ -33,6 +33,9 @@ export interface TaskBoardActionsOptions {
   /** Desktop opens active cards in a new tab; the mobile/standalone PWA
    * navigates in place (window.open opens an in-app browser there). */
   openActiveInNewTab?: boolean;
+  /** When provided, non-draft tasks open through this callback (e.g. the
+   * desktop side drawer) instead of navigating away from the board. */
+  onOpenChat?: (task: Task) => void;
   includedTagIds?: string[];
   excludedTagIds?: string[];
 }
@@ -41,7 +44,7 @@ export interface TaskBoardActionsOptions {
  * desktop kanban (TaskBoard) and the mobile inbox (MobileTaskBoard). */
 export function useTaskBoardActions({
   board, onBoardChange, onRefresh, onEditDraft, onError,
-  openActiveInNewTab = true, includedTagIds = [], excludedTagIds = [],
+  openActiveInNewTab = true, onOpenChat, includedTagIds = [], excludedTagIds = [],
 }: TaskBoardActionsOptions) {
   const router = useRouter();
 
@@ -205,6 +208,11 @@ export function useTaskBoardActions({
     // (including chats parked in a lane) opens the conversation.
     if (task.task_status === "todo" && !task.status) {
       onEditDraft(task);
+      return;
+    }
+    // Side drawer keeps the board in place — no new tabs, no navigation.
+    if (onOpenChat) {
+      onOpenChat(task);
       return;
     }
     const url = `${basePath}/chat?continue=${task.conversation_id}`;
