@@ -36,3 +36,26 @@ export async function disconnectClaude(): Promise<void> {
     throw new Error(err.error || `Disconnect failed: ${res.status}`);
   }
 }
+
+export interface ClaudeTestResult {
+  ok: boolean;
+  email: string;
+  response?: string;
+  error?: string;
+  auth_error?: boolean;
+  duration_ms?: number;
+}
+
+/** Admin-only: run a tiny test chat against a specific user's Claude account. */
+export async function testClaudeAccount(email: string): Promise<ClaudeTestResult> {
+  const res = await fetch(`${API_BASE}/api/claude-auth/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!data) {
+    throw new Error(`Claude test failed: ${res.status}`);
+  }
+  return data as ClaudeTestResult;
+}
