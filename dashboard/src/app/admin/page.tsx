@@ -29,6 +29,7 @@ import {
   type EnvUpdateVariable,
   type EnvAuditChange,
 } from "../../lib/env-api";
+import { testClaudeAccount, type ClaudeTestResult } from "../../lib/claude-auth-api";
 import {
   fetchPromptSettings,
   updatePromptSetting,
@@ -183,6 +184,20 @@ export default function AdminPage() {
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
   const [promptLoading, setPromptLoading] = useState(false);
   const [savingPromptKey, setSavingPromptKey] = useState<PromptSettingKey | null>(null);
+  const [claudeTesting, setClaudeTesting] = useState<string | null>(null);
+  const [claudeTestResult, setClaudeTestResult] = useState<ClaudeTestResult | null>(null);
+
+  const runClaudeTest = async (email: string) => {
+    setClaudeTesting(email);
+    try {
+      const result = await testClaudeAccount(email);
+      setClaudeTestResult(result);
+    } catch (err) {
+      setClaudeTestResult({ ok: false, email, error: err instanceof Error ? err.message : "Test failed" });
+    } finally {
+      setClaudeTesting(null);
+    }
+  };
 
   useEffect(() => {
     if (!userLoading && !isMaintainerOrAbove) {
@@ -785,6 +800,20 @@ export default function AdminPage() {
                             />
                             <span className="text-[10px] text-muted-foreground">Pool</span>
                           </Label>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            disabled={claudeTesting !== null}
+                            onClick={() => runClaudeTest(user.email)}
+                            className="text-[10px]"
+                            title="Run a small test chat with this user's Claude account"
+                          >
+                            {claudeTesting === user.email ? (
+                              <RiLoader4Line size={12} className="animate-spin" />
+                            ) : (
+                              "Test"
+                            )}
+                          </Button>
                         </div>
                       ) : (
                         <Badge variant="secondary" className="text-[10px] bg-gray-100 text-muted-foreground">Not connected</Badge>
@@ -1761,6 +1790,50 @@ export default function AdminPage() {
           >
             {saving ? "Applying..." : "Apply Changes"}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    {/* Claude account test result modal */}
+    <Dialog open={claudeTestResult !== null} onOpenChange={(open) => { if (!open) setClaudeTestResult(null); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="text-[13px]">Claude Account Test</DialogTitle>
+          <DialogDescription className="text-xs">
+            Test chat result for {claudeTestResult?.email}
+          </DialogDescription>
+        </DialogHeader>
+        {claudeTestResult && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              {claudeTestResult.ok ? (
+                <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-600">Working</Badge>
+              ) : claudeTestResult.auth_error ? (
+                <Badge variant="secondary" className="text-[10px] bg-red-50 text-red-500">Auth error</Badge>
+              ) : (
+                <Badge variant="secondary" className="text-[10px] bg-amber-50 text-amber-600">Failed</Badge>
+              )}
+              {typeof claudeTestResult.duration_ms === "number" && (
+                <span className="text-[10px] text-muted-foreground">
+                  {(claudeTestResult.duration_ms / 1000).toFixed(1)}s
+                </span>
+              )}
+            </div>
+            <div className="px-3 py-2 rounded-lg bg-muted/40 border border-border text-xs font-mono whitespace-pre-wrap break-words max-h-[40vh] overflow-y-auto">
+              {claudeTestResult.ok ? claudeTestResult.response : claudeTestResult.error}
+            </div>
+            {claudeTestResult.auth_error && (
+              <Alert className="bg-red-50 border-red-200 text-red-700">
+                <RiAlertLine size={14} className="flex-shrink-0" />
+                <AlertDescription className="text-xs">
+                  This account&apos;s Claude login looks broken. Turn off its Pool toggle and ask the user to reconnect Claude from the Integrations page.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setClaudeTestResult(null)}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
