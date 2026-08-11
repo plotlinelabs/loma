@@ -130,6 +130,7 @@ async def copy_spreadsheet(user_email: str, spreadsheet_id: str, title: str = ""
         fileId=spreadsheet_id,
         body=metadata,
         fields="id,name,webViewLink",
+        supportsAllDrives=True,
     ).execute()
 
     return {
