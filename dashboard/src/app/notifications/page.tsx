@@ -17,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import ClientTimestamp from "@/components/ClientTimestamp";
+import MarkdownContent from "@/components/MarkdownContent";
 import { cn } from "@/lib/utils";
 import { basePath } from "@/lib/api";
 import {
@@ -27,6 +28,39 @@ import {
   markNotificationRead,
 } from "@/lib/notifications-api";
 import { useNotifications } from "@/lib/NotificationsContext";
+
+
+// ── Body rendering helpers ─────────────────────────────────────────────────
+
+/**
+ * Wrap bare URLs in <url> (Slack auto-link form, supported by MarkdownContent)
+ * so plain-text notifications from older flows still get clickable links.
+ * URLs already inside markdown links [label](url) or <url> are left alone.
+ */
+function autolinkBareUrls(text: string): string {
+  return text.replace(
+    /(^|[^("'<\]])(https?:\/\/[^\s<>)"']+)/g,
+    (_m, prefix, url) => `${prefix}<${url}>`,
+  );
+}
+
+/**
+ * Strip markdown syntax down to plain text for the collapsed 2-line preview.
+ */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ") // fenced code blocks
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1") // images -> alt
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // links -> label
+    .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/g, "$2") // slack links -> label
+    .replace(/\*+/g, "") // bold/italic markers
+    .replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, "$1$2") // _emphasis_ (word-internal _ kept)
+    .replace(/[~`#>]+/g, "") // strikethrough, code ticks, headings, quotes
+    .replace(/^[-•]\s+/gm, "") // bullet markers
+    .replace(/\n{2,}/g, " · ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export default function NotificationsPage() {
   const router = useRouter();
@@ -185,16 +219,16 @@ export default function NotificationsPage() {
                       >
                         {n.title}
                       </div>
-                      {n.body && (
-                        <div
-                          className={cn(
-                            "text-xs text-muted-foreground mt-0.5",
-                            expanded ? "whitespace-pre-wrap break-words" : "line-clamp-2",
-                          )}
-                        >
-                          {n.body}
-                        </div>
-                      )}
+                      {n.body &&
+                        (expanded ? (
+                          <div className="mt-1 text-foreground/90 break-words">
+                            <MarkdownContent content={autolinkBareUrls(n.body)} className="text-[13px]" />
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                            {stripMarkdown(n.body)}
+                          </div>
+                        ))}
                       <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
                         <ClientTimestamp iso={n.created_at} variant="short" />
                       </div>
