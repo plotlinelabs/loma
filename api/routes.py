@@ -1850,5 +1850,9 @@ def setup_api_routes(app: web.Application):
     from api.file_routes import setup_file_routes
     setup_file_routes(app)
 
+    # Notification inbox routes (persistent per-user notifications)
+    from api.notification_routes import setup_notification_routes
+    setup_notification_routes(app)
+
     # CORS catch-all must be last
     app.router.add_route("OPTIONS", "/api/{path:.*}", cors_options)

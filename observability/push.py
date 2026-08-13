@@ -127,3 +127,65 @@ def fire_task_push(db, conversation_id: str):
     except RuntimeError:
         # No running loop (e.g. sync shutdown path) — skip.
         pass
+
+
+async def send_user_push(db, user_email: str, *, title: str, body: str = "",
+                         url: str = "", tag: str = ""):
+    """Send a web push to every browser a user has subscribed.
+
+    Generic sibling of send_task_needs_input_push — used by the notification
+    inbox so a new inbox notification also reaches the user's lock screen.
+    All failures are swallowed into logs.
+    """
+    try:
+        config = _vapid_config()
+        if not config or db is None or not user_email:
+            return
+        private_key, subject = config
+
+        subscriptions = await db.push_subscriptions.find(
+            {"user_email": user_email}).to_list(50)
+        if not subscriptions:
+            return
+
+        payload = json.dumps({
+            "title": title,
+            "body": (body or "")[:120],
+            "tag": tag or title,
+            "url": url,
+        })
+
+        from pywebpush import WebPushException
+
+        expired: list[str] = []
+        for entry in subscriptions:
+            subscription = entry.get("subscription") or {}
+            try:
+                await asyncio.to_thread(_send_one, subscription, payload, private_key, subject)
+            except WebPushException as e:
+                status_code = getattr(e.response, "status_code", None)
+                if status_code in (404, 410):
+                    expired.append(subscription.get("endpoint", ""))
+                else:
+                    logger.warning("Push: send failed for %s: %s", user_email, e)
+            except Exception as e:
+                logger.warning("Push: send failed for %s: %s", user_email, e)
+
+        if expired:
+            await db.push_subscriptions.delete_many(
+                {"subscription.endpoint": {"$in": expired}},
+            )
+    except Exception as e:
+        logger.warning("Push: user push for %s failed: %s", user_email, e)
+
+
+def fire_user_push(db, user_email: str, *, title: str, body: str = "",
+                   url: str = "", tag: str = ""):
+    """Fire-and-forget wrapper around send_user_push."""
+    try:
+        asyncio.create_task(
+            send_user_push(db, user_email, title=title, body=body, url=url, tag=tag)
+        )
+    except RuntimeError:
+        # No running loop (e.g. sync shutdown path) — skip.
+        pass

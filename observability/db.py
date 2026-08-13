@@ -104,6 +104,15 @@ async def init_observability():
     await _db.push_subscriptions.create_index("subscription.endpoint", unique=True)
     await _db.push_subscriptions.create_index("user_email")
 
+    # Notification inbox — persistent per-user notifications
+    await _db.notifications.create_index("notification_id", unique=True)
+    await _db.notifications.create_index(
+        [("user_email", 1), ("dismissed", 1), ("created_at", -1)],
+    )
+    await _db.notifications.create_index(
+        [("user_email", 1), ("read", 1), ("dismissed", 1)],
+    )
+
     # Projects collection (chat organization)
     await _db.projects.create_index("project_id", unique=True)
     await _db.projects.create_index("created_by")

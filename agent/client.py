@@ -743,13 +743,27 @@ async def stream_agent(
             f"[Authenticated User: {user_email}]\n"
             f"[Personal Tools Auth Token: {auth_token}]\n"
             f"When using personal tools (gmail, google_drive, google_calendar, "
-            f"google_sheets, google_slides, google_docs_personal, slack_user, telegram), you MUST pass "
+            f"google_sheets, google_slides, google_docs_personal, slack_user, telegram, notify), you MUST pass "
             f"`--user-email {user_email} --auth-token {auth_token}`. "
             f"Never use a different user's email with --user-email.\n"
             f"IMPORTANT: Always use the personal CLI tools (e.g. `python3 tools/google_drive.py`, "
             f"`python3 tools/gmail.py`) instead of any MCP equivalents (e.g. mcp__claude_ai_Google_Drive__*, "
             f"mcp__claude_ai_Gmail__*). The CLI tools use the user's own authenticated credentials and are "
             f"more reliable. Do NOT fall back to MCP Google Drive or Gmail tools."
+        )
+
+    # Expose the conversation id so tools (e.g. tools/notify.py) can deep-link
+    # notifications back to this conversation.
+    conversation_id = getattr(observer, "conversation_id", None) if observer else None
+    if user_email and conversation_id:
+        text_parts.append(
+            f"[Conversation ID: {conversation_id}]\n"
+            f"To leave a persistent notification in this user's Loma inbox (the bell icon "
+            f"in the dashboard), run `python3 tools/notify.py --user-email {user_email} "
+            f"--auth-token {auth_token} send --title \"...\" --body \"...\" "
+            f"--conversation-id {conversation_id}`. Use it when a flow or long-running "
+            f"task finishes with a result the user should see — the notification "
+            f"deep-links back to this conversation and persists until dismissed."
         )
 
     if conversation_context:
