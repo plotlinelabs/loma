@@ -136,7 +136,11 @@ export default function NotificationsPage() {
   const hasUnread = notifications.some((n) => !n.read);
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+    // Own scroll container (like /my-usage) so the page never scrolls the
+    // window — window scrolling conflicts with the PWA viewport-height sync
+    // on mobile and caused scroll-jump-to-top when a card was expanded.
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
       {/* Header */}
       <div className="pwa-header-offset flex items-center justify-between">
         <h1 className="text-lg font-semibold text-foreground">Notifications</h1>
@@ -292,6 +296,7 @@ export default function NotificationsPage() {
             );
           })
         )}
+        </div>
       </div>
     </div>
   );

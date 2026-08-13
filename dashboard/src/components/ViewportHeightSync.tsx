@@ -19,10 +19,25 @@ export default function ViewportHeightSync() {
     const vv = window.visualViewport;
     if (!vv) return;
 
+    // Only pin the window scroll while the on-screen keyboard is plausibly
+    // open (an editable element is focused). Pinning unconditionally fights
+    // the user on any page that scrolls at the window level — scrolling down
+    // fires visualViewport events and the page snaps back to the top.
+    const keyboardLikelyOpen = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      return (
+        tag === "TEXTAREA" ||
+        tag === "INPUT" ||
+        (el as HTMLElement).isContentEditable === true
+      );
+    };
+
     const sync = () => {
       document.documentElement.style.setProperty("--app-h", `${vv.height}px`);
       // Counteract iOS scrolling the page when the keyboard appears.
-      if (vv.offsetTop > 0 || window.scrollY > 0) {
+      if (keyboardLikelyOpen() && (vv.offsetTop > 0 || window.scrollY > 0)) {
         window.scrollTo(0, 0);
       }
     };
