@@ -63,10 +63,9 @@ async def _send(user_email: str, title: str, body: str,
             fire_push=False,  # fire-and-forget tasks die with this short-lived CLI; send inline instead
         )
         base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
-        if doc.get("conversation_id"):
-            url = f"{base_url}/chat?continue={doc['conversation_id']}"
-        else:
-            url = doc.get("link") or f"{base_url}/notifications"
+        # Push clicks always land on the notifications inbox — the user expands
+        # the notification there and opens the conversation explicitly.
+        url = f"{base_url}/notifications"
         await send_user_push(
             db, user_email,
             title=doc["title"], body=doc["body"], url=url, tag=doc["notification_id"],

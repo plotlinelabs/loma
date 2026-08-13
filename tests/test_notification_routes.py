@@ -177,7 +177,9 @@ async def test_create_notification_inserts_doc_and_fires_push():
     assert doc["dismissed"] is False
     db.notifications.insert_one.assert_awaited_once()
     fire.assert_called_once()
-    assert "conv-42" in fire.call_args.kwargs["url"]
+    # Push clicks land on the notifications inbox, never directly in a chat
+    assert fire.call_args.kwargs["url"].endswith("/notifications")
+    assert "conv-42" not in fire.call_args.kwargs["url"]
 
 
 @pytest.mark.asyncio
