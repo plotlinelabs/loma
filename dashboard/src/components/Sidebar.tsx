@@ -8,6 +8,7 @@ import { fetchConversations, fetchPinnedConversations, fetchPoolStatus } from ".
 import type { Conversation, PoolStatus } from "../lib/api";
 import { useUser } from "../lib/UserContext";
 import { useTaskAttention } from "../lib/TaskAttentionContext";
+import { useNotifications } from "../lib/NotificationsContext";
 import type { SystemRole } from "../lib/governance-api";
 import CrosscutIcon from "./CrosscutIcon";
 import ChatContextMenu from "./ChatContextMenu";
@@ -39,6 +40,7 @@ import {
   RiMenuFoldLine,
   RiMenuUnfoldLine,
   RiExpandUpDownLine,
+  RiNotification3Line,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -67,6 +69,12 @@ const navigation: NavItem[] = [
     name: "Activity",
     href: "/conversations",
     icon: <RiGridLine size={16} />,
+  },
+  {
+    name: "Notifications",
+    href: "/notifications",
+    badgeKey: "notifications",
+    icon: <RiNotification3Line size={16} />,
   },
   {
     name: "My Usage",
@@ -351,7 +359,8 @@ export default function Sidebar({
   const [myConversations, setMyConversations] = useState<Conversation[]>([]);
   const [pinnedConversations, setPinnedConversations] = useState<Conversation[]>([]);
   const { needsInputCount } = useTaskAttention();
-  const badgeCounts: Record<string, number> = { tasks: needsInputCount };
+  const { unreadCount: unreadNotificationCount } = useNotifications();
+  const badgeCounts: Record<string, number> = { tasks: needsInputCount, notifications: unreadNotificationCount };
   const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
 
   // Filter nav items by role
