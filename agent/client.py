@@ -763,7 +763,10 @@ async def stream_agent(
             f"--auth-token {auth_token} send --title \"...\" --body \"...\" "
             f"--conversation-id {conversation_id}`. Use it when a flow or long-running "
             f"task finishes with a result the user should see — the notification "
-            f"deep-links back to this conversation and persists until dismissed."
+            f"deep-links back to this conversation and persists until dismissed. "
+            f"IMPORTANT: after sending a notification, ALWAYS also write the same "
+            f"summary as your final chat response — never end the run with only the "
+            f"tool call, or the conversation the notification points to will be empty."
         )
 
     if conversation_context:

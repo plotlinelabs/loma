@@ -70,10 +70,9 @@ async def create_notification(
 
     if fire_push:
         base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
-        if doc["conversation_id"]:
-            url = f"{base_url}/chat?continue={doc['conversation_id']}"
-        else:
-            url = doc["link"] or f"{base_url}/notifications"
+        # Push clicks always land on the notifications inbox — the user expands
+        # the notification there and opens the conversation explicitly.
+        url = f"{base_url}/notifications"
         fire_user_push(
             db, user_email,
             title=doc["title"], body=doc["body"],

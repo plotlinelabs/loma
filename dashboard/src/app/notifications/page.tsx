@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  RiArrowDownSLine,
+  RiChat1Line,
   RiCheckDoubleLine,
   RiCloseLine,
+  RiExternalLinkLine,
   RiNotification3Line,
   RiRefreshLine,
 } from "@remixicon/react";
@@ -30,6 +33,7 @@ export default function NotificationsPage() {
   const { refresh: refreshUnreadCount } = useNotifications();
   const [notifications, setNotifications] = useState<LomaNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -45,24 +49,36 @@ export default function NotificationsPage() {
     loadData();
   }, [loadData]);
 
-  const handleOpen = async (n: LomaNotification) => {
-    if (!n.read) {
-      setNotifications((prev) =>
-        prev.map((x) => (x.notification_id === n.notification_id ? { ...x, read: true } : x)),
-      );
-      markNotificationRead(n.notification_id)
-        .then(refreshUnreadCount)
-        .catch(() => {});
-    }
-    if (n.conversation_id) {
-      router.push(`${basePath}/chat?continue=${n.conversation_id}`);
-    } else if (n.link) {
-      window.open(n.link, "_blank", "noopener,noreferrer");
-    }
+  const markRead = (n: LomaNotification) => {
+    if (n.read) return;
+    setNotifications((prev) =>
+      prev.map((x) => (x.notification_id === n.notification_id ? { ...x, read: true } : x)),
+    );
+    markNotificationRead(n.notification_id)
+      .then(refreshUnreadCount)
+      .catch(() => {});
+  };
+
+  // Clicking a card expands it in place (and marks it read) — it never
+  // navigates. Opening the conversation/link is an explicit button action.
+  const handleToggle = (n: LomaNotification) => {
+    markRead(n);
+    setExpandedId((prev) => (prev === n.notification_id ? null : n.notification_id));
+  };
+
+  const handleOpenConversation = (n: LomaNotification) => {
+    markRead(n);
+    router.push(`${basePath}/chat?continue=${n.conversation_id}`);
+  };
+
+  const handleOpenLink = (n: LomaNotification) => {
+    markRead(n);
+    window.open(n.link!, "_blank", "noopener,noreferrer");
   };
 
   const handleDismiss = async (n: LomaNotification) => {
     setNotifications((prev) => prev.filter((x) => x.notification_id !== n.notification_id));
+    if (expandedId === n.notification_id) setExpandedId(null);
     try {
       await dismissNotification(n.notification_id);
       refreshUnreadCount();
@@ -137,64 +153,110 @@ export default function NotificationsPage() {
             description="Flows and long-running tasks will leave their results here"
           />
         ) : (
-          notifications.map((n, idx) => (
-            <Card
-              key={n.notification_id}
-              className={cn(
-                "p-3 active:bg-muted/50 transition-colors animate-fade-in-up",
-                (n.conversation_id || n.link) && "cursor-pointer",
-                !n.read && "bg-brand-50/40",
-              )}
-              style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
-              onClick={() => handleOpen(n)}
-            >
-              <CardContent className="p-0">
-                <div className="flex items-start gap-2.5">
-                  <div
-                    className={cn(
-                      "h-2 w-2 rounded-full mt-1.5 shrink-0",
-                      n.read ? "bg-transparent" : "bg-brand-500",
-                    )}
-                  />
-                  <div className="flex-1 min-w-0">
+          notifications.map((n, idx) => {
+            const expanded = expandedId === n.notification_id;
+            const hasActions = Boolean(n.conversation_id || n.link);
+            return (
+              <Card
+                key={n.notification_id}
+                className={cn(
+                  "p-3 active:bg-muted/50 transition-colors animate-fade-in-up cursor-pointer",
+                  !n.read && "bg-brand-50/40",
+                )}
+                style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
+                onClick={() => handleToggle(n)}
+                aria-expanded={expanded}
+              >
+                <CardContent className="p-0">
+                  <div className="flex items-start gap-2.5">
                     <div
                       className={cn(
-                        "text-[13px] truncate",
-                        n.read ? "font-normal text-foreground/80" : "font-medium text-foreground",
+                        "h-2 w-2 rounded-full mt-1.5 shrink-0",
+                        n.read ? "bg-transparent" : "bg-brand-500",
                       )}
-                    >
-                      {n.title}
-                    </div>
-                    {n.body && (
-                      <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                        {n.body}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div
+                        className={cn(
+                          "text-[13px]",
+                          expanded ? "break-words" : "truncate",
+                          n.read ? "font-normal text-foreground/80" : "font-medium text-foreground",
+                        )}
+                      >
+                        {n.title}
                       </div>
-                    )}
-                    <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
-                      <ClientTimestamp iso={n.created_at} variant="short" />
-                      {n.conversation_id && <span>Open conversation →</span>}
+                      {n.body && (
+                        <div
+                          className={cn(
+                            "text-xs text-muted-foreground mt-0.5",
+                            expanded ? "whitespace-pre-wrap break-words" : "line-clamp-2",
+                          )}
+                        >
+                          {n.body}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
+                        <ClientTimestamp iso={n.created_at} variant="short" />
+                      </div>
+                      {expanded && hasActions && (
+                        <div
+                          className="flex items-center gap-2 mt-2.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {n.conversation_id && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleOpenConversation(n)}
+                              className="h-8 text-xs press-scale"
+                            >
+                              <RiChat1Line size={14} className="mr-1.5" />
+                              Open conversation
+                            </Button>
+                          )}
+                          {n.link && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleOpenLink(n)}
+                              className="h-8 text-xs press-scale"
+                            >
+                              <RiExternalLinkLine size={14} className="mr-1.5" />
+                              Open link
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="shrink-0 flex items-center" onClick={(e) => e.stopPropagation()}>
+                      <RiArrowDownSLine
+                        size={16}
+                        className={cn(
+                          "text-muted-foreground/60 transition-transform mt-1.5 mr-0.5",
+                          expanded && "rotate-180",
+                        )}
+                        onClick={() => handleToggle(n)}
+                      />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => handleDismiss(n)}
+                            className="text-muted-foreground hover:text-foreground h-8 w-8 md:h-6 md:w-6"
+                            aria-label="Dismiss notification"
+                          >
+                            <RiCloseLine size={14} />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Dismiss</TooltipContent>
+                      </Tooltip>
                     </div>
                   </div>
-                  <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => handleDismiss(n)}
-                          className="text-muted-foreground hover:text-foreground h-8 w-8 md:h-6 md:w-6"
-                          aria-label="Dismiss notification"
-                        >
-                          <RiCloseLine size={14} />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Dismiss</TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))
+                </CardContent>
+              </Card>
+            );
+          })
         )}
       </div>
     </div>
