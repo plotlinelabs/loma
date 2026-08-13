@@ -138,11 +138,15 @@ You are responding in the dashboard. Use standard Markdown.
 _FORMATTING_POOLED = f"""
 ## Response Formatting
 
-Each message may specify its output channel with a `[Source: slack]`, `[Source: dashboard]`, or `[Source: github_webhook]` marker. Apply the formatting rules for the indicated source.
+Each message may specify its output channel with a `[Source: slack]`, `[Source: dashboard]`, `[Source: telegram]`, or `[Source: github_webhook]` marker. Apply the formatting rules for the indicated source.
 
 {_FORMATTING_SLACK}
 
 {_FORMATTING_DASHBOARD}
+
+### Telegram
+
+You are responding in a Telegram DM. Use plain text only — no Markdown syntax, no tables, no heading markers. Keep responses short and mobile-friendly; use simple dashes for lists.
 
 ### GitHub Webhook
 
