@@ -143,7 +143,7 @@ class TestProcessTelegramUpdate:
     async def test_start_with_valid_code_links_account(self):
         db = _make_db()
         db.telegram_link_codes.find_one_and_update.return_value = {
-            "code": "abc", "user_email": "adarsh@plotline.so",
+            "code": "abc", "user_email": "user@example.com",
         }
         send = AsyncMock()
         with patch.object(telegram_ingestion, "get_db", return_value=db), \
@@ -152,9 +152,9 @@ class TestProcessTelegramUpdate:
 
         db.telegram_links.update_one.assert_awaited_once()
         filter_arg, update_arg = db.telegram_links.update_one.await_args.args
-        assert filter_arg == {"user_email": "adarsh@plotline.so"}
+        assert filter_arg == {"user_email": "user@example.com"}
         assert update_arg["$set"]["telegram_user_id"] == 42
-        assert "Connected as adarsh@plotline.so" in send.await_args.args[1]
+        assert "Connected as user@example.com" in send.await_args.args[1]
 
     @pytest.mark.asyncio
     async def test_start_with_invalid_code_replies_error(self):
@@ -190,13 +190,13 @@ class TestProcessTelegramUpdate:
     async def test_linked_sender_runs_agent(self):
         db = _make_db()
         db.telegram_links.find_one.return_value = {
-            "user_email": "adarsh@plotline.so",
+            "user_email": "user@example.com",
             "telegram_user_id": 42,
             "telegram_chat_id": 42,
         }
 
         async def fake_stream(**kwargs):
-            assert kwargs["user_email"] == "adarsh@plotline.so"
+            assert kwargs["user_email"] == "user@example.com"
             assert kwargs["source"] == "telegram"
             yield "part one"
             yield "part two"
