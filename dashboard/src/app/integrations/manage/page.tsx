@@ -24,6 +24,13 @@ import {
   type CodexAuthStatus,
 } from "../../../lib/codex-auth-api";
 import {
+  fetchTelegramStatus,
+  createTelegramLink,
+  disconnectTelegram,
+  type TelegramStatus,
+  type TelegramLink,
+} from "../../../lib/telegram-api";
+import {
   fetchIntegrations,
   connectIntegration,
   disconnectIntegration,
@@ -151,6 +158,18 @@ function SlackLogo() {
       <path d="M8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312z" fill="#36C5F0"/>
       <path d="M18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312z" fill="#2EB67D"/>
       <path d="M15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z" fill="#ECB22E"/>
+    </svg>
+  );
+}
+
+function TelegramLogo() {
+  return (
+    <svg className="w-8 h-8" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="12" fill="#229ED9" />
+      <path
+        d="M5.29 11.71l12.3-4.74c.57-.21 1.07.14.88.99l-2.09 9.87c-.15.7-.57.87-1.15.54l-3.19-2.35-1.54 1.48c-.17.17-.31.31-.64.31l.23-3.25 5.92-5.35c.26-.23-.06-.36-.4-.13L8.29 13.7l-3.15-.98c-.68-.22-.7-.68.15-1.01z"
+        fill="#fff"
+      />
     </svg>
   );
 }
@@ -343,17 +362,24 @@ export default function IntegrationsPage() {
   const [codexAutoCommand, setCodexAutoCommand] = useState<string | undefined>();
   const [disconnectingCodex, setDisconnectingCodex] = useState(false);
 
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
+  const [telegramLink, setTelegramLink] = useState<TelegramLink | null>(null);
+  const [linkingTelegram, setLinkingTelegram] = useState(false);
+  const [disconnectingTelegram, setDisconnectingTelegram] = useState(false);
+
   const loadConnections = useCallback(async () => {
     try {
-      const [conns, claude, codex, orgInteg] = await Promise.all([
+      const [conns, claude, codex, orgInteg, telegram] = await Promise.all([
         fetchOAuthConnections().catch(() => []),
         fetchClaudeAuthStatus().catch(() => null),
         fetchCodexAuthStatus().catch(() => null),
         fetchIntegrations().catch(() => []),
+        fetchTelegramStatus().catch(() => null),
       ]);
       setConnections(conns);
       if (claude) setClaudeAuth(claude);
       if (codex) setCodexAuth(codex);
+      if (telegram) setTelegramStatus(telegram);
       setOrgIntegrations(orgInteg);
 
       const urls: Record<string, string> = {};
@@ -413,6 +439,22 @@ export default function IntegrationsPage() {
   }, [showCodexTerminal]);
 
   useEffect(() => {
+    if (!telegramLink || telegramStatus?.linked) return;
+    const interval = setInterval(async () => {
+      try {
+        const status = await fetchTelegramStatus();
+        if (status.linked) {
+          setTelegramStatus(status);
+          setTelegramLink(null);
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [telegramLink, telegramStatus?.linked]);
+
+  useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (event.data?.type === "oauth-complete") {
         const prov = event.data.provider;
@@ -431,6 +473,38 @@ export default function IntegrationsPage() {
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
   }, [loadConnections]);
+
+  const handleConnectTelegram = async () => {
+    setLinkingTelegram(true);
+    setError(null);
+    try {
+      const link = await createTelegramLink();
+      setTelegramLink(link);
+      window.open(link.deep_link, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create Telegram link");
+    } finally {
+      setLinkingTelegram(false);
+    }
+  };
+
+  const handleDisconnectTelegram = async () => {
+    if (!confirm("Disconnect your Telegram account? Loma will no longer respond to your Telegram messages.")) {
+      return;
+    }
+    setDisconnectingTelegram(true);
+    setError(null);
+    try {
+      await disconnectTelegram();
+      setTelegramLink(null);
+      const status = await fetchTelegramStatus().catch(() => null);
+      if (status) setTelegramStatus(status);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to disconnect Telegram");
+    } finally {
+      setDisconnectingTelegram(false);
+    }
+  };
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -1449,6 +1523,112 @@ export default function IntegrationsPage() {
                           <Badge
                             key={perm}
                             className="bg-purple-50 text-purple-600 border-transparent"
+                          >
+                            {perm}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Telegram Integration Card */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
+                        <TelegramLogo />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-[13px] font-semibold text-foreground">
+                            Telegram
+                          </h2>
+                          <StatusBadge status={telegramStatus?.linked ? "connected" : "not_connected"} />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          Chat with your Loma agent from Telegram
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {telegramStatus?.linked ? (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleDisconnectTelegram}
+                          disabled={disconnectingTelegram}
+                        >
+                          {disconnectingTelegram ? "Disconnecting..." : "Disconnect"}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={handleConnectTelegram}
+                          disabled={linkingTelegram || telegramStatus?.configured === false}
+                        >
+                          {linkingTelegram ? "Connecting..." : "Connect Telegram"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {telegramStatus?.linked && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-xs text-muted-foreground">
+                        Linked to {telegramStatus.telegram_username ? `@${telegramStatus.telegram_username}` : "your Telegram account"}
+                        {telegramStatus.linked_at ? ` — connected ${formatDate(telegramStatus.linked_at)}` : ""}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Message {telegramStatus.bot_username ? `@${telegramStatus.bot_username}` : "the Loma bot"} on
+                        Telegram and it will reply as your agent. Send /stop to disconnect.
+                      </p>
+                    </>
+                  )}
+
+                  {telegramStatus?.configured === false && (
+                    <Alert className="mt-2 bg-amber-50 border-amber-100">
+                      <AlertDescription className="text-amber-700">
+                        The Telegram bot is not configured on this deployment. Ask an admin to set TELEGRAM_BOT_TOKEN.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!telegramStatus?.linked && telegramLink && (
+                    <Alert className="mt-2 bg-sky-50 border-sky-100">
+                      <AlertDescription className="text-sky-700">
+                        Waiting for you to open Telegram…{" "}
+                        <a
+                          href={telegramLink.deep_link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline font-medium"
+                        >
+                          Open @{telegramLink.bot_username}
+                        </a>{" "}
+                        and tap Start. The link expires in {telegramLink.expires_in_minutes} minutes.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!telegramStatus?.linked && !telegramLink && telegramStatus?.configured !== false && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-[13px] text-muted-foreground">
+                        Link your Telegram account to chat with your own Loma agent from your phone.
+                        Click Connect, open the bot in Telegram, and tap Start — no tokens needed.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {["Chat with your agent", "DMs only", "Runs as your account", "Unlink anytime with /stop"].map((perm) => (
+                          <Badge
+                            key={perm}
+                            className="bg-sky-50 text-sky-600 border-transparent"
                           >
                             {perm}
                           </Badge>

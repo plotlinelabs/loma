@@ -24,6 +24,7 @@ from webhooks.pylon import setup_pylon_webhook_routes
 from webhooks.hubspot import setup_hubspot_webhook_routes
 from webhooks.github import setup_github_webhook_routes
 from webhooks.incoming import setup_incoming_webhook_routes
+from webhooks.telegram import setup_telegram_webhook_routes
 from observability.db import init_observability, get_db
 from api.skill_seed import seed_default_skills
 from api.routes import setup_api_routes
@@ -39,6 +40,7 @@ from api.codex_auth_routes import setup_codex_auth_routes
 from api.file_routes import setup_file_routes
 from api.integration_routes import setup_integration_routes
 from api.prompt_settings_routes import setup_prompt_settings_routes
+from api.telegram_routes import setup_telegram_routes
 from recovery import start_recovery_loop, mark_all_running_interrupted
 from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
@@ -125,6 +127,7 @@ async def main():
         setup_hubspot_webhook_routes(webhook_app)
         setup_github_webhook_routes(webhook_app)
         setup_incoming_webhook_routes(webhook_app)
+        setup_telegram_webhook_routes(webhook_app)
     setup_api_routes(webhook_app)
     setup_governance_routes(webhook_app)
     setup_oauth_routes(webhook_app)
@@ -137,6 +140,7 @@ async def main():
     setup_file_routes(webhook_app)
     setup_integration_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
+    setup_telegram_routes(webhook_app)
     async def on_shutdown(_app):
         await mark_all_running_interrupted()
 

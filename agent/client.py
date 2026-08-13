@@ -743,7 +743,7 @@ async def stream_agent(
             f"[Authenticated User: {user_email}]\n"
             f"[Personal Tools Auth Token: {auth_token}]\n"
             f"When using personal tools (gmail, google_drive, google_calendar, "
-            f"google_sheets, google_slides, google_docs_personal, slack_user), you MUST pass "
+            f"google_sheets, google_slides, google_docs_personal, slack_user, telegram), you MUST pass "
             f"`--user-email {user_email} --auth-token {auth_token}`. "
             f"Never use a different user's email with --user-email.\n"
             f"IMPORTANT: Always use the personal CLI tools (e.g. `python3 tools/google_drive.py`, "
