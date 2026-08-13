@@ -182,7 +182,7 @@ export default function NotificationsPage() {
                           variant="ghost"
                           size="icon-xs"
                           onClick={() => handleDismiss(n)}
-                          className="text-muted-foreground hover:text-foreground"
+                          className="text-muted-foreground hover:text-foreground h-8 w-8 md:h-6 md:w-6"
                           aria-label="Dismiss notification"
                         >
                           <RiCloseLine size={14} />

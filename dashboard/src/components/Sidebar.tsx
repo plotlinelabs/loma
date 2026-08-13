@@ -61,6 +61,12 @@ const navigation: NavItem[] = [
     icon: <RiCheckboxLine size={16} />,
   },
   {
+    name: "Notifications",
+    href: "/notifications",
+    badgeKey: "notifications",
+    icon: <RiNotification3Line size={16} />,
+  },
+  {
     name: "Chat",
     href: "/chat",
     icon: <RiChat1Line size={16} />,
@@ -69,12 +75,6 @@ const navigation: NavItem[] = [
     name: "Activity",
     href: "/conversations",
     icon: <RiGridLine size={16} />,
-  },
-  {
-    name: "Notifications",
-    href: "/notifications",
-    badgeKey: "notifications",
-    icon: <RiNotification3Line size={16} />,
   },
   {
     name: "My Usage",
