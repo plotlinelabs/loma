@@ -44,11 +44,12 @@ Ashby key + per-user access control:
     minted server-side for the authenticated Loma user, so one user cannot
     invoke this tool as another user.
   * Only allowlisted users may use this tool at all. Allowlist comes from the
-    ASHBY_ALLOWED_USERS env var (comma-separated emails); if unset it defaults
-    to shubham@plotline.so ONLY.
+    ASHBY_ALLOWED_USERS env var (comma-separated emails); if unset, ALL access
+    is denied (deny-by-default — the allowlist must be configured explicitly).
   * The API key is resolved per user: ASHBY_API_KEY__<EMAIL_UPPERCASED_WITH_
-    NON_ALNUM_AS_UNDERSCORE> (e.g. ASHBY_API_KEY__SHUBHAM_PLOTLINE_SO) is
-    checked first, then the shared ASHBY_API_KEY as fallback.
+    NON_ALNUM_AS_UNDERSCORE> (e.g. ASHBY_API_KEY__JANE_EXAMPLE_COM for
+    jane@example.com) is checked first, then the shared ASHBY_API_KEY as
+    fallback.
 API docs: https://developers.ashbyhq.com
 Auth to Ashby: HTTP Basic — API key as username, blank password.
 
@@ -73,9 +74,9 @@ SECURITY — compensation / offer data must never leak through this tool:
     so offer data is blocked at the key level too (defense in depth).
 
 Usage (called by the agent via Bash — auth flags are required on EVERY call):
-  python3 tools/ashby.py list-jobs --status Open --user-email shubham@plotline.so --auth-token TOKEN
+  python3 tools/ashby.py list-jobs --status Open --user-email jane@example.com --auth-token TOKEN
   python3 tools/ashby.py create-job --title "Backend Engineer" --team-id ... --location-id ... \
-      --user-email shubham@plotline.so --auth-token TOKEN
+      --user-email jane@example.com --auth-token TOKEN
 """
 
 import asyncio
@@ -167,8 +168,9 @@ class AshbyToolError(Exception):
 # Per-user access control
 # ---------------------------------------------------------------------------
 
-# If ASHBY_ALLOWED_USERS is not set, ONLY this user may use the tool.
-DEFAULT_ALLOWED_USERS = "shubham@plotline.so"
+# If ASHBY_ALLOWED_USERS is not set, NO user may use the tool (deny-by-default).
+# Configure the allowlist via the ASHBY_ALLOWED_USERS env var, never in code.
+DEFAULT_ALLOWED_USERS = ""
 
 # Set by _authorize_user() after the auth token is verified.
 _AUTHED_EMAIL: str | None = None
