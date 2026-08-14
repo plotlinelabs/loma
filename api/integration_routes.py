@@ -191,26 +191,103 @@ async def _probe_custom_connector(request: web.Request) -> web.Response:
         return web.json_response({"error": "Valid URL required"}, status=400)
 
     result: dict = {"requires_oauth": False, "reachable": False, "oauth_metadata": None}
+    resource_metadata_url: str | None = None
 
     async with _aiohttp.ClientSession() as session:
+        # Try GET first (works for SSE-based MCP servers).
         try:
             async with session.get(url, timeout=_aiohttp.ClientTimeout(total=10), allow_redirects=True) as resp:
                 result["reachable"] = True
                 if resp.status == 401:
                     result["requires_oauth"] = True
+                    resource_metadata_url = _extract_resource_metadata_url(resp)
         except Exception:
             pass
 
-    parsed = urlparse(url)
-    well_known_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/oauth-authorization-server"
+        # Also try POST for Streamable HTTP servers (they return 405 on GET).
+        if not result["requires_oauth"]:
+            try:
+                async with session.post(
+                    url,
+                    json={"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}},
+                    timeout=_aiohttp.ClientTimeout(total=10),
+                    headers={"Content-Type": "application/json"},
+                ) as resp:
+                    if resp.status in (200, 401, 403, 405):
+                        result["reachable"] = True
+                    if resp.status == 401:
+                        result["requires_oauth"] = True
+                        resource_metadata_url = _extract_resource_metadata_url(resp)
+            except Exception:
+                pass
+
+    # OAuth discovery: try the Protected Resource Metadata flow first (RFC 9728,
+    # used by Ashby and other modern MCP servers where the auth server is on a
+    # different origin), then fall back to same-origin well-known.
+    oauth_metadata = await _discover_oauth_metadata(url, resource_metadata_url)
+    if oauth_metadata:
+        result["requires_oauth"] = True
+        result["oauth_metadata"] = oauth_metadata
+
+    return web.json_response(result)
+
+
+def _extract_resource_metadata_url(resp) -> str | None:
+    """Parse resource_metadata from a WWW-Authenticate Bearer challenge."""
+    www_auth = resp.headers.get("WWW-Authenticate", "")
+    match = re.search(r'resource_metadata="([^"]+)"', www_auth)
+    return match.group(1) if match else None
+
+
+async def _discover_oauth_metadata(
+    mcp_url: str,
+    resource_metadata_url: str | None,
+) -> dict | None:
+    """Discover OAuth authorization server metadata.
+
+    Tries two flows:
+    1. Protected Resource Metadata (RFC 9728): fetch the resource_metadata URL
+       from the WWW-Authenticate header, follow its authorization_servers list.
+    2. Same-origin well-known: /.well-known/oauth-authorization-server on the
+       MCP server host (legacy flow).
+    """
+    timeout = _aiohttp.ClientTimeout(total=5)
 
     async with _aiohttp.ClientSession() as session:
+        # Flow 1: Protected Resource Metadata → cross-origin auth server
+        if resource_metadata_url:
+            try:
+                async with session.get(resource_metadata_url, timeout=timeout) as resp:
+                    if resp.status == 200 and "json" in (resp.content_type or ""):
+                        resource_meta = await resp.json()
+                        auth_servers = resource_meta.get("authorization_servers", [])
+                        resource_scopes = resource_meta.get("scopes_supported", [])
+                        for auth_server_issuer in auth_servers:
+                            issuer = auth_server_issuer.rstrip("/")
+                            as_url = f"{issuer}/.well-known/oauth-authorization-server"
+                            try:
+                                async with session.get(as_url, timeout=timeout) as as_resp:
+                                    if as_resp.status == 200 and "json" in (as_resp.content_type or ""):
+                                        metadata = await as_resp.json()
+                                        return {
+                                            "authorization_endpoint": metadata.get("authorization_endpoint"),
+                                            "token_endpoint": metadata.get("token_endpoint"),
+                                            "registration_endpoint": metadata.get("registration_endpoint"),
+                                            "scopes_supported": resource_scopes or metadata.get("scopes_supported", []),
+                                        }
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+
+        # Flow 2: same-origin well-known (legacy)
+        parsed = urlparse(mcp_url)
+        well_known_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/oauth-authorization-server"
         try:
-            async with session.get(well_known_url, timeout=_aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
+            async with session.get(well_known_url, timeout=timeout) as resp:
+                if resp.status == 200 and "json" in (resp.content_type or ""):
                     metadata = await resp.json()
-                    result["requires_oauth"] = True
-                    result["oauth_metadata"] = {
+                    return {
                         "authorization_endpoint": metadata.get("authorization_endpoint"),
                         "token_endpoint": metadata.get("token_endpoint"),
                         "registration_endpoint": metadata.get("registration_endpoint"),
@@ -219,7 +296,7 @@ async def _probe_custom_connector(request: web.Request) -> web.Response:
         except Exception:
             pass
 
-    return web.json_response(result)
+    return None
 
 
 async def _add_custom_connector(request: web.Request) -> web.Response:
