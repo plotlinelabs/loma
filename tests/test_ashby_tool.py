@@ -12,13 +12,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import tools.ashby as ashby_mod  # noqa: E402
 from tools.ashby import (  # noqa: E402
     ENDPOINT_ALLOWLIST,
     EXPAND_ALLOWLIST,
     REDACTED,
+    WRITE_ENDPOINT_ALLOWLIST,
     AshbyToolError,
     _post,
     _sanitize_expand,
+    _sanitize_write_payload,
     redact_sensitive,
 )
 
@@ -39,9 +42,8 @@ from tools.ashby import (  # noqa: E402
         "application.update",
         "candidate.update",
         "candidate.create",
-        "job.create",
-        "job.update",
-        "job.setStatus",
+        "jobPosting.update",
+        "interviewPlan.update",
     ],
 )
 def test_blocked_endpoints_raise_locally(endpoint):
@@ -50,11 +52,58 @@ def test_blocked_endpoints_raise_locally(endpoint):
         asyncio.run(_post(endpoint, {}))
 
 
-def test_no_offer_or_write_endpoints_in_allowlist():
+def test_no_offer_or_write_endpoints_in_read_allowlist():
     for endpoint in ENDPOINT_ALLOWLIST:
         assert not endpoint.startswith("offer."), f"offer endpoint in allowlist: {endpoint}"
         for verb in ("create", "update", "delete", "change", "set", "add", "upload", "move"):
             assert verb not in endpoint.lower(), f"write endpoint in allowlist: {endpoint}"
+
+
+def test_write_allowlist_covers_only_job_and_opening():
+    for endpoint in WRITE_ENDPOINT_ALLOWLIST:
+        assert endpoint.startswith(("job.", "opening.")), (
+            f"non job/opening write endpoint in write allowlist: {endpoint}"
+        )
+    assert not any(e.startswith("offer.") for e in WRITE_ENDPOINT_ALLOWLIST)
+
+
+@pytest.mark.parametrize("endpoint", sorted(WRITE_ENDPOINT_ALLOWLIST))
+def test_write_endpoints_pass_allowlist(endpoint, monkeypatch):
+    """Allowlisted write endpoints clear the local endpoint gate.
+
+    With no API key configured they must fail on the missing key (i.e. AFTER
+    the allowlist check), proving the endpoint itself is permitted — and no
+    network request is ever made.
+    """
+    monkeypatch.setattr(ashby_mod, "_AUTHED_EMAIL", "user@example.com")
+    monkeypatch.delenv("ASHBY_API_KEY", raising=False)
+    monkeypatch.delenv("ASHBY_API_KEY__USER_EXAMPLE_COM", raising=False)
+    with pytest.raises(AshbyToolError, match="ASHBY_API_KEY"):
+        asyncio.run(_post(endpoint, {}))
+
+
+def test_write_payload_sanitizer_strips_comp_keys():
+    payload = {
+        "title": "Backend Engineer",
+        "teamId": "t-1",
+        "compensation": {"min": 100},
+        "salaryRange": "100-200",
+        "nested": {"equityGrant": "1%", "locationId": "l-1"},
+    }
+    out = _sanitize_write_payload(payload)
+    assert "compensation" not in out
+    assert "salaryRange" not in out
+    assert "equityGrant" not in out["nested"]
+    assert out["title"] == "Backend Engineer"
+    assert out["nested"]["locationId"] == "l-1"
+
+
+def test_unauthorized_user_cannot_reach_api(monkeypatch):
+    """Without a verified user, even allowlisted endpoints fail closed."""
+    monkeypatch.setattr(ashby_mod, "_AUTHED_EMAIL", None)
+    monkeypatch.setenv("ASHBY_API_KEY", "dummy")
+    with pytest.raises(AshbyToolError, match="not authorized"):
+        asyncio.run(_post("job.list", {}))
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +196,8 @@ def test_redaction_preserves_non_dict_types():
 # ---------------------------------------------------------------------------
 
 def test_missing_api_key_raises(monkeypatch):
+    monkeypatch.setattr(ashby_mod, "_AUTHED_EMAIL", "user@example.com")
     monkeypatch.delenv("ASHBY_API_KEY", raising=False)
+    monkeypatch.delenv("ASHBY_API_KEY__USER_EXAMPLE_COM", raising=False)
     with pytest.raises(AshbyToolError, match="ASHBY_API_KEY"):
         asyncio.run(_post("job.list", {}))
