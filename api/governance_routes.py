@@ -293,6 +293,17 @@ async def handle_delete_user(request: web.Request) -> web.Response:
 
     await db.users.delete_one({"email": email})
 
+    # Delete any Claude/Codex credential dirs BEFORE refreshing the pools.
+    # The pool rescans the credentials dir on disk, and a deleted user has no
+    # user doc left to exclude them via the pool toggle — so a leftover OAuth
+    # file would resurrect them as a pool account forever.
+    from api.claude_auth_routes import remove_claude_credentials
+    from api.codex_auth_routes import remove_codex_credentials
+    if not await remove_claude_credentials(email):
+        logger.error("Could not remove Claude credentials for deleted user %s", email)
+    if not await remove_codex_credentials(email):
+        logger.error("Could not remove Codex credentials for deleted user %s", email)
+
     # The removed user may have been a Claude/Codex pool account — refresh the lists.
     try:
         from agent.pool import get_pool
