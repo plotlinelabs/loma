@@ -15,13 +15,14 @@ export function appendDictation(prev: string, text: string): string {
 interface DictationButtonProps {
   onText: (text: string) => void;
   disabled?: boolean;
+  mobileProminent?: boolean;
   className?: string;
 }
 
 /** Mic toggle for composers: tap to record, tap again to stop + transcribe
  * (server-side, Deepgram Nova-3). Hidden where MediaRecorder/getUserMedia
  * are unavailable (e.g. plain HTTP). */
-export function DictationButton({ onText, disabled, className }: DictationButtonProps) {
+export function DictationButton({ onText, disabled, mobileProminent, className }: DictationButtonProps) {
   const { state, seconds, error, supported, toggle } = useDictation(onText);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -62,7 +63,7 @@ export function DictationButton({ onText, disabled, className }: DictationButton
         title="Stop and transcribe (Option + Space)"
         aria-keyshortcuts="Alt+Space"
         className={cn(
-          "h-7 gap-1.5 rounded-lg px-2 text-red-600 hover:text-red-600 hover:bg-red-500/10",
+          "h-7 gap-1.5 rounded-lg px-2 text-red-600 hover:text-red-600 hover:bg-red-500/10 max-md:h-11 max-md:px-3",
           className,
         )}
       >
@@ -90,6 +91,8 @@ export function DictationButton({ onText, disabled, className }: DictationButton
       aria-keyshortcuts="Alt+Space"
       className={cn(
         error ? "text-destructive" : "text-muted-foreground hover:text-foreground",
+        "max-md:size-11 max-md:rounded-xl",
+        mobileProminent && "max-md:size-12 max-md:bg-accent-200 max-md:text-accent-on max-md:hover:bg-accent-300 max-md:hover:text-accent-on max-md:[&_svg]:size-5",
         className,
       )}
     >
