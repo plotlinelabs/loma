@@ -108,10 +108,10 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               loadState={loadState}
             />
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
             <DictationButton
               onText={(t) => setValue((prev) => appendDictation(prev, t))}
-              mobileProminent={!value.trim() && files.length === 0}
+              mobileProminent
             />
             <Button
               type="button"

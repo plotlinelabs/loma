@@ -1374,10 +1374,10 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center">
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
-                      mobileProminent={!input.trim() && pendingFiles.length === 0}
+                      mobileProminent
                     />
                     <Button
                       type="button"
@@ -1695,10 +1695,10 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center">
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
-                      mobileProminent={!input.trim() && pendingFiles.length === 0}
+                      mobileProminent
                     />
                     <Button
                       type="button"

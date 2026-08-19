@@ -59,11 +59,12 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
         type="button"
         variant="ghost"
         size="sm"
-        onClick={toggle}
-        title="Stop and transcribe (Option + Space)"
-        aria-keyshortcuts="Alt+Space"
-        className={cn(
-          "h-7 gap-1.5 rounded-lg px-2 text-red-600 hover:text-red-600 hover:bg-red-500/10 max-md:h-11 max-md:px-3",
+      onClick={toggle}
+      title="Stop and transcribe (Option + Space)"
+      aria-label="Stop dictation and transcribe"
+      aria-keyshortcuts="Alt+Space"
+      className={cn(
+          "h-7 gap-1.5 rounded-lg px-2 text-red-600 hover:text-red-600 hover:bg-red-500/10 max-md:order-last max-md:h-12 max-md:px-4 max-md:ring-2 max-md:ring-red-500/20",
           className,
         )}
       >
@@ -88,11 +89,12 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
       onClick={toggle}
       disabled={disabled || state === "transcribing"}
       title={error ?? "Dictate (Option + Space)"}
+      aria-label={state === "transcribing" ? "Transcribing dictation" : "Start dictation"}
       aria-keyshortcuts="Alt+Space"
       className={cn(
         error ? "text-destructive" : "text-muted-foreground hover:text-foreground",
-        "max-md:size-11 max-md:rounded-xl",
-        mobileProminent && "max-md:size-12 max-md:bg-accent-200 max-md:text-accent-on max-md:hover:bg-accent-300 max-md:hover:text-accent-on max-md:[&_svg]:size-5",
+        "max-md:order-last max-md:size-11 max-md:rounded-xl",
+        mobileProminent && "max-md:size-12 max-md:bg-accent-200 max-md:text-accent-on max-md:ring-2 max-md:ring-accent-200/25 max-md:ring-offset-2 max-md:hover:bg-accent-300 max-md:hover:text-accent-on max-md:[&_svg]:size-6",
         className,
       )}
     >
