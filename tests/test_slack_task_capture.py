@@ -84,8 +84,9 @@ async def test_capture_creates_owned_task_with_thread_and_permalink():
     assert "https://slack.test/message" in args[2]
     assert kwargs["metadata"]["slack_thread_ts"] == "1699999999.000001"
     assert kwargs["dedupe_filter"]["metadata.user_name"] == "owner@example.com"
-    bot.reactions_add.assert_awaited_once()
+    bot.reactions_add.assert_not_awaited()
     bot.chat_postEphemeral.assert_awaited_once()
+    assert bot.chat_postEphemeral.await_args.kwargs["text"].startswith(":inbox_tray: Added")
 
 
 @pytest.mark.asyncio
@@ -108,4 +109,4 @@ async def test_capture_does_not_acknowledge_duplicate_with_reaction():
         await _capture_loma_task(bot, _event())
 
     bot.reactions_add.assert_not_awaited()
-    assert "Already added" in bot.chat_postEphemeral.await_args.kwargs["text"]
+    assert bot.chat_postEphemeral.await_args.kwargs["text"].startswith(":inbox_tray: Already added")

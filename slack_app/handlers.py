@@ -630,19 +630,12 @@ async def _capture_loma_task(client, event: dict) -> None:
         )
         task_url = f"{os.environ.get('PUBLIC_BASE_URL', 'http://localhost:3001').rstrip('/')}/tasks"
         confirmation = (
-            f":white_check_mark: {'Added' if created else 'Already added'} to Loma tasks: "
+            f":inbox_tray: {'Added' if created else 'Already added'} to Loma tasks: "
             f"<{task_url}|{task.get('title') or 'Open task'}>"
         )
         await _post_ephemeral_safe(
             client, user_client, channel_id, slack_user_id, thread_ts, confirmation,
         )
-        if created:
-            try:
-                await client.reactions_add(
-                    name="white_check_mark", channel=channel_id, timestamp=message_ts,
-                )
-            except Exception as exc:
-                logger.debug("[TASK CAPTURE] Acknowledgement reaction failed: %s", exc)
     except Exception as exc:
         logger.exception("[TASK CAPTURE] Failed for %s:%s", channel_id, message_ts)
         await _post_ephemeral_safe(
