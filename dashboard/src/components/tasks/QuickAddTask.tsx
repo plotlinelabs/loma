@@ -10,6 +10,7 @@ import { useAgentModels } from "@/hooks/useAgentModels";
 import { ModelPicker } from "@/components/composer/ModelPicker";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
+import { cn } from "@/lib/utils";
 
 interface QuickAddTaskProps {
   onAdded: () => void;
@@ -107,15 +108,18 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               loadState={loadState}
             />
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <DictationButton onText={(t) => setValue((prev) => appendDictation(prev, t))} />
+          <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
+            <DictationButton
+              onText={(t) => setValue((prev) => appendDictation(prev, t))}
+              mobileProminent
+            />
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
               onClick={() => fileInputRef.current?.click()}
               title="Attach files"
-              className="text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground max-md:size-11 max-md:rounded-xl"
             >
               <RiAttachmentLine size={16} />
             </Button>
@@ -125,7 +129,10 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               onClick={() => void submit()}
               disabled={(!value.trim() && files.length === 0) || busy}
               aria-label="Add task"
-              className="bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
+              className={cn(
+                "bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                !value.trim() && files.length === 0 && "max-md:hidden",
+              )}
             >
               {busy
                 ? <RiLoader4Line size={16} className="animate-spin" />

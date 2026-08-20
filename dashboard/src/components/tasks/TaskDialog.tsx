@@ -141,7 +141,8 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               <Label htmlFor="task-details">Details</Label>
               <DictationButton
                 onText={(t) => setPrompt((prev) => appendDictation(prev, t))}
-                className="-my-1"
+                mobileProminent
+                className="-my-1 max-md:my-0"
               />
             </div>
             <Textarea

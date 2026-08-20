@@ -1374,22 +1374,28 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center">
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <DictationButton onText={(t) => setInput((prev) => appendDictation(prev, t))} />
+                  <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
+                    <DictationButton
+                      onText={(t) => setInput((prev) => appendDictation(prev, t))}
+                      mobileProminent
+                    />
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => fileInputRef.current?.click()}
                       title="Attach files"
-                      className="text-muted-foreground hover:text-foreground"
+                      className="text-muted-foreground hover:text-foreground max-md:size-11 max-md:rounded-xl"
                     >
                       <RiAttachmentLine size={16} />
                     </Button>
                     <Button
                       type="submit"
                       disabled={!input.trim() && pendingFiles.length === 0}
-                      className="bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
+                      className={cn(
+                        "bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                        !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
+                      )}
                       size="icon-sm"
                     >
                       <RiSendPlaneLine size={16} />
@@ -1689,15 +1695,18 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center">
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <DictationButton onText={(t) => setInput((prev) => appendDictation(prev, t))} />
+                  <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
+                    <DictationButton
+                      onText={(t) => setInput((prev) => appendDictation(prev, t))}
+                      mobileProminent
+                    />
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => fileInputRef.current?.click()}
                       title="Attach files"
-                      className="text-muted-foreground hover:text-foreground"
+                      className="text-muted-foreground hover:text-foreground max-md:size-11 max-md:rounded-xl"
                     >
                       <RiAttachmentLine size={16} />
                     </Button>
@@ -1717,7 +1726,10 @@ export default function ChatPanel({
                       type="submit"
                       size="icon-sm"
                       disabled={!input.trim() && pendingFiles.length === 0}
-                      className="bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale"
+                      className={cn(
+                        "bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                        !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
+                      )}
                     >
                       <RiSendPlaneLine size={16} />
                     </Button>
