@@ -24,6 +24,7 @@ from draft_with_loma.auth import get_user_slack_token
 logger = logging.getLogger(__name__)
 
 THINKING_EMOJI = "hourglass_flowing_sand"
+TASK_CAPTURE_EMOJI = "loma-task"
 
 CONVERSATION_TRACKER_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3001").rstrip("/") + "/conversations"
 
@@ -366,6 +367,16 @@ def register_handlers(app):
             "slack_dm", user,
         )
 
+    @app.event("reaction_added")
+    async def handle_task_reaction(event, client):
+        """Capture a Slack message as a staged Loma task."""
+        if event.get("reaction") != TASK_CAPTURE_EMOJI:
+            return
+        item = event.get("item") or {}
+        if item.get("type") != "message" or not item.get("channel") or not item.get("ts"):
+            return
+        await _capture_loma_task(client, event)
+
     # ─── Draft with Loma: message shortcut ───────────────────────────
 
     @app.shortcut("draft_with_loma")
@@ -539,6 +550,105 @@ async def _resolve_user_email(client, slack_user_id: str) -> str | None:
     except Exception as e:
         logger.warning("[DRAFT] Failed to resolve email for %s: %s", slack_user_id, e)
         return None
+
+
+def _task_title(message: dict) -> str:
+    text = " ".join((message.get("text") or "").split())
+    return f"Slack: {text[:72]}" if text else "Slack task"
+
+
+async def _capture_loma_task(client, event: dict) -> None:
+    """Create an idempotent Todo task from a ``:loma-task:`` reaction."""
+    from slack_sdk.web.async_client import AsyncWebClient
+    from api.task_service import create_staged_task
+
+    item = event["item"]
+    channel_id = item["channel"]
+    message_ts = item["ts"]
+    slack_user_id = event["user"]
+
+    try:
+        user_email = await _resolve_user_email(client, slack_user_id)
+        if not user_email:
+            raise RuntimeError("Couldn't resolve your Slack email")
+
+        user_token = await get_user_slack_token(user_email)
+        user_client = AsyncWebClient(token=user_token)
+        history = await user_client.conversations_history(
+            channel=channel_id, latest=message_ts, oldest=message_ts,
+            inclusive=True, limit=1,
+        )
+        messages = history.get("messages", [])
+        if not messages:
+            raise RuntimeError("Couldn't read the reacted Slack message")
+        reacted_message = messages[0]
+        thread_ts = reacted_message.get("thread_ts") or message_ts
+
+        replies = await user_client.conversations_replies(
+            channel=channel_id, ts=thread_ts, limit=100,
+        )
+        thread_messages = replies.get("messages", []) or [reacted_message]
+        permalink_result = await user_client.chat_getPermalink(
+            channel=channel_id, message_ts=message_ts,
+        )
+        permalink = permalink_result.get("permalink", "")
+
+        parts = []
+        for message in thread_messages:
+            author = message.get("user") or message.get("bot_profile", {}).get("name") or "unknown"
+            marker = " [selected]" if message.get("ts") == message_ts else ""
+            parts.append(f"[{author}]{marker}: {message.get('text', '')}")
+        prompt = (
+            "Follow up on this Slack message. Use the thread as context and complete the action requested.\n\n"
+            f"Slack link: {permalink}\n"
+            f"Channel: {channel_id}\n"
+            f"Thread:\n" + "\n".join(parts)
+        )
+
+        db = get_db()
+        if db is None:
+            raise RuntimeError("Loma task storage is unavailable")
+        metadata = {
+            "source": "slack_task",
+            "slack_user_id": slack_user_id,
+            "slack_channel_id": channel_id,
+            "slack_message_ts": message_ts,
+            "slack_thread_ts": thread_ts,
+            "slack_permalink": permalink,
+        }
+        task, created = await create_staged_task(
+            db, user_email, prompt,
+            title=_task_title(reacted_message),
+            metadata=metadata,
+            dedupe_filter={
+                "metadata.source": "slack_task",
+                "metadata.slack_channel_id": channel_id,
+                "metadata.slack_message_ts": message_ts,
+                "metadata.user_name": user_email,
+                "deleted": {"$ne": True},
+            },
+        )
+        task_url = f"{os.environ.get('PUBLIC_BASE_URL', 'http://localhost:3001').rstrip('/')}/tasks"
+        confirmation = (
+            f":white_check_mark: {'Added' if created else 'Already added'} to Loma tasks: "
+            f"<{task_url}|{task.get('title') or 'Open task'}>"
+        )
+        await _post_ephemeral_safe(
+            client, user_client, channel_id, slack_user_id, thread_ts, confirmation,
+        )
+        if created:
+            try:
+                await client.reactions_add(
+                    name="white_check_mark", channel=channel_id, timestamp=message_ts,
+                )
+            except Exception as exc:
+                logger.debug("[TASK CAPTURE] Acknowledgement reaction failed: %s", exc)
+    except Exception as exc:
+        logger.exception("[TASK CAPTURE] Failed for %s:%s", channel_id, message_ts)
+        await _post_ephemeral_safe(
+            client, None, channel_id, slack_user_id, message_ts,
+            f":x: Couldn't add this to Loma tasks: {exc}",
+        )
 
 
 async def _read_thread_with_user_token(user_token: str, channel_id: str, thread_ts: str) -> str:
