@@ -64,7 +64,7 @@ const FAVORITE_MODEL_IDS = [
   "anthropic/claude-fable-5",
   "anthropic/claude-opus-4-7",
   "anthropic/claude-opus-4-6",
-  "opencode-go/deepseek-v4-flash",
+  "opencode/x-preview-f-free",
   "openai/gpt-5.5",
 ] as const;
 
