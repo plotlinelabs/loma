@@ -7,8 +7,8 @@ const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 
 export const FAVORITE_MODEL_IDS = [
   "codex/gpt-5.6-sol",
+  "opencode/x-preview-f-free",
   "anthropic/claude-fable-5",
-  "opencode-go/deepseek-v4-flash",
 ] as const;
 
 export function favoriteModelRank(model: AgentModel): number | null {

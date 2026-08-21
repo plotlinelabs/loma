@@ -18,8 +18,8 @@ import { favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks
 
 const FAVORITE_LABELS: Record<string, string> = {
   "codex/gpt-5.6-sol": "GPT 5.6 Sol",
+  "opencode/x-preview-f-free": "Ox Alpha",
   "anthropic/claude-fable-5": "Claude Fable 5",
-  "opencode-go/deepseek-v4-flash": "DeepSeek V4 Flash",
 };
 
 interface ModelPickerProps {

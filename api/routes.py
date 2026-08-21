@@ -145,18 +145,18 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 
 FAVORITE_MODEL_IDS = (
     "codex/gpt-5.6-sol",
+    "opencode/x-preview-f-free",
     "anthropic/claude-fable-5",
-    "opencode-go/deepseek-v4-flash",
 )
 
 FAVORITE_MODEL_TEMPLATES = {
-    "opencode-go/deepseek-v4-flash": {
-        "id": "opencode-go/deepseek-v4-flash",
-        "provider_id": "opencode-go",
-        "model_id": "deepseek-v4-flash",
-        "label": "OpenCode Go · DeepSeek V4 Flash",
+    "opencode/x-preview-f-free": {
+        "id": "opencode/x-preview-f-free",
+        "provider_id": "opencode",
+        "model_id": "x-preview-f-free",
+        "label": "OpenCode Zen · Ox Alpha Free",
         "context_limit": None,
-        "supports_attachments": False,
+        "supports_attachments": True,
         "supports_reasoning": True,
         "status": "active",
         "cost": {},
@@ -178,8 +178,8 @@ FAVORITE_MODEL_TEMPLATES = {
 def _ensure_favorite_models(models: list[dict]) -> list[dict]:
     """Ensure configured favorite provider/model aliases are available."""
     by_id = {model.get("id"): model for model in models}
-    if os.environ.get("OPENCODE_API_KEY") and "opencode-go/deepseek-v4-flash" not in by_id:
-        models.append(FAVORITE_MODEL_TEMPLATES["opencode-go/deepseek-v4-flash"])
+    if os.environ.get("OPENCODE_API_KEY") and "opencode/x-preview-f-free" not in by_id:
+        models.append(FAVORITE_MODEL_TEMPLATES["opencode/x-preview-f-free"])
     if os.environ.get("OPENAI_API_KEY") and "openai/gpt-5.5" not in by_id:
         models.append(FAVORITE_MODEL_TEMPLATES["openai/gpt-5.5"])
     return models
@@ -1028,7 +1028,7 @@ async def handle_agent_models(request: web.Request) -> web.Response:
         for model in catalog.get("models", []):
             model_id = model.get("model_id") or ""
             provider_id = model.get("provider_id") or ""
-            if provider_id == "opencode-go":
+            if provider_id in ("opencode-go", "opencode"):
                 if os.environ.get("OPENCODE_API_KEY"):
                     filtered_models.append(model)
                 continue
