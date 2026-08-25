@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 from config.app_config import APP_NAME
@@ -174,11 +176,20 @@ SYSTEM_PROMPT_WRAPPER = """
 """.strip()
 
 
-def load_rulebook() -> str:
-    """Load core prompt settings from the Mongo-backed in-memory cache."""
+def load_rulebook(overrides: dict[str, str] | None = None) -> str:
+    """Load core prompt settings from the Mongo-backed in-memory cache.
+
+    ``overrides`` lets a caller substitute one or more section values without
+    touching the shared cache — used by the prompt eval engine to build a
+    draft prompt string without affecting any live conversation. Unset keys
+    fall back to the live cached value exactly as before.
+    """
     sections = []
     for key in RULEBOOK_KEYS:
-        content = (_prompt_settings_cache.get(key) or "").strip()
+        content = (
+            overrides.get(key) if overrides and key in overrides
+            else _prompt_settings_cache.get(key) or ""
+        ).strip()
         if content:
             title = PROMPT_SETTING_TITLES[key]
             sections.append(f"# {title}\n\n{content}")
@@ -204,10 +215,14 @@ def build_system_prompt(source: str = "slack") -> str:
     return prompt
 
 
-def build_pooled_system_prompt() -> str:
-    """Build a universal system prompt for pooled clients."""
+def build_pooled_system_prompt(overrides: dict[str, str] | None = None) -> str:
+    """Build a universal system prompt for pooled clients.
+
+    ``overrides`` is forwarded to load_rulebook() — see its docstring. Every
+    existing call site (no args) is unaffected.
+    """
     prompt = SYSTEM_PROMPT_WRAPPER.format(
-        rulebook=load_rulebook(),
+        rulebook=load_rulebook(overrides),
         tools_and_skills=f"{_TOOLS_AND_SKILLS_SECTION}\n\n{_build_loma_skills_section()}",
         formatting=_FORMATTING_POOLED,
         gh_pr=_GH_PR_SECTION,

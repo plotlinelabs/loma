@@ -41,6 +41,7 @@ import {
   RiMenuUnfoldLine,
   RiExpandUpDownLine,
   RiNotification3Line,
+  RiFlaskLine,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -103,6 +104,12 @@ const navigation: NavItem[] = [
     href: "/webhook-logs",
     minRole: "analyst",
     icon: <RiDownloadLine size={16} />,
+  },
+  {
+    name: "Prompt Lab",
+    href: "/prompt-lab",
+    minRole: "maintainer",
+    icon: <RiFlaskLine size={16} />,
   },
 ];
 
