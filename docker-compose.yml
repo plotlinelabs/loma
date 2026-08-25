@@ -29,6 +29,24 @@ services:
       - ${LOMA_SSH_DIR:-/home/ubuntu/.ssh}:/root/.ssh-host:ro
     restart: unless-stopped
 
+  # Opt-in horizontal scale-out for eval runs, on top of the embedded
+  # workers loma-backend always starts (see eval/worker.py, app.py). A
+  # plain `docker compose up` works fine without this service — scale it
+  # up for a large run: `docker compose up -d --scale eval-worker=4`.
+  # Same image as loma-backend (Compose reuses the cached build, doesn't
+  # rebuild), just a different entrypoint — each replica spawns its own
+  # OpenCode subprocess via the same self-spawn logic loma-backend uses,
+  # no shared OpenCode instance or extra networking needed (see DESIGN.md).
+  eval-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python3 -m eval.worker
+    env_file: .env
+    depends_on:
+      - loma-backend
+    restart: unless-stopped
+
   loma-dashboard:
     build:
       context: ./dashboard
