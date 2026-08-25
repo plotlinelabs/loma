@@ -37,6 +37,7 @@ import {
   type PromptSettingKey,
 } from "../../lib/prompt-settings-api";
 import UsagePanel from "../usage/UsagePanel";
+import PromptEvalPanel from "@/components/admin/PromptEvalPanel";
 import dynamic from "next/dynamic";
 import { useUser } from "../../lib/UserContext";
 import { Button } from "@/components/ui/button";
@@ -117,6 +118,7 @@ const AI_PROVIDER_CARDS = [
 ] as const;
 
 const ALLOWED_EMAIL_DOMAINS_KEY = "ALLOWED_EMAIL_DOMAINS";
+const PROMPT_DRAFTS_STORAGE_KEY = "loma:prompt-eval:core-prompt-drafts";
 
 function StatusCell({ role, source, oauthStatus, authMode }: {
   role: string | null;
@@ -186,6 +188,21 @@ export default function AdminPage() {
   const [savingPromptKey, setSavingPromptKey] = useState<PromptSettingKey | null>(null);
   const [claudeTesting, setClaudeTesting] = useState<string | null>(null);
   const [claudeTestResult, setClaudeTestResult] = useState<ClaudeTestResult | null>(null);
+
+  // Persist unsaved Core Prompt edits (also what the eval panel below reads
+  // as "the draft") so an accidental refresh or tab close doesn't lose them.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY);
+      if (raw) setPromptDrafts(JSON.parse(raw));
+    } catch {
+      // corrupt/old payload — start fresh rather than crash
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify(promptDrafts));
+  }, [promptDrafts]);
 
   const runClaudeTest = async (email: string) => {
     setClaudeTesting(email);
@@ -1716,6 +1733,13 @@ export default function AdminPage() {
               </div>
             )}
           </Card>
+
+          <PromptEvalPanel
+            promptSettings={promptSettings}
+            promptDrafts={promptDrafts}
+            onDraftChange={(key, value) => setPromptDrafts((prev) => ({ ...prev, [key]: value }))}
+            onPromoted={loadPromptSettings}
+          />
         </div>
       )}
 
