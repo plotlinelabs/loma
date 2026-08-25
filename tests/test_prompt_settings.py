@@ -48,3 +48,42 @@ def test_loma_skill_index_cache_appears_in_prompts():
 
     assert "- code-review: Review GitHub pull requests" in pooled_prompt
     assert "- code-review: Review GitHub pull requests" in dashboard_prompt
+
+
+# --- prompt eval engine: the `overrides` param used by eval/prompt_subject.py ---
+
+def test_overrides_replaces_one_section_without_touching_the_other():
+    set_prompt_settings_cache({
+        "identity_guidelines": "LIVE identity.",
+        "company_information": "LIVE company info.",
+    })
+
+    draft = build_pooled_system_prompt(overrides={"identity_guidelines": "DRAFT identity."})
+
+    assert "DRAFT identity." in draft
+    assert "LIVE identity." not in draft
+    assert "LIVE company info." in draft  # untouched section still comes from the cache
+
+
+def test_overrides_never_mutates_the_shared_cache():
+    set_prompt_settings_cache({"identity_guidelines": "LIVE identity.", "company_information": ""})
+
+    build_pooled_system_prompt(overrides={"identity_guidelines": "DRAFT identity."})
+    live_prompt_after = build_pooled_system_prompt()  # no overrides — reads the cache directly
+
+    assert "LIVE identity." in live_prompt_after
+    assert "DRAFT identity." not in live_prompt_after
+
+
+def test_overrides_key_outside_rulebook_has_no_effect():
+    # dictation_vocabulary is a PROMPT_SETTING_KEYS entry but not a
+    # RULEBOOK_KEYS one (see agent/prompt.py) — it never enters the system
+    # prompt at all, so overriding it must be a no-op here. This is the
+    # exact bug eval/prompt_subject.py guards against by validating against
+    # RULEBOOK_KEYS before ever calling this function.
+    set_prompt_settings_cache({"identity_guidelines": "LIVE identity.", "company_information": ""})
+
+    prompt = build_pooled_system_prompt(overrides={"dictation_vocabulary": "should not appear"})
+
+    assert "should not appear" not in prompt
+    assert "LIVE identity." in prompt
