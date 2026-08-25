@@ -29,6 +29,16 @@ DEFAULT_OPENCODE_PORT = 4097
 OPENCODE_START_TIMEOUT_SECONDS = 20
 OPENCODE_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_REQUEST_TIMEOUT", "900"))
 OPENCODE_FLOW_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_FLOW_REQUEST_TIMEOUT", "1800"))
+# Deliberately much shorter than OPENCODE_REQUEST_TIMEOUT_SECONDS. A live
+# Slack/dashboard conversation waiting the full 900s for one slow model call
+# is tolerable; an eval run silently sitting at up to 900s per phase (response,
+# then judge — see eval/runner.py's _run_one_case) is not. Found live: a
+# single rubric'd case ran 30-40 minutes under provider degradation with no
+# error surfaced at any point, because nothing failed until the full 900s
+# ceiling for each phase was individually exhausted. A shorter ceiling here
+# means a degraded call fails fast and shows up as a clean `error:` result
+# instead of a run that looks hung.
+EVAL_ONESHOT_TIMEOUT_SECONDS = int(os.environ.get("EVAL_ONESHOT_TIMEOUT", "180"))
 OPENCODE_EVENT_BUFFER_LIMIT_BYTES = int(
     os.environ.get("OPENCODE_EVENT_BUFFER_LIMIT_BYTES", str(64 * 1024 * 1024))
 )
@@ -326,6 +336,26 @@ async def _write_managed_opencode_config(
         "$schema": "https://opencode.ai/config.json",
         "mcp": mcp_config,
         "permission": _opencode_permission_config(),
+        # No "prompt" field on any of these — deliberately. OpenCode's
+        # default "build" agent has its own hardcoded identity baked into
+        # the binary ("You are opencode, an interactive CLI tool that helps
+        # users with software engineering tasks...") that coexists with
+        # whatever "system" string a caller passes, and can win out over it
+        # on some samples — confirmed live: a prompt eval oneshot call
+        # asking the model to be "a customer support assistant for Acme
+        # Cloud" sometimes answered in-character as an OpenCode CLI agent
+        # instead, correctly naming this actual repo/product by name.
+        # Routing run_opencode_oneshot() through a dedicated agent instead
+        # of the implicit "build" default removes that competing identity —
+        # verified with 6/6 clean runs against a case that leaked in
+        # production, vs. failures on "build". Built from AGENT_PROFILES so
+        # every registered profile (default + any temperature variants —
+        # see that constant's own comment) gets this same treatment, not
+        # just the one originally hardcoded here.
+        "agent": {
+            agent_name: {"mode": "primary", **({"temperature": temperature} if temperature is not None else {})}
+            for agent_name, temperature in AGENT_PROFILES.values()
+        },
     }
     config_text = json.dumps(opencode_config, indent=2, sort_keys=True)
     config_hash = hashlib.sha256(config_text.encode()).hexdigest()
@@ -638,6 +668,180 @@ async def _delete_session_messages(session_id: str) -> None:
                 return
     except Exception:
         logger.warning("Failed to clean OpenCode warmup messages for session=%s", session_id, exc_info=True)
+
+
+async def _fetch_tool_calls(session_id: str) -> list[dict]:
+    """Every tool invocation across the whole session's message history.
+
+    Verified against the real server (not assumed): a synchronous
+    POST /session/{id}/message response only carries the *final* assistant
+    message's parts. When the model uses a tool, that tool call lives in an
+    *earlier* message in the same turn (role=assistant, finish="tool-calls",
+    a part with type="tool") — invisible unless you fetch the session's full
+    message list, which is what this does.
+    """
+    try:
+        messages = await _request_json(
+            "GET", f"/session/{session_id}/message",
+            params={"directory": str(PROJECT_ROOT)}, timeout=30,
+        )
+    except Exception:
+        logger.warning("Failed to fetch tool-call trace for session=%s", session_id, exc_info=True)
+        return []
+
+    if not isinstance(messages, list):
+        return []
+
+    tool_calls = []
+    for message in messages:
+        for part in (message.get("parts") or []) if isinstance(message, dict) else []:
+            if not isinstance(part, dict) or part.get("type") != "tool":
+                continue
+            state = part.get("state") or {}
+            tool_calls.append({
+                "tool": part.get("tool") or "?",
+                "input": state.get("input") or {},
+                "output": state.get("output") or (state.get("metadata") or {}).get("output") or "",
+                "status": state.get("status") or "?",
+            })
+    return tool_calls
+
+
+# A dedicated agent (registered in _write_managed_opencode_config, no
+# "prompt" of its own) that run_opencode_oneshot() routes through instead of
+# the implicit "build" default — see that function's docstring and the
+# "agent" key comment above for why.
+PROMPT_EVAL_AGENT_NAME = "prompt_eval_oneshot"
+
+# Maps a caller-facing profile name -> (registered OpenCode agent name,
+# temperature or None). OpenCode has no per-request temperature parameter —
+# the message API's schema (GET /doc) has no such field — so varying
+# temperature per eval run means adding more entries here, each its own
+# pre-registered agent, NOT a live per-call knob. Verified live against a
+# running OpenCode server's GET /doc: AgentConfig (the shape
+# _write_managed_opencode_config's "agent" dict is built from) has a
+# `"temperature": {"type": "number"}` field, so this is a real knob, not a
+# guess.
+AGENT_PROFILES: dict[str, tuple[str, float | None]] = {
+    "default": (PROMPT_EVAL_AGENT_NAME, None),
+    "precise": ("prompt_eval_precise", 0.2),
+    "balanced": ("prompt_eval_balanced", 0.7),
+}
+
+# {"tools": {"*": false}} disables every tool for a single oneshot call, per
+# OpenCode's own OpenAPI spec (GET /doc on the running server) — the "tools"
+# field on POST /session/{id}/message, which turned out to already exist
+# despite this module previously assuming no such knob did.
+#
+# NOT built from an enumerated tool-name list — that was tried first
+# (bash/edit/glob/grep/list/patch/read/task/todowrite/webfetch/write, grepped
+# from the installed binary) and found live-broken: it missed "websearch",
+# which isn't a built-in id string OpenCode ships with, it's provided at
+# runtime, so no static grep of the binary can ever find every name that
+# might exist (a new one, or an MCP-provided tool, would silently slip
+# through the same way). A test case asking about "the Enterprise plan" got
+# answered from a live web search of *Box.com's* actual pricing page —
+# confidently, fluently, and completely disconnected from the Acme Cloud
+# persona the test was evaluating — while "tools" listed every enumerated
+# name as false. The wildcard key closes that: verified live, zero tool
+# calls, correct escalate-to-a-human response instead of a fabricated answer.
+_DISABLE_ALL_TOOLS = {"*": False}
+
+
+async def run_opencode_oneshot(
+    *, system_prompt: str, user_prompt: str, selected_model: str,
+    disable_tools: bool = False, agent_profile: str = "default",
+) -> tuple[str, list[dict], dict | None, float | None]:
+    """Stateless single-turn completion for the prompt eval engine.
+
+    Returns (text, tool_calls, usage, cost_usd). tool_calls is every tool
+    the model invoked while producing this response, each a {"tool",
+    "input", "output", "status"} dict (see _fetch_tool_calls for why a
+    second request is needed to see them at all). usage/cost reuse
+    _usage_from_info(), previously only exercised against the streaming
+    run_opencode_agent path — NOT YET independently verified live that
+    OpenCode's oneshot (non-streaming) response actually populates
+    info.cost; both come back None if it doesn't, which eval/metrics.py's
+    CostMetric already degrades gracefully against.
+
+    agent_profile selects which registered OpenCode agent to route through
+    (see AGENT_PROFILES) — "default" uses PROMPT_EVAL_AGENT_NAME, the same
+    agent every oneshot call used before this parameter existed.
+
+    A throwaway session with an arbitrary system prompt and one user
+    message, deleted immediately after. Never touches the shared prompt
+    cache (agent.prompt._prompt_settings_cache) or the warm-session pool
+    used by run_opencode_agent, so evaluating a draft prompt can never
+    affect a live Slack/dashboard conversation.
+
+    The message call uses EVAL_ONESHOT_TIMEOUT_SECONDS (180s), not the much
+    longer OPENCODE_REQUEST_TIMEOUT_SECONDS a live conversation tolerates —
+    see that constant's own comment for why a short ceiling here matters.
+
+    disable_tools=True sends a wildcard {"tools": {"*": false}} — not an
+    enumerated list of tool ids, see _DISABLE_ALL_TOOLS for why that's the
+    only version of this that's actually complete. For callers that have no
+    legitimate reason to touch tools at all (the LLM judge; see
+    eval/runner.py).
+
+    Routed through PROMPT_EVAL_AGENT_NAME rather than OpenCode's implicit
+    "build" default. "build" carries its own hardcoded identity ("You are
+    opencode, an interactive CLI tool...") baked into the binary, which
+    coexists with whatever system_prompt is supplied here rather than being
+    replaced by it — confirmed live: a customer-support persona occasionally
+    answered in-character as an OpenCode CLI agent instead, correctly
+    naming this actual repo/product. PROMPT_EVAL_AGENT_NAME has no "prompt"
+    of its own (see its config in _write_managed_opencode_config), so
+    system_prompt is the only identity in play — 6/6 clean runs against a
+    case that leaked under "build", vs. an intermittent failure there. See
+    DESIGN.md.
+    """
+    if agent_profile not in AGENT_PROFILES:
+        raise OpenCodeError(f"Unknown agent_profile: {agent_profile!r} — must be one of {list(AGENT_PROFILES)}")
+    agent_name, _temperature = AGENT_PROFILES[agent_profile]
+
+    provider_id, raw_model_id = _split_model(selected_model)
+    session_id = await _create_session(f"Prompt eval oneshot · {selected_model}")
+    try:
+        message_body = {
+            "model": {"providerID": provider_id, "modelID": raw_model_id},
+            "agent": agent_name,
+            "system": system_prompt,
+            "parts": [{"type": "text", "text": user_prompt}],
+        }
+        if disable_tools:
+            message_body["tools"] = _DISABLE_ALL_TOOLS
+        response = await _request_json(
+            "POST",
+            f"/session/{session_id}/message",
+            json_body=message_body,
+            params={"directory": str(PROJECT_ROOT)},
+            timeout=EVAL_ONESHOT_TIMEOUT_SECONDS,
+        )
+        info = response.get("info") if isinstance(response, dict) else {}
+        error = (info or {}).get("error")
+        if error:
+            message = (error.get("data") or {}).get("message") or error.get("name") or "unknown error"
+            raise OpenCodeError(f"OpenCode oneshot completion failed: {message}")
+
+        parts = response.get("parts") if isinstance(response, dict) else []
+        text = "".join(
+            part.get("text", "")
+            for part in (parts or [])
+            if isinstance(part, dict) and part.get("type") == "text"
+        ).strip()
+
+        tool_calls = await _fetch_tool_calls(session_id)
+        usage, cost = _usage_from_info(info or {})
+        return text, tool_calls, usage, cost
+    finally:
+        try:
+            await _request_json(
+                "DELETE", f"/session/{session_id}",
+                params={"directory": str(PROJECT_ROOT)}, timeout=30,
+            )
+        except Exception:
+            logger.warning("Failed to delete eval oneshot session=%s", session_id, exc_info=True)
 
 
 async def _warm_opencode_session(model_id: str) -> str:
