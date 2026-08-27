@@ -557,6 +557,37 @@ def _task_title(message: dict) -> str:
     return f"Slack: {text[:72]}" if text else "Slack task"
 
 
+async def _fetch_reacted_message(user_client, channel_id: str, message_ts: str) -> dict | None:
+    """Fetch a single message by ts, whether it is a top-level message or a thread reply.
+
+    ``conversations.history`` only returns top-level channel messages — thread
+    replies are invisible to it. Fall back to ``conversations.replies`` with the
+    reply's own ts, which returns the reply itself for threaded messages.
+    """
+    try:
+        history = await user_client.conversations_history(
+            channel=channel_id, latest=message_ts, oldest=message_ts,
+            inclusive=True, limit=1,
+        )
+        for message in history.get("messages", []):
+            if message.get("ts") == message_ts:
+                return message
+    except Exception as e:
+        logger.debug("[TASK CAPTURE] conversations.history failed (%s), trying replies", e)
+
+    # Thread replies don't appear in channel history — read the reply directly.
+    try:
+        replies = await user_client.conversations_replies(
+            channel=channel_id, ts=message_ts, inclusive=True, limit=1,
+        )
+        for message in replies.get("messages", []):
+            if message.get("ts") == message_ts:
+                return message
+    except Exception as e:
+        logger.warning("[TASK CAPTURE] conversations.replies failed for %s:%s: %s", channel_id, message_ts, e)
+    return None
+
+
 async def _capture_loma_task(client, event: dict) -> None:
     """Create an idempotent Todo task from a ``:loma-task:`` reaction."""
     from slack_sdk.web.async_client import AsyncWebClient
@@ -574,14 +605,9 @@ async def _capture_loma_task(client, event: dict) -> None:
 
         user_token = await get_user_slack_token(user_email)
         user_client = AsyncWebClient(token=user_token)
-        history = await user_client.conversations_history(
-            channel=channel_id, latest=message_ts, oldest=message_ts,
-            inclusive=True, limit=1,
-        )
-        messages = history.get("messages", [])
-        if not messages:
+        reacted_message = await _fetch_reacted_message(user_client, channel_id, message_ts)
+        if reacted_message is None:
             raise RuntimeError("Couldn't read the reacted Slack message")
-        reacted_message = messages[0]
         thread_ts = reacted_message.get("thread_ts") or message_ts
 
         replies = await user_client.conversations_replies(
