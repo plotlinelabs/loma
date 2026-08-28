@@ -29,7 +29,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OPENCODE_HOST = "127.0.0.1"
 DEFAULT_OPENCODE_PORT = 4097
 OPENCODE_START_TIMEOUT_SECONDS = 20
-OPENCODE_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_REQUEST_TIMEOUT", "900"))
+# Wall-clock cap for a whole turn. Chat turns default to 0 (no cap) so long
+# implementation work (installs, builds, test runs) is only guarded by the idle
+# watchdog, matching the Claude/Codex runtimes. Flows keep a ceiling by default.
+OPENCODE_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_REQUEST_TIMEOUT", "0"))
 OPENCODE_FLOW_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_FLOW_REQUEST_TIMEOUT", "1800"))
 OPENCODE_EVENT_BUFFER_LIMIT_BYTES = int(
     os.environ.get("OPENCODE_EVENT_BUFFER_LIMIT_BYTES", str(64 * 1024 * 1024))
@@ -998,7 +1001,7 @@ async def _iter_opencode_turn_events(
     idle_timeout_seconds: int,
     request_timeout_seconds: int,
 ) -> AsyncGenerator[dict, None]:
-    timeout = aiohttp.ClientTimeout(total=request_timeout_seconds)
+    timeout = _turn_client_timeout(request_timeout_seconds)
     prompt_task: asyncio.Task | None = None
     async with aiohttp.ClientSession(timeout=timeout, auth=_auth()) as session:
         try:
@@ -1104,6 +1107,8 @@ async def _iter_opencode_turn_events(
                     event_session_id = _event_session_id(event.get("properties") or {}) if event is not None else None
                     if event is not None and event_session_id == session_id:
                         yield event
+        except asyncio.TimeoutError as exc:
+            raise OpenCodeError(_describe_turn_timeout(request_timeout_seconds)) from exc
         finally:
             if prompt_task is not None:
                 try:
@@ -1111,6 +1116,27 @@ async def _iter_opencode_turn_events(
                 except Exception:
                     logger.exception("OpenCode prompt_async request failed")
                     raise
+
+
+def _turn_client_timeout(request_timeout_seconds: int) -> aiohttp.ClientTimeout:
+    """aiohttp timeout for a turn's event stream.
+
+    A positive value is a hard wall-clock cap on the whole turn. Zero (the
+    chat default) disables the cap; the idle watchdog is then the only guard,
+    so a turn can run as long as OpenCode keeps producing events.
+    """
+    if request_timeout_seconds > 0:
+        return aiohttp.ClientTimeout(total=request_timeout_seconds)
+    return aiohttp.ClientTimeout(total=None, sock_connect=30)
+
+
+def _describe_turn_timeout(request_timeout_seconds: int) -> str:
+    if request_timeout_seconds > 0:
+        return (
+            f"OpenCode turn exceeded the {request_timeout_seconds}s wall-clock limit "
+            "(raise OPENCODE_REQUEST_TIMEOUT / OPENCODE_FLOW_REQUEST_TIMEOUT to allow longer turns)"
+        )
+    return "OpenCode event stream connection timed out"
 
 
 async def _post_prompt_async(
@@ -1242,7 +1268,8 @@ async def run_opencode_agent(
         if is_flow_run
         else OPENCODE_REQUEST_TIMEOUT_SECONDS
     )
-    request_timeout_seconds = max(request_timeout_seconds, idle_timeout_seconds + 30)
+    if request_timeout_seconds > 0:
+        request_timeout_seconds = max(request_timeout_seconds, idle_timeout_seconds + 30)
 
     server = await _ensure_server_instance(user_mcp_overrides=user_mcp_overrides)
     base_url = server.base_url

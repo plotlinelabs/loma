@@ -457,3 +457,26 @@ async def test_run_opencode_agent_does_not_retry_model_errors(monkeypatch):
 
     assert attempts["count"] == 1
     assert server.active_turns == 0
+
+
+def test_chat_turn_has_no_wall_clock_cap_by_default():
+    import agent.opencode_runtime as ocr
+
+    assert ocr.OPENCODE_REQUEST_TIMEOUT_SECONDS == 0
+    timeout = ocr._turn_client_timeout(ocr.OPENCODE_REQUEST_TIMEOUT_SECONDS)
+    assert timeout.total is None
+    assert timeout.sock_connect == 30
+
+
+def test_flow_turn_keeps_wall_clock_cap():
+    import agent.opencode_runtime as ocr
+
+    timeout = ocr._turn_client_timeout(ocr.OPENCODE_FLOW_REQUEST_TIMEOUT_SECONDS)
+    assert timeout.total == ocr.OPENCODE_FLOW_REQUEST_TIMEOUT_SECONDS
+
+
+def test_turn_timeout_message_is_explicit():
+    import agent.opencode_runtime as ocr
+
+    assert "1800s wall-clock limit" in ocr._describe_turn_timeout(1800)
+    assert "connection timed out" in ocr._describe_turn_timeout(0)
