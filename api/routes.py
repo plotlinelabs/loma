@@ -145,16 +145,16 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 
 FAVORITE_MODEL_IDS = (
     "codex/gpt-5.6-sol",
-    "opencode/x-preview-f-free",
+    "opencode-go/glm-5.3-flash",
     "anthropic/claude-fable-5",
 )
 
 FAVORITE_MODEL_TEMPLATES = {
-    "opencode/x-preview-f-free": {
-        "id": "opencode/x-preview-f-free",
-        "provider_id": "opencode",
-        "model_id": "x-preview-f-free",
-        "label": "OpenCode Zen · Ox Alpha Free",
+    "opencode-go/glm-5.3-flash": {
+        "id": "opencode-go/glm-5.3-flash",
+        "provider_id": "opencode-go",
+        "model_id": "glm-5.3-flash",
+        "label": "OpenCode Go · GLM 5.3 Flash",
         "context_limit": None,
         "supports_attachments": True,
         "supports_reasoning": True,
@@ -178,8 +178,8 @@ FAVORITE_MODEL_TEMPLATES = {
 def _ensure_favorite_models(models: list[dict]) -> list[dict]:
     """Ensure configured favorite provider/model aliases are available."""
     by_id = {model.get("id"): model for model in models}
-    if os.environ.get("OPENCODE_API_KEY") and "opencode/x-preview-f-free" not in by_id:
-        models.append(FAVORITE_MODEL_TEMPLATES["opencode/x-preview-f-free"])
+    if os.environ.get("OPENCODE_API_KEY") and "opencode-go/glm-5.3-flash" not in by_id:
+        models.append(FAVORITE_MODEL_TEMPLATES["opencode-go/glm-5.3-flash"])
     if os.environ.get("OPENAI_API_KEY") and "openai/gpt-5.5" not in by_id:
         models.append(FAVORITE_MODEL_TEMPLATES["openai/gpt-5.5"])
     return models
