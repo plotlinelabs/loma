@@ -12,10 +12,12 @@ import json
 import logging
 import os
 import shutil
+import socket
 import tempfile
 import time
 from pathlib import Path
 from typing import AsyncGenerator
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -32,12 +34,20 @@ OPENCODE_FLOW_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_FLOW_REQUES
 OPENCODE_EVENT_BUFFER_LIMIT_BYTES = int(
     os.environ.get("OPENCODE_EVENT_BUFFER_LIMIT_BYTES", str(64 * 1024 * 1024))
 )
-OPENCODE_EVENT_IDLE_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_EVENT_IDLE_TIMEOUT", "120"))
+OPENCODE_EVENT_IDLE_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_EVENT_IDLE_TIMEOUT", "480"))
 OPENCODE_FLOW_EVENT_IDLE_TIMEOUT_SECONDS = int(os.environ.get("OPENCODE_FLOW_EVENT_IDLE_TIMEOUT", "900"))
 OPENCODE_CONFIG_TTL_SECONDS = int(os.environ.get("OPENCODE_CONFIG_TTL_SECONDS", "30"))
 OPENCODE_MODEL_CATALOG_TTL_SECONDS = int(os.environ.get("OPENCODE_MODEL_CATALOG_TTL_SECONDS", "60"))
 OPENCODE_PREWARM_POOL_SIZE = int(os.environ.get("OPENCODE_PREWARM_POOL_SIZE", "2"))
 OPENCODE_PREWARM_WAIT_SECONDS = float(os.environ.get("OPENCODE_PREWARM_WAIT_SECONDS", "0.5"))
+OPENCODE_TURN_MAX_ATTEMPTS = max(1, int(os.environ.get("OPENCODE_TURN_MAX_ATTEMPTS", "2")))
+OPENCODE_MAX_SERVERS = max(1, int(os.environ.get("OPENCODE_MAX_SERVERS", "3")))
+OPENCODE_SERVER_LOG_DIR = Path(
+    os.environ.get(
+        "OPENCODE_SERVER_LOG_DIR", str(Path(tempfile.gettempdir()) / "loma-opencode-logs")
+    )
+)
+OPENCODE_SERVER_LOG_TAIL_BYTES = 4096
 OPENCODE_DEFAULT_PREWARM_MODELS = "opencode-go/deepseek-v4-flash"
 OPENCODE_AUTO_APPROVE_PERMISSIONS = os.environ.get("OPENCODE_AUTO_APPROVE_PERMISSIONS", "1").lower() not in {
     "0",
@@ -49,45 +59,109 @@ OPENCODE_WARMUP_PROMPT = (
     "Do not use tools. Ignore this warmup exchange in future user-facing answers."
 )
 
-_opencode_process: asyncio.subprocess.Process | None = None
-_opencode_config_hash: str | None = None
-_opencode_config_home: Path | None = None
+class _OpenCodeServer:
+    """One managed `opencode serve` process bound to a specific config hash."""
+
+    def __init__(
+        self,
+        *,
+        config_hash: str,
+        config_home: Path,
+        host: str,
+        port: int,
+        process: asyncio.subprocess.Process | None,
+        log_path: Path | None = None,
+        log_file=None,
+    ) -> None:
+        self.config_hash = config_hash
+        self.config_home = config_home
+        self.host = host
+        self.port = port
+        self.process = process
+        self.log_path = log_path
+        self.log_file = log_file
+        self.active_turns = 0
+        self.last_used_at = time.monotonic()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
+
+    @property
+    def is_alive(self) -> bool:
+        return self.process is not None and self.process.returncode is None
+
+    def touch(self) -> None:
+        self.last_used_at = time.monotonic()
+
+    def log_tail(self) -> str:
+        """Last chunk of the server's captured stdout/stderr for diagnostics."""
+        if not self.log_path:
+            return ""
+        try:
+            data = self.log_path.read_bytes()
+        except OSError:
+            return ""
+        return data[-OPENCODE_SERVER_LOG_TAIL_BYTES:].decode("utf-8", errors="ignore").strip()
+
+    async def terminate(self) -> None:
+        if self.is_alive:
+            self.process.terminate()
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+        if self.log_file is not None:
+            try:
+                self.log_file.close()
+            except OSError:
+                pass
+            self.log_file = None
+
+
+# Managed OpenCode servers keyed by config hash. Running one server per config
+# means a user bringing different MCP connectors gets their own server instead
+# of restarting (and killing) everyone else's in-flight runs.
+_opencode_servers: dict[str, _OpenCodeServer] = {}
+_opencode_server_lock: asyncio.Lock = asyncio.Lock()
+_EXTERNAL_SERVER_HASH = "external"
 _opencode_mcp_names: set[str] = set()
-_opencode_config_checked_at: float = 0.0
+# Config cache keyed by the sorted override-name key -> (home, hash, checked_at).
+_opencode_config_cache: dict[str, tuple[Path, str, float]] = {}
 _opencode_model_catalog: dict | None = None
 _opencode_model_catalog_checked_at: float = 0.0
-_opencode_session_cache: dict[tuple[str, str], str] = {}
-_opencode_warm_sessions: dict[str, list[str]] = {}
-_opencode_prewarm_tasks: dict[str, asyncio.Task] = {}
+# Session reuse cache keyed by (config_hash, conversation_id, model).
+_opencode_session_cache: dict[tuple[str, str, str], str] = {}
+# Warm session pools keyed by (config_hash, model).
+_opencode_warm_sessions: dict[tuple[str, str], list[str]] = {}
+_opencode_prewarm_tasks: dict[tuple[str, str], asyncio.Task] = {}
 _opencode_prewarm_lock = asyncio.Lock()
 
 
 async def reset_opencode_runtime(reason: str = "") -> None:
-    """Clear OpenCode caches and restart the managed server on next use."""
-    global _opencode_process, _opencode_config_hash, _opencode_config_checked_at
+    """Clear OpenCode caches and restart managed servers on next use."""
     global _opencode_model_catalog, _opencode_model_catalog_checked_at
 
     _opencode_session_cache.clear()
     _opencode_warm_sessions.clear()
+    _opencode_config_cache.clear()
     _opencode_model_catalog = None
     _opencode_model_catalog_checked_at = 0.0
-    _opencode_config_hash = None
-    _opencode_config_checked_at = 0.0
 
     for task in list(_opencode_prewarm_tasks.values()):
         if not task.done():
             task.cancel()
     _opencode_prewarm_tasks.clear()
 
-    if _opencode_process is not None and _opencode_process.returncode is None:
-        logger.info("Restarting OpenCode runtime%s", f" ({reason})" if reason else "")
-        _opencode_process.terminate()
-        try:
-            await asyncio.wait_for(_opencode_process.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            _opencode_process.kill()
-            await _opencode_process.wait()
-    _opencode_process = None
+    servers = list(_opencode_servers.values())
+    _opencode_servers.clear()
+    for server in servers:
+        if server.is_alive:
+            logger.info(
+                "Stopping OpenCode server %s%s", server.base_url, f" ({reason})" if reason else ""
+            )
+        await server.terminate()
 
 
 def _opencode_system_prompt() -> str:
@@ -117,6 +191,22 @@ def _opencode_session_permission_rules() -> list[dict]:
 
 class OpenCodeError(RuntimeError):
     """Raised when OpenCode cannot serve a dashboard chat request."""
+
+
+class OpenCodeModelError(OpenCodeError):
+    """Raised when the model/provider itself reports an error for a message."""
+
+
+def _is_retryable_turn_error(exc: BaseException) -> bool:
+    """Whether a failed turn is worth one retry on a fresh session.
+
+    Model-reported errors (bad request, provider refusal) are not transient;
+    transport-level failures (idle timeout, dropped stream, server restart,
+    connection errors) usually are.
+    """
+    if isinstance(exc, OpenCodeModelError):
+        return False
+    return isinstance(exc, (OpenCodeError, aiohttp.ClientError, asyncio.TimeoutError))
 
 
 def _format_opencode_error(error: object) -> str:
@@ -180,8 +270,10 @@ async def _request_json(
     json_body: dict | None = None,
     params: dict | None = None,
     timeout: int | None = None,
+    base_url: str | None = None,
 ) -> dict:
-    base_url = await ensure_opencode_server()
+    if base_url is None:
+        base_url = await ensure_opencode_server()
     request_timeout = aiohttp.ClientTimeout(total=timeout or OPENCODE_REQUEST_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=request_timeout, auth=_auth()) as session:
         async with session.request(
@@ -213,59 +305,144 @@ async def _health_check(base_url: str) -> bool:
         return False
 
 
-async def ensure_opencode_server(
-    user_mcp_overrides: dict | None = None,
-) -> str:
-    """Return a reachable OpenCode server URL, starting one if needed.
+def _find_free_port(host: str) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
 
-    By default the app starts OpenCode with an isolated config home so global
-    ~/.config/opencode MCP settings do not leak into dashboard chat. If
-    OPENCODE_SERVER_URL is explicitly set, we assume that external server is
-    intentionally managed by the operator.
+
+def _pick_server_port(host: str) -> int:
+    """Prefer the configured port when free; otherwise grab an ephemeral one."""
+    preferred = int(os.environ.get("OPENCODE_PORT", str(DEFAULT_OPENCODE_PORT)))
+    if any(server.port == preferred for server in _opencode_servers.values()):
+        return _find_free_port(host)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, preferred))
+        except OSError:
+            return _find_free_port(host)
+    return preferred
+
+
+def _open_server_log(port: int) -> tuple[Path | None, object | None]:
+    """Open a per-server log file so crashes are no longer silent."""
+    try:
+        OPENCODE_SERVER_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = OPENCODE_SERVER_LOG_DIR / f"opencode-server-{port}.log"
+        log_file = open(log_path, "ab")
+        return log_path, log_file
+    except OSError:
+        logger.warning("Could not open OpenCode server log file; falling back to /dev/null")
+        return None, None
+
+
+def _drop_server_state(config_hash: str) -> None:
+    """Forget a server and every cache entry tied to its config hash."""
+    _opencode_servers.pop(config_hash, None)
+    for key in [key for key in _opencode_session_cache if key[0] == config_hash]:
+        _opencode_session_cache.pop(key, None)
+    for key in [key for key in _opencode_warm_sessions if key[0] == config_hash]:
+        _opencode_warm_sessions.pop(key, None)
+    for key in [key for key in _opencode_prewarm_tasks if key[0] == config_hash]:
+        task = _opencode_prewarm_tasks.pop(key)
+        if not task.done():
+            task.cancel()
+
+
+async def _retire_stale_servers(keep_hash: str) -> None:
+    """Reap dead servers and idle servers beyond the cap.
+
+    Servers with in-flight turns are never terminated here — that is the whole
+    point of running one server per config instead of restarting the shared
+    one whenever the config changes.
     """
-    base_url = _configured_server_url()
+    for config_hash, server in list(_opencode_servers.items()):
+        if config_hash != keep_hash and not server.is_alive:
+            await server.terminate()
+            _drop_server_state(config_hash)
 
+    idle = sorted(
+        (
+            (config_hash, server)
+            for config_hash, server in _opencode_servers.items()
+            if config_hash != keep_hash and server.active_turns == 0
+        ),
+        key=lambda item: item[1].last_used_at,
+    )
+    excess = len(_opencode_servers) - OPENCODE_MAX_SERVERS
+    for config_hash, server in idle[: max(0, excess)]:
+        logger.info("Retiring idle OpenCode server %s (config rotation)", server.base_url)
+        await server.terminate()
+        _drop_server_state(config_hash)
+
+
+async def _ensure_server_instance(
+    user_mcp_overrides: dict | None = None,
+) -> _OpenCodeServer:
+    """Return a healthy server for this config, starting one if needed.
+
+    Servers are keyed by config hash: a config change starts a *new* server on
+    a fresh port instead of restarting the shared one, so in-flight runs from
+    other users/configs are never killed mid-turn. If OPENCODE_SERVER_URL is
+    explicitly set, we assume that external server is intentionally managed by
+    the operator.
+    """
     if os.environ.get("OPENCODE_SERVER_URL"):
-        if await _health_check(base_url):
-            return base_url
-        raise OpenCodeError(f"Configured OPENCODE_SERVER_URL is not reachable: {base_url}")
+        base_url = _configured_server_url()
+        if not await _health_check(base_url):
+            raise OpenCodeError(f"Configured OPENCODE_SERVER_URL is not reachable: {base_url}")
+        server = _opencode_servers.get(_EXTERNAL_SERVER_HASH)
+        if server is None:
+            parsed = urlparse(base_url)
+            server = _OpenCodeServer(
+                config_hash=_EXTERNAL_SERVER_HASH,
+                config_home=PROJECT_ROOT,
+                host=parsed.hostname or DEFAULT_OPENCODE_HOST,
+                port=parsed.port or 80,
+                process=None,
+            )
+            _opencode_servers[_EXTERNAL_SERVER_HASH] = server
+        server.touch()
+        return server
 
     config_home, config_hash = await _write_managed_opencode_config(
         user_mcp_overrides=user_mcp_overrides,
     )
 
-    global _opencode_process, _opencode_config_hash
-    should_start = _opencode_process is None or _opencode_process.returncode is not None
-    config_changed = _opencode_config_hash is not None and _opencode_config_hash != config_hash
-    if config_changed and _opencode_process is not None and _opencode_process.returncode is None:
-        logger.info("OpenCode managed config changed; restarting server")
-        _opencode_session_cache.clear()
-        _opencode_warm_sessions.clear()
-        _opencode_process.terminate()
-        try:
-            await asyncio.wait_for(_opencode_process.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            _opencode_process.kill()
-            await _opencode_process.wait()
-        should_start = True
+    async with _opencode_server_lock:
+        server = _opencode_servers.get(config_hash)
+        if server is not None and server.is_alive and await _health_check(server.base_url):
+            server.touch()
+            return server
+        if server is not None:
+            tail = server.log_tail()
+            if tail:
+                logger.warning(
+                    "OpenCode server %s is unhealthy; last output:\n%s", server.base_url, tail
+                )
+            await server.terminate()
+            _drop_server_state(config_hash)
 
-    if not should_start and await _health_check(base_url):
-        return base_url
-
-    if should_start:
         opencode_bin = shutil.which("opencode")
         if not opencode_bin:
             raise OpenCodeError("opencode binary not found on PATH")
 
-        port = int(os.environ.get("OPENCODE_PORT", str(DEFAULT_OPENCODE_PORT)))
         host = os.environ.get("OPENCODE_HOST", DEFAULT_OPENCODE_HOST)
-        logger.info("Starting OpenCode server on %s:%d", host, port)
+        port = _pick_server_port(host)
+        log_path, log_file = _open_server_log(port)
+        logger.info(
+            "Starting OpenCode server on %s:%d (config=%s log=%s)",
+            host,
+            port,
+            config_hash[:12],
+            log_path or "/dev/null",
+        )
         env = {
             **os.environ,
             "XDG_CONFIG_HOME": str(config_home),
             "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
         }
-        _opencode_process = await asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             opencode_bin,
             "serve",
             "--port",
@@ -274,45 +451,64 @@ async def ensure_opencode_server(
             host,
             cwd=str(PROJECT_ROOT),
             env=env,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=log_file if log_file is not None else asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.STDOUT if log_file is not None else asyncio.subprocess.DEVNULL,
         )
-        _opencode_config_hash = config_hash
+        server = _OpenCodeServer(
+            config_hash=config_hash,
+            config_home=config_home,
+            host=host,
+            port=port,
+            process=process,
+            log_path=log_path,
+            log_file=log_file,
+        )
+        _opencode_servers[config_hash] = server
+        await _retire_stale_servers(keep_hash=config_hash)
 
     deadline = asyncio.get_running_loop().time() + OPENCODE_START_TIMEOUT_SECONDS
     while asyncio.get_running_loop().time() < deadline:
-        if await _health_check(base_url):
-            return base_url
-        if _opencode_process and _opencode_process.returncode is not None:
-            raise OpenCodeError(f"OpenCode server exited with code {_opencode_process.returncode}")
+        if await _health_check(server.base_url):
+            server.touch()
+            return server
+        if not server.is_alive:
+            tail = server.log_tail()
+            raise OpenCodeError(
+                f"OpenCode server exited with code {server.process.returncode}"
+                + (f"; last output:\n{tail}" if tail else "")
+            )
         await asyncio.sleep(0.5)
 
-    raise OpenCodeError(f"OpenCode server did not become ready at {base_url}")
+    tail = server.log_tail()
+    raise OpenCodeError(
+        f"OpenCode server did not become ready at {server.base_url}"
+        + (f"; last output:\n{tail}" if tail else "")
+    )
 
 
-_opencode_config_last_user: str | None = None
+async def ensure_opencode_server(
+    user_mcp_overrides: dict | None = None,
+) -> str:
+    """Return a reachable OpenCode server URL, starting one if needed."""
+    server = await _ensure_server_instance(user_mcp_overrides=user_mcp_overrides)
+    return server.base_url
 
 
 async def _write_managed_opencode_config(
     user_mcp_overrides: dict | None = None,
 ) -> tuple[Path, str]:
-    """Write isolated OpenCode config from this app's MCP source of truth."""
-    global _opencode_config_home, _opencode_mcp_names, _opencode_config_checked_at
-    global _opencode_config_last_user
+    """Write isolated OpenCode config from this app's MCP source of truth.
 
-    # Cache key includes user overrides so config changes per-user
+    Config homes are stable per config hash so each managed server keeps its
+    own isolated XDG config dir.
+    """
+    global _opencode_mcp_names
+
     overrides_key = json.dumps(sorted((user_mcp_overrides or {}).keys()))
-
     now = time.monotonic()
-    if (
-        _opencode_config_home is not None
-        and _opencode_config_hash is not None
-        and now - _opencode_config_checked_at < OPENCODE_CONFIG_TTL_SECONDS
-        and _opencode_config_last_user == overrides_key
-    ):
-        return _opencode_config_home, _opencode_config_hash
-
-    _opencode_config_last_user = overrides_key
+    cached = _opencode_config_cache.get(overrides_key)
+    if cached is not None and now - cached[2] < OPENCODE_CONFIG_TTL_SECONDS:
+        return cached[0], cached[1]
 
     app_config = await _load_current_agent_config()
     # Merge per-user MCP overrides into the app config
@@ -330,15 +526,14 @@ async def _write_managed_opencode_config(
     config_text = json.dumps(opencode_config, indent=2, sort_keys=True)
     config_hash = hashlib.sha256(config_text.encode()).hexdigest()
 
-    if _opencode_config_home is None:
-        _opencode_config_home = Path(tempfile.mkdtemp(prefix="loma-opencode-config-"))
-    config_dir = _opencode_config_home / "opencode"
+    config_home = Path(tempfile.gettempdir()) / f"loma-opencode-config-{config_hash[:12]}"
+    config_dir = config_home / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "opencode.json"
     config_path.write_text(config_text)
     config_path.chmod(0o600)
-    _opencode_config_checked_at = now
-    return _opencode_config_home, config_hash
+    _opencode_config_cache[overrides_key] = (config_home, config_hash, now)
+    return config_home, config_hash
 
 
 async def _load_current_agent_config() -> dict:
@@ -471,19 +666,20 @@ async def get_agent_models() -> dict:
         _opencode_model_catalog is not None
         and now - _opencode_model_catalog_checked_at < OPENCODE_MODEL_CATALOG_TTL_SECONDS
     ):
-        _schedule_configured_prewarm(_opencode_model_catalog)
         return _opencode_model_catalog
 
+    server = await _ensure_server_instance()
     payload = await _request_json(
         "GET",
         "/config/providers",
         params={"directory": str(PROJECT_ROOT)},
         timeout=30,
+        base_url=server.base_url,
     )
     catalog = parse_configured_models(payload)
     _opencode_model_catalog = catalog
     _opencode_model_catalog_checked_at = now
-    _schedule_configured_prewarm(catalog)
+    _schedule_configured_prewarm(server, catalog)
     return catalog
 
 
@@ -515,12 +711,23 @@ def _should_prewarm_model(model_id: str) -> bool:
 def get_opencode_pool_status() -> dict:
     """Return OpenCode warm-session pool status for dashboard indicators."""
     configured_models = sorted(_configured_prewarm_models())
-    known_models = sorted(set(configured_models) | set(_opencode_warm_sessions.keys()) | set(_opencode_prewarm_tasks.keys()))
+    known_models = sorted(
+        set(configured_models)
+        | {key[1] for key in _opencode_warm_sessions}
+        | {key[1] for key in _opencode_prewarm_tasks}
+    )
     models = []
     for model_id in known_models:
-        task = _opencode_prewarm_tasks.get(model_id)
-        warming = 1 if task is not None and not task.done() else 0
-        available = len(_opencode_warm_sessions.get(model_id, []))
+        warming = sum(
+            1
+            for key, task in _opencode_prewarm_tasks.items()
+            if key[1] == model_id and not task.done()
+        )
+        available = sum(
+            len(sessions)
+            for key, sessions in _opencode_warm_sessions.items()
+            if key[1] == model_id
+        )
         models.append({
             "model": model_id,
             "enabled": _should_prewarm_model(model_id),
@@ -534,19 +741,20 @@ def get_opencode_pool_status() -> dict:
         "pool_size": OPENCODE_PREWARM_POOL_SIZE,
         "configured_models": configured_models,
         "active_sessions": len(_opencode_session_cache),
+        "servers": len(_opencode_servers),
         "total_available": sum(model["available"] for model in models),
         "total_warming": sum(model["warming"] for model in models),
         "models": models,
     }
 
 
-def _schedule_configured_prewarm(catalog: dict) -> None:
+def _schedule_configured_prewarm(server: _OpenCodeServer, catalog: dict) -> None:
     available_models = {model["id"] for model in catalog.get("models", [])}
     for model_id in _configured_prewarm_models() & available_models:
-        _schedule_prewarm(model_id)
+        _schedule_prewarm(server, model_id)
 
 
-def _schedule_prewarm(model_id: str) -> None:
+def _schedule_prewarm(server: _OpenCodeServer, model_id: str) -> None:
     if not _should_prewarm_model(model_id):
         return
     try:
@@ -554,29 +762,33 @@ def _schedule_prewarm(model_id: str) -> None:
     except RuntimeError:
         return
 
-    sessions = _opencode_warm_sessions.get(model_id, [])
-    running_task = _opencode_prewarm_tasks.get(model_id)
+    key = (server.config_hash, model_id)
+    sessions = _opencode_warm_sessions.get(key, [])
+    running_task = _opencode_prewarm_tasks.get(key)
     if len(sessions) >= OPENCODE_PREWARM_POOL_SIZE:
         return
     if running_task is not None and not running_task.done():
         return
 
     needed = OPENCODE_PREWARM_POOL_SIZE - len(sessions)
-    _opencode_prewarm_tasks[model_id] = loop.create_task(_prewarm_model_sessions(model_id, needed))
+    _opencode_prewarm_tasks[key] = loop.create_task(
+        _prewarm_model_sessions(server, model_id, needed)
+    )
 
 
-async def _checkout_warm_session(model_id: str) -> str | None:
+async def _checkout_warm_session(server: _OpenCodeServer, model_id: str) -> str | None:
     if not _should_prewarm_model(model_id):
         return None
 
+    key = (server.config_hash, model_id)
     async with _opencode_prewarm_lock:
-        sessions = _opencode_warm_sessions.get(model_id) or []
+        sessions = _opencode_warm_sessions.get(key) or []
         if sessions:
             session_id = sessions.pop(0)
             logger.info("Checked out prewarmed OpenCode session %s for model=%s", session_id, model_id)
             return session_id
 
-    running_task = _opencode_prewarm_tasks.get(model_id)
+    running_task = _opencode_prewarm_tasks.get(key)
     if running_task is not None and not running_task.done() and OPENCODE_PREWARM_WAIT_SECONDS > 0:
         try:
             await asyncio.wait_for(asyncio.shield(running_task), timeout=OPENCODE_PREWARM_WAIT_SECONDS)
@@ -586,7 +798,7 @@ async def _checkout_warm_session(model_id: str) -> str | None:
             logger.exception("OpenCode prewarm task failed for model=%s", model_id)
 
     async with _opencode_prewarm_lock:
-        sessions = _opencode_warm_sessions.get(model_id) or []
+        sessions = _opencode_warm_sessions.get(key) or []
         if sessions:
             session_id = sessions.pop(0)
             logger.info("Checked out prewarmed OpenCode session %s for model=%s after wait", session_id, model_id)
@@ -594,7 +806,7 @@ async def _checkout_warm_session(model_id: str) -> str | None:
     return None
 
 
-async def _create_session(title: str) -> str:
+async def _create_session(title: str, *, base_url: str | None = None) -> str:
     session = await _request_json(
         "POST",
         "/session",
@@ -604,6 +816,7 @@ async def _create_session(title: str) -> str:
         },
         params={"directory": str(PROJECT_ROOT)},
         timeout=30,
+        base_url=base_url,
     )
     session_id = session.get("id")
     if not session_id:
@@ -611,7 +824,7 @@ async def _create_session(title: str) -> str:
     return session_id
 
 
-async def _delete_session_messages(session_id: str) -> None:
+async def _delete_session_messages(session_id: str, *, base_url: str | None = None) -> None:
     try:
         for _ in range(3):
             messages = await _request_json(
@@ -619,6 +832,7 @@ async def _delete_session_messages(session_id: str) -> None:
                 f"/session/{session_id}/message",
                 params={"directory": str(PROJECT_ROOT), "limit": 20},
                 timeout=30,
+                base_url=base_url,
             )
             if not isinstance(messages, list) or not messages:
                 return
@@ -632,6 +846,7 @@ async def _delete_session_messages(session_id: str) -> None:
                     f"/session/{session_id}/message/{message_id}",
                     params={"directory": str(PROJECT_ROOT)},
                     timeout=30,
+                    base_url=base_url,
                 )
                 deleted_any = True
             if not deleted_any:
@@ -640,9 +855,11 @@ async def _delete_session_messages(session_id: str) -> None:
         logger.warning("Failed to clean OpenCode warmup messages for session=%s", session_id, exc_info=True)
 
 
-async def _warm_opencode_session(model_id: str) -> str:
+async def _warm_opencode_session(server: _OpenCodeServer, model_id: str) -> str:
     provider_id, raw_model_id = _split_model(model_id)
-    session_id = await _create_session(f"OpenCode warm session · {model_id}")
+    session_id = await _create_session(
+        f"OpenCode warm session · {model_id}", base_url=server.base_url
+    )
     started_at = time.perf_counter()
     body = {
         "model": {"providerID": provider_id, "modelID": raw_model_id},
@@ -655,8 +872,9 @@ async def _warm_opencode_session(model_id: str) -> str:
         json_body=body,
         params={"directory": str(PROJECT_ROOT)},
         timeout=OPENCODE_REQUEST_TIMEOUT_SECONDS,
+        base_url=server.base_url,
     )
-    await _delete_session_messages(session_id)
+    await _delete_session_messages(session_id, base_url=server.base_url)
 
     info = response.get("info") if isinstance(response, dict) else {}
     tokens = (info or {}).get("tokens") or {}
@@ -673,22 +891,23 @@ async def _warm_opencode_session(model_id: str) -> str:
     return session_id
 
 
-async def _prewarm_model_sessions(model_id: str, count: int) -> None:
+async def _prewarm_model_sessions(server: _OpenCodeServer, model_id: str, count: int) -> None:
+    key = (server.config_hash, model_id)
     try:
         for _ in range(max(0, count)):
             try:
-                session_id = await _warm_opencode_session(model_id)
+                session_id = await _warm_opencode_session(server, model_id)
                 async with _opencode_prewarm_lock:
-                    sessions = _opencode_warm_sessions.setdefault(model_id, [])
+                    sessions = _opencode_warm_sessions.setdefault(key, [])
                     if len(sessions) < OPENCODE_PREWARM_POOL_SIZE:
                         sessions.append(session_id)
             except Exception:
                 logger.exception("Failed to prewarm OpenCode session for model=%s", model_id)
                 break
     finally:
-        task = _opencode_prewarm_tasks.get(model_id)
+        task = _opencode_prewarm_tasks.get(key)
         if task is asyncio.current_task():
-            _opencode_prewarm_tasks.pop(model_id, None)
+            _opencode_prewarm_tasks.pop(key, None)
 
 
 def _usage_from_info(info: dict) -> tuple[dict | None, float | None]:
@@ -1025,19 +1244,26 @@ async def run_opencode_agent(
     )
     request_timeout_seconds = max(request_timeout_seconds, idle_timeout_seconds + 30)
 
+    server = await _ensure_server_instance(user_mcp_overrides=user_mcp_overrides)
+    base_url = server.base_url
+
     conversation_id = getattr(observer, "conversation_id", None)
-    session_cache_key = (conversation_id, selected_model) if conversation_id else None
+    session_cache_key = (
+        (server.config_hash, conversation_id, selected_model) if conversation_id else None
+    )
     session_id = _opencode_session_cache.get(session_cache_key) if session_cache_key else None
     warm_session_used = False
     reused_session = bool(session_id)
     if not session_id:
-        session_id = await _checkout_warm_session(selected_model)
+        session_id = await _checkout_warm_session(server, selected_model)
         if session_id is None:
-            session_id = await _create_session(full_prompt[:80] or "Dashboard chat")
-            _schedule_prewarm(selected_model)
+            session_id = await _create_session(
+                full_prompt[:80] or "Dashboard chat", base_url=base_url
+            )
+            _schedule_prewarm(server, selected_model)
         else:
             warm_session_used = True
-            _schedule_prewarm(selected_model)
+            _schedule_prewarm(server, selected_model)
         if session_cache_key:
             _opencode_session_cache[session_cache_key] = session_id
     else:
@@ -1110,7 +1336,6 @@ async def run_opencode_agent(
         yield {"type": "turn", "turn_number": turn_count}
         yield {"type": "status", "message": "Sent prompt to OpenCode; waiting for model/tool events"}
 
-    base_url = await ensure_opencode_server(user_mcp_overrides=user_mcp_overrides)
     assistant_message_ids: set[str] = set()
     emitted_text_part_ids: set[str] = set()
     emitted_text_by_part_id: dict[str, str] = {}
@@ -1248,96 +1473,150 @@ async def run_opencode_agent(
             first_text_at = time.perf_counter()
         yield {"type": "text", "text": delta, "append": True}
 
-    async for event in _iter_opencode_turn_events(
-        base_url,
-        session_id=session_id,
-        body=body,
-        idle_timeout_seconds=idle_timeout_seconds,
-        request_timeout_seconds=request_timeout_seconds,
-    ):
-        if first_event_at is None:
-            first_event_at = time.perf_counter()
-        event_type = event.get("type")
-        if event_type == "__status":
-            if include_steps:
-                yield {
-                    "type": "status",
-                    "message": event.get("message") or "Still waiting for OpenCode events...",
-                    "elapsed_seconds": event.get("elapsed_seconds"),
-                }
-            continue
+    server.active_turns += 1
+    attempt = 1
+    try:
+        while True:
+            try:
+                async for event in _iter_opencode_turn_events(
+                    base_url,
+                    session_id=session_id,
+                    body=body,
+                    idle_timeout_seconds=idle_timeout_seconds,
+                    request_timeout_seconds=request_timeout_seconds,
+                ):
+                    if first_event_at is None:
+                        first_event_at = time.perf_counter()
+                    event_type = event.get("type")
+                    if event_type == "__status":
+                        if include_steps:
+                            yield {
+                                "type": "status",
+                                "message": event.get("message") or "Still waiting for OpenCode events...",
+                                "elapsed_seconds": event.get("elapsed_seconds"),
+                            }
+                        continue
 
-        properties = event.get("properties") or {}
-        if _event_session_id(properties) != session_id:
-            continue
+                    properties = event.get("properties") or {}
+                    if _event_session_id(properties) != session_id:
+                        continue
 
-        if event_type == "permission.asked":
-            permission_id = properties.get("id")
-            permission_name = properties.get("permission") or "permission"
-            patterns = properties.get("patterns") or []
-            if include_steps:
-                yield {
-                    "type": "status",
-                    "message": f"OpenCode requested {permission_name}; auto-approving for dashboard run",
-                }
-            if OPENCODE_AUTO_APPROVE_PERMISSIONS and permission_id:
-                await _request_json(
-                    "POST",
-                    f"/session/{session_id}/permissions/{permission_id}",
-                    json_body={"response": "always"},
-                    params={"directory": str(PROJECT_ROOT)},
-                    timeout=30,
-                )
-                logger.info(
-                    "Auto-approved OpenCode permission session=%s permission=%s patterns=%s",
-                    session_id,
-                    permission_name,
-                    patterns,
-                )
-            continue
+                    if event_type == "permission.asked":
+                        permission_id = properties.get("id")
+                        permission_name = properties.get("permission") or "permission"
+                        patterns = properties.get("patterns") or []
+                        if include_steps:
+                            yield {
+                                "type": "status",
+                                "message": f"OpenCode requested {permission_name}; auto-approving for dashboard run",
+                            }
+                        if OPENCODE_AUTO_APPROVE_PERMISSIONS and permission_id:
+                            await _request_json(
+                                "POST",
+                                f"/session/{session_id}/permissions/{permission_id}",
+                                json_body={"response": "always"},
+                                params={"directory": str(PROJECT_ROOT)},
+                                timeout=30,
+                                base_url=base_url,
+                            )
+                            logger.info(
+                                "Auto-approved OpenCode permission session=%s permission=%s patterns=%s",
+                                session_id,
+                                permission_name,
+                                patterns,
+                            )
+                        continue
 
-        if event_type == "message.updated":
-            info = properties.get("info") or {}
-            message_id = info.get("id")
-            if info.get("role") != "assistant" or not message_id:
-                continue
+                    if event_type == "message.updated":
+                        info = properties.get("info") or {}
+                        message_id = info.get("id")
+                        if info.get("role") != "assistant" or not message_id:
+                            continue
 
-            assistant_message_ids.add(message_id)
-            if info.get("error"):
-                raise OpenCodeError(_format_opencode_error(info["error"]))
-            for pending_part in pending_parts.pop(message_id, []):
-                async for output_event in handle_part(pending_part):
-                    yield output_event
+                        assistant_message_ids.add(message_id)
+                        if info.get("error"):
+                            raise OpenCodeModelError(_format_opencode_error(info["error"]))
+                        for pending_part in pending_parts.pop(message_id, []):
+                            async for output_event in handle_part(pending_part):
+                                yield output_event
 
-            if info.get("time", {}).get("completed") and message_id not in completed_usage_messages:
-                completed_usage_messages.add(message_id)
-                usage, cost = _usage_from_info(info)
-                total_cost += _merge_usage(total_usage, usage, cost)
+                        if info.get("time", {}).get("completed") and message_id not in completed_usage_messages:
+                            completed_usage_messages.add(message_id)
+                            usage, cost = _usage_from_info(info)
+                            total_cost += _merge_usage(total_usage, usage, cost)
 
-                finish = info.get("finish")
-                if finish and finish != "tool-calls":
-                    stream_completed = True
+                            finish = info.get("finish")
+                            if finish and finish != "tool-calls":
+                                stream_completed = True
 
-            if stream_completed:
+                        if stream_completed:
+                            break
+
+                    if event_type == "message.part.delta":
+                        async for output_event in handle_part_delta(properties):
+                            yield output_event
+                        continue
+
+                    if event_type != "message.part.updated":
+                        continue
+
+                    part = properties.get("part") or {}
+                    message_id = part.get("messageID")
+                    if message_id not in assistant_message_ids:
+                        if message_id:
+                            pending_parts.setdefault(message_id, []).append(part)
+                        continue
+
+                    async for output_event in handle_part(part):
+                        yield output_event
                 break
-
-        if event_type == "message.part.delta":
-            async for output_event in handle_part_delta(properties):
-                yield output_event
-            continue
-
-        if event_type != "message.part.updated":
-            continue
-
-        part = properties.get("part") or {}
-        message_id = part.get("messageID")
-        if message_id not in assistant_message_ids:
-            if message_id:
-                pending_parts.setdefault(message_id, []).append(part)
-            continue
-
-        async for output_event in handle_part(part):
-            yield output_event
+            except Exception as exc:
+                can_retry = (
+                    attempt < OPENCODE_TURN_MAX_ATTEMPTS
+                    and first_text_at is None
+                    and not emitted_tool_calls
+                    and _is_retryable_turn_error(exc)
+                )
+                if not can_retry:
+                    raise
+                attempt += 1
+                logger.warning(
+                    "OpenCode turn failed before any output (%s); retrying with a fresh session (attempt %d/%d)",
+                    exc,
+                    attempt,
+                    OPENCODE_TURN_MAX_ATTEMPTS,
+                )
+                if include_steps:
+                    yield {
+                        "type": "status",
+                        "message": "OpenCode stream dropped before any output; retrying with a fresh session",
+                    }
+                for container in (
+                    assistant_message_ids,
+                    emitted_text_part_ids,
+                    emitted_text_by_part_id,
+                    part_type_by_id,
+                    emitted_tool_calls,
+                    emitted_tool_results,
+                    completed_usage_messages,
+                    pending_parts,
+                ):
+                    container.clear()
+                stream_completed = False
+                first_event_at = None
+                server.active_turns = max(0, server.active_turns - 1)
+                server = await _ensure_server_instance(user_mcp_overrides=user_mcp_overrides)
+                server.active_turns += 1
+                base_url = server.base_url
+                session_id = await _create_session(
+                    full_prompt[:80] or "Dashboard chat", base_url=base_url
+                )
+                if conversation_id:
+                    session_cache_key = (server.config_hash, conversation_id, selected_model)
+                    _opencode_session_cache[session_cache_key] = session_id
+    finally:
+        server.active_turns = max(0, server.active_turns - 1)
+        server.touch()
 
     if observer:
         usage_payload = total_usage if total_usage["input_tokens"] or total_usage["output_tokens"] else None
