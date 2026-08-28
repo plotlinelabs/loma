@@ -7,7 +7,7 @@ const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 
 export const FAVORITE_MODEL_IDS = [
   "codex/gpt-5.6-sol",
-  "opencode/x-preview-f-free",
+  "opencode-go/glm-5.3-flash",
   "anthropic/claude-fable-5",
 ] as const;
 
