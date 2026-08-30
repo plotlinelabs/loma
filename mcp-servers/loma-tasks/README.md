@@ -7,8 +7,8 @@ REST routes, so all board logic and owner-scoping stay in one place.
 
 ## How auth works
 
-1. A user mints a personal key in the dashboard (**Settings → API Keys**,
-   `/settings/api-keys`). The full key (`loma_sk_…`) is shown once; only its
+1. A user mints a personal key in the dashboard (**Integrations → API Keys** tab,
+   `/integrations/manage?tab=api-keys`). The full key (`loma_sk_…`) is shown once; only its
    SHA-256 hash is stored in the `api_keys` Mongo collection.
 2. The external agent connects to `https://<loma-host>/mcp/tasks` with
    `Authorization: Bearer loma_sk_…`.

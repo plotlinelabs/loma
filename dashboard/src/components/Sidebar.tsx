@@ -41,7 +41,6 @@ import {
   RiMenuUnfoldLine,
   RiExpandUpDownLine,
   RiNotification3Line,
-  RiKey2Line,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -86,11 +85,6 @@ const navigation: NavItem[] = [
     name: "Integrations",
     href: "/integrations/manage",
     icon: <RiSettings3Line size={16} />,
-  },
-  {
-    name: "API Keys",
-    href: "/settings/api-keys",
-    icon: <RiKey2Line size={16} />,
   },
   {
     name: "Flows",

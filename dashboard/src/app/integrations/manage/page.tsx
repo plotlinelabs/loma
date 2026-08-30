@@ -53,6 +53,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RiCloseLine, RiFileCopyLine, RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
+import ApiKeysPanel from "../../../components/ApiKeysPanel";
+
+const INTEGRATION_TABS = ["org", "system", "custom", "personal", "api-keys"] as const;
+type IntegrationTab = (typeof INTEGRATION_TABS)[number];
 
 const WebTerminal = dynamic(() => import("../../../components/WebTerminal"), { ssr: false });
 
@@ -366,6 +370,23 @@ export default function IntegrationsPage() {
   const [telegramLink, setTelegramLink] = useState<TelegramLink | null>(null);
   const [linkingTelegram, setLinkingTelegram] = useState(false);
   const [disconnectingTelegram, setDisconnectingTelegram] = useState(false);
+
+  // Active tab; deep-linkable via ?tab=api-keys etc.
+  const [activeTab, setActiveTab] = useState<IntegrationTab>("org");
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested && (INTEGRATION_TABS as readonly string[]).includes(requested)) {
+      setActiveTab(requested as IntegrationTab);
+    }
+  }, []);
+  const handleTabChange = (value: string) => {
+    const tab = value as IntegrationTab;
+    setActiveTab(tab);
+    const url = new URL(window.location.href);
+    if (tab === "org") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", tab);
+    window.history.replaceState(null, "", url.toString());
+  };
 
   const loadConnections = useCallback(async () => {
     try {
@@ -1026,12 +1047,13 @@ export default function IntegrationsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Tabs defaultValue="org">
+        <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList>
             <TabsTrigger value="org">Org</TabsTrigger>
             <TabsTrigger value="system">System</TabsTrigger>
             <TabsTrigger value="custom">Custom</TabsTrigger>
             <TabsTrigger value="personal">Personal</TabsTrigger>
+            <TabsTrigger value="api-keys">API Keys</TabsTrigger>
           </TabsList>
 
           {/* Org Integrations */}
@@ -1862,6 +1884,11 @@ export default function IntegrationsPage() {
               </Card>
             </div>
           </TabsContent>
+
+          {/* API Keys (loma-tasks MCP server) */}
+          <TabsContent value="api-keys">
+            <ApiKeysPanel />
+          </TabsContent>
         </Tabs>
       )}
 
@@ -1873,6 +1900,7 @@ export default function IntegrationsPage() {
             <li>Org integrations are shared across the team — connect with an API key</li>
             <li>System-managed integrations are configured on the server — no setup needed</li>
             <li>Personal integrations are scoped to your account only</li>
+            <li>API Keys let external agents reach your own task board over MCP — they act as you</li>
             <li>All tokens and keys are encrypted at rest</li>
             <li>You can disconnect at any time to revoke access</li>
           </ul>
