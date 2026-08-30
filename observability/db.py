@@ -61,6 +61,10 @@ async def init_observability():
     await _db.env_audit_log.create_index([("timestamp", -1)])
     await _db.env_audit_log.create_index("user_email")
 
+    # Personal API keys (bearer keys for the loma-tasks MCP server)
+    await _db.api_keys.create_index("key_hash", unique=True)
+    await _db.api_keys.create_index("user_email")
+
     # Draft with Loma indexes
     await _db.drafts.create_index("draft_id", unique=True)
     await _db.drafts.create_index([("user_email", 1), ("status", 1)])
