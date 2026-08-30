@@ -282,7 +282,8 @@ async def _authenticate(request: web.Request) -> str | None:
     if not doc:
         return None
     # Best-effort usage stamp — never block the request on it.
-    asyncio.create_task(
+    # (ensure_future, not create_task: motor returns a Future, not a coroutine.)
+    asyncio.ensure_future(
         db.api_keys.update_one(
             {"key_id": doc["key_id"]},
             {"$set": {"last_used_at": datetime.now(timezone.utc)}},
