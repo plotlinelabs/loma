@@ -48,6 +48,20 @@ services:
       - loma-backend
     restart: unless-stopped
 
+  # MCP sidecar: exposes each user's task board to external agents over
+  # Streamable HTTP at /mcp/tasks (bearer API keys minted in the dashboard).
+  # Internal-only — reached exclusively through the nginx proxy.
+  loma-tasks-mcp:
+    build:
+      context: ./mcp-servers/loma-tasks
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      BACKEND_URL: http://loma-backend:3000
+    depends_on:
+      - loma-backend
+    restart: unless-stopped
+
   # Single external entrypoint. Serves the dashboard on :80 and routes /api +
   # webhooks to the backend over the internal network, so :3000/:3001 need not
   # be exposed. For HTTPS on :443 see deploy/nginx/README.md.
@@ -65,6 +79,7 @@ services:
     depends_on:
       - loma-backend
       - loma-dashboard
+      - loma-tasks-mcp
     restart: unless-stopped
 
   # Phase 2 (HTTPS): obtain/renew Let's Encrypt certs via the webroot challenge.

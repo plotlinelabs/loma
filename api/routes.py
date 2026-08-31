@@ -1854,5 +1854,9 @@ def setup_api_routes(app: web.Application):
     from api.notification_routes import setup_notification_routes
     setup_notification_routes(app)
 
+    # Personal API keys (bearer keys for the loma-tasks MCP server)
+    from api.api_key_routes import setup_api_key_routes
+    setup_api_key_routes(app)
+
     # CORS catch-all must be last
     app.router.add_route("OPTIONS", "/api/{path:.*}", cors_options)
