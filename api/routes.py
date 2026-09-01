@@ -325,10 +325,11 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
         return "Untitled conversation"
 
 
-async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
+async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str | None:
     """Classify a conversation into a topic category using Claude Haiku.
 
-    Returns one of the _VALID_TOPICS values, or 'other' on failure.
+    Returns one of the _VALID_TOPICS values. Failures return None so callers
+    leave the topic unset and a later enrichment pass can retry it.
     """
     context = prompt[:500]
     if response_snippet:
@@ -342,34 +343,45 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
         f"Conversation:\n{context}"
     )
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", message,
-            "--model", "claude-haiku-4-5-20251001",
-            "--max-turns", "1",
-            "--output-format", "json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
-
-        if proc.returncode != 0:
-            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
-            return "other"
-
-        output = stdout.decode().strip()
+    for attempt in range(1, 4):
         try:
-            envelope = json.loads(output)
-            raw = envelope.get("result", output)
-        except json.JSONDecodeError:
-            raw = output
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", message,
+                "--model", "claude-haiku-4-5-20251001",
+                "--max-turns", "1",
+                "--output-format", "json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
-        topic = raw.strip().lower().strip('"').strip("'").strip()
-        return topic if topic in _VALID_TOPICS else "other"
+            if proc.returncode != 0:
+                logger.warning(
+                    "Topic classification CLI failed (attempt=%d, rc=%d): %s",
+                    attempt, proc.returncode, stderr.decode()[:500],
+                )
+                continue
 
-    except Exception as e:
-        logger.warning("Topic classification failed: %s", e)
-        return "other"
+            output = stdout.decode().strip()
+            try:
+                envelope = json.loads(output)
+                raw = envelope.get("result", output)
+            except json.JSONDecodeError:
+                raw = output
+
+            topic = raw.strip().lower().strip('"').strip("'").strip()
+            if topic in _VALID_TOPICS:
+                return topic
+            logger.warning("Invalid topic classification (attempt=%d): %r", attempt, topic)
+        except asyncio.TimeoutError:
+            logger.warning("Topic classification timed out (attempt=%d)", attempt)
+        except Exception as e:
+            logger.warning("Topic classification failed (attempt=%d): %s", attempt, e)
+
+        if attempt < 3:
+            await asyncio.sleep(0.25 * attempt)
+
+    return None
 
 
 async def _enrich_conversation(db, conversation: dict) -> dict:
@@ -388,8 +400,9 @@ async def _enrich_conversation(db, conversation: dict) -> dict:
 
     if not conversation.get("topic"):
         topic = await _classify_topic_llm(prompt, response_snippet)
-        conversation["topic"] = topic
-        needs_update["topic"] = topic
+        if topic:
+            conversation["topic"] = topic
+            needs_update["topic"] = topic
 
     if needs_update:
         try:

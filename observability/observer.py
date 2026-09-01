@@ -439,13 +439,16 @@ class ConversationObserver:
             # set title_edited) — only enrich the topic in that case.
             existing = await self.db.conversations.find_one(
                 {"conversation_id": self.conversation_id}, {"title_edited": 1})
-            update_fields = {"topic": topic}
+            update_fields = {}
+            if topic:
+                update_fields["topic"] = topic
             if not (existing or {}).get("title_edited"):
                 update_fields["title"] = title
-            await self.db.conversations.update_one(
-                {"conversation_id": self.conversation_id},
-                {"$set": update_fields},
-            )
+            if update_fields:
+                await self.db.conversations.update_one(
+                    {"conversation_id": self.conversation_id},
+                    {"$set": update_fields},
+                )
             logger.info("Observability: enrichment complete for %s: title=%r topic=%s",
                          self.conversation_id, title, topic)
         except Exception as e:
