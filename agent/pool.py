@@ -61,6 +61,38 @@ def _get_claude_users_dir() -> Path:
     return Path(os.environ.get("CLAUDE_USERS_DIR", "/opt/claude-users"))
 
 
+def _strip_account_mcp_servers(config_dir: str) -> None:
+    """Ensure a Claude account's settings disable all account-level MCP servers.
+
+    Claude AI accounts may have personal MCP integrations (Gmail, Google Drive,
+    Calendar, Slack) connected at the account level. These are NOT scoped to the
+    dashboard user — any agent running on that account would use the account
+    owner's credentials, violating user isolation.
+
+    This writes a project-level settings.json that disables all MCP servers,
+    ensuring the agent only uses the MCP servers we explicitly pass via
+    ClaudeAgentOptions.mcp_servers.
+    """
+    settings_dir = Path(config_dir) / ".claude"
+    settings_file = settings_dir / "settings.json"
+
+    desired = {"mcpServers": {}}
+
+    try:
+        if settings_file.exists():
+            existing = json.loads(settings_file.read_text())
+            if existing.get("mcpServers") == {}:
+                return
+            existing["mcpServers"] = {}
+            settings_file.write_text(json.dumps(existing, indent=2))
+        else:
+            settings_dir.mkdir(parents=True, exist_ok=True)
+            settings_file.write_text(json.dumps(desired, indent=2))
+        logger.info("Stripped account-level MCP servers from %s", config_dir)
+    except Exception:
+        logger.exception("Failed to strip MCP servers from %s", config_dir)
+
+
 def get_pool() -> "ClientPool":
     """Get the global client pool. Raises if not initialized."""
     if _pool is None:
@@ -193,6 +225,7 @@ class ClientPool:
                     if entry.name in disabled:
                         logger.info("Skipping account %s (pool disabled by admin)", entry.name)
                         continue
+                    _strip_account_mcp_servers(str(entry))
                     accounts.append({
                         "email": entry.name,
                         "config_dir": str(entry),

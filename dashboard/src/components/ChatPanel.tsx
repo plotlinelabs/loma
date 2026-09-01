@@ -1642,7 +1642,6 @@ export default function ChatPanel({
                         ? "Waiting for OpenCode events..."
                         : "Waiting for agent events..."
                     }
-                    elapsedSeconds={streamElapsedSeconds}
                   />
                 </div>
               )}
