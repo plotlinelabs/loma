@@ -85,6 +85,7 @@ async def assess_review_quality(
     )
 
     try:
+        from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", prompt,
             "--model", "claude-opus-4-8",
@@ -92,6 +93,7 @@ async def assess_review_quality(
             "--output-format", "json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
 

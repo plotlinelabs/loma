@@ -300,6 +300,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
             "--model", "claude-haiku-4-5-20251001",
@@ -307,11 +308,13 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
             "--output-format", "json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
         if proc.returncode != 0:
-            logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
+            detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
+            logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, detail)
             return _fallback_title(prompt)
 
         output = stdout.decode().strip()
@@ -354,6 +357,7 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
             "--model", "claude-haiku-4-5-20251001",
@@ -361,11 +365,13 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
             "--output-format", "json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
         if proc.returncode != 0:
-            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
+            detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
+            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, detail)
             return "other"
 
         output = stdout.decode().strip()
