@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
+import { RiArrowUpLine, RiCloseLine, RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -10,6 +10,8 @@ import ChatWithArtifacts from "@/components/ChatWithArtifacts";
 import { rebuildItemsFromConversation, type ChatItem } from "@/components/ChatPanel";
 import type { Artifact } from "@/components/ArtifactViewer";
 import { basePath, fetchConversation, updateTask, type ChatFile, type Task } from "@/lib/api";
+
+const HISTORY_BATCH_SIZE = 40;
 
 /** Loads and renders one conversation inside the drawer. Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
@@ -22,12 +24,14 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
   const [draftPrompt, setDraftPrompt] = useState<string | null>(null);
   const [draftFiles, setDraftFiles] = useState<ChatFile[] | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [historyItemCount, setHistoryItemCount] = useState(0);
+  const [visibleHistoryLimit, setVisibleHistoryLimit] = useState(HISTORY_BATCH_SIZE);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const data = await fetchConversation(conversationId);
+        const data = await fetchConversation(conversationId, { historyLimit: visibleHistoryLimit });
         if (cancelled) return;
         setModel(data.conversation.model || null);
         if (data.conversation.task_status === "todo" && !data.conversation.status) {
@@ -38,14 +42,19 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
           setDraftPrompt(data.conversation.prompt);
           setDraftFiles(data.conversation.draft_files || null);
         } else {
+          const recentMessages = data.conversation.messages;
+          const recentPrompt = data.history_truncated
+            ? recentMessages?.find((message) => message.role === "user")?.content || data.conversation.prompt
+            : data.conversation.prompt;
           const { items, artifacts } = rebuildItemsFromConversation(
-            data.conversation.messages,
-            data.conversation.prompt,
+            recentMessages,
+            recentPrompt,
             data.conversation.final_response,
             data.turns,
             data.artifacts,
           );
           setInitialItems(items);
+          setHistoryItemCount(data.history_total_turns || items.length);
           setInitialArtifacts(artifacts);
           setInitialStatus(data.conversation.status);
         }
@@ -59,7 +68,7 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+  }, [conversationId, visibleHistoryLimit]);
 
   if (loading) {
     return (
@@ -84,6 +93,18 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {historyItemCount > visibleHistoryLimit && (
+        <div className="flex flex-shrink-0 justify-center border-b border-border bg-muted/30 px-3 py-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setVisibleHistoryLimit((count) => count + HISTORY_BATCH_SIZE)}
+          >
+            <RiArrowUpLine size={15} />
+            Load earlier messages ({historyItemCount - visibleHistoryLimit} remaining)
+          </Button>
+        </div>
+      )}
       <ChatWithArtifacts
         initialItems={initialItems}
         initialArtifacts={initialArtifacts}
@@ -93,6 +114,7 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
         initialModel={model || undefined}
         initialStatus={initialStatus}
         draftStorageKey={`loma-task-draft-${conversationId}`}
+        historyItemLimit={visibleHistoryLimit}
       />
     </div>
   );
@@ -106,56 +128,85 @@ export function TaskChatDrawer({
   open,
   onOpenChange,
   onTaskChange,
+  embedded = false,
 }: {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onTaskChange?: (task: Task) => void;
+  embedded?: boolean;
 }) {
+  const content = (
+    <>
+      <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
+        {task && (
+          <EditableTaskTitle
+            key={`${task.conversation_id}:${task.title || task.prompt}`}
+            task={task}
+            onTaskChange={onTaskChange}
+            embedded={embedded}
+          />
+        )}
+        {embedded && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground"
+            onClick={() => onOpenChange(false)}
+            aria-label="Close task drawer"
+          >
+            <RiCloseLine size={16} />
+          </Button>
+        )}
+        {task && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" asChild>
+                <a
+                  href={`${basePath}/chat?continue=${task.conversation_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Open in full tab"
+                >
+                  <RiExternalLinkLine size={16} />
+                </a>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Open in full tab</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      {task && (
+        <DrawerConversation
+          key={task.conversation_id}
+          conversationId={task.conversation_id}
+        />
+      )}
+    </>
+  );
+
+  if (embedded) {
+    if (!open || !task) return null;
+    return (
+      <aside className="flex min-w-[420px] flex-1 flex-col overflow-hidden border-l border-border bg-background">
+        {content}
+      </aside>
+    );
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(1100px,92vw)]"
       >
-        <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
-          {task && (
-            <EditableTaskTitle
-              key={`${task.conversation_id}:${task.title || task.prompt}`}
-              task={task}
-              onTaskChange={onTaskChange}
-            />
-          )}
-          {task && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" className="text-muted-foreground" asChild>
-                  <a
-                    href={`${basePath}/chat?continue=${task.conversation_id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="Open in full tab"
-                  >
-                    <RiExternalLinkLine size={16} />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Open in full tab</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        {task && (
-          <DrawerConversation
-            key={task.conversation_id}
-            conversationId={task.conversation_id}
-          />
-        )}
+        {content}
       </SheetContent>
     </Sheet>
   );
 }
 
-function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: (task: Task) => void }) {
+function EditableTaskTitle({ task, onTaskChange, embedded = false }: { task: Task; onTaskChange?: (task: Task) => void; embedded?: boolean }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [title, setTitle] = useState(task.title || task.prompt || "New task");
 
@@ -194,13 +245,23 @@ function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: 
               />
             ) : (
               <div className="flex min-w-0 items-center gap-1">
-                <SheetTitle
-                  className="min-w-0 truncate font-heading text-base font-semibold"
-                  onClick={() => setEditingTitle(true)}
-                  title="Click to rename"
-                >
-                  {task ? task.title || task.prompt || "New task" : "Task"}
-                </SheetTitle>
+                {embedded ? (
+                  <h2
+                    className="min-w-0 truncate font-heading text-base font-semibold"
+                    onClick={() => setEditingTitle(true)}
+                    title="Click to rename"
+                  >
+                    {task ? task.title || task.prompt || "New task" : "Task"}
+                  </h2>
+                ) : (
+                  <SheetTitle
+                    className="min-w-0 truncate font-heading text-base font-semibold"
+                    onClick={() => setEditingTitle(true)}
+                    title="Click to rename"
+                  >
+                    {task ? task.title || task.prompt || "New task" : "Task"}
+                  </SheetTitle>
+                )}
                 {task && (
                   <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground" onClick={() => setEditingTitle(true)} aria-label="Rename task">
                     <RiPencilLine size={14} />

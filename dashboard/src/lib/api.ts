@@ -104,6 +104,8 @@ export interface ConversationDetailResponse {
   conversation: Conversation;
   turns: Turn[];
   artifacts?: PersistedArtifact[];
+  history_total_turns?: number | null;
+  history_truncated?: boolean;
 }
 
 export interface StatsResponse {
@@ -196,8 +198,14 @@ export async function fetchConversations(params: {
   return res.json();
 }
 
-export async function fetchConversation(id: string): Promise<ConversationDetailResponse> {
-  const res = await fetch(`${API_BASE}/api/conversations/${id}`);
+export async function fetchConversation(
+  id: string,
+  options: { historyLimit?: number } = {},
+): Promise<ConversationDetailResponse> {
+  const params = new URLSearchParams();
+  if (options.historyLimit) params.set("history_limit", String(options.historyLimit));
+  const query = params.size ? `?${params}` : "";
+  const res = await fetch(`${API_BASE}/api/conversations/${id}${query}`);
   if (!res.ok) throw new Error(`Failed to fetch conversation: ${res.status}`);
   return res.json();
 }
@@ -1218,4 +1226,65 @@ export async function fetchConversationCost(conversationId: string): Promise<Con
   const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/cost`);
   if (!res.ok) throw new Error(`Failed to fetch cost: ${res.status}`);
   return res.json();
+}
+
+// ---------- Voice mode ----------
+
+export interface VoiceHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface VoiceAction {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface VoiceCommandResponse {
+  speech: string;
+  actions: VoiceAction[];
+  executed: boolean;
+  executed_count: number;
+}
+
+/** One voice-session turn: the utterance plus recent history in, a short
+ * spoken reply and any executed board actions out. */
+export async function sendVoiceCommand(
+  text: string,
+  history: VoiceHistoryMessage[],
+  model: string,
+): Promise<VoiceCommandResponse> {
+  const res = await fetch(`${API_BASE}/api/voice/command`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, history, model }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Voice command failed: ${res.status}`);
+  return body;
+}
+
+export async function generateVoiceSpeech(text: string, voice: string, speed: number): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/api/voice/speech`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice, speed }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Speech generation failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
+export async function createVoiceListenToken(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/voice/listen-token`, { method: "POST" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Live transcription failed: ${res.status}`);
+  return body.token;
+}
+
+export function voiceListenWebSocketUrl(token: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${API_BASE}/api/voice/listen?token=${encodeURIComponent(token)}`;
 }

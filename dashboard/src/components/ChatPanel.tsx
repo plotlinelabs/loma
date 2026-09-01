@@ -550,6 +550,7 @@ export default function ChatPanel({
   onArtifactClose,
   artifacts: externalArtifacts,
   onConversationCreated,
+  historyItemLimit,
 }: {
   initialItems?: ChatItem[];
   /** Artifacts restored from history (persisted in MongoDB) */
@@ -576,10 +577,17 @@ export default function ChatPanel({
   artifacts?: Artifact[];
   /** Called when a new conversation is created (ID available) */
   onConversationCreated?: (conversationId: string) => void;
+  /** Render only the most recent history items. Used by compact drawers to
+   * avoid mounting very large conversations all at once. */
+  historyItemLimit?: number;
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
-  const [items, setItems] = useState<ChatItem[]>(initialItems || []);
+  const limitHistory = useCallback((history: ChatItem[]) => {
+    if (!historyItemLimit || history.length <= historyItemLimit) return history;
+    return history.slice(-historyItemLimit);
+  }, [historyItemLimit]);
+  const [items, setItems] = useState<ChatItem[]>(() => limitHistory(initialItems || []));
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const [input, setInput] = useState(initialPrompt || "");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -645,10 +653,8 @@ export default function ChatPanel({
   }, []);
 
   useEffect(() => {
-    if (initialItems?.length) {
-      setItems(initialItems);
-    }
-  }, [initialItems]);
+    if (initialItems) setItems(limitHistory(initialItems));
+  }, [initialItems, limitHistory]);
 
   // Opening an existing conversation lands at the latest message, not the top.
   const didInitialScrollRef = useRef(false);
@@ -797,7 +803,8 @@ export default function ChatPanel({
         );
         setItems((prev) => {
           const queued = prev.filter((item) => item.queued);
-          return queued.length > 0 ? [...rebuilt, ...queued] : rebuilt;
+          const visibleHistory = limitHistory(rebuilt);
+          return queued.length > 0 ? [...visibleHistory, ...queued] : visibleHistory;
         });
         scrollToBottom();
 
@@ -826,7 +833,7 @@ export default function ChatPanel({
 
     poll();
     return () => { stopped = true; };
-  }, [isRecovering, conversationId, scrollToBottom]);
+  }, [isRecovering, conversationId, limitHistory, scrollToBottom]);
 
   // If page loaded with a running conversation (refresh), enter recovery mode
   useEffect(() => {

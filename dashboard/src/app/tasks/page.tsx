@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiMicLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -19,6 +19,7 @@ import {
   updateTask,
   type Task,
   type TasksBoardResponse,
+  type VoiceAction,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +40,7 @@ import { QuickAddTask } from "@/components/tasks/QuickAddTask";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { AddChatDialog } from "@/components/tasks/AddChatDialog";
 import { TaskChatDrawer } from "@/components/tasks/TaskChatDrawer";
+import { VoicePanel } from "@/components/tasks/VoicePanel";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -55,6 +57,7 @@ export default function TasksPage() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
   // Desktop: clicking a non-draft card opens its chat in a side drawer so the
   // board keeps its tab. Task is kept on close for the exit animation.
@@ -67,6 +70,12 @@ export default function TasksPage() {
   const [pushState, setPushState] = useState<PushState | null>(null);
   // Pause polling while a mutation is in flight to avoid clobbering optimistic state.
   const busyRef = useRef(false);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("voice") === "1") {
+      setVoiceOpen(true);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isPushSupported()) return;
@@ -176,17 +185,43 @@ export default function TasksPage() {
     for (const lane of board.lanes) laneCounts[lane.id] = board.counts[lane.id] ?? 0;
   }
   const activeTagFilterCount = includedTagIds.length + excludedTagIds.length;
+  const taskDrawerEmbedded = voiceOpen && !isMobile;
+
+  const handleVoiceTaskAction = useCallback((action: VoiceAction) => {
+    if (action.type === "close_task") {
+      setChatDrawerOpen(false);
+      return;
+    }
+    if (action.type !== "open_task") return;
+    const conversationId = typeof action.conversation_id === "string" ? action.conversation_id : "";
+    const task = board?.tasks.find((candidate) => candidate.conversation_id === conversationId);
+    if (task) {
+      setChatTask(task);
+      setChatDrawerOpen(true);
+    }
+  }, [board]);
 
   return (
-    <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
+    <div className="relative flex h-full min-h-0 overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col space-y-2 overflow-hidden p-4 transition-[width] duration-300 lg:p-6">
       <div className="pwa-header-offset flex items-center justify-between">
         <h1 className="text-lg font-semibold">Tasks</h1>
         <div className="flex items-center gap-1">
+          <Button
+            variant={voiceOpen ? "secondary" : "outline"}
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setVoiceOpen(true)}
+          >
+            <RiMicLine className={voiceOpen ? "h-4 w-4 text-emerald-500" : "h-4 w-4"} />
+            <span className="hidden sm:inline">Voice</span>
+          </Button>
           {board && board.tags.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant={activeTagFilterCount ? "secondary" : "ghost"} size="sm">
-                  <RiFilter3Line className="h-4 w-4" /> Tags{activeTagFilterCount ? ` (${activeTagFilterCount})` : ""}
+                  <RiFilter3Line className="h-4 w-4" />
+                  <span className="hidden sm:inline">Filters</span>{activeTagFilterCount ? ` (${activeTagFilterCount})` : ""}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-48">
@@ -365,23 +400,51 @@ export default function TasksPage() {
         laneCounts={laneCounts}
         onSaved={refresh}
       />
-      <TaskChatDrawer
-        task={chatTask}
-        open={chatDrawerOpen}
-        onOpenChange={(open) => {
-          setChatDrawerOpen(open);
-          if (!open) refresh();
-        }}
-        onTaskChange={(updatedTask) => {
-          setChatTask(updatedTask);
-          setBoard((current) => current ? {
-            ...current,
-            tasks: current.tasks.map((task) =>
-              task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
-            ),
-          } : current);
-        }}
-      />
+      {!taskDrawerEmbedded && (
+        <TaskChatDrawer
+          task={chatTask}
+          open={chatDrawerOpen}
+          onOpenChange={(open) => {
+            setChatDrawerOpen(open);
+            if (!open) refresh();
+          }}
+          onTaskChange={(updatedTask) => {
+            setChatTask(updatedTask);
+            setBoard((current) => current ? {
+              ...current,
+              tasks: current.tasks.map((task) =>
+                task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
+              ),
+            } : current);
+          }}
+        />
+      )}
+      </div>
+      {taskDrawerEmbedded && (
+        <TaskChatDrawer
+          task={chatTask}
+          open={chatDrawerOpen}
+          onOpenChange={(open) => {
+            setChatDrawerOpen(open);
+            if (!open) refresh();
+          }}
+          onTaskChange={(updatedTask) => {
+            setChatTask(updatedTask);
+            setBoard((current) => current ? {
+              ...current,
+              tasks: current.tasks.map((task) =>
+                task.conversation_id === updatedTask.conversation_id ? updatedTask : task,
+              ),
+            } : current);
+          }}
+          embedded
+        />
+      )}
+      {voiceOpen && (
+        <aside className="absolute inset-0 z-40 bg-background md:static md:z-auto md:w-[400px] md:shrink-0 md:border-l md:border-border">
+          <VoicePanel onClose={() => setVoiceOpen(false)} onBoardChange={refresh} onTaskAction={handleVoiceTaskAction} />
+        </aside>
+      )}
     </div>
   );
 }

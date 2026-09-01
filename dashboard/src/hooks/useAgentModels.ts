@@ -24,12 +24,11 @@ export type ModelLoadState = "loading" | "ready" | "error";
 
 /**
  * Agent-model catalog + selection, shared by the chat composer and the tasks
- * quick-add composer. Selection priority: explicit initialModel (e.g. a board
- * saved preference > explicit initialModel (e.g. a board task's chosen
- * model) > backend default. Selecting a
- * model persists it as the saved preference.
+ * quick-add composer. Selection priority: saved preference > explicit
+ * initialModel (e.g. a board task's chosen model) > backend default. Callers
+ * can disable the backend default when an explicit choice is required.
  */
-export function useAgentModels(initialModel?: string) {
+export function useAgentModels(initialModel?: string, chooseDefault = true) {
   const [models, setModels] = useState<AgentModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [loadState, setLoadState] = useState<ModelLoadState>("loading");
@@ -54,7 +53,9 @@ export function useAgentModels(initialModel?: string) {
           ? saved
           : initialIsValid
             ? initialModel
-            : catalog.default_model || list[0]?.id || "";
+            : chooseDefault
+              ? catalog.default_model || list[0]?.id || ""
+              : "";
         setSelectedModel(nextModel);
         setLoadState("ready");
       } catch (e) {
@@ -70,7 +71,7 @@ export function useAgentModels(initialModel?: string) {
     return () => {
       cancelled = true;
     };
-  }, [initialModel]);
+  }, [initialModel, chooseDefault]);
 
   const selectModel = (value: string) => {
     setSelectedModel(value);
