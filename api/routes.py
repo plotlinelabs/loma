@@ -447,23 +447,23 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
     user_email = get_user_email(request)
     system_role = get_system_role(request)
 
-    if system_role == "admin":
-        # Admin sees all — allow optional person filter
+    if system_role in ("admin", "maintainer"):
+        # Admin/maintainer: person filter narrows to that user's own chats.
+        # No person filter → admin sees everything, maintainer sees own + shared.
         if person:
             query["metadata.user_name"] = {"$regex": person, "$options": "i"}
-    elif system_role == "maintainer":
-        # Maintainer sees own conversations + shared flow/task conversations (like analyst)
-        isolation_condition = {
-            "$or": [
-                {"metadata.user_name": user_email},
-                {"metadata.visibility": "shared"},
-                {"source": "task_step"},
-                {
-                    "source": {"$in": ["flow", "webhook"]},
-                    "metadata.visibility": {"$ne": "private"},
-                },
-            ]
-        }
+        elif system_role == "maintainer":
+            isolation_condition = {
+                "$or": [
+                    {"metadata.user_name": user_email},
+                    {"metadata.visibility": "shared"},
+                    {"source": "task_step"},
+                    {
+                        "source": {"$in": ["flow", "webhook"]},
+                        "metadata.visibility": {"$ne": "private"},
+                    },
+                ]
+            }
     elif system_role == "analyst":
         # Analyst sees own conversations + shared flow/task conversations.
         # Private flow conversations are only visible to the creator

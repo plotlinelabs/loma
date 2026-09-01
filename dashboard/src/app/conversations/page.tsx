@@ -135,7 +135,8 @@ function MobileSkeletonCard() {
 export default function ConversationsPage() {
   const router = useRouter();
   const { data: session } = useSession();
-  const { isAdmin, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
+  const { isAdmin, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects, hasRole } = useUser();
+  const canFilterUsers = isAdmin || hasRole("maintainer");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [page, setPage] = useState(1);
@@ -167,10 +168,10 @@ export default function ConversationsPage() {
   }, [session?.user?.email]);
 
   useEffect(() => {
-    if (isAdmin) {
+    if (canFilterUsers) {
       fetchUsers().then(setTeamUsers).catch(() => {});
     }
-  }, [isAdmin]);
+  }, [canFilterUsers]);
 
   useEffect(() => {
     if (!personFilterReady) return;
@@ -201,7 +202,7 @@ export default function ConversationsPage() {
     }
   }
 
-  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || topicFilter || (isAdmin && personFilter !== session?.user?.email);
+  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || topicFilter || (canFilterUsers && personFilter !== session?.user?.email);
 
   const clearFilters = useCallback(() => {
     setSourceFilter("");
@@ -239,7 +240,7 @@ export default function ConversationsPage() {
             />
           </div>
           <div className="flex flex-wrap items-center gap-2 flex-1">
-            {isAdmin && (
+            {canFilterUsers && (
               <Select
                 value={personFilter || "__all__"}
                 onValueChange={(val) => { setPersonFilter(val === "__all__" ? "" : val); setPage(1); }}

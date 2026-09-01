@@ -382,7 +382,7 @@ export async function updateSkillFolder(name: string, folder: string | null): Pr
   return res.json();
 }
 
-export async function autoOrganizeSkills(): Promise<{ organized: number; total: number; message: string }> {
+export async function autoOrganizeSkills(): Promise<{ organized: number; total: number; message: string; errors?: string[] }> {
   const res = await fetch(`${API_BASE}/api/skills-organize`, { method: "POST" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
