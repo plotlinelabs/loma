@@ -380,6 +380,13 @@ export default function Sidebar({
     }
   }, [status, session?.user?.email, pinnedIds.size]);
 
+  // Refresh sidebar conversations when a stream completes (title may have been generated)
+  useEffect(() => {
+    const handler = () => reloadConversations();
+    window.addEventListener("conversations-updated", handler);
+    return () => window.removeEventListener("conversations-updated", handler);
+  }, [reloadConversations]);
+
   // Close sidebar on route change (mobile)
   useEffect(() => {
     onClose();

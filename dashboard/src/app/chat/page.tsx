@@ -72,6 +72,19 @@ function ChatPageContent() {
     setConversationOwner(user?.email || null);
   }, [user?.email]);
 
+  // After stream completes, poll for the async-generated title
+  const handleStreamComplete = useCallback((convId: string) => {
+    setTimeout(async () => {
+      try {
+        const data = await fetchConversation(convId);
+        if (data.conversation?.title) {
+          setConversationTitle(data.conversation.title);
+        }
+        window.dispatchEvent(new Event("conversations-updated"));
+      } catch {}
+    }, 4000);
+  }, []);
+
   useEffect(() => {
     if (flowId) {
       loadFlow();
@@ -420,6 +433,7 @@ function ChatPageContent() {
         systemContext={skillContextParam || undefined}
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
+        onStreamComplete={handleStreamComplete}
       />
     </div>
   );

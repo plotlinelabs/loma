@@ -82,6 +82,7 @@ export default function ChatWithArtifacts({
   systemContext,
   initialStatus,
   onConversationCreated,
+  onStreamComplete,
   draftStorageKey,
 }: {
   initialItems?: ChatItem[];
@@ -94,6 +95,7 @@ export default function ChatWithArtifacts({
   systemContext?: string;
   initialStatus?: string;
   onConversationCreated?: (conversationId: string) => void;
+  onStreamComplete?: (conversationId: string) => void;
   /** localStorage key for persisting unsent composer text (see ChatPanel) */
   draftStorageKey?: string;
 }) {
@@ -169,6 +171,7 @@ export default function ChatWithArtifacts({
           onArtifactClose={handleArtifactClose}
           artifacts={artifacts}
           onConversationCreated={onConversationCreated}
+          onStreamComplete={onStreamComplete}
         />
       </div>
 

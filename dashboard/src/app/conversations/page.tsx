@@ -7,6 +7,8 @@ import { useSession } from "next-auth/react";
 import { fetchConversations, fetchStats } from "../../lib/api";
 import type { Conversation, StatsResponse } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
+import { fetchUsers } from "../../lib/governance-api";
+import type { User } from "../../lib/governance-api";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import ClientTimestamp from "../../components/ClientTimestamp";
 import { Button } from "@/components/ui/button";
@@ -19,7 +21,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   RiSearchLine, RiCloseLine, RiRefreshLine, RiChat1Line,
-  RiAtLine, RiChat3Line, RiLinksLine, RiComputerLine, RiGitBranchLine, RiTaskLine
+  RiAtLine, RiChat3Line, RiLinksLine, RiComputerLine, RiGitBranchLine, RiTaskLine,
+  RiUserLine
 } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/EmptyState";
@@ -132,7 +135,7 @@ function MobileSkeletonCard() {
 export default function ConversationsPage() {
   const router = useRouter();
   const { data: session } = useSession();
-  const { isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
+  const { isAdmin, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [page, setPage] = useState(1);
@@ -144,6 +147,8 @@ export default function ConversationsPage() {
   const [personFilter, setPersonFilter] = useState("");
   const [topicFilter, setTopicFilter] = useState("");
   const [loading, setLoading] = useState(true);
+  const [teamUsers, setTeamUsers] = useState<User[]>([]);
+  const [personFilterReady, setPersonFilterReady] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -156,14 +161,21 @@ export default function ConversationsPage() {
   useEffect(() => {
     if (session?.user?.email) {
       setPersonFilter(session.user.email);
+      setPersonFilterReady(true);
       setPage(1);
     }
   }, [session?.user?.email]);
 
   useEffect(() => {
-    if (!personFilter) return;
+    if (isAdmin) {
+      fetchUsers().then(setTeamUsers).catch(() => {});
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!personFilterReady) return;
     loadData();
-  }, [page, sourceFilter, categoryFilter, debouncedSearch, personFilter, topicFilter]);
+  }, [page, sourceFilter, categoryFilter, debouncedSearch, personFilter, topicFilter, personFilterReady]);
 
   async function loadData() {
     setLoading(true);
@@ -189,7 +201,7 @@ export default function ConversationsPage() {
     }
   }
 
-  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || topicFilter;
+  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || topicFilter || (isAdmin && personFilter !== session?.user?.email);
 
   const clearFilters = useCallback(() => {
     setSourceFilter("");
@@ -197,8 +209,9 @@ export default function ConversationsPage() {
     setSearchQuery("");
     setDebouncedSearch("");
     setTopicFilter("");
+    if (session?.user?.email) setPersonFilter(session.user.email);
     setPage(1);
-  }, []);
+  }, [session?.user?.email]);
 
   function formatDuration(ms: number | null | undefined) {
     if (!ms) return null;
@@ -226,6 +239,30 @@ export default function ConversationsPage() {
             />
           </div>
           <div className="flex flex-wrap items-center gap-2 flex-1">
+            {isAdmin && (
+              <Select
+                value={personFilter || "__all__"}
+                onValueChange={(val) => { setPersonFilter(val === "__all__" ? "" : val); setPage(1); }}
+              >
+                <SelectTrigger className="w-auto min-w-[140px] bg-card border-border text-[13px] text-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <RiUserLine size={14} className="text-muted-foreground shrink-0" />
+                    <SelectValue placeholder="My Chats" />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={session?.user?.email || "__me__"}>My Chats</SelectItem>
+                  <SelectItem value="__all__">All Users</SelectItem>
+                  {teamUsers
+                    .filter((u) => u.email !== session?.user?.email)
+                    .map((u) => (
+                      <SelectItem key={u.email} value={u.email}>
+                        {u.name || u.email}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            )}
             <Select
               value={sourceFilter || "__all__"}
               onValueChange={(val) => { setSourceFilter(val === "__all__" ? "" : val); setPage(1); }}

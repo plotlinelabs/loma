@@ -227,6 +227,7 @@ async def ensure_skill_indexes(db) -> None:
     await db.skills.create_index("slug", unique=True)
     await db.skills.create_index("enabled")
     await db.skills.create_index("scope")
+    await db.skills.create_index("folder")
     await db.skills.create_index([("updated_at", -1)])
     await db.skill_files.create_index([("skill_slug", 1), ("path", 1)], unique=True)
     await db.skill_files.create_index("content_hash")
@@ -250,6 +251,8 @@ async def get_skill(db, slug: str) -> dict[str, Any]:
     files = await _load_files(db, slug)
     skill_doc = serialize_doc(skill) or {}
     skill_doc["scope"] = skill_doc.get("scope") or ("system" if skill_doc.get("created_by") in ("system", "import") else "personal")
+    skill_doc["folder"] = skill_doc.get("folder") or None
+    skill_doc["folder_source"] = skill_doc.get("folder_source") or None
     skill_doc["files"] = files
     skill_md = next((f for f in files if f["path"] == "SKILL.md"), None)
     skill_doc["content"] = skill_md.get("content", "") if skill_md else ""
@@ -284,6 +287,8 @@ async def list_skills(db) -> list[dict[str, Any]]:
         doc["has_extra_files"] = bool(doc["files"])
         doc["name"] = doc.get("name") or doc["slug"]
         doc["scope"] = doc.get("scope") or ("system" if doc.get("created_by") in ("system", "import") else "personal")
+        doc["folder"] = doc.get("folder") or None
+        doc["folder_source"] = doc.get("folder_source") or None
     return docs
 
 
@@ -472,6 +477,130 @@ async def delete_skill(db, *, slug: str, actor: str, source: str = "dashboard") 
     if result.matched_count == 0:
         raise SkillError("Skill not found", status=404)
     await _record_version(db, slug, actor, source, "Disabled skill")
+
+
+async def update_skill_folder(
+    db, *, slug: str, folder: str | None, actor: str, folder_source: str = "manual",
+) -> dict[str, Any]:
+    slug = slugify(slug)
+    skill = await db.skills.find_one({"slug": slug, "enabled": {"$ne": False}})
+    if not skill:
+        raise SkillError("Skill not found", status=404)
+    if skill.get("scope") == "system":
+        raise SkillError("Cannot organize system skills into folders", status=403)
+    folder = folder.strip() if folder else None
+    await db.skills.update_one(
+        {"slug": slug},
+        {"$set": {
+            "folder": folder,
+            "folder_source": folder_source,
+            "updated_at": now_utc(),
+            "updated_by": actor,
+        }},
+    )
+    msg = f"Moved to folder '{folder}'" if folder else "Removed from folder"
+    await _record_version(db, slug, actor, "dashboard", msg)
+    return await get_skill(db, slug)
+
+
+async def list_folders(db) -> list[str]:
+    folders = await db.skills.distinct(
+        "folder", {"enabled": {"$ne": False}, "folder": {"$ne": None}},
+    )
+    return sorted([f for f in folders if f])
+
+
+async def auto_organize_skills(db) -> dict[str, Any]:
+    """Categorize unorganized skills into business-function folders using LLM."""
+    import asyncio
+    import json as json_module
+    import logging
+
+    logger = logging.getLogger("loma.skill_organize")
+
+    unorganized = await db.skills.find({
+        "enabled": {"$ne": False},
+        "scope": {"$ne": "system"},
+        "$or": [{"folder": {"$exists": False}}, {"folder": None}],
+    }).to_list(500)
+
+    if not unorganized:
+        return {"organized": 0, "total": 0, "message": "No unorganized skills found"}
+
+    creator_emails = list({s.get("created_by", "") for s in unorganized if s.get("created_by")})
+    teams = await db.teams.find({"members": {"$in": creator_emails}}).to_list(50) if creator_emails else []
+    email_to_teams: dict[str, list[str]] = {}
+    for team in teams:
+        for member in team.get("members", []):
+            email_to_teams.setdefault(member, []).append(team.get("name", ""))
+
+    skill_lines = []
+    for skill in unorganized:
+        slug = skill.get("slug", "")
+        name = skill.get("name", slug)
+        desc = skill.get("description", "")
+        tags = ", ".join(skill.get("tags") or [])
+        creator_teams = ", ".join(email_to_teams.get(skill.get("created_by", ""), []))
+        skill_lines.append(
+            f"- slug: {slug} | name: {name} | description: {desc} | tags: {tags} | creator_teams: {creator_teams}"
+        )
+
+    BATCH_SIZE = 40
+    total_organized = 0
+    timestamp = now_utc()
+
+    for i in range(0, len(skill_lines), BATCH_SIZE):
+        batch = skill_lines[i:i + BATCH_SIZE]
+        batch_skills = unorganized[i:i + BATCH_SIZE]
+
+        message = (
+            "Categorize these skills into business-function folders. "
+            "Choose from: Sales, CSM, Engineering, Legal, Account Receivables, "
+            "Product, Marketing, Operations, HR, Finance, General.\n"
+            "Return ONLY a JSON object mapping each slug to its folder name.\n"
+            "Example: {\"my-skill\": \"Sales\", \"other-skill\": \"Engineering\"}\n\n"
+            "Skills:\n" + "\n".join(batch)
+        )
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", message,
+                "--model", "claude-haiku-4-5-20251001",
+                "--max-turns", "1",
+                "--output-format", "json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode != 0:
+                logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
+                continue
+
+            output = stdout.decode().strip()
+            try:
+                envelope = json_module.loads(output)
+                raw = envelope.get("result", output)
+                mapping = json_module.loads(raw) if isinstance(raw, str) else raw
+            except (json_module.JSONDecodeError, TypeError):
+                logger.warning("Failed to parse LLM response for skill organize batch")
+                continue
+
+            for skill in batch_skills:
+                slug = skill.get("slug", "")
+                folder = mapping.get(slug)
+                if folder and isinstance(folder, str):
+                    await db.skills.update_one(
+                        {"slug": slug, "folder": None},
+                        {"$set": {"folder": folder.strip(), "folder_source": "auto", "updated_at": timestamp}},
+                    )
+                    total_organized += 1
+
+        except asyncio.TimeoutError:
+            logger.warning("Skill organize batch timed out")
+        except Exception as e:
+            logger.warning("Skill organize batch failed: %s", e)
+
+    return {"organized": total_organized, "total": len(unorganized), "message": f"Organized {total_organized} of {len(unorganized)} skills"}
 
 
 async def get_skill_file(db, slug: str, path: str) -> dict[str, Any]:

@@ -271,11 +271,22 @@ async def _ensure_search_index(db) -> bool:
         return False
 
 
+def _fallback_title(prompt: str) -> str:
+    """Extract first few meaningful words from the prompt as a fallback title."""
+    words = prompt.strip().split()[:6]
+    if not words:
+        return "Untitled conversation"
+    title = " ".join(words)
+    if len(title) > 50:
+        title = title[:47] + "..."
+    return title
+
+
 async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     """Generate a short 5-word conversation title using Claude Haiku.
 
     Uses the claude CLI (same pattern as observability/confidence.py).
-    Returns 'Untitled conversation' on any failure.
+    Falls back to extracting words from the prompt on any failure.
     """
     context = prompt[:500]
     if response_snippet:
@@ -301,7 +312,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
 
         if proc.returncode != 0:
             logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
-            return "Untitled conversation"
+            return _fallback_title(prompt)
 
         output = stdout.decode().strip()
         try:
@@ -315,14 +326,14 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
         words = title.split()
         if len(words) > 8:
             title = " ".join(words[:8])
-        return title or "Untitled conversation"
+        return title or _fallback_title(prompt)
 
     except asyncio.TimeoutError:
         logger.warning("Title generation timed out")
-        return "Untitled conversation"
+        return _fallback_title(prompt)
     except Exception as e:
         logger.warning("Title generation failed: %s", e)
-        return "Untitled conversation"
+        return _fallback_title(prompt)
 
 
 async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
@@ -1256,19 +1267,74 @@ async def handle_update_skill_scope(request: web.Request) -> web.Response:
 
 
 async def handle_delete_skill(request: web.Request) -> web.Response:
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    name = request.match_info["name"]
+    skill = await db.skills.find_one(
+        {"slug": skill_service.slugify(name), "enabled": {"$ne": False}},
+    )
+    if not skill:
+        return web.json_response({"error": "Skill not found"}, status=404)
+    scope = skill.get("scope", "personal")
+    if scope == "system":
+        return web.json_response({"error": "System skills cannot be deleted"}, status=403)
+    user_email = get_user_email(request)
+    if scope == "workspace":
+        require_admin(request)
+    elif skill.get("created_by", "") != user_email:
+        raise web.HTTPForbidden(
+            text='{"error": "You can only delete your own personal skills"}',
+            content_type="application/json",
+        )
+    try:
+        await skill_service.delete_skill(db, slug=name, actor=user_email, source="dashboard")
+        await _refresh_skill_prompt_cache()
+        return web.json_response({"ok": True})
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_update_skill_folder(request: web.Request) -> web.Response:
+    """PUT /api/skills/{name}/folder — move a skill to a folder."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        body = await request.json()
+        skill = await skill_service.update_skill_folder(
+            db,
+            slug=request.match_info["name"],
+            folder=body.get("folder"),
+            actor=get_user_email(request),
+            folder_source="manual",
+        )
+        return web.json_response(skill)
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_list_skill_folders(request: web.Request) -> web.Response:
+    """GET /api/skills-folders — list distinct folder names."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    folders = await skill_service.list_folders(db)
+    return web.json_response({"folders": folders})
+
+
+async def handle_auto_organize_skills(request: web.Request) -> web.Response:
+    """POST /api/skills-organize — trigger AI auto-organization of unfoldered skills."""
     require_maintainer_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "MongoDB is not configured"}, status=503)
     try:
-        await skill_service.delete_skill(
-            db,
-            slug=request.match_info["name"],
-            actor=get_user_email(request),
-            source="dashboard",
-        )
-        await _refresh_skill_prompt_cache()
-        return web.json_response({"ok": True})
+        result = await skill_service.auto_organize_skills(db)
+        return web.json_response(result)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
 
@@ -1812,6 +1878,9 @@ def setup_api_routes(app: web.Application):
     app.router.add_put("/api/skills/{name}", handle_update_skill)
     app.router.add_delete("/api/skills/{name}", handle_delete_skill)
     app.router.add_put("/api/skills/{name}/scope", handle_update_skill_scope)
+    app.router.add_put("/api/skills/{name}/folder", handle_update_skill_folder)
+    app.router.add_get("/api/skills-folders", handle_list_skill_folders)
+    app.router.add_post("/api/skills-organize", handle_auto_organize_skills)
     app.router.add_put("/api/skills/{name}/files", handle_update_skill_file)
     app.router.add_delete("/api/skills/{name}/files", handle_delete_skill_file)
     app.router.add_post("/api/skills/{name}/assets", handle_upload_skill_asset)
