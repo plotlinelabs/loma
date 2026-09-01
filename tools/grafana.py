@@ -49,9 +49,11 @@ PROMETHEUS_DATASOURCE_UID = "grafanacloud-prom"
 def _get_url() -> str:
     url = os.environ.get("GRAFANA_URL", "")
     if not url:
+        from tools._integration_key import get_integration_extra
+        url = get_integration_extra("grafana", "url")
+    if not url:
         raise ValueError(
-            "GRAFANA_URL environment variable is not set. "
-            "Please configure it before using Grafana tools."
+            "GRAFANA_URL not set and no Grafana integration found on the dashboard."
         )
     return url.rstrip("/")
 
@@ -59,9 +61,11 @@ def _get_url() -> str:
 def _get_api_key() -> str:
     key = os.environ.get("GRAFANA_API_KEY", "")
     if not key:
+        from tools._integration_key import get_integration_key
+        key = get_integration_key("grafana")
+    if not key:
         raise ValueError(
-            "GRAFANA_API_KEY environment variable is not set. "
-            "Please configure it before using Grafana tools."
+            "GRAFANA_API_KEY not set and no Grafana integration found on the dashboard."
         )
     return key
 

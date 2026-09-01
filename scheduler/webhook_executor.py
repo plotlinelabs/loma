@@ -169,6 +169,7 @@ async def execute_webhook_flow(
         flow.get("created_by", {}).get("source", "")
         or flow.get("created_by", {}).get("user_name", "")
     )
+    run_as_email = flow.get("run_as") or creator_email
 
     selected_model = _flow_model(flow)
 
@@ -243,6 +244,7 @@ async def execute_webhook_flow(
             source="slack",
             selected_model=selected_model,
             raise_on_opencode_error=True,
+            user_email=run_as_email if "@" in run_as_email else None,
         ):
             if isinstance(chunk, str):
                 last_text = chunk

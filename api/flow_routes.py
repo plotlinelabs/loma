@@ -215,6 +215,21 @@ async def handle_create_flow(request: web.Request) -> web.Response:
             created_by["source"] = user_email
             body["created_by"] = created_by
 
+    # Validate run_as: admins can set any active user, others only themselves
+    run_as = body.get("run_as")
+    if run_as:
+        requester_email = get_user_email(request)
+        requester_role = get_system_role(request)
+        if requester_role != "admin" and run_as != requester_email:
+            return web.json_response(
+                {"error": "Only admins can set run_as to another user"}, status=403,
+            )
+        target = await db.users.find_one({"email": run_as})
+        if not target or target.get("status") != "active":
+            return web.json_response(
+                {"error": f"run_as user '{run_as}' not found or not active"}, status=400,
+            )
+
     # Parse datetime fields
     body["start_time"] = _parse_datetime(body.get("start_time"))
     body["end_time"] = _parse_datetime(body.get("end_time"))
@@ -280,6 +295,21 @@ async def handle_update_flow(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "Another active Slack-triggered flow already watches this channel"},
                 status=409,
+            )
+
+    # Validate run_as if being updated
+    if "run_as" in body:
+        run_as = body["run_as"]
+        requester_email = get_user_email(request)
+        requester_role = get_system_role(request)
+        if requester_role != "admin" and run_as != requester_email:
+            return web.json_response(
+                {"error": "Only admins can set run_as to another user"}, status=403,
+            )
+        target = await db.users.find_one({"email": run_as})
+        if not target or target.get("status") != "active":
+            return web.json_response(
+                {"error": f"run_as user '{run_as}' not found or not active"}, status=400,
             )
 
     # Parse datetime fields if present

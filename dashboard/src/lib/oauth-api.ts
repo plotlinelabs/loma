@@ -65,6 +65,22 @@ export async function disconnectSlack(): Promise<void> {
   if (!res.ok) throw await apiError(res, "Failed to disconnect Slack");
 }
 
+// ── Generic provider OAuth (HubSpot / Notion / Grain) ────────────────────
+
+export async function getProviderAuthorizeUrl(provider: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/oauth/${provider}/authorize`);
+  if (!res.ok) throw await apiError(res, `Failed to get ${provider} authorize URL`);
+  const data = await res.json();
+  return data.authorize_url;
+}
+
+export async function disconnectProvider(provider: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/oauth/connections/${provider}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw await apiError(res, `Failed to disconnect ${provider}`);
+}
+
 // ── Custom MCP OAuth ─────────────────────────────────────────────────────
 
 export async function getCustomMcpAuthorizeUrl(provider: string): Promise<string> {

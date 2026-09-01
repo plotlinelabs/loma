@@ -40,6 +40,34 @@ GOOGLE_SCOPES = [
 
 # ── Slack OAuth constants ─────────────────────────────────────────────────
 
+# ── HubSpot OAuth constants ──────────────────────────────────────────────
+
+HUBSPOT_AUTH_URL = "https://app.hubspot.com/oauth/authorize"
+HUBSPOT_TOKEN_URL = "https://api.hubapi.com/oauth/v1/token"
+HUBSPOT_SCOPES = [
+    "crm.objects.contacts.read",
+    "crm.objects.contacts.write",
+    "crm.objects.companies.read",
+    "crm.objects.companies.write",
+    "crm.objects.deals.read",
+    "crm.objects.deals.write",
+    "crm.objects.owners.read",
+    "tickets",
+]
+
+# ── Notion OAuth constants ───────────────────────────────────────────────
+
+NOTION_AUTH_URL = "https://api.notion.com/v1/oauth/authorize"
+NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
+
+# ── Grain OAuth constants ────────────────────────────────────────────────
+
+GRAIN_AUTH_URL = "https://grain.com/oauth/authorize"
+GRAIN_TOKEN_URL = "https://grain.com/oauth/token"
+GRAIN_SCOPES = ["read", "write"]
+
+# ── Slack OAuth constants ─────────────────────────────────────────────────
+
 SLACK_AUTH_URL = "https://slack.com/oauth/v2/authorize"
 SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 SLACK_REVOKE_URL = "https://slack.com/api/auth.revoke"
@@ -703,6 +731,161 @@ async def revoke_custom_mcp_tokens(db, user_email: str, provider: str) -> bool:
         }},
     )
     logger.info("Disconnected custom MCP for %s / %s", user_email, provider)
+    return True
+
+
+# ── Generic provider token storage (HubSpot / Notion / Grain) ────────────
+
+_PROVIDER_TOKEN_URLS = {
+    "hubspot": HUBSPOT_TOKEN_URL,
+    "notion": NOTION_TOKEN_URL,
+    "grain": GRAIN_TOKEN_URL,
+}
+
+
+async def store_provider_tokens(
+    db,
+    user_email: str,
+    provider: str,
+    access_token: str,
+    refresh_token: str | None,
+    expires_in: int | None,
+    scopes: list[str] | None = None,
+) -> None:
+    """Encrypt and store OAuth tokens for HubSpot / Notion / Grain."""
+    now = datetime.now(timezone.utc)
+    token_expiry = (
+        datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc)
+        if expires_in else None
+    )
+
+    update_doc: dict = {
+        "provider": provider,
+        "access_token": encrypt_token(access_token),
+        "token_expiry": token_expiry,
+        "scopes": scopes or [],
+        "updated_at": now,
+    }
+    if refresh_token:
+        update_doc["refresh_token"] = encrypt_token(refresh_token)
+
+    await db.oauth_tokens.update_one(
+        {"user_email": user_email, "provider": provider},
+        {"$set": update_doc, "$setOnInsert": {"connected_at": now}},
+        upsert=True,
+    )
+
+    await _ensure_tool_assignments_mapping(db, user_email)
+    await db.users.update_one(
+        {"email": user_email},
+        {"$set": {
+            f"tool_assignments.{provider}-personal.oauth_status": "connected",
+            f"tool_assignments.{provider}-personal.last_used": now.isoformat() + "Z",
+            "updated_at": now,
+        }},
+    )
+    logger.info("Stored %s OAuth tokens for %s", provider, user_email)
+
+
+async def get_valid_provider_token(user_email: str, provider: str, db=None) -> str | None:
+    """Get a valid access token for a provider, auto-refreshing if expired."""
+    if db is None:
+        db = get_db()
+    if db is None:
+        return None
+
+    doc = await db.oauth_tokens.find_one({"user_email": user_email, "provider": provider})
+    if doc is None:
+        return None
+
+    expiry = doc.get("token_expiry")
+    if expiry is None or expiry.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc):
+        try:
+            return decrypt_token(doc["access_token"])
+        except ValueError:
+            return None
+
+    refresh_encrypted = doc.get("refresh_token")
+    if not refresh_encrypted:
+        await _mark_provider_expired(db, user_email, provider)
+        return None
+
+    try:
+        refresh_token_val = decrypt_token(refresh_encrypted)
+    except ValueError:
+        await _mark_provider_expired(db, user_email, provider)
+        return None
+
+    client_id = os.environ.get(f"{provider.upper()}_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get(f"{provider.upper()}_OAUTH_CLIENT_SECRET", "")
+    token_url = _PROVIDER_TOKEN_URLS.get(provider, "")
+
+    auth_method = "client_secret_basic" if provider == "notion" else "client_secret_post"
+
+    new_token = await _refresh_oauth_token(
+        token_endpoint=token_url,
+        refresh_token=refresh_token_val,
+        client_id=client_id,
+        client_secret=client_secret,
+        auth_method=auth_method,
+    )
+
+    if new_token is None:
+        await _mark_provider_expired(db, user_email, provider)
+        return None
+
+    now = datetime.now(timezone.utc)
+    token_expiry = datetime.fromtimestamp(
+        time.time() + new_token.get("expires_in", 3600), tz=timezone.utc
+    )
+    update: dict = {
+        "access_token": encrypt_token(new_token["access_token"]),
+        "token_expiry": token_expiry,
+        "updated_at": now,
+    }
+    if "refresh_token" in new_token:
+        update["refresh_token"] = encrypt_token(new_token["refresh_token"])
+
+    await db.oauth_tokens.update_one(
+        {"user_email": user_email, "provider": provider},
+        {"$set": update},
+    )
+
+    logger.info("Refreshed %s token for %s", provider, user_email)
+    return new_token["access_token"]
+
+
+async def _mark_provider_expired(db, user_email: str, provider: str) -> None:
+    now = datetime.now(timezone.utc)
+    await _ensure_tool_assignments_mapping(db, user_email)
+    await db.users.update_one(
+        {"email": user_email},
+        {"$set": {
+            f"tool_assignments.{provider}-personal.oauth_status": "expired",
+            "updated_at": now,
+        }},
+    )
+    logger.warning("Marked %s OAuth as expired for %s", provider, user_email)
+
+
+async def revoke_provider_tokens(db, user_email: str, provider: str) -> bool:
+    """Delete provider tokens from DB, update user status."""
+    result = await db.oauth_tokens.delete_one({
+        "user_email": user_email, "provider": provider,
+    })
+    if result.deleted_count == 0:
+        return False
+
+    now = datetime.now(timezone.utc)
+    await _ensure_tool_assignments_mapping(db, user_email)
+    await db.users.update_one(
+        {"email": user_email},
+        {"$set": {
+            f"tool_assignments.{provider}-personal.oauth_status": "not_connected",
+            "updated_at": now,
+        }},
+    )
+    logger.info("Disconnected %s for %s", provider, user_email)
     return True
 
 

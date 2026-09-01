@@ -28,23 +28,32 @@ import aiohttp
 import boto3
 
 
+def _r2_env(name: str, field: str | None = None) -> str:
+    val = os.environ.get(name, "")
+    if not val and field:
+        from tools._integration_key import get_integration_extra, get_integration_key
+        val = get_integration_key("cdn_r2") if field == "__key__" else get_integration_extra("cdn_r2", field)
+    return val
+
+
 def _get_s3_client():
     """Create an S3 client configured for Cloudflare R2."""
     return boto3.client(
         "s3",
-        endpoint_url=os.environ["R2_ENDPOINT"],
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        endpoint_url=_r2_env("R2_ENDPOINT", "endpoint"),
+        aws_access_key_id=_r2_env("R2_ACCESS_KEY_ID", "access_key_id"),
+        aws_secret_access_key=_r2_env("R2_SECRET_ACCESS_KEY", "__key__"),
         region_name="auto",
     )
 
 
 def _get_bucket():
-    return os.environ.get("R2_PUBLIC_BUCKET_NAME", os.environ.get("R2_BUCKET_NAME", ""))
+    return os.environ.get("R2_PUBLIC_BUCKET_NAME", os.environ.get("R2_BUCKET_NAME", "")) or _r2_env("", "bucket_name")
 
 
 def _get_cdn_base():
-    return os.environ["R2_MEDIA_BASE_URL"].rstrip("/")
+    val = os.environ.get("R2_MEDIA_BASE_URL", "") or _r2_env("", "media_base_url")
+    return val.rstrip("/")
 
 
 UPLOAD_PREFIX = "loma-images"
