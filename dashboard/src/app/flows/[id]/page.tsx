@@ -61,6 +61,7 @@ const LABEL_COLORS = [
 const FAVORITE_MODEL_IDS = [
   "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
+  "anthropic/claude-fable-5-1",
   "anthropic/claude-fable-5",
   "anthropic/claude-opus-4-7",
   "anthropic/claude-opus-4-6",
