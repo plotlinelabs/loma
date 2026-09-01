@@ -35,6 +35,8 @@ import {
   RiSparklingLine,
   RiCloseLine,
   RiCheckLine,
+  RiLoader4Line,
+  RiErrorWarningLine,
 } from "@remixicon/react";
 
 type ScopeKey = "workspace" | "personal" | "system";
@@ -78,8 +80,16 @@ export default function SkillTreeSidebar({
 
   const [showNewFolder, setShowNewFolder] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState("");
-  const [organizing, setOrganizing] = useState(false);
+  const [organizeStatus, setOrganizeStatus] = useState<
+    { state: "running" } | { state: "done"; message: string } | { state: "error"; message: string } | null
+  >(null);
+  const organizing = organizeStatus?.state === "running";
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => () => {
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (showNewFolder && folderInputRef.current) {
@@ -130,18 +140,22 @@ export default function SkillTreeSidebar({
   }
 
   async function handleAutoOrganize() {
-    setOrganizing(true);
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+    setOrganizeStatus({ state: "running" });
     try {
       const result = await autoOrganizeSkills();
       onSkillsChanged?.();
-      const detail = result.organized === 0 && result.errors?.length
-        ? `${result.message}\n\n${result.errors.slice(0, 3).join("\n")}`
-        : result.message;
-      alert(detail);
+      if (result.organized === 0 && result.errors?.length) {
+        setOrganizeStatus({ state: "error", message: result.errors[0] });
+      } else {
+        setOrganizeStatus({ state: "done", message: result.message });
+        dismissTimerRef.current = setTimeout(() => setOrganizeStatus(null), 8000);
+      }
     } catch (e) {
-      alert(`Auto-organize failed: ${e instanceof Error ? e.message : "Unknown error"}`);
-    } finally {
-      setOrganizing(false);
+      setOrganizeStatus({
+        state: "error",
+        message: e instanceof Error ? e.message : "Unknown error",
+      });
     }
   }
 
@@ -354,6 +368,39 @@ export default function SkillTreeSidebar({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Auto-organize status banner */}
+      {organizeStatus && (
+        <div
+          className={cn(
+            "mx-3 mb-2 flex items-start gap-2 rounded-lg px-3 py-2 text-xs animate-fade-in-up",
+            organizeStatus.state === "running" && "bg-brand-50 text-brand-700",
+            organizeStatus.state === "done" && "bg-emerald-50 text-emerald-700",
+            organizeStatus.state === "error" && "bg-red-50 text-red-700",
+          )}
+        >
+          {organizeStatus.state === "running" ? (
+            <RiLoader4Line size={14} className="animate-spin shrink-0 mt-0.5" />
+          ) : organizeStatus.state === "done" ? (
+            <RiCheckLine size={14} className="shrink-0 mt-0.5" />
+          ) : (
+            <RiErrorWarningLine size={14} className="shrink-0 mt-0.5" />
+          )}
+          <span className="flex-1 leading-relaxed">
+            {organizeStatus.state === "running"
+              ? "Organizing skills with AI — this can take a minute or two…"
+              : organizeStatus.message}
+          </span>
+          {organizeStatus.state !== "running" && (
+            <button
+              onClick={() => setOrganizeStatus(null)}
+              className="shrink-0 opacity-60 hover:opacity-100 transition-opacity"
+            >
+              <RiCloseLine size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Tree */}
       <ScrollArea className="flex-1 min-h-0">
