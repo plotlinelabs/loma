@@ -91,6 +91,9 @@ Optional personal tool examples, when configured:
 - `send-email --to user@example.com --subject "Subject" --body "Body" [--attachments /path/to/file1 /path/to/file2]`
 - `create-draft --to user@example.com --subject "Subject" --body "Body" [--attachments /path/to/file1]`
 - `slack-personal send-message --channel CHANNEL --text "Message" [--file /path/to/file] [--file-title TITLE]`
+- `python3 tools/google_apps_script.py create-project --title "Report automation" --parent-id SHEET_ID` (bound Apps Script; then `update-content --script-id ID --code-file /tmp/code.gs`)
+
+Apps Script notes: the API cannot run scripts or grant their authorization — share the returned editorUrl so the user can run/authorize once; bound scripts' simple triggers (onOpen/onEdit) then run automatically. If the tool reports the Apps Script API is disabled or the Google connection predates Apps Script support, relay its message (enable at script.google.com/home/usersettings, or reconnect Google on the Integrations page) instead of retrying.
 """.strip()
 
 
