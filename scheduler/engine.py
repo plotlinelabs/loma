@@ -75,6 +75,17 @@ async def init_scheduler():
     )
     logger.info("Usage check job registered (hourly at :00)")
 
+    # --- Skill auto-organization (daily at 03:00 UTC) ---
+    _scheduler.add_job(
+        _run_skill_auto_organize,
+        CronTrigger(hour=3, minute=0, timezone="UTC"),
+        id="skill_auto_organize",
+        replace_existing=True,
+        misfire_grace_time=3600,
+        max_instances=1,
+    )
+    logger.info("Skill auto-organize job registered (daily at 03:00 UTC)")
+
     logger.info("Scheduler initialized with %d active flow(s)", len(flows))
 
 
@@ -148,6 +159,21 @@ async def _run_usage_check():
         await run_usage_check()
     except Exception:
         logger.exception("[USAGE_CHECK] Hourly check failed")
+
+
+async def _run_skill_auto_organize():
+    """Wrapper for the daily skill auto-organization job."""
+    try:
+        from api.skill_service import auto_organize_skills
+        from observability.db import get_db
+        db = get_db()
+        if db is None:
+            logger.warning("[SKILL_ORGANIZE] DB not available")
+            return
+        result = await auto_organize_skills(db)
+        logger.info("[SKILL_ORGANIZE] %s", result.get("message", ""))
+    except Exception:
+        logger.exception("[SKILL_ORGANIZE] Auto-organize failed")
 
 
 async def shutdown_scheduler():
