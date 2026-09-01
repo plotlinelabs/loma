@@ -239,6 +239,8 @@ export interface Skill {
   updated_at?: string;
   created_by?: string;
   scope?: "system" | "personal" | "workspace";
+  folder?: string | null;
+  folder_source?: "manual" | "auto" | null;
 }
 
 export interface SkillFile {
@@ -262,6 +264,8 @@ export interface SkillDetailResponse {
   updated_at?: string;
   created_by?: string;
   scope?: "system" | "personal" | "workspace";
+  folder?: string | null;
+  folder_source?: "manual" | "auto" | null;
 }
 
 export async function fetchSkills(): Promise<{ skills: Skill[] }> {
@@ -365,6 +369,28 @@ export async function deleteSkill(name: string): Promise<{ ok: boolean }> {
   return res.json();
 }
 
+export async function updateSkillFolder(name: string, folder: string | null): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/folder`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to update skill folder: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function autoOrganizeSkills(): Promise<{ organized: number; total: number; message: string; errors?: string[] }> {
+  const res = await fetch(`${API_BASE}/api/skills-organize`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to auto-organize skills: ${res.status}`);
+  }
+  return res.json();
+}
+
 export function skillAssetUrl(name: string, path: string): string {
   return `${API_BASE}/api/skills/${encodeURIComponent(name)}/assets/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
@@ -435,6 +461,7 @@ export async function fetchMcpServers(): Promise<{ servers: McpServer[] }> {
 export interface WebhookConfig {
   auth_method: "bearer_token" | "hmac_sha256" | "none";
   auth_secret?: string;
+  has_auth_secret?: boolean;
   signature_header?: string;
 }
 

@@ -138,6 +138,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_CLAUDE_MODEL_IDS = (
     "claude-opus-5",
     "claude-opus-4-8",
+    "claude-fable-5-1",
     "claude-fable-5",
     "claude-opus-4-7",
     "claude-opus-4-6",
@@ -145,8 +146,8 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 
 FAVORITE_MODEL_IDS = (
     "codex/gpt-5.6-sol",
+    "anthropic/claude-fable-5-1",
     "opencode-go/glm-5.3-flash",
-    "anthropic/claude-fable-5",
 )
 
 FAVORITE_MODEL_TEMPLATES = {
@@ -271,11 +272,22 @@ async def _ensure_search_index(db) -> bool:
         return False
 
 
+def _fallback_title(prompt: str) -> str:
+    """Extract first few meaningful words from the prompt as a fallback title."""
+    words = prompt.strip().split()[:6]
+    if not words:
+        return "Untitled conversation"
+    title = " ".join(words)
+    if len(title) > 50:
+        title = title[:47] + "..."
+    return title
+
+
 async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     """Generate a short 5-word conversation title using Claude Haiku.
 
     Uses the claude CLI (same pattern as observability/confidence.py).
-    Returns 'Untitled conversation' on any failure.
+    Falls back to extracting words from the prompt on any failure.
     """
     context = prompt[:500]
     if response_snippet:
@@ -289,6 +301,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
             "--model", "claude-haiku-4-5-20251001",
@@ -296,12 +309,14 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
             "--output-format", "json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
         if proc.returncode != 0:
-            logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
-            return "Untitled conversation"
+            detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
+            logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, detail)
+            return _fallback_title(prompt)
 
         output = stdout.decode().strip()
         try:
@@ -315,14 +330,14 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
         words = title.split()
         if len(words) > 8:
             title = " ".join(words[:8])
-        return title or "Untitled conversation"
+        return title or _fallback_title(prompt)
 
     except asyncio.TimeoutError:
         logger.warning("Title generation timed out")
-        return "Untitled conversation"
+        return _fallback_title(prompt)
     except Exception as e:
         logger.warning("Title generation failed: %s", e)
-        return "Untitled conversation"
+        return _fallback_title(prompt)
 
 
 async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
@@ -343,6 +358,7 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
             "--model", "claude-haiku-4-5-20251001",
@@ -350,11 +366,13 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
             "--output-format", "json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
         if proc.returncode != 0:
-            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
+            detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
+            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, detail)
             return "other"
 
         output = stdout.decode().strip()
@@ -436,23 +454,23 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
     user_email = get_user_email(request)
     system_role = get_system_role(request)
 
-    if system_role == "admin":
-        # Admin sees all — allow optional person filter
+    if system_role in ("admin", "maintainer"):
+        # Admin/maintainer: person filter narrows to that user's own chats.
+        # No person filter → admin sees everything, maintainer sees own + shared.
         if person:
             query["metadata.user_name"] = {"$regex": person, "$options": "i"}
-    elif system_role == "maintainer":
-        # Maintainer sees own conversations + shared flow/task conversations (like analyst)
-        isolation_condition = {
-            "$or": [
-                {"metadata.user_name": user_email},
-                {"metadata.visibility": "shared"},
-                {"source": "task_step"},
-                {
-                    "source": {"$in": ["flow", "webhook"]},
-                    "metadata.visibility": {"$ne": "private"},
-                },
-            ]
-        }
+        elif system_role == "maintainer":
+            isolation_condition = {
+                "$or": [
+                    {"metadata.user_name": user_email},
+                    {"metadata.visibility": "shared"},
+                    {"source": "task_step"},
+                    {
+                        "source": {"$in": ["flow", "webhook"]},
+                        "metadata.visibility": {"$ne": "private"},
+                    },
+                ]
+            }
     elif system_role == "analyst":
         # Analyst sees own conversations + shared flow/task conversations.
         # Private flow conversations are only visible to the creator
@@ -812,8 +830,10 @@ async def handle_chat(request: web.Request) -> web.Response:
     # Parse file attachments
     files = body.get("files") or None
 
-    # Use authenticated identity (from middleware), not the self-reported body value
-    user_email = get_user_email(request) or body.get("user_email", "")
+    # Use authenticated identity (from middleware) only — never trust body-supplied email
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
 
     # Set up observability — reuse existing conversation if conversation_id provided
     observer = None
@@ -1256,19 +1276,74 @@ async def handle_update_skill_scope(request: web.Request) -> web.Response:
 
 
 async def handle_delete_skill(request: web.Request) -> web.Response:
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    name = request.match_info["name"]
+    skill = await db.skills.find_one(
+        {"slug": skill_service.slugify(name), "enabled": {"$ne": False}},
+    )
+    if not skill:
+        return web.json_response({"error": "Skill not found"}, status=404)
+    scope = skill.get("scope", "personal")
+    if scope == "system":
+        return web.json_response({"error": "System skills cannot be deleted"}, status=403)
+    user_email = get_user_email(request)
+    if scope == "workspace":
+        require_admin(request)
+    elif skill.get("created_by", "") != user_email:
+        raise web.HTTPForbidden(
+            text='{"error": "You can only delete your own personal skills"}',
+            content_type="application/json",
+        )
+    try:
+        await skill_service.delete_skill(db, slug=name, actor=user_email, source="dashboard")
+        await _refresh_skill_prompt_cache()
+        return web.json_response({"ok": True})
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_update_skill_folder(request: web.Request) -> web.Response:
+    """PUT /api/skills/{name}/folder — move a skill to a folder."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        body = await request.json()
+        skill = await skill_service.update_skill_folder(
+            db,
+            slug=request.match_info["name"],
+            folder=body.get("folder"),
+            actor=get_user_email(request),
+            folder_source="manual",
+        )
+        return web.json_response(skill)
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
+async def handle_list_skill_folders(request: web.Request) -> web.Response:
+    """GET /api/skills-folders — list distinct folder names."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    folders = await skill_service.list_folders(db)
+    return web.json_response({"folders": folders})
+
+
+async def handle_auto_organize_skills(request: web.Request) -> web.Response:
+    """POST /api/skills-organize — trigger AI auto-organization of unfoldered skills."""
     require_maintainer_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "MongoDB is not configured"}, status=503)
     try:
-        await skill_service.delete_skill(
-            db,
-            slug=request.match_info["name"],
-            actor=get_user_email(request),
-            source="dashboard",
-        )
-        await _refresh_skill_prompt_cache()
-        return web.json_response({"ok": True})
+        result = await skill_service.auto_organize_skills(db)
+        return web.json_response(result)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
 
@@ -1812,6 +1887,9 @@ def setup_api_routes(app: web.Application):
     app.router.add_put("/api/skills/{name}", handle_update_skill)
     app.router.add_delete("/api/skills/{name}", handle_delete_skill)
     app.router.add_put("/api/skills/{name}/scope", handle_update_skill_scope)
+    app.router.add_put("/api/skills/{name}/folder", handle_update_skill_folder)
+    app.router.add_get("/api/skills-folders", handle_list_skill_folders)
+    app.router.add_post("/api/skills-organize", handle_auto_organize_skills)
     app.router.add_put("/api/skills/{name}/files", handle_update_skill_file)
     app.router.add_delete("/api/skills/{name}/files", handle_delete_skill_file)
     app.router.add_post("/api/skills/{name}/assets", handle_upload_skill_asset)

@@ -63,7 +63,11 @@ async def auth_middleware(request, handler):
                 user_email = _PREVIEW_EMAIL
                 using_preview_fallback = True
             else:
-                user_email = ""
+                logger.warning("API request without X-User-Email in production: %s %s",
+                               request.method, request.path)
+                return web.json_response(
+                    {"error": "Authentication required"}, status=401,
+                )
 
         # Attach user email to request for downstream handlers
         request["user_email"] = user_email

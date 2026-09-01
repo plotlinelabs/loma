@@ -58,6 +58,17 @@ async def execute_flow(flow_id: str):
     )
     run_as_email = flow.get("run_as") or creator_email
 
+    # Only pass user email for personal tool auth if the account is still active.
+    # Prevents orphaned flows from using deactivated users' OAuth tokens.
+    effective_user_email = None
+    if run_as_email and "@" in run_as_email:
+        run_as_user = await db.users.find_one({"email": run_as_email}, {"status": 1})
+        if run_as_user and run_as_user.get("status", "active") == "active":
+            effective_user_email = run_as_email
+        else:
+            logger.warning("[SCHEDULER] Flow %s run_as user %s is inactive; running without personal tools",
+                           flow_id, run_as_email)
+
     selected_model = _flow_model(flow)
 
     metadata = {
@@ -87,7 +98,7 @@ async def execute_flow(flow_id: str):
             source="slack",
             selected_model=selected_model,
             raise_on_opencode_error=True,
-            user_email=run_as_email if "@" in run_as_email else None,
+            user_email=effective_user_email,
         ):
             if isinstance(chunk, str):
                 last_text = chunk

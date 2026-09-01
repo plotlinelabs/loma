@@ -19,6 +19,20 @@ from api.auth_helpers import require_analyst_or_above, require_operator_or_above
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_flow(flow: dict | None) -> dict | None:
+    """Strip secrets from a flow document before returning to the frontend."""
+    if flow is None:
+        return None
+    wh_config = flow.get("webhook_config")
+    if isinstance(wh_config, dict):
+        wh_config = dict(wh_config)
+        has_secret = bool(wh_config.pop("auth_secret", None) or wh_config.pop("auth_secret_encrypted", None))
+        wh_config["has_auth_secret"] = has_secret
+        flow = dict(flow)
+        flow["webhook_config"] = wh_config
+    return flow
+
+
 def _serialize(doc):
     """Make a MongoDB document JSON-serializable."""
     if doc is None:
@@ -127,7 +141,7 @@ async def handle_list_flows(request: web.Request) -> web.Response:
         db, status=status, trigger_type=trigger_type,
         user_email=user_email, system_role=system_role,
     )
-    return web.json_response({"flows": _serialize(flows)})
+    return web.json_response({"flows": _serialize([_sanitize_flow(f) for f in flows])})
 
 
 async def handle_get_flow(request: web.Request) -> web.Response:
@@ -142,7 +156,7 @@ async def handle_get_flow(request: web.Request) -> web.Response:
     if flow is None or not _check_flow_access(flow, request):
         return web.json_response({"error": "Flow not found"}, status=404)
 
-    return web.json_response({"flow": _serialize(flow)})
+    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
 
 
 async def _slack_channel_taken(db, channel_id: str, exclude_flow_id: str | None = None) -> bool:
@@ -250,7 +264,7 @@ async def handle_create_flow(request: web.Request) -> web.Response:
             )
             flow["next_run_at"] = next_run
 
-    return web.json_response({"flow": _serialize(flow)}, status=201)
+    return web.json_response({"flow": _serialize(_sanitize_flow(flow))}, status=201)
 
 
 async def handle_update_flow(request: web.Request) -> web.Response:
@@ -337,7 +351,7 @@ async def handle_update_flow(request: web.Request) -> web.Response:
                     )
                     flow["next_run_at"] = next_run
 
-    return web.json_response({"flow": _serialize(flow)})
+    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
 
 
 async def handle_delete_flow(request: web.Request) -> web.Response:
@@ -371,7 +385,7 @@ async def handle_pause_flow(request: web.Request) -> web.Response:
 
     flow = await update_flow(db, flow_id, {"status": "paused"})
     await remove_flow_from_scheduler(flow_id)
-    return web.json_response({"flow": _serialize(flow)})
+    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
 
 
 async def handle_resume_flow(request: web.Request) -> web.Response:
@@ -408,7 +422,7 @@ async def handle_resume_flow(request: web.Request) -> web.Response:
             )
             flow["next_run_at"] = next_run
 
-    return web.json_response({"flow": _serialize(flow)})
+    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
 
 
 async def handle_run_now(request: web.Request) -> web.Response:
@@ -493,7 +507,7 @@ async def handle_update_flow_labels(request: web.Request) -> web.Response:
     if flow is None:
         return web.json_response({"error": "Flow not found"}, status=404)
 
-    return web.json_response({"flow": _serialize(flow)})
+    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
 
 
 async def handle_list_labels(request: web.Request) -> web.Response:

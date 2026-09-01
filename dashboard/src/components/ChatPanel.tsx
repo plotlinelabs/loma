@@ -550,6 +550,7 @@ export default function ChatPanel({
   onArtifactClose,
   artifacts: externalArtifacts,
   onConversationCreated,
+  onStreamComplete,
 }: {
   initialItems?: ChatItem[];
   /** Artifacts restored from history (persisted in MongoDB) */
@@ -576,6 +577,8 @@ export default function ChatPanel({
   artifacts?: Artifact[];
   /** Called when a new conversation is created (ID available) */
   onConversationCreated?: (conversationId: string) => void;
+  /** Called when the agent stream finishes (for post-stream title refresh) */
+  onStreamComplete?: (conversationId: string) => void;
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
@@ -1128,6 +1131,9 @@ export default function ChatPanel({
       if (!enteredRecovery) {
         setIsStreaming(false);
         setStreamStartedAt(null);
+        if (activeConversationId && onStreamComplete) {
+          onStreamComplete(activeConversationId);
+        }
       }
       abortControllerRef.current = null;
       scrollToBottom();
@@ -1636,7 +1642,6 @@ export default function ChatPanel({
                         ? "Waiting for OpenCode events..."
                         : "Waiting for agent events..."
                     }
-                    elapsedSeconds={streamElapsedSeconds}
                   />
                 </div>
               )}

@@ -171,7 +171,10 @@ function SkillsPageInner() {
     if (selectedSkillSlug) {
       fetchSkill(selectedSkillSlug)
         .then(setSkillDetail)
-        .catch(() => {});
+        .catch(() => {
+          setSkillDetail(null);
+          updateUrl(null);
+        });
     }
     loadSkills();
   }

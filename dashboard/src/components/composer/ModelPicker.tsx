@@ -19,7 +19,7 @@ import { favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks
 const FAVORITE_LABELS: Record<string, string> = {
   "codex/gpt-5.6-sol": "GPT 5.6 Sol",
   "opencode-go/glm-5.3-flash": "GLM 5.3 Flash",
-  "anthropic/claude-fable-5": "Claude Fable 5",
+  "anthropic/claude-fable-5-1": "Claude Fable 5.1",
 };
 
 interface ModelPickerProps {
