@@ -119,6 +119,24 @@ async def shutdown_pool():
         _pool = None
 
 
+def background_cli_env() -> dict[str, str]:
+    """Env for background `claude -p` utility calls (titles, topics, organize).
+
+    The server process has no Claude credentials of its own — bare `claude`
+    subprocesses exit 1. Borrow an authenticated pool account's
+    CLAUDE_CONFIG_DIR (round-robin, cooldown-aware) so the CLI can run.
+    Falls back to the plain server env if the pool is empty or uninitialized.
+    """
+    env = dict(os.environ)
+    try:
+        account = get_pool()._next_account()
+        if account:
+            env["CLAUDE_CONFIG_DIR"] = account["config_dir"]
+    except RuntimeError:
+        pass
+    return env
+
+
 class ClientPool:
     """Bounded pool of pre-warmed ClaudeSDKClient instances.
 

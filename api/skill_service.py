@@ -590,6 +590,7 @@ async def auto_organize_skills(db) -> dict[str, Any]:
         )
 
         try:
+            from agent.pool import background_cli_env
             proc = await asyncio.create_subprocess_exec(
                 "claude", "-p", message,
                 "--model", "claude-haiku-4-5-20251001",
@@ -597,10 +598,11 @@ async def auto_organize_skills(db) -> dict[str, Any]:
                 "--output-format", "json",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=background_cli_env(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             if proc.returncode != 0:
-                detail = stderr.decode()[:300].strip() or "no stderr"
+                detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip() or "no output"
                 logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, detail)
                 errors.append(f"{batch_label}: claude CLI exited {proc.returncode}: {detail}")
                 continue

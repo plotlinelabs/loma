@@ -64,6 +64,7 @@ async def _extract_thread_refs_llm(prompt: str) -> dict[str, list[str]]:
     )
 
     try:
+        from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
             "--model", "claude-haiku-4-5-20251001",
@@ -72,6 +73,7 @@ async def _extract_thread_refs_llm(prompt: str) -> dict[str, list[str]]:
             "--allowedTools", "",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
 
