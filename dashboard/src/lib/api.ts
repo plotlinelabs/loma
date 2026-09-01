@@ -461,6 +461,7 @@ export async function fetchMcpServers(): Promise<{ servers: McpServer[] }> {
 export interface WebhookConfig {
   auth_method: "bearer_token" | "hmac_sha256" | "none";
   auth_secret?: string;
+  has_auth_secret?: boolean;
   signature_header?: string;
 }
 

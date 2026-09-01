@@ -9,9 +9,12 @@ logger = logging.getLogger(__name__)
 
 def _encrypt_webhook_secret(webhook_config: dict) -> dict:
     """Encrypt auth_secret in webhook_config, replacing it with auth_secret_encrypted."""
-    if not webhook_config or not webhook_config.get("auth_secret"):
+    if not webhook_config:
         return webhook_config
     config = dict(webhook_config)
+    config.pop("auth_secret_encrypted", None)
+    if not config.get("auth_secret"):
+        return config
     config["auth_secret_encrypted"] = encrypt_token(config["auth_secret"])
     config.pop("auth_secret", None)
     return config
