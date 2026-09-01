@@ -510,6 +510,31 @@ async def list_folders(db) -> list[str]:
     return sorted([f for f in folders if f])
 
 
+def _extract_json_object(raw: str) -> dict | None:
+    """Parse a JSON object from LLM output, tolerating code fences and prose."""
+    import json as json_module
+
+    text = raw.strip()
+    # Strip markdown code fences (```json ... ```)
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text).strip()
+    try:
+        parsed = json_module.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json_module.JSONDecodeError:
+        pass
+    # Fall back to the outermost {...} block embedded in prose
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            parsed = json_module.loads(text[start:end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json_module.JSONDecodeError:
+            return None
+    return None
+
+
 async def auto_organize_skills(db) -> dict[str, Any]:
     """Categorize unorganized skills into business-function folders using LLM."""
     import asyncio
@@ -547,11 +572,13 @@ async def auto_organize_skills(db) -> dict[str, Any]:
 
     BATCH_SIZE = 40
     total_organized = 0
+    errors: list[str] = []
     timestamp = now_utc()
 
     for i in range(0, len(skill_lines), BATCH_SIZE):
         batch = skill_lines[i:i + BATCH_SIZE]
         batch_skills = unorganized[i:i + BATCH_SIZE]
+        batch_label = f"batch {i // BATCH_SIZE + 1}"
 
         message = (
             "Categorize these skills into business-function folders. "
@@ -571,36 +598,56 @@ async def auto_organize_skills(db) -> dict[str, Any]:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             if proc.returncode != 0:
-                logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, stderr.decode()[:500])
+                detail = stderr.decode()[:300].strip() or "no stderr"
+                logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, detail)
+                errors.append(f"{batch_label}: claude CLI exited {proc.returncode}: {detail}")
                 continue
 
             output = stdout.decode().strip()
             try:
                 envelope = json_module.loads(output)
                 raw = envelope.get("result", output)
-                mapping = json_module.loads(raw) if isinstance(raw, str) else raw
-            except (json_module.JSONDecodeError, TypeError):
-                logger.warning("Failed to parse LLM response for skill organize batch")
+            except json_module.JSONDecodeError:
+                raw = output
+            mapping = _extract_json_object(raw) if isinstance(raw, str) else (raw if isinstance(raw, dict) else None)
+            if mapping is None:
+                logger.warning("Failed to parse LLM response for skill organize %s: %r", batch_label, str(raw)[:300])
+                errors.append(f"{batch_label}: could not parse LLM response as JSON")
                 continue
 
             for skill in batch_skills:
                 slug = skill.get("slug", "")
                 folder = mapping.get(slug)
                 if folder and isinstance(folder, str):
-                    await db.skills.update_one(
+                    result = await db.skills.update_one(
                         {"slug": slug, "folder": None},
                         {"$set": {"folder": folder.strip(), "folder_source": "auto", "updated_at": timestamp}},
                     )
-                    total_organized += 1
+                    if result.modified_count:
+                        total_organized += 1
 
         except asyncio.TimeoutError:
-            logger.warning("Skill organize batch timed out")
+            logger.warning("Skill organize %s timed out", batch_label)
+            errors.append(f"{batch_label}: LLM call timed out after 120s")
+        except FileNotFoundError:
+            logger.warning("Skill organize failed: claude CLI not found")
+            errors.append("claude CLI not found on server")
+            break
         except Exception as e:
-            logger.warning("Skill organize batch failed: %s", e)
+            logger.warning("Skill organize %s failed: %s", batch_label, e)
+            errors.append(f"{batch_label}: {e}")
 
-    return {"organized": total_organized, "total": len(unorganized), "message": f"Organized {total_organized} of {len(unorganized)} skills"}
+    message = f"Organized {total_organized} of {len(unorganized)} skills"
+    if errors and total_organized == 0:
+        message = f"Failed to organize skills: {errors[0]}"
+    return {
+        "organized": total_organized,
+        "total": len(unorganized),
+        "message": message,
+        "errors": errors,
+    }
 
 
 async def get_skill_file(db, slug: str, path: str) -> dict[str, Any]:

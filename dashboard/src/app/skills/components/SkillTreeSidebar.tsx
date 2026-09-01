@@ -132,9 +132,15 @@ export default function SkillTreeSidebar({
   async function handleAutoOrganize() {
     setOrganizing(true);
     try {
-      await autoOrganizeSkills();
+      const result = await autoOrganizeSkills();
       onSkillsChanged?.();
-    } catch {} finally {
+      const detail = result.organized === 0 && result.errors?.length
+        ? `${result.message}\n\n${result.errors.slice(0, 3).join("\n")}`
+        : result.message;
+      alert(detail);
+    } catch (e) {
+      alert(`Auto-organize failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    } finally {
       setOrganizing(false);
     }
   }
