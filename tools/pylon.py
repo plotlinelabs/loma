@@ -40,9 +40,11 @@ PYLON_BASE_URL = "https://api.usepylon.com"
 def _get_api_key() -> str:
     key = os.environ.get("PYLON_API_KEY", "")
     if not key:
+        from tools._integration_key import get_integration_key
+        key = get_integration_key("pylon")
+    if not key:
         raise ValueError(
-            "PYLON_API_KEY environment variable is not set. "
-            "Please configure it before using Pylon tools."
+            "PYLON_API_KEY not set and no Pylon integration found on the dashboard."
         )
     return key
 

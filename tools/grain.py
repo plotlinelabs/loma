@@ -41,9 +41,11 @@ DEFAULT_INCLUDE = {
 def _get_api_token() -> str:
     token = os.environ.get("GRAIN_API_TOKEN", "")
     if not token:
+        from tools._integration_key import get_integration_key
+        token = get_integration_key("grain")
+    if not token:
         raise ValueError(
-            "GRAIN_API_TOKEN environment variable is not set. "
-            "Please configure it before using Grain tools."
+            "GRAIN_API_TOKEN not set and no Grain integration found on the dashboard."
         )
     return token
 

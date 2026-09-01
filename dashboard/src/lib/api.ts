@@ -490,6 +490,7 @@ export interface Flow {
   status: "active" | "paused" | "completed";
   labels: string[];
   visibility?: "private" | "shared";
+  run_as?: string;
   created_by: {
     user_id?: string;
     user_name?: string;

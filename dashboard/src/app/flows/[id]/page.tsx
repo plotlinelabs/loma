@@ -43,6 +43,9 @@ import {
 import type { Flow, Conversation, WebhookLog, AgentModel } from "../../../lib/api";
 import { basePath } from "../../../lib/api";
 import ClientTimestamp from "../../../components/ClientTimestamp";
+import { useUser } from "../../../lib/UserContext";
+import { fetchUsers } from "../../../lib/governance-api";
+import type { User } from "../../../lib/governance-api";
 
 // Fixed palette of 10 colors for deterministic label coloring
 const LABEL_COLORS = [
@@ -344,11 +347,17 @@ export default function FlowDetailPage() {
   const [refreshingLogs, setRefreshingLogs] = useState(false);
   const [refreshingRuns, setRefreshingRuns] = useState(false);
   const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
+  const [orgUsers, setOrgUsers] = useState<User[]>([]);
+  const [runAsSaving, setRunAsSaving] = useState(false);
+  const { user, isAdmin } = useUser();
 
   useEffect(() => {
     loadData();
     loadAgentModels();
-  }, [flowId]);
+    if (isAdmin) {
+      fetchUsers().then(setOrgUsers).catch(() => {});
+    }
+  }, [flowId, isAdmin]);
 
   async function loadAgentModels() {
     setModelsLoading(true);
@@ -481,6 +490,22 @@ export default function FlowDetailPage() {
       console.warn("Failed to refresh webhook logs:", e);
     } finally {
       setRefreshingLogs(false);
+    }
+  }
+
+  async function handleRunAsChange(email: string) {
+    if (!flow || runAsSaving || email === (flow.run_as || "")) return;
+    setRunAsSaving(true);
+    const previous = flow;
+    setFlow({ ...flow, run_as: email });
+    try {
+      const result = await updateFlow(flow.flow_id, { run_as: email });
+      setFlow(result.flow);
+    } catch (e) {
+      console.error("Failed to update run_as:", e);
+      setFlow(previous);
+    } finally {
+      setRunAsSaving(false);
     }
   }
 
@@ -667,6 +692,37 @@ export default function FlowDetailPage() {
         saving={modelSaving}
         onChange={handleModelChange}
       />
+
+      {/* Run As */}
+      <div className="bg-card rounded-xl border border-border p-3 space-y-2">
+        <h2 className="text-[13px] font-heading font-semibold text-foreground">Run As</h2>
+        {isAdmin ? (
+          <Select
+            value={flow.run_as || flow.created_by?.source || ""}
+            disabled={runAsSaving || orgUsers.length === 0}
+            onValueChange={handleRunAsChange}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select user..." />
+            </SelectTrigger>
+            <SelectContent>
+              {orgUsers.filter((u) => u.status === "active").map((u) => (
+                <SelectItem key={u.email} value={u.email}>
+                  {u.name || u.email}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <div className="text-[13px] text-foreground">
+            {flow.run_as || flow.created_by?.source || user?.email || "—"}
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground">
+          This flow runs with this user&apos;s personal tools and permissions
+          {runAsSaving && <span className="text-brand-600 ml-1">Saving...</span>}
+        </p>
+      </div>
 
       {/* Flow info grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">

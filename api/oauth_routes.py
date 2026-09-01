@@ -14,6 +14,14 @@ from api.oauth_helpers import (
     GOOGLE_SCOPES,
     GOOGLE_TOKEN_URL,
     GOOGLE_USERINFO_URL,
+    HUBSPOT_AUTH_URL,
+    HUBSPOT_TOKEN_URL,
+    HUBSPOT_SCOPES,
+    NOTION_AUTH_URL,
+    NOTION_TOKEN_URL,
+    GRAIN_AUTH_URL,
+    GRAIN_TOKEN_URL,
+    GRAIN_SCOPES,
     SLACK_AUTH_URL,
     SLACK_TOKEN_URL,
     SLACK_USER_SCOPES,
@@ -25,6 +33,8 @@ from api.oauth_helpers import (
     revoke_google_tokens,
     store_slack_tokens,
     revoke_slack_tokens,
+    store_provider_tokens,
+    revoke_provider_tokens,
     decrypt_token,
     _exchange_oauth_code,
     store_custom_mcp_tokens,
@@ -464,7 +474,11 @@ async def handle_list_connections(request: web.Request) -> web.Response:
     user = await db.users.find_one({"email": email})
     if user is not None:
         tool_assignments = user.get("tool_assignments") or {}
-        for provider, assignment_key in [("google", "google-personal"), ("slack", "slack-personal")]:
+        for provider, assignment_key in [
+            ("google", "google-personal"), ("slack", "slack-personal"),
+            ("hubspot", "hubspot-personal"), ("notion", "notion-personal"),
+            ("grain", "grain-personal"),
+        ]:
             if not any(c["provider"] == provider for c in connections):
                 status = tool_assignments.get(assignment_key, {}).get("oauth_status")
                 if status == "expired":
@@ -509,6 +523,179 @@ async def handle_disconnect_slack(request: web.Request) -> web.Response:
     revoked = await revoke_slack_tokens(db, email)
     if not revoked:
         return web.json_response({"error": "No Slack connection found"}, status=404)
+
+    return web.json_response({"disconnected": True})
+
+
+# ── Generic provider OAuth flow (HubSpot / Notion / Grain) ───────────────
+
+_PROVIDER_OAUTH_CONFIG = {
+    "hubspot": {
+        "auth_url": HUBSPOT_AUTH_URL,
+        "token_url": HUBSPOT_TOKEN_URL,
+        "scopes": HUBSPOT_SCOPES,
+        "auth_method": "client_secret_post",
+        "scope_separator": " ",
+    },
+    "notion": {
+        "auth_url": NOTION_AUTH_URL,
+        "token_url": NOTION_TOKEN_URL,
+        "scopes": [],
+        "auth_method": "client_secret_basic",
+        "scope_separator": " ",
+        "owner_type": "user",
+    },
+    "grain": {
+        "auth_url": GRAIN_AUTH_URL,
+        "token_url": GRAIN_TOKEN_URL,
+        "scopes": GRAIN_SCOPES,
+        "auth_method": "client_secret_post",
+        "scope_separator": " ",
+    },
+}
+
+
+async def handle_provider_authorize(request: web.Request) -> web.Response:
+    """GET /api/oauth/{provider}/authorize — return the OAuth consent URL."""
+    provider = request.match_info["provider"]
+    cfg = _PROVIDER_OAUTH_CONFIG.get(provider)
+    if not cfg:
+        return web.json_response({"error": f"Unknown provider: {provider}"}, status=400)
+
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+
+    email = get_user_email(request)
+    if not email:
+        return web.json_response({"error": "User not authenticated"}, status=401)
+
+    client_id = os.environ.get(f"{provider.upper()}_OAUTH_CLIENT_ID", "")
+    redirect_uri = _oauth_redirect_uri(request, provider)
+
+    if not client_id:
+        return web.json_response(
+            {"error": f"{provider.title()} OAuth not configured (missing client ID)"},
+            status=503,
+        )
+
+    state = create_oauth_state(email)
+
+    params: dict = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "state": state,
+    }
+    if cfg["scopes"]:
+        params["scope"] = cfg["scope_separator"].join(cfg["scopes"])
+    if cfg.get("owner_type"):
+        params["owner"] = cfg["owner_type"]
+
+    authorize_url = f"{cfg['auth_url']}?{urlencode(params)}"
+    return web.json_response({"authorize_url": authorize_url})
+
+
+async def handle_provider_callback(request: web.Request) -> web.Response:
+    """GET /api/oauth/{provider}/callback — handle OAuth redirect."""
+    provider = request.match_info["provider"]
+    cfg = _PROVIDER_OAUTH_CONFIG.get(provider)
+    if not cfg:
+        return _callback_error(f"Unknown provider: {provider}", provider)
+
+    db = get_db()
+    if db is None:
+        return _callback_error("Database not available", provider)
+
+    error = request.query.get("error")
+    if error:
+        return _callback_error(f"Authorization failed: {error}", provider)
+
+    code = request.query.get("code")
+    state = request.query.get("state")
+    if not code or not state:
+        return _callback_error("Missing authorization code or state", provider)
+
+    email = verify_oauth_state(state)
+    if email is None:
+        return _callback_error("Invalid or expired authorization state", provider)
+
+    client_id = os.environ.get(f"{provider.upper()}_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get(f"{provider.upper()}_OAUTH_CLIENT_SECRET", "")
+    redirect_uri = _oauth_redirect_uri(request, provider)
+
+    if not client_id or not client_secret:
+        return _callback_error(f"{provider.title()} OAuth is not configured", provider)
+
+    token_data = await _exchange_oauth_code(
+        token_endpoint=cfg["token_url"],
+        code=code,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        auth_method=cfg["auth_method"],
+    )
+
+    if token_data is None:
+        return _callback_error("Failed to exchange authorization code", provider)
+
+    access_token = token_data.get("access_token")
+    refresh_token = token_data.get("refresh_token")
+    expires_in = token_data.get("expires_in")
+
+    if not access_token:
+        return _callback_error(f"{provider.title()} did not return an access token", provider)
+
+    scopes = token_data.get("scope", "").split() if token_data.get("scope") else cfg["scopes"]
+
+    await store_provider_tokens(
+        db=db,
+        user_email=email,
+        provider=provider,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=int(expires_in) if expires_in else None,
+        scopes=scopes,
+    )
+
+    logger.info("%s OAuth completed for %s", provider.title(), email)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>Connected</title></head>
+<body>
+<p>{provider.title()} connected successfully. This window will close.</p>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{
+      type: 'oauth-complete',
+      provider: '{provider}'
+    }}, '*');
+  }}
+  setTimeout(function() {{ window.close(); }}, 1500);
+</script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_disconnect_provider(request: web.Request) -> web.Response:
+    """DELETE /api/oauth/connections/{provider} — disconnect a provider."""
+    provider = request.match_info["provider"]
+    if provider not in _PROVIDER_OAUTH_CONFIG:
+        return web.json_response({"error": f"Unknown provider: {provider}"}, status=400)
+
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+
+    email = get_user_email(request)
+    if not email:
+        return web.json_response({"error": "User not authenticated"}, status=401)
+
+    revoked = await revoke_provider_tokens(db, email, provider)
+    if not revoked:
+        return web.json_response({"error": f"No {provider} connection found"}, status=404)
 
     return web.json_response({"disconnected": True})
 
@@ -662,6 +849,11 @@ def setup_oauth_routes(app: web.Application):
     app.router.add_get("/api/oauth/slack/authorize", handle_slack_authorize)
     app.router.add_get("/api/oauth/slack/callback", handle_slack_callback)
     app.router.add_delete("/api/oauth/connections/slack", handle_disconnect_slack)
+    # HubSpot / Notion / Grain (generic provider OAuth)
+    for prov in ("hubspot", "notion", "grain"):
+        app.router.add_get(f"/api/oauth/{prov}/authorize", handle_provider_authorize)
+        app.router.add_get(f"/api/oauth/{prov}/callback", handle_provider_callback)
+        app.router.add_delete(f"/api/oauth/connections/{prov}", handle_disconnect_provider)
     # Custom MCP
     app.router.add_get("/api/oauth/custom-mcp/{provider}/authorize", handle_custom_mcp_authorize)
     app.router.add_get("/api/oauth/custom-mcp/{provider}/callback", handle_custom_mcp_callback)

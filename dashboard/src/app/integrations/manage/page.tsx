@@ -9,6 +9,8 @@ import {
   disconnectSlack,
   getCustomMcpAuthorizeUrl,
   disconnectCustomMcp,
+  getProviderAuthorizeUrl,
+  disconnectProvider,
   type OAuthConnection,
 } from "../../../lib/oauth-api";
 import {
@@ -38,6 +40,7 @@ import {
   removeCustomConnector,
   getWebhookUrl,
   probeCustomConnector,
+  updateIntegrationSharing,
   type Integration,
   type ProbeResult,
 } from "../../../lib/integration-api";
@@ -324,6 +327,103 @@ function ConnectModal({
   );
 }
 
+/* -- Sharing Dialog --------------------------------------------------------- */
+
+function SharingDialog({
+  integration,
+  open,
+  onClose,
+  onSaved,
+}: {
+  integration: Integration;
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const current = integration.shared_with || { mode: "everyone" as const };
+  const [mode, setMode] = useState<"everyone" | "specific">(current.mode);
+  const [emails, setEmails] = useState((current.users || []).join(", "));
+  const [teamIds, setTeamIds] = useState((current.teams || []).join(", "));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      const sharedWith: { mode: "everyone" | "specific"; users?: string[]; teams?: string[] } = { mode };
+      if (mode === "specific") {
+        sharedWith.users = emails.split(",").map((e) => e.trim()).filter(Boolean);
+        sharedWith.teams = teamIds.split(",").map((t) => t.trim()).filter(Boolean);
+      }
+      await updateIntegrationSharing(integration.provider, sharedWith);
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to update sharing");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Share {integration.display_name}</DialogTitle>
+          <DialogDescription>Control who can use this integration</DialogDescription>
+        </DialogHeader>
+
+        {err && (
+          <Alert variant="destructive" className="mt-2">
+            <AlertDescription>{err}</AlertDescription>
+          </Alert>
+        )}
+
+        <div className="space-y-4 mt-2">
+          <div className="flex gap-2">
+            <Button variant={mode === "everyone" ? "default" : "outline"} size="sm" onClick={() => setMode("everyone")}>
+              Everyone
+            </Button>
+            <Button variant={mode === "specific" ? "default" : "outline"} size="sm" onClick={() => setMode("specific")}>
+              Specific users / teams
+            </Button>
+          </div>
+
+          {mode === "specific" && (
+            <>
+              <div>
+                <Label className="mb-1">User emails (comma-separated)</Label>
+                <Input
+                  type="text"
+                  value={emails}
+                  onChange={(e) => setEmails(e.target.value)}
+                  placeholder="alice@example.com, bob@example.com"
+                />
+              </div>
+              <div>
+                <Label className="mb-1">Team IDs (comma-separated, optional)</Label>
+                <Input
+                  type="text"
+                  value={teamIds}
+                  onChange={(e) => setTeamIds(e.target.value)}
+                  placeholder="engineering, sales"
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? "Saving..." : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /* -- Main Page -------------------------------------------------------------- */
 
 export default function IntegrationsPage() {
@@ -337,6 +437,7 @@ export default function IntegrationsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [connectModalTarget, setConnectModalTarget] = useState<Integration | null>(null);
+  const [sharingTarget, setSharingTarget] = useState<Integration | null>(null);
   const [disconnectingOrg, setDisconnectingOrg] = useState<string | null>(null);
   const [webhookUrls, setWebhookUrls] = useState<Record<string, string>>({});
 
@@ -355,6 +456,8 @@ export default function IntegrationsPage() {
   const [probing, setProbing] = useState(false);
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
   const [connectingCustomOAuth, setConnectingCustomOAuth] = useState<string | null>(null);
+  const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
+  const [disconnectingProvider, setDisconnectingProvider] = useState<string | null>(null);
 
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
   const [showClaudeTerminal, setShowClaudeTerminal] = useState(false);
@@ -481,12 +584,14 @@ export default function IntegrationsPage() {
         const prov = event.data.provider;
         if (prov === "slack") setConnectingSlack(false);
         else if (prov === "google") setConnecting(false);
+        else if (["hubspot", "notion", "grain"].includes(prov)) setConnectingProvider(null);
         else setConnectingCustomOAuth(null);
         loadConnections();
       } else if (event.data?.type === "oauth-error") {
         const prov = event.data.provider;
         if (prov === "slack") setConnectingSlack(false);
         else if (prov === "google") setConnecting(false);
+        else if (["hubspot", "notion", "grain"].includes(prov)) setConnectingProvider(null);
         else setConnectingCustomOAuth(null);
         setError(event.data.error || "OAuth failed");
       }
@@ -604,6 +709,39 @@ export default function IntegrationsPage() {
       setError(e instanceof Error ? e.message : "Failed to disconnect Slack");
     } finally {
       setDisconnectingSlack(false);
+    }
+  };
+
+  const handleConnectProvider = async (provider: string) => {
+    setConnectingProvider(provider);
+    setError(null);
+    try {
+      const url = await getProviderAuthorizeUrl(provider);
+      const w = 500, h = 600;
+      const left = window.screenX + (window.outerWidth - w) / 2;
+      const top = window.screenY + (window.outerHeight - h) / 2;
+      const popup = window.open(url, `${provider}-oauth`, `width=${w},height=${h},left=${left},top=${top},popup=yes`);
+      if (!popup) {
+        setConnectingProvider(null);
+        setError("Popup blocked. Allow popups for this site and try again.");
+      }
+    } catch (e) {
+      setConnectingProvider(null);
+      setError(e instanceof Error ? e.message : `Failed to start ${provider} OAuth flow`);
+    }
+  };
+
+  const handleDisconnectProvider = async (provider: string, displayName: string) => {
+    if (!confirm(`Disconnect your ${displayName} account?`)) return;
+    setDisconnectingProvider(provider);
+    setError(null);
+    try {
+      await disconnectProvider(provider);
+      await loadConnections();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : `Failed to disconnect ${displayName}`);
+    } finally {
+      setDisconnectingProvider(null);
     }
   };
 
@@ -829,6 +967,10 @@ export default function IntegrationsPage() {
   const isSlackConnected = slackConn?.status === "connected";
   const isSlackExpired = slackConn?.status === "expired";
 
+  const hubspotConn = connections.find((c) => c.provider === "hubspot");
+  const notionConn = connections.find((c) => c.provider === "notion");
+  const grainConn = connections.find((c) => c.provider === "grain");
+
   const userManagedIntegrations = orgIntegrations.filter((i) => !i.is_custom && i.status !== "system_managed");
   const systemManagedIntegrations = orgIntegrations.filter((i) => !i.is_custom && i.status === "system_managed");
   const customConnectors = orgIntegrations.filter((i) => i.is_custom);
@@ -859,8 +1001,18 @@ export default function IntegrationsPage() {
         />
       )}
 
-      {/* Add Custom Connector Modal -- admin only */}
-      <Dialog open={showCustomModal && isAdmin} onOpenChange={(o) => { if (!o) setShowCustomModal(false); }}>
+      {/* Sharing Dialog */}
+      {sharingTarget && (
+        <SharingDialog
+          integration={sharingTarget}
+          open={!!sharingTarget}
+          onClose={() => setSharingTarget(null)}
+          onSaved={() => { setSharingTarget(null); loadConnections(); }}
+        />
+      )}
+
+      {/* Add Custom Connector Modal */}
+      <Dialog open={showCustomModal} onOpenChange={(o) => { if (!o) setShowCustomModal(false); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Add custom connector</DialogTitle>
@@ -1129,6 +1281,20 @@ export default function IntegrationsPage() {
                                   Webhook secret not set
                                 </Badge>
                               )}
+                              {integ.shared_with?.mode === "specific" ? (
+                                <Badge className="bg-blue-50 text-blue-600 border-blue-100 cursor-pointer" onClick={() => isAdmin && setSharingTarget(integ)}>
+                                  Shared with {(integ.shared_with.users?.length || 0) + (integ.shared_with.teams?.length || 0)}
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary" className={isAdmin ? "cursor-pointer" : ""} onClick={() => isAdmin && setSharingTarget(integ)}>
+                                  Everyone
+                                </Badge>
+                              )}
+                              {["hubspot", "notion", "grain"].includes(integ.provider) && (
+                                <Badge className="bg-violet-50 text-violet-600 border-violet-100">
+                                  Personal auth available
+                                </Badge>
+                              )}
                             </div>
 
                             {integ.has_webhook && webhookUrls[integ.provider] && (
@@ -1242,647 +1408,400 @@ export default function IntegrationsPage() {
 
           {/* Custom MCP Connectors */}
           <TabsContent value="custom">
-            <div className="space-y-2">
-              {isAdmin && (
-                <div className="flex justify-end">
-                  <Button size="sm" onClick={() => setShowCustomModal(true)}>
-                    Add custom connector
-                  </Button>
-                </div>
-              )}
+            <div className="flex justify-end mb-2">
+              <Button size="sm" onClick={() => setShowCustomModal(true)}>
+                Add custom connector
+              </Button>
+            </div>
 
-              {customConnectors.length === 0 ? (
-                <Card className="border-dashed">
-                  <CardContent className="p-3 text-center">
-                    <p className="text-[13px] text-muted-foreground">
-                      No custom connectors yet.{isAdmin ? " Add a remote MCP server to extend the agent." : ""}
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : (
-                customConnectors.map((integ) => (
+            {customConnectors.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="p-3 text-center">
+                  <p className="text-[13px] text-muted-foreground">
+                    No custom connectors yet. Add a remote MCP server to extend the agent.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                {customConnectors.map((integ) => (
                   <Card key={integ.provider}>
                     <CardContent>
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                            <span className="text-lg font-bold text-muted-foreground">
-                              {integ.display_name[0]}
-                            </span>
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-[13px] font-semibold text-foreground">
-                                {integ.display_name}
-                              </h2>
-                              <StatusBadge status="connected" />
-                            </div>
-                            <p className="text-[13px] text-muted-foreground mt-0.5 font-mono break-all">
-                              {integ.url}
-                            </p>
-                          </div>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                          <span className="text-lg font-bold text-muted-foreground">
+                            {integ.display_name[0]}
+                          </span>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <h2 className="text-[13px] font-semibold text-foreground truncate">
+                            {integ.display_name}
+                          </h2>
+                          <p className="text-xs text-muted-foreground font-mono truncate">
+                            {integ.url}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-2">
+                        <StatusBadge status="connected" />
+                        <div className="flex items-center gap-1">
                           {integ.auth_mode === "oauth" && (
                             integ.user_oauth_status === "connected" ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="shrink-0 whitespace-nowrap"
-                                onClick={() => handleDisconnectCustomOAuth(integ.provider, integ.display_name)}
-                              >
+                              <Button variant="outline" size="xs" onClick={() => handleDisconnectCustomOAuth(integ.provider, integ.display_name)}>
                                 Disconnect
                               </Button>
                             ) : (
-                              <Button
-                                size="sm"
-                                className="shrink-0 whitespace-nowrap"
-                                onClick={() => handleConnectCustomOAuth(integ.provider)}
-                                disabled={connectingCustomOAuth === integ.provider}
-                              >
-                                {connectingCustomOAuth === integ.provider ? "Connecting..." : "Connect"}
+                              <Button size="xs" onClick={() => handleConnectCustomOAuth(integ.provider)} disabled={connectingCustomOAuth === integ.provider}>
+                                {connectingCustomOAuth === integ.provider ? "..." : "Connect"}
                               </Button>
                             )
                           )}
                           {isAdmin && (
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              className="shrink-0 whitespace-nowrap"
-                              onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)}
-                              disabled={removingCustom === integ.provider}
-                            >
-                              {removingCustom === integ.provider ? "Removing..." : "Remove"}
+                            <Button variant="destructive" size="xs" onClick={() => handleRemoveCustomConnector(integ.provider, integ.display_name)} disabled={removingCustom === integ.provider}>
+                              {removingCustom === integ.provider ? "..." : "Remove"}
                             </Button>
                           )}
                         </div>
                       </div>
                       <Separator className="my-5" />
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
-                          MCP tools active (mcp__{integ.provider})
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100">
+                          MCP tools
                         </Badge>
                         {integ.auth_mode === "oauth" ? (
                           integ.user_oauth_status === "connected" ? (
-                            <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
-                              Your auth: Connected
+                            <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100">
+                              Authenticated
                             </Badge>
                           ) : (
-                            <Badge className="bg-amber-50 text-amber-600 border-amber-100">
+                            <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-600 border-amber-100">
                               Login required
                             </Badge>
                           )
                         ) : (
-                          <Badge variant="secondary">
+                          <Badge variant="outline" className="text-[10px]">
                             {integ.has_token ? "Token auth" : "No auth"}
                           </Badge>
-                        )}
-                        {integ.connected_by && (
-                          <span className="text-xs text-muted-foreground">
-                            Added {formatDate(integ.connected_at)} by {integ.connected_by}
-                          </span>
                         )}
                       </div>
                     </CardContent>
                   </Card>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           {/* Personal Integrations */}
           <TabsContent value="personal">
-            <div className="space-y-2">
-              {/* Google Integration Card */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+              {/* Google */}
               <Card>
                 <CardContent>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                        <GoogleLogo />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-[13px] font-semibold text-foreground">
-                            Google
-                          </h2>
-                          <StatusBadge status={googleConn?.status || "not_connected"} />
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                          Gmail, Drive, Calendar, Sheets, Docs, Slides
-                        </p>
-                      </div>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <GoogleLogo />
                     </div>
-
-                    <div className="shrink-0">
-                      {isConnected ? (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleDisconnect}
-                          disabled={disconnecting}
-                        >
-                          {disconnecting ? "Disconnecting..." : "Disconnect"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleConnect}
-                          disabled={connecting}
-                        >
-                          {connecting ? "Connecting..." : isExpired ? "Reconnect" : "Connect Google"}
-                        </Button>
-                      )}
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">Google</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">Gmail, Drive, Calendar, Sheets, Docs, Slides</p>
                     </div>
                   </div>
-
-                  {isConnected && googleConn && (
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={isExpired ? "expired" : googleConn?.status || "not_connected"} />
+                    {isConnected ? (
+                      <Button variant="destructive" size="xs" onClick={handleDisconnect} disabled={disconnecting}>
+                        {disconnecting ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" onClick={handleConnect} disabled={connecting}>
+                        {connecting ? "..." : isExpired ? "Reconnect" : "Connect"}
+                      </Button>
+                    )}
+                  </div>
+                  {isConnected && googleConn?.connected_at && (
                     <>
                       <Separator className="my-5" />
-                      {googleConn.connected_at && (
-                        <p className="text-xs text-muted-foreground mb-2">
-                          Connected {formatDate(googleConn.connected_at)}
-                        </p>
-                      )}
-                      <div>
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                          Permissions granted
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {(googleConn.scopes || []).map((scope) => (
-                            <Badge
-                              key={scope}
-                              variant="outline"
-                            >
-                              {formatScope(scope)}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {isExpired && (
-                    <Alert className="mt-2 bg-amber-50 border-amber-100">
-                      <AlertDescription className="text-amber-700">
-                        Your Google connection has expired. Please reconnect to restore access.
-                      </AlertDescription>
-                    </Alert>
-                  )}
-
-                  {!isConnected && !isExpired && (
-                    <>
-                      <Separator className="my-5" />
-                      <p className="text-[13px] text-muted-foreground">
-                        Connect your Google account to let Loma access Gmail, Drive, Calendar,
-                        Sheets, Docs, and Slides on your behalf. Your tokens are encrypted and stored securely.
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {["Read emails", "Compose & send emails", "Read & write Drive", "Calendar", "Sheets", "Read & edit Docs", "Read & edit Slides"].map((perm) => (
-                          <Badge
-                            key={perm}
-                            className="bg-blue-50 text-blue-600 border-transparent"
-                          >
-                            {perm}
-                          </Badge>
-                        ))}
-                      </div>
+                      <p className="text-xs text-muted-foreground">Connected {formatDate(googleConn.connected_at)}</p>
                     </>
                   )}
                 </CardContent>
               </Card>
 
-              {/* Slack Integration Card */}
+              {/* Slack */}
               <Card>
                 <CardContent>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                        <SlackLogo />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-[13px] font-semibold text-foreground">
-                            Slack
-                          </h2>
-                          <StatusBadge status={slackConn?.status || "not_connected"} />
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                          Read, search, and send messages as you
-                        </p>
-                      </div>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <SlackLogo />
                     </div>
-
-                    <div className="shrink-0">
-                      {isSlackConnected ? (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleDisconnectSlack}
-                          disabled={disconnectingSlack}
-                        >
-                          {disconnectingSlack ? "Disconnecting..." : "Disconnect"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleConnectSlack}
-                          disabled={connectingSlack}
-                        >
-                          {connectingSlack ? "Connecting..." : isSlackExpired ? "Reconnect" : "Connect Slack"}
-                        </Button>
-                      )}
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">Slack</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">Read, search, and send messages as you</p>
                     </div>
                   </div>
-
-                  {isSlackConnected && slackConn && (
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={isSlackExpired ? "expired" : slackConn?.status || "not_connected"} />
+                    {isSlackConnected ? (
+                      <Button variant="destructive" size="xs" onClick={handleDisconnectSlack} disabled={disconnectingSlack}>
+                        {disconnectingSlack ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" onClick={handleConnectSlack} disabled={connectingSlack}>
+                        {connectingSlack ? "..." : isSlackExpired ? "Reconnect" : "Connect"}
+                      </Button>
+                    )}
+                  </div>
+                  {isSlackConnected && slackConn?.connected_at && (
                     <>
                       <Separator className="my-5" />
-                      {slackConn.connected_at && (
-                        <p className="text-xs text-muted-foreground mb-2">
-                          Connected {formatDate(slackConn.connected_at)}
-                        </p>
-                      )}
-                      <div>
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                          Permissions granted
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {(slackConn.scopes || []).map((scope) => (
-                            <Badge
-                              key={scope}
-                              variant="outline"
-                            >
-                              {formatScope(scope)}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {isSlackExpired && (
-                    <Alert className="mt-2 bg-amber-50 border-amber-100">
-                      <AlertDescription className="text-amber-700">
-                        Your Slack connection has expired. Please reconnect to restore access.
-                      </AlertDescription>
-                    </Alert>
-                  )}
-
-                  {!isSlackConnected && !isSlackExpired && (
-                    <>
-                      <Separator className="my-5" />
-                      <p className="text-[13px] text-muted-foreground">
-                        Connect your Slack account to let Loma read channels, search messages, view unreads,
-                        and send messages as you. Your token is encrypted and stored securely.
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {["Read channels", "Read DMs", "Send messages as you", "Search messages", "View unreads"].map((perm) => (
-                          <Badge
-                            key={perm}
-                            className="bg-purple-50 text-purple-600 border-transparent"
-                          >
-                            {perm}
-                          </Badge>
-                        ))}
-                      </div>
+                      <p className="text-xs text-muted-foreground">Connected {formatDate(slackConn.connected_at)}</p>
                     </>
                   )}
                 </CardContent>
               </Card>
 
-              {/* Telegram Integration Card */}
+              {/* Telegram */}
               <Card>
                 <CardContent>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                        <TelegramLogo />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-[13px] font-semibold text-foreground">
-                            Telegram
-                          </h2>
-                          <StatusBadge status={telegramStatus?.linked ? "connected" : "not_connected"} />
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                          Chat with your Loma agent from Telegram
-                        </p>
-                      </div>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <TelegramLogo />
                     </div>
-
-                    <div className="shrink-0">
-                      {telegramStatus?.linked ? (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleDisconnectTelegram}
-                          disabled={disconnectingTelegram}
-                        >
-                          {disconnectingTelegram ? "Disconnecting..." : "Disconnect"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleConnectTelegram}
-                          disabled={linkingTelegram || telegramStatus?.configured === false}
-                        >
-                          {linkingTelegram ? "Connecting..." : "Connect Telegram"}
-                        </Button>
-                      )}
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">Telegram</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">Chat with your agent from Telegram</p>
                     </div>
                   </div>
-
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={telegramStatus?.linked ? "connected" : "not_connected"} />
+                    {telegramStatus?.linked ? (
+                      <Button variant="destructive" size="xs" onClick={handleDisconnectTelegram} disabled={disconnectingTelegram}>
+                        {disconnectingTelegram ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" onClick={handleConnectTelegram} disabled={linkingTelegram || telegramStatus?.configured === false}>
+                        {linkingTelegram ? "..." : "Connect"}
+                      </Button>
+                    )}
+                  </div>
                   {telegramStatus?.linked && (
                     <>
                       <Separator className="my-5" />
                       <p className="text-xs text-muted-foreground">
-                        Linked to {telegramStatus.telegram_username ? `@${telegramStatus.telegram_username}` : "your Telegram account"}
-                        {telegramStatus.linked_at ? ` — connected ${formatDate(telegramStatus.linked_at)}` : ""}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Message {telegramStatus.bot_username ? `@${telegramStatus.bot_username}` : "the Loma bot"} on
-                        Telegram and it will reply as your agent. Send /stop to disconnect.
+                        Linked to {telegramStatus.telegram_username ? `@${telegramStatus.telegram_username}` : "your account"}
+                        {telegramStatus.linked_at ? ` — ${formatDate(telegramStatus.linked_at)}` : ""}
                       </p>
                     </>
                   )}
-
                   {telegramStatus?.configured === false && (
-                    <Alert className="mt-2 bg-amber-50 border-amber-100">
-                      <AlertDescription className="text-amber-700">
-                        The Telegram bot is not configured on this deployment. Ask an admin to set TELEGRAM_BOT_TOKEN.
-                      </AlertDescription>
-                    </Alert>
+                    <p className="text-xs text-amber-600 mt-2">Telegram bot not configured on this deployment</p>
                   )}
-
                   {!telegramStatus?.linked && telegramLink && (
-                    <Alert className="mt-2 bg-sky-50 border-sky-100">
-                      <AlertDescription className="text-sky-700">
-                        Waiting for you to open Telegram…{" "}
-                        <a
-                          href={telegramLink.deep_link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline font-medium"
-                        >
-                          Open @{telegramLink.bot_username}
-                        </a>{" "}
-                        and tap Start. The link expires in {telegramLink.expires_in_minutes} minutes.
-                      </AlertDescription>
-                    </Alert>
-                  )}
-
-                  {!telegramStatus?.linked && !telegramLink && telegramStatus?.configured !== false && (
-                    <>
-                      <Separator className="my-5" />
-                      <p className="text-[13px] text-muted-foreground">
-                        Link your Telegram account to chat with your own Loma agent from your phone.
-                        Click Connect, open the bot in Telegram, and tap Start — no tokens needed.
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {["Chat with your agent", "DMs only", "Runs as your account", "Unlink anytime with /stop"].map((perm) => (
-                          <Badge
-                            key={perm}
-                            className="bg-sky-50 text-sky-600 border-transparent"
-                          >
-                            {perm}
-                          </Badge>
-                        ))}
-                      </div>
-                    </>
+                    <p className="text-xs text-sky-600 mt-2">
+                      <a href={telegramLink.deep_link} target="_blank" rel="noopener noreferrer" className="underline">
+                        Open @{telegramLink.bot_username}
+                      </a>{" "}and tap Start
+                    </p>
                   )}
                 </CardContent>
               </Card>
 
-              {/* Claude Code Integration Card */}
+              {/* Claude Code */}
               <Card>
                 <CardContent>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                        <ClaudeLogo />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-[13px] font-semibold text-foreground">
-                            Claude Code
-                          </h2>
-                          <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                          Your account joins the shared round-robin pool
-                        </p>
-                      </div>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <ClaudeLogo />
                     </div>
-
-                    <div className="shrink-0">
-                      {claudeAuth?.connected ? (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleDisconnectClaude}
-                          disabled={disconnectingClaude}
-                        >
-                          {disconnectingClaude ? "Disconnecting..." : "Disconnect"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          className="bg-amber-600 text-white hover:bg-amber-700 whitespace-nowrap"
-                          onClick={handleConnectClaude}
-                          disabled={showClaudeTerminal}
-                        >
-                          {showClaudeTerminal ? "Logging in..." : "Login with Claude"}
-                        </Button>
-                      )}
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">Claude Code</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">Shared round-robin pool</p>
                     </div>
                   </div>
-
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={claudeAuth?.connected ? "connected" : "not_connected"} />
+                    {claudeAuth?.connected ? (
+                      <Button variant="destructive" size="xs" onClick={handleDisconnectClaude} disabled={disconnectingClaude}>
+                        {disconnectingClaude ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" className="bg-amber-600 text-white hover:bg-amber-700" onClick={handleConnectClaude} disabled={showClaudeTerminal}>
+                        {showClaudeTerminal ? "..." : "Login"}
+                      </Button>
+                    )}
+                  </div>
                   {claudeAuth?.connected && (
                     <>
                       <Separator className="my-5" />
-                      <div className="flex items-center gap-3 text-[13px]">
-                        {claudeAuth.email && (
-                          <div>
-                            <span className="text-muted-foreground">Account: </span>
-                            <span className="text-foreground">{claudeAuth.email}</span>
-                          </div>
-                        )}
-                        {claudeAuth.authMethod && (
-                          <div>
-                            <span className="text-muted-foreground">Auth: </span>
-                            <span className="text-foreground">{claudeAuth.authMethod}</span>
-                          </div>
-                        )}
-                        <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
-                          In round-robin pool
-                        </Badge>
-                      </div>
-                    </>
-                  )}
-
-                  {showClaudeTerminal && (
-                    <>
-                      <Separator className="my-5" />
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[13px] text-muted-foreground">
-                          Complete the OAuth flow in the terminal below:
-                        </p>
-                        <Button variant="link" size="xs" onClick={handleClaudeTerminalDone}>
-                          Done
-                        </Button>
-                      </div>
-                      <WebTerminal
-                        autoCommand={claudeAutoCommand}
-                        tokenEndpoint="/api/terminal/token"
-                      />
-                    </>
-                  )}
-
-                  {!claudeAuth?.connected && !showClaudeTerminal && (
-                    <>
-                      <Separator className="my-5" />
-                      <p className="text-[13px] text-muted-foreground">
-                        Connect your Claude Code subscription (Pro, Max, or Teams) to join the shared
-                        round-robin pool. All connected accounts are used to process tasks across the team.
+                      <p className="text-xs text-muted-foreground">
+                        {claudeAuth.email || "Connected"}
                       </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {["Shared pool", "Round-robin usage", "Rate limit rotation"].map((perm) => (
-                          <Badge
-                            key={perm}
-                            className="bg-amber-50 text-amber-600 border-transparent"
-                          >
-                            {perm}
-                          </Badge>
-                        ))}
-                      </div>
                     </>
                   )}
                 </CardContent>
               </Card>
 
-              {/* Codex (ChatGPT subscription) Integration Card */}
+              {/* Codex */}
               <Card>
                 <CardContent>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center">
-                        <CodexLogo />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-[13px] font-semibold text-foreground">
-                            Codex
-                          </h2>
-                          <StatusBadge status={codexAuth?.connected ? "connected" : "not_connected"} />
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                          Your ChatGPT subscription joins the shared round-robin pool
-                        </p>
-                      </div>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <CodexLogo />
                     </div>
-
-                    <div className="shrink-0">
-                      {codexAuth?.connected ? (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="whitespace-nowrap"
-                          onClick={handleDisconnectCodex}
-                          disabled={disconnectingCodex}
-                        >
-                          {disconnectingCodex ? "Disconnecting..." : "Disconnect"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          className="bg-emerald-700 text-white hover:bg-emerald-800 whitespace-nowrap"
-                          onClick={handleConnectCodex}
-                          disabled={showCodexTerminal}
-                        >
-                          {showCodexTerminal ? "Logging in..." : "Login with ChatGPT"}
-                        </Button>
-                      )}
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">Codex</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">ChatGPT shared round-robin pool</p>
                     </div>
                   </div>
-
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={codexAuth?.connected ? "connected" : "not_connected"} />
+                    {codexAuth?.connected ? (
+                      <Button variant="destructive" size="xs" onClick={handleDisconnectCodex} disabled={disconnectingCodex}>
+                        {disconnectingCodex ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" className="bg-emerald-700 text-white hover:bg-emerald-800" onClick={handleConnectCodex} disabled={showCodexTerminal}>
+                        {showCodexTerminal ? "..." : "Login"}
+                      </Button>
+                    )}
+                  </div>
                   {codexAuth?.connected && (
                     <>
                       <Separator className="my-5" />
-                      <div className="flex items-center gap-3 text-[13px]">
-                        {codexAuth.email && (
-                          <div>
-                            <span className="text-muted-foreground">Account: </span>
-                            <span className="text-foreground">{codexAuth.email}</span>
-                          </div>
-                        )}
-                        {codexAuth.plan && (
-                          <div>
-                            <span className="text-muted-foreground">Plan: </span>
-                            <span className="text-foreground">{codexAuth.plan}</span>
-                          </div>
-                        )}
-                        {codexAuth.pool_enabled === false ? (
-                          <Badge className="bg-amber-50 text-amber-600 border-transparent">
-                            Pool disabled on server
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
-                            In round-robin pool
-                          </Badge>
-                        )}
-                      </div>
-                    </>
-                  )}
-
-                  {showCodexTerminal && (
-                    <>
-                      <Separator className="my-5" />
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[13px] text-muted-foreground">
-                          Approve the device code at chatgpt.com, then finish in the terminal below:
-                        </p>
-                        <Button variant="link" size="xs" onClick={handleCodexTerminalDone}>
-                          Done
-                        </Button>
-                      </div>
-                      <WebTerminal
-                        autoCommand={codexAutoCommand}
-                        tokenEndpoint="/api/terminal/token"
-                      />
-                    </>
-                  )}
-
-                  {!codexAuth?.connected && !showCodexTerminal && (
-                    <>
-                      <Separator className="my-5" />
-                      <p className="text-[13px] text-muted-foreground">
-                        Connect your ChatGPT subscription (Plus, Pro, or Team) to make GPT-5.6 Codex
-                        models available in chat via the shared round-robin pool — no API billing.
+                      <p className="text-xs text-muted-foreground">
+                        {codexAuth.email || "Connected"}{codexAuth.plan ? ` — ${codexAuth.plan}` : ""}
                       </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {["Shared pool", "Round-robin usage", "Usage-window rotation"].map((perm) => (
-                          <Badge
-                            key={perm}
-                            className="bg-emerald-50 text-emerald-700 border-transparent"
-                          >
-                            {perm}
-                          </Badge>
-                        ))}
-                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* HubSpot */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <img src="/hubspot.png" alt="HubSpot" className="w-8 h-8 rounded" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">HubSpot</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">CRM contacts, deals, and tickets</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={hubspotConn?.status || "not_connected"} />
+                    {hubspotConn?.status === "connected" ? (
+                      <Button variant="destructive" size="xs" onClick={() => handleDisconnectProvider("hubspot", "HubSpot")} disabled={disconnectingProvider === "hubspot"}>
+                        {disconnectingProvider === "hubspot" ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" onClick={() => handleConnectProvider("hubspot")} disabled={connectingProvider === "hubspot"}>
+                        {connectingProvider === "hubspot" ? "..." : "Connect"}
+                      </Button>
+                    )}
+                  </div>
+                  {hubspotConn?.status === "connected" && hubspotConn?.connected_at && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-xs text-muted-foreground">Connected {formatDate(hubspotConn.connected_at)}</p>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Notion */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <img src="/notion.png" alt="Notion" className="w-8 h-8 rounded" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">Notion</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">Pages, databases, and runbooks</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={notionConn?.status || "not_connected"} />
+                    {notionConn?.status === "connected" ? (
+                      <Button variant="destructive" size="xs" onClick={() => handleDisconnectProvider("notion", "Notion")} disabled={disconnectingProvider === "notion"}>
+                        {disconnectingProvider === "notion" ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" onClick={() => handleConnectProvider("notion")} disabled={connectingProvider === "notion"}>
+                        {connectingProvider === "notion" ? "..." : "Connect"}
+                      </Button>
+                    )}
+                  </div>
+                  {notionConn?.status === "connected" && notionConn?.connected_at && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-xs text-muted-foreground">Connected {formatDate(notionConn.connected_at)}</p>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Grain */}
+              <Card>
+                <CardContent>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 bg-muted rounded-lg flex items-center justify-center shrink-0">
+                      <span className="text-lg font-bold text-muted-foreground">G</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h2 className="text-[13px] font-semibold text-foreground truncate">Grain</h2>
+                      <p className="text-xs text-muted-foreground line-clamp-1">Meeting recordings and transcripts</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <StatusBadge status={grainConn?.status || "not_connected"} />
+                    {grainConn?.status === "connected" ? (
+                      <Button variant="destructive" size="xs" onClick={() => handleDisconnectProvider("grain", "Grain")} disabled={disconnectingProvider === "grain"}>
+                        {disconnectingProvider === "grain" ? "..." : "Disconnect"}
+                      </Button>
+                    ) : (
+                      <Button size="xs" onClick={() => handleConnectProvider("grain")} disabled={connectingProvider === "grain"}>
+                        {connectingProvider === "grain" ? "..." : "Connect"}
+                      </Button>
+                    )}
+                  </div>
+                  {grainConn?.status === "connected" && grainConn?.connected_at && (
+                    <>
+                      <Separator className="my-5" />
+                      <p className="text-xs text-muted-foreground">Connected {formatDate(grainConn.connected_at)}</p>
                     </>
                   )}
                 </CardContent>
               </Card>
             </div>
+
+            {/* Claude/Codex terminal dialogs */}
+            <Dialog open={showClaudeTerminal} onOpenChange={(o) => { if (!o) handleClaudeTerminalDone(); }}>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Login with Claude Code</DialogTitle>
+                  <DialogDescription>Complete the OAuth flow in the terminal below</DialogDescription>
+                </DialogHeader>
+                <WebTerminal autoCommand={claudeAutoCommand} tokenEndpoint="/api/terminal/token" />
+                <DialogFooter>
+                  <Button variant="outline" onClick={handleClaudeTerminalDone}>Done</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={showCodexTerminal} onOpenChange={(o) => { if (!o) handleCodexTerminalDone(); }}>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Login with ChatGPT</DialogTitle>
+                  <DialogDescription>Approve the device code at chatgpt.com, then finish below</DialogDescription>
+                </DialogHeader>
+                <WebTerminal autoCommand={codexAutoCommand} tokenEndpoint="/api/terminal/token" />
+                <DialogFooter>
+                  <Button variant="outline" onClick={handleCodexTerminalDone}>Done</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           {/* API Keys (loma-tasks MCP server) */}

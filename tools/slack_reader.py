@@ -37,9 +37,11 @@ logger = logging.getLogger(__name__)
 def _get_bot_token() -> str:
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not token:
+        from tools._integration_key import get_integration_key
+        token = get_integration_key("slack_bot")
+    if not token:
         raise ValueError(
-            "SLACK_BOT_TOKEN environment variable is not set. "
-            "Please configure it before using Slack tools."
+            "SLACK_BOT_TOKEN not set and no Slack Bot integration found on the dashboard."
         )
     return token
 

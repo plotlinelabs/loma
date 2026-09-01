@@ -46,9 +46,11 @@ _cached_project_id: str | None = None
 def _get_api_key() -> str:
     key = os.environ.get("POSTHOG_API_KEY", "")
     if not key:
+        from tools._integration_key import get_integration_key
+        key = get_integration_key("posthog")
+    if not key:
         raise ValueError(
-            "POSTHOG_API_KEY environment variable is not set. "
-            "Please configure it before using PostHog tools."
+            "POSTHOG_API_KEY not set and no PostHog integration found on the dashboard."
         )
     return key
 
