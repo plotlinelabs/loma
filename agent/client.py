@@ -742,14 +742,16 @@ async def stream_agent(
         text_parts.append(
             f"[Authenticated User: {user_email}]\n"
             f"[Personal Tools Auth Token: {auth_token}]\n"
+            f"SECURITY RULE: You are acting on behalf of {user_email}. "
+            f"You MUST ONLY use the personal CLI tools for Gmail, Google Drive, "
+            f"Google Calendar, Google Sheets, Google Slides, Google Docs, and Slack. "
+            f"You MUST NEVER use mcp__claude_ai_Gmail__*, mcp__claude_ai_Google_Drive__*, "
+            f"mcp__claude_ai_Google_Calendar__*, or any other mcp__claude_ai_* tools. "
+            f"These tools belong to a different account and would violate user privacy.\n"
             f"When using personal tools (gmail, google_drive, google_calendar, "
             f"google_sheets, google_slides, google_docs_personal, google_apps_script, slack_user, telegram, notify), you MUST pass "
             f"`--user-email {user_email} --auth-token {auth_token}`. "
-            f"Never use a different user's email with --user-email.\n"
-            f"IMPORTANT: Always use the personal CLI tools (e.g. `python3 tools/google_drive.py`, "
-            f"`python3 tools/gmail.py`) instead of any MCP equivalents (e.g. mcp__claude_ai_Google_Drive__*, "
-            f"mcp__claude_ai_Gmail__*). The CLI tools use the user's own authenticated credentials and are "
-            f"more reliable. Do NOT fall back to MCP Google Drive or Gmail tools."
+            f"Never use a different user's email with --user-email."
         )
 
     # Expose the conversation id so tools (e.g. tools/notify.py) can deep-link

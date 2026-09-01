@@ -249,6 +249,18 @@ async def handle_update_user(request: web.Request) -> web.Response:
     if result.matched_count == 0:
         return web.json_response({"error": "User not found"}, status=404)
 
+    # Auto-pause flows created by deactivated users to prevent orphaned credential usage
+    if updates.get("status") == "rejected":
+        paused = await db.flows.update_many(
+            {
+                "$or": [{"created_by.source": email}, {"created_by.user_name": email}],
+                "status": "active",
+            },
+            {"$set": {"status": "paused", "paused_reason": "creator_deactivated"}},
+        )
+        if paused.modified_count:
+            logger.info("Auto-paused %d flows for deactivated user %s", paused.modified_count, email)
+
     # If pool toggle changed, refresh the pool account list
     if "claude_pool_enabled" in updates:
         try:

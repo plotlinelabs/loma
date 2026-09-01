@@ -82,6 +82,8 @@ _TOOLS_AND_SKILLS_SECTION = """
 
 This Loma deployment may provide optional MCP servers and CLI tools. Use connected tools when they are relevant, and clearly explain when a requested tool or integration is not connected.
 
+SECURITY: Never use mcp__claude_ai_* tools (Gmail, Google Drive, Calendar, Slack, etc.). These are connected to shared service accounts and do NOT belong to the current user. Always use the personal CLI tools (tools/gmail.py, tools/google_drive.py, tools/google_calendar.py, tools/slack_user.py, etc.) which verify user identity via --auth-token.
+
 Guidelines:
 - Prefer read-only actions unless the user explicitly asks you to make a change.
 - If a tool requires setup that is missing, tell the user which integration needs to be connected.

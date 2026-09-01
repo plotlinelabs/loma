@@ -823,8 +823,10 @@ async def handle_chat(request: web.Request) -> web.Response:
     # Parse file attachments
     files = body.get("files") or None
 
-    # Use authenticated identity (from middleware), not the self-reported body value
-    user_email = get_user_email(request) or body.get("user_email", "")
+    # Use authenticated identity (from middleware) only — never trust body-supplied email
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
 
     # Set up observability — reuse existing conversation if conversation_id provided
     observer = None
