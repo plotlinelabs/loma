@@ -930,6 +930,36 @@ export interface ChatMessage {
   content: string;
 }
 
+export async function injectMessage(
+  conversationId: string,
+  message: string,
+): Promise<{ injected: boolean }> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/inject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Injection failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function interruptAgent(
+  conversationId: string,
+): Promise<{ interrupted: boolean }> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/interrupt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Interrupt failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function* streamChat(
   message: string,
   conversationHistory?: ChatMessage[],
