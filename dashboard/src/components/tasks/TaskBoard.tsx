@@ -154,7 +154,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       <DragOverlay>
         {activeTask && (
           <div className="rounded-md border bg-card px-3 py-2 text-[13px] shadow-md">
-            <div className="line-clamp-2 break-words">{activeTask.title || activeTask.prompt}</div>
+            <div className="line-clamp-2 break-words">{activeTask.title || activeTask.prompt || "New task"}</div>
           </div>
         )}
       </DragOverlay>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RiExternalLinkLine, RiLoader4Line, RiPencilLine } from "@remixicon/react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,13 @@ import { basePath, fetchConversation, updateTask, type ChatFile, type Task } fro
 
 /** Loads and renders one conversation inside the drawer. Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
-function DrawerConversation({ conversationId }: { conversationId: string }) {
+function DrawerConversation({
+  conversationId,
+  onStreamComplete,
+}: {
+  conversationId: string;
+  onStreamComplete?: (conversationId: string) => void;
+}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [initialItems, setInitialItems] = useState<ChatItem[] | undefined>();
@@ -93,6 +99,7 @@ function DrawerConversation({ conversationId }: { conversationId: string }) {
         initialModel={model || undefined}
         initialStatus={initialStatus}
         draftStorageKey={`loma-task-draft-${conversationId}`}
+        onStreamComplete={onStreamComplete}
       />
     </div>
   );
@@ -112,6 +119,38 @@ export function TaskChatDrawer({
   onOpenChange: (open: boolean) => void;
   onTaskChange?: (task: Task) => void;
 }) {
+  // Refs so the delayed title fetch below reads the latest task/callback, not
+  // the ones captured when the stream started.
+  const taskRef = useRef(task);
+  const onTaskChangeRef = useRef(onTaskChange);
+  useEffect(() => {
+    taskRef.current = task;
+    onTaskChangeRef.current = onTaskChange;
+  }, [task, onTaskChange]);
+
+  // After a run finishes, server-side enrichment generates a title
+  // asynchronously — poll once shortly after so the drawer header and board
+  // card pick it up (mirrors handleStreamComplete on the chat page).
+  const handleStreamComplete = useCallback((conversationId: string) => {
+    setTimeout(async () => {
+      try {
+        const data = await fetchConversation(conversationId);
+        const nextTitle = data.conversation?.title;
+        const current = taskRef.current;
+        if (
+          nextTitle &&
+          current &&
+          current.conversation_id === conversationId &&
+          nextTitle !== current.title
+        ) {
+          onTaskChangeRef.current?.({ ...current, title: nextTitle });
+        }
+      } catch {
+        // Board polling will pick the title up on its next pass.
+      }
+    }, 4000);
+  }, []);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -148,6 +187,7 @@ export function TaskChatDrawer({
           <DrawerConversation
             key={task.conversation_id}
             conversationId={task.conversation_id}
+            onStreamComplete={handleStreamComplete}
           />
         )}
       </SheetContent>
@@ -161,10 +201,16 @@ function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: 
 
   const saveTitle = async () => {
     if (!task) return;
-    const nextTitle = title.trim() || "New task";
-    setTitle(nextTitle);
     setEditingTitle(false);
-    if (nextTitle === task.title) return;
+    const fallback = task.title || task.prompt || "New task";
+    const nextTitle = title.trim();
+    // Empty or unchanged input is a no-op — saving would store the display
+    // fallback as a real user title and lock out auto-titling (title_edited).
+    if (!nextTitle || nextTitle === fallback) {
+      setTitle(fallback);
+      return;
+    }
+    setTitle(nextTitle);
     try {
       const { task: updatedTask } = await updateTask(task.conversation_id, { title: nextTitle });
       onTaskChange?.(updatedTask || { ...task, title: nextTitle });

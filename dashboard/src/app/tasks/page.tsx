@@ -94,6 +94,18 @@ export default function TasksPage() {
       const data = await fetchTasksBoard(searchQuery);
       hasBoardRef.current = true;
       setBoard(data);
+      // Keep the open drawer's task in sync (e.g. the async-generated title).
+      // Only swap when title/prompt changed — a new object remounts the
+      // drawer's title editor, which would clobber an in-progress rename.
+      setChatTask((current) => {
+        if (!current) return current;
+        const next = data.tasks.find(
+          (t) => t.conversation_id === current.conversation_id,
+        );
+        return next && (next.title !== current.title || next.prompt !== current.prompt)
+          ? next
+          : current;
+      });
     } catch {
       // Transient poll failures are fine — keep showing the last board.
     }
@@ -156,8 +168,9 @@ export default function TasksPage() {
       const todoLane = board.lanes.find(
         (lane) => lane.id === "todo" || lane.name.trim().toLowerCase() === "todo",
       ) || board.lanes[0];
+      // No title: the backend leaves title_edited false so the first run's
+      // enrichment can name the task. "New task" is a display-only fallback.
       const { task } = await createTask({
-        title: "New task",
         prompt: "",
         lane: todoLane?.id || "todo",
       });
