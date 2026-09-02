@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from agent.client import stream_agent
 from agent.pool import ClientPool
+from api.drain import is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
 from scheduler.engine import get_next_run_time, remove_flow_from_scheduler
@@ -45,6 +46,16 @@ async def execute_flow(flow_id: str):
     flow = await db.flows.find_one({"flow_id": flow_id})
     if flow is None or flow["status"] != "active":
         logger.info("[SCHEDULER] Flow %s not active or not found, skipping", flow_id)
+        return
+
+    # A deploy is draining: don't start a run the restart would kill. Flag the
+    # flow so the new server runs it on boot (see engine._run_deferred_flows).
+    if is_draining():
+        logger.info("[SCHEDULER] Draining for a deploy; deferring flow %s to next startup", flow_id)
+        await db.flows.update_one(
+            {"flow_id": flow_id},
+            {"$set": {"deferred_run_at": datetime.now(timezone.utc)}},
+        )
         return
 
     logger.info("[SCHEDULER] Executing flow: %s (%s)", flow["name"], flow_id)

@@ -2,12 +2,69 @@
 # Build and (re)start the Loma stack, then verify both services respond.
 # Generic by design: contains no host/URL/secrets. Invoked by CI after the repo
 # has been fast-forwarded to origin/main on the server.
+#
+# Deploys drain first (see api/drain.py): the running backend stops accepting
+# new agent runs and we wait, bounded, for in-flight ones to finish, so the
+# container swap doesn't kill someone's task or chat halfway through.
+#   DRAIN_MAX_WAIT    seconds to wait for running=0 (default 600; 0 skips drain)
+#   DRAIN_ON_TIMEOUT  "proceed" (default) or "fail" if runs are still active
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-echo "Deploying $(git rev-parse --short HEAD)"
+SHA=$(git rev-parse --short HEAD)
+echo "Deploying $SHA"
 
-docker compose up -d --build
+# Build while the old stack keeps serving so the swap below is quick.
+docker compose build
+
+DRAIN_MAX_WAIT="${DRAIN_MAX_WAIT:-600}"
+DRAIN_ON_TIMEOUT="${DRAIN_ON_TIMEOUT:-proceed}"
+
+# Talk to the running backend from inside its container: the drain toggles are
+# loopback-only, and this works whether or not :3000 is published on the host.
+drain_api() {
+  docker compose exec -T loma-backend curl -sf --max-time 5 -X "$1" \
+    -H 'Content-Type: application/json' "${@:2}" http://127.0.0.1:3000/health/drain
+}
+# Pull N out of {"running": N, ...} without needing jq/python on the host.
+running_count() {
+  printf '%s' "$1" | grep -o '"running": *[0-9]*' | grep -o '[0-9]*$' || true
+}
+
+running=""
+if [ "$DRAIN_MAX_WAIT" -gt 0 ] && drain_api POST -d "{\"reason\":\"deploy $SHA\"}" >/dev/null 2>&1; then
+  echo "Draining: waiting up to ${DRAIN_MAX_WAIT}s for in-flight agent runs to finish"
+  deadline=$((SECONDS + DRAIN_MAX_WAIT))
+  drained=0
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    status=$(drain_api GET 2>/dev/null || true)
+    running=$(running_count "$status")
+    if [ -z "$running" ]; then
+      echo "  drain status unavailable; not waiting"
+      drained=1
+      break
+    fi
+    if [ "$running" -eq 0 ]; then
+      drained=1
+      break
+    fi
+    echo "  $running run(s) still active ($((deadline - SECONDS))s left)"
+    sleep 10
+  done
+  if [ "$drained" = 1 ]; then
+    echo "Drained: no agent runs in flight"
+  elif [ "$DRAIN_ON_TIMEOUT" = "fail" ]; then
+    echo "Drain timed out with $running run(s) still active; aborting (DRAIN_ON_TIMEOUT=fail)"
+    drain_api DELETE >/dev/null 2>&1 || true
+    exit 1
+  else
+    echo "Drain timed out with $running run(s) still active; proceeding (owners are notified on shutdown)"
+  fi
+else
+  echo "Backend not reachable for drain (first deploy, stack down, or DRAIN_MAX_WAIT=0); proceeding"
+fi
+
+docker compose up -d
 
 # The nginx reverse-proxy config is bind-mounted. In TLS mode the nginx image
 # renders /etc/nginx/templates/*.template into /etc/nginx/conf.d/ at container

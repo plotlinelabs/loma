@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -63,6 +64,7 @@ async def init_scheduler():
     }).to_list(None)
     for flow in flows:
         _add_job_for_flow(flow)
+    await _run_deferred_flows(db, flows)
 
     # --- Usage monitoring (hourly) ---
     _scheduler.add_job(
@@ -87,6 +89,27 @@ async def init_scheduler():
     logger.info("Skill auto-organize job registered (daily at 03:00 UTC)")
 
     logger.info("Scheduler initialized with %d active flow(s)", len(flows))
+
+
+async def _run_deferred_flows(db, flows: list[dict]):
+    """Fire flows the previous server deferred while draining for a deploy.
+
+    executor.execute_flow sets `deferred_run_at` instead of running when the
+    server is draining; the trigger has already fired, so without this the run
+    would simply be lost.
+    """
+    deferred = [f for f in flows if f.get("deferred_run_at")]
+    if not deferred:
+        return
+    from scheduler.executor import execute_flow
+
+    await db.flows.update_many(
+        {"flow_id": {"$in": [f["flow_id"] for f in deferred]}},
+        {"$unset": {"deferred_run_at": ""}},
+    )
+    for flow in deferred:
+        logger.info("[SCHEDULER] Running flow %s deferred by the previous deploy", flow["flow_id"])
+        asyncio.create_task(execute_flow(flow["flow_id"]))
 
 
 def _add_job_for_flow(flow: dict):
