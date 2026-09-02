@@ -73,7 +73,7 @@ export function TaskCard({
         {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 break-words text-[13px]">
-            {task.title || task.prompt}
+            {task.title || task.prompt || "New task"}
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
             <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />

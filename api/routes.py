@@ -771,6 +771,15 @@ async def handle_generate_titles(request: web.Request) -> web.Response:
     if db is None:
         return web.json_response({"error": "Observability not configured"}, status=503)
 
+    # Repair rows poisoned by the old side-drawer flow, which stored the
+    # "New task" placeholder as a user-edited title and locked out every
+    # auto-title path. Nobody names a task "New task" on purpose — a false
+    # positive just gets a fresh LLM title below.
+    repaired = (await db.conversations.update_many(
+        {"title": "New task", "title_edited": True, "source": "dashboard"},
+        {"$set": {"title": None, "title_edited": False}},
+    )).modified_count
+
     # Find conversations missing title or topic (skip unsent board drafts)
     missing = await db.conversations.find(
         {"$nor": [{"task_status": "todo", "status": None}],
@@ -780,7 +789,11 @@ async def handle_generate_titles(request: web.Request) -> web.Response:
     ).limit(200).to_list(200)
 
     if not missing:
-        return web.json_response({"processed": 0, "message": "All conversations already have titles and topics"})
+        return web.json_response({
+            "processed": 0,
+            "repaired": repaired,
+            "message": "All conversations already have titles and topics",
+        })
 
     processed = 0
     batch_size = 5
@@ -793,6 +806,7 @@ async def handle_generate_titles(request: web.Request) -> web.Response:
 
     return web.json_response({
         "processed": processed,
+        "repaired": repaired,
         "message": f"Generated titles/topics for {processed} conversations",
     })
 

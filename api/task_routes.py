@@ -254,9 +254,10 @@ async def handle_create_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     prompt = (body.get("prompt") or "").strip()
+    # Empty staged drafts are fine (the side drawer creates one on click and
+    # the user fills it in) — title stays None so finish-time enrichment can
+    # name the task from the first message. start=true still requires details.
     title = (body.get("title") or "").strip() or None
-    if not prompt and not title:
-        return web.json_response({"error": "A title or details are required"}, status=400)
 
     model = (body.get("model") or "").strip()
 
@@ -332,7 +333,8 @@ async def handle_create_task(request: web.Request) -> web.Response:
     await db.conversations.insert_one(doc)
 
     # Quick-added tasks (no explicit title) get an LLM title from the prompt.
-    if not title:
+    # Empty drafts skip this — enrichment titles them after the first run.
+    if not title and prompt:
         asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
 
     if start:
