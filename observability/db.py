@@ -122,6 +122,12 @@ async def init_observability():
     await _db.projects.create_index("created_by")
     await _db.projects.create_index([("created_at", -1)])
 
+    # Agent identities (user-created, shareable agent personas)
+    await _db.agent_identities.create_index("agent_id", unique=True)
+    await _db.agent_identities.create_index("created_by")
+    await _db.agent_identities.create_index("visibility")
+    await _db.conversations.create_index("metadata.agent_id")
+
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)
     await _db.integrations.create_index("status")

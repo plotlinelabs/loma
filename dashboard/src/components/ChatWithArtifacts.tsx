@@ -78,6 +78,7 @@ export default function ChatWithArtifacts({
   initialPrompt,
   initialFiles,
   initialModel,
+  initialAgentId,
   autoSend,
   systemContext,
   initialStatus,
@@ -91,6 +92,7 @@ export default function ChatWithArtifacts({
   initialPrompt?: string;
   initialFiles?: ChatFile[];
   initialModel?: string;
+  initialAgentId?: string | null;
   autoSend?: boolean;
   systemContext?: string;
   initialStatus?: string;
@@ -162,6 +164,7 @@ export default function ChatWithArtifacts({
           initialPrompt={initialPrompt}
           initialFiles={initialFiles}
           initialModel={initialModel}
+          initialAgentId={initialAgentId}
           autoSend={autoSend}
           systemContext={systemContext}
           initialStatus={initialStatus}
