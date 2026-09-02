@@ -6,8 +6,10 @@ import { useStandalone } from "@/hooks/useStandalone";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useAgentIdentities } from "@/hooks/useAgentIdentities";
 import { AgentPicker } from "@/components/composer/AgentPicker";
+import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { filesToChatFiles } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
+import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
 import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath } from "../lib/api";
@@ -544,6 +546,7 @@ export default function ChatPanel({
   initialFiles,
   initialModel,
   initialAgentId,
+  initialToolConfig,
   autoSend,
   systemContext,
   initialStatus,
@@ -566,6 +569,8 @@ export default function ChatPanel({
   initialModel?: string;
   /** Agent pinned on the conversation being resumed — wins over the saved preference */
   initialAgentId?: string | null;
+  /** Tool/skill restrictions to preselect (e.g. from a board task's stored config) */
+  initialToolConfig?: import("@/lib/api").ToolConfig | null;
   autoSend?: boolean;
   systemContext?: string;
   initialStatus?: string;
@@ -621,6 +626,20 @@ export default function ChatPanel({
     selectAgent,
     loadState: agentLoadState,
   } = useAgentIdentities(initialAgentId);
+  const {
+    tools: availableTools,
+    skills: availableSkills,
+    selection: toolsSelection,
+    loadState: toolsLoadState,
+    loadCatalog: loadToolsCatalog,
+    toggleTool,
+    toggleSkill,
+    enableAll: enableAllTools,
+    isAllEnabled: allToolsEnabled,
+    disabledCount: toolsDisabledCount,
+    toolConfig,
+    isAlwaysEnabled,
+  } = useToolsPicker(initialToolConfig);
   /** Internal artifact store — synced to parent via callbacks */
   const [internalArtifacts, setInternalArtifacts] = useState<Artifact[]>(initialArtifacts || []);
   // Use external artifacts if they have entries, otherwise fall back to internal.
@@ -979,6 +998,7 @@ export default function ChatPanel({
         abortController.signal,
         selectedModel || undefined,
         selectedAgentId || undefined,
+        toolConfig,
       )) {
         if (event.type === "account_info") {
           setAccountInfo(event);
@@ -1413,6 +1433,7 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center gap-0.5">
                     <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
+                    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} />
                   </div>
                   <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton
@@ -1734,6 +1755,7 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center gap-0.5">
                     <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
+                    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} />
                   </div>
                   <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton

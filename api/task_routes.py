@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 async def _run_task_headless(db, conversation_id: str, prompt: str,
-                             model: str, files: list, owner: str):
+                             model: str, files: list, owner: str,
+                             tool_config: dict | None = None):
     """Run a task's first agent turn in the background — no client stream.
 
     Powers quick-add: the task fires immediately and keeps running even if
@@ -76,6 +77,7 @@ async def _run_task_headless(db, conversation_id: str, prompt: str,
             source="dashboard",
             user_email=owner,
             selected_model=model or None,
+            tool_config=tool_config,
         ):
             pass  # observer records; nobody is watching the stream
     except Exception as e:
@@ -262,6 +264,17 @@ async def handle_create_task(request: web.Request) -> web.Response:
 
     model = (body.get("model") or "").strip()
 
+    tool_config = body.get("tool_config")
+    if tool_config is not None:
+        if not isinstance(tool_config, dict):
+            return web.json_response({"error": "tool_config must be an object"}, status=400)
+        for key in ("enabled_skills", "enabled_tools"):
+            val = tool_config.get(key)
+            if val is not None and not isinstance(val, list):
+                return web.json_response(
+                    {"error": f"tool_config.{key} must be an array or null"}, status=400,
+                )
+
     files = body.get("files") or []
     if files:
         if not isinstance(files, list) or len(files) > MAX_DRAFT_FILES:
@@ -335,6 +348,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_tag_ids": [],
         "task_priority": None,
         "task_deadline": None,
+        **({"tool_config": tool_config} if tool_config else {}),
     }
     await db.conversations.insert_one(doc)
 
@@ -346,6 +360,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
     if start:
         asyncio.create_task(_run_task_headless(
             db, doc["conversation_id"], prompt, model, files, user_email,
+            tool_config=tool_config,
         ))
 
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)
@@ -675,6 +690,21 @@ async def handle_update_task(request: web.Request) -> web.Response:
         title = (body["title"] or "").strip() or None
         updates["title"] = title
         updates["title_edited"] = bool(title)
+
+    if "tool_config" in body:
+        if conversation.get("status") == "running":
+            return web.json_response(
+                {"error": "tool_config cannot be changed while a task is running"}, status=400)
+        tc = body["tool_config"]
+        if tc is not None:
+            if not isinstance(tc, dict):
+                return web.json_response({"error": "tool_config must be an object or null"}, status=400)
+            for key in ("enabled_skills", "enabled_tools"):
+                val = tc.get(key)
+                if val is not None and not isinstance(val, list):
+                    return web.json_response(
+                        {"error": f"tool_config.{key} must be an array or null"}, status=400)
+        updates["tool_config"] = tc
 
     if not updates:
         return web.json_response({"error": "Nothing to update"}, status=400)

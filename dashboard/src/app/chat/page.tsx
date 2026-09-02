@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { ChatItem } from "../../components/ChatPanel";
 import type { Artifact } from "../../components/ArtifactViewer";
-import type { ChatFile } from "../../lib/api";
+import type { ChatFile, ToolConfig } from "../../lib/api";
 import { rebuildItemsFromConversation } from "../../components/ChatPanel";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import { CostChip } from "../../components/CostChip";
@@ -54,6 +54,7 @@ function ChatPageContent() {
   const [taskDraftFiles, setTaskDraftFiles] = useState<ChatFile[] | null>(null);
   const [taskModel, setTaskModel] = useState<string | null>(null);
   const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
+  const [taskToolConfig, setTaskToolConfig] = useState<ToolConfig | null>(null);
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
   const [conversationOwner, setConversationOwner] = useState<string | null>(null);
   const [conversationShared, setConversationShared] = useState(false);
@@ -135,6 +136,7 @@ function ChatPageContent() {
           setTaskDraftPrompt(data.conversation.prompt);
           setTaskDraftFiles(data.conversation.draft_files || null);
           setTaskModel(data.conversation.model || null);
+          setTaskToolConfig(data.conversation.tool_config || null);
           setConversationTitle(data.conversation.title || null);
           setPromptPreview(
             data.conversation.prompt.length > 80
@@ -432,6 +434,7 @@ function ChatPageContent() {
         initialFiles={taskDraftFiles || undefined}
         initialModel={taskModel || undefined}
         initialAgentId={continueId ? pinnedAgentId : undefined}
+        initialToolConfig={taskToolConfig}
         autoSend={autoSendParam || (startParam && !!taskDraftPrompt)}
         systemContext={skillContextParam || undefined}
         initialStatus={initialStatus}

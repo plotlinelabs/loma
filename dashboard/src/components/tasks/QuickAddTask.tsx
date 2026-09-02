@@ -7,7 +7,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { createTask, type ChatFile } from "@/lib/api";
 import { filesToChatFiles } from "@/lib/chatFiles";
 import { useAgentModels } from "@/hooks/useAgentModels";
+import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { ModelPicker } from "@/components/composer/ModelPicker";
+import { ToolsPicker } from "@/components/composer/ToolsPicker";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
 import { cn } from "@/lib/utils";
@@ -28,6 +30,20 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { models, selectedModel, selectModel, loadState } = useAgentModels();
+  const {
+    tools: availableTools,
+    skills: availableSkills,
+    selection: toolsSelection,
+    loadState: toolsLoadState,
+    loadCatalog: loadToolsCatalog,
+    toggleTool,
+    toggleSkill,
+    enableAll: enableAllTools,
+    isAllEnabled: allToolsEnabled,
+    disabledCount: toolsDisabledCount,
+    toolConfig,
+    isAlwaysEnabled,
+  } = useToolsPicker();
 
   const addFiles = async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
@@ -46,6 +62,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
         model: selectedModel || undefined,
         files: files.length > 0 ? files : undefined,
         start: true,
+        tool_config: toolConfig,
       });
       setValue("");
       setFiles([]);
@@ -100,13 +117,14 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
           style={{ maxHeight: "120px" }}
         />
         <div className="flex items-center justify-between gap-2 px-2 pb-2">
-          <div className="flex min-w-0 items-center">
+          <div className="flex min-w-0 items-center gap-1">
             <ModelPicker
               models={models}
               selectedModel={selectedModel}
               onSelect={selectModel}
               loadState={loadState}
             />
+            <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} isAlwaysEnabled={isAlwaysEnabled} />
           </div>
           <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
             <DictationButton

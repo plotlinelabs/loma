@@ -48,6 +48,7 @@ export interface Conversation {
   task_status?: "todo" | "active" | "done" | null;
   /** Attachments staged with a board-task draft (cleared once started) */
   draft_files?: ChatFile[];
+  tool_config?: ToolConfig | null;
   messages?: Array<{
     role: "user" | "assistant";
     content: string;
@@ -266,6 +267,38 @@ export interface SkillDetailResponse {
   scope?: "system" | "personal" | "workspace";
   folder?: string | null;
   folder_source?: "manual" | "auto" | null;
+}
+
+// ── Tool/Skill picker catalog ──────────────────────────────────────────────
+
+export interface ToolConfig {
+  enabled_skills?: string[] | null;
+  enabled_tools?: string[] | null;
+}
+
+export interface AvailableTool {
+  id: string;
+  name: string;
+  group: "built-in" | "integrations";
+  description?: string;
+}
+
+export interface AvailableSkill {
+  slug: string;
+  name: string;
+  description: string;
+  tags?: string[];
+}
+
+export interface AvailableToolsResponse {
+  tools: AvailableTool[];
+  skills: AvailableSkill[];
+}
+
+export async function fetchAvailableTools(): Promise<AvailableToolsResponse> {
+  const res = await fetch(`${API_BASE}/api/available-tools`);
+  if (!res.ok) throw new Error(`Failed to fetch available tools: ${res.status}`);
+  return res.json();
 }
 
 export async function fetchSkills(): Promise<{ skills: Skill[] }> {
@@ -969,6 +1002,7 @@ export async function* streamChat(
   signal?: AbortSignal,
   selectedModel?: string,
   agentId?: string,
+  toolConfig?: ToolConfig,
 ): AsyncGenerator<ChatEvent, void, unknown> {
   const body: Record<string, unknown> = { message };
   if (conversationHistory?.length) body.conversation_history = conversationHistory;
@@ -977,6 +1011,7 @@ export async function* streamChat(
   if (userEmail) body.user_email = userEmail;
   if (selectedModel) body.model = selectedModel;
   if (agentId) body.agent_id = agentId;
+  if (toolConfig) body.tool_config = toolConfig;
 
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
@@ -1115,6 +1150,7 @@ export async function createTask(params: {
   files?: ChatFile[];
   /** Fire immediately: the agent starts running in the background */
   start?: boolean;
+  tool_config?: ToolConfig;
 }): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: "POST",
