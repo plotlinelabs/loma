@@ -24,6 +24,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import {
   RiChat1Line,
   RiCheckboxLine,
+  RiRobot2Line,
   RiGridLine,
   RiMoneyDollarCircleLine,
   RiTimeLine,
@@ -70,6 +71,11 @@ const navigation: NavItem[] = [
     name: "Chat",
     href: "/chat",
     icon: <RiChat1Line size={16} />,
+  },
+  {
+    name: "Agents",
+    href: "/agents",
+    icon: <RiRobot2Line size={16} />,
   },
   {
     name: "Activity",

@@ -53,6 +53,7 @@ function ChatPageContent() {
   const [taskDraftPrompt, setTaskDraftPrompt] = useState<string | null>(null);
   const [taskDraftFiles, setTaskDraftFiles] = useState<ChatFile[] | null>(null);
   const [taskModel, setTaskModel] = useState<string | null>(null);
+  const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
   const [conversationOwner, setConversationOwner] = useState<string | null>(null);
   const [conversationShared, setConversationShared] = useState(false);
@@ -123,6 +124,7 @@ function ChatPageContent() {
         const data = await fetchConversation(continueId!);
         setConversationOwner(data.conversation.metadata?.user_name || null);
         setConversationShared(data.conversation.metadata?.visibility === "shared");
+        setPinnedAgentId(data.conversation.metadata?.agent_id || null);
         setTaskStatus(data.conversation.task_status || null);
         if (data.conversation.task_status === "todo" && !data.conversation.status) {
           // Unstarted board draft: nothing has been sent yet. Don't rebuild
@@ -429,6 +431,7 @@ function ChatPageContent() {
         initialPrompt={taskDraftPrompt || promptParam || undefined}
         initialFiles={taskDraftFiles || undefined}
         initialModel={taskModel || undefined}
+        initialAgentId={continueId ? pinnedAgentId : undefined}
         autoSend={autoSendParam || (startParam && !!taskDraftPrompt)}
         systemContext={skillContextParam || undefined}
         initialStatus={initialStatus}

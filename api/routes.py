@@ -27,6 +27,7 @@ from api.auth_helpers import (
 )
 from api.dashboard_ingestion import ingest_dashboard_chat
 from api import skill_service
+from api.agent_identity_routes import build_agent_context_block, resolve_agent_for_chat
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
@@ -838,6 +839,7 @@ async def handle_chat(request: web.Request) -> web.Response:
     # Set up observability — reuse existing conversation if conversation_id provided
     observer = None
     existing = None
+    agent_identity = None
     db = get_db()
     existing_conversation_id = body.get("conversation_id")
     if db is not None:
@@ -857,6 +859,34 @@ async def handle_chat(request: web.Request) -> web.Response:
                 existing, user_email, get_system_role(request)
             ):
                 return web.json_response({"error": "Not found"}, status=404)
+
+        # Agent identity: an explicit selection wins; resumed conversations fall
+        # back to the agent pinned on the conversation.
+        requested_agent_id = body.get("agent_id")
+        if requested_agent_id is not None and not isinstance(requested_agent_id, str):
+            return web.json_response({"error": "agent_id must be a string"}, status=400)
+        pinned_agent_id = ((existing or {}).get("metadata") or {}).get("agent_id")
+        if requested_agent_id:
+            agent_identity = await resolve_agent_for_chat(db, requested_agent_id, user_email)
+            if agent_identity is None:
+                return web.json_response({"error": "Agent not found"}, status=404)
+        elif pinned_agent_id:
+            # Pinned agent may have been deleted, disabled, or unshared since —
+            # degrade to the default agent rather than blocking the conversation.
+            agent_identity = await resolve_agent_for_chat(db, pinned_agent_id, user_email)
+        if agent_identity:
+            metadata["agent_id"] = agent_identity["agent_id"]
+            metadata["agent_name"] = agent_identity["name"]
+            if existing and pinned_agent_id != agent_identity["agent_id"]:
+                await db.conversations.update_one(
+                    {"conversation_id": existing_conversation_id},
+                    {"$set": {
+                        "metadata.agent_id": agent_identity["agent_id"],
+                        "metadata.agent_name": agent_identity["name"],
+                    }},
+                )
+
+        if existing_conversation_id:
             observer = ConversationObserver(
                 db, metadata=metadata,
                 conversation_id=existing_conversation_id,
@@ -899,6 +929,14 @@ async def handle_chat(request: web.Request) -> web.Response:
                     f"{context_block}\n\n{conversation_context}"
                     if conversation_context else context_block
                 )
+
+        # The active agent's persona and skill/tool scope lead the context.
+        if agent_identity:
+            agent_block = await build_agent_context_block(db, agent_identity)
+            conversation_context = (
+                f"{agent_block}\n\n{conversation_context}"
+                if conversation_context else agent_block
+            )
 
     response = web.StreamResponse(
         status=200,

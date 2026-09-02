@@ -4,6 +4,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
 import { useAgentModels } from "@/hooks/useAgentModels";
+import { useAgentIdentities } from "@/hooks/useAgentIdentities";
+import { AgentPicker } from "@/components/composer/AgentPicker";
 import { filesToChatFiles } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
@@ -541,6 +543,7 @@ export default function ChatPanel({
   initialPrompt,
   initialFiles,
   initialModel,
+  initialAgentId,
   autoSend,
   systemContext,
   initialStatus,
@@ -561,6 +564,8 @@ export default function ChatPanel({
   initialFiles?: ChatFile[];
   /** Model to preselect (e.g. a board task's chosen model) — wins over the saved preference */
   initialModel?: string;
+  /** Agent pinned on the conversation being resumed — wins over the saved preference */
+  initialAgentId?: string | null;
   autoSend?: boolean;
   systemContext?: string;
   initialStatus?: string;
@@ -610,6 +615,12 @@ export default function ChatPanel({
     selectModel,
     loadState: modelLoadState,
   } = useAgentModels(initialModel);
+  const {
+    agents: agentIdentities,
+    selectedAgentId,
+    selectAgent,
+    loadState: agentLoadState,
+  } = useAgentIdentities(initialAgentId);
   /** Internal artifact store — synced to parent via callbacks */
   const [internalArtifacts, setInternalArtifacts] = useState<Artifact[]>(initialArtifacts || []);
   // Use external artifacts if they have entries, otherwise fall back to internal.
@@ -946,6 +957,7 @@ export default function ChatPanel({
         session?.user?.email ?? undefined,
         abortController.signal,
         selectedModel || undefined,
+        selectedAgentId || undefined,
       )) {
         if (event.type === "account_info") {
           setAccountInfo(event);
@@ -1198,7 +1210,7 @@ export default function ChatPanel({
 
       handleSend(answer);
     },
-    [items, conversationId, session, isStreaming, selectedModel],
+    [items, conversationId, session, isStreaming, selectedModel, selectedAgentId],
   );
 
   const getQueueIndex = (itemIndex: number): number => {
@@ -1377,7 +1389,8 @@ export default function ChatPanel({
                   style={{ maxHeight: "200px" }}
                 />
                 <div className="flex items-center justify-between gap-2 px-3 pb-3">
-                  <div className="flex min-w-0 items-center">
+                  <div className="flex min-w-0 items-center gap-0.5">
+                    <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
                   <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
@@ -1697,7 +1710,8 @@ export default function ChatPanel({
                   style={{ maxHeight: "160px" }}
                 />
                 <div className="flex items-center justify-between gap-2 px-2 pb-2">
-                  <div className="flex min-w-0 items-center">
+                  <div className="flex min-w-0 items-center gap-0.5">
+                    <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                   </div>
                   <div className="flex items-center gap-1 max-md:gap-2 shrink-0">

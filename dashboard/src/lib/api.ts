@@ -937,6 +937,7 @@ export async function* streamChat(
   userEmail?: string,
   signal?: AbortSignal,
   selectedModel?: string,
+  agentId?: string,
 ): AsyncGenerator<ChatEvent, void, unknown> {
   const body: Record<string, unknown> = { message };
   if (conversationHistory?.length) body.conversation_history = conversationHistory;
@@ -944,6 +945,7 @@ export async function* streamChat(
   if (conversationId) body.conversation_id = conversationId;
   if (userEmail) body.user_email = userEmail;
   if (selectedModel) body.model = selectedModel;
+  if (agentId) body.agent_id = agentId;
 
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
