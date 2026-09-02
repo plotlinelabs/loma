@@ -369,6 +369,22 @@ class ConversationObserver:
         from observability.push import fire_task_push
         fire_task_push(self.db, self.conversation_id)
 
+    async def record_injected_message(self, content: str):
+        """Record a user message injected mid-stream."""
+        now = datetime.now(timezone.utc)
+        try:
+            await self.db.conversations.update_one(
+                {"conversation_id": self.conversation_id},
+                {"$push": {"messages": {
+                    "role": "user",
+                    "content": content[:5000],
+                    "timestamp": now,
+                    "injected": True,
+                }}},
+            )
+        except Exception as e:
+            logger.warning("Observability: failed to record injected message: %s", e)
+
     async def record_error(self, error: str):
         """Mark conversation as errored."""
         self._stop_heartbeat()

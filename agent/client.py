@@ -1156,6 +1156,10 @@ async def stream_agent(
         try:
             await client.query(full_prompt)
 
+            if observer and observer.conversation_id:
+                from agent.active_streams import register
+                await register(observer.conversation_id, client, user_email or "")
+
             streamed_in_turn = False
             streamed_first_chunk = False
             # True after the final ResultMessage when Agent sub-agent results
@@ -1542,6 +1546,9 @@ async def stream_agent(
                 yield f"Sorry, I encountered an error: {e}"
             return
         finally:
+            if observer and observer.conversation_id:
+                from agent.active_streams import unregister
+                await unregister(observer.conversation_id)
             # Always release the client back to pool
             if client is not None:
                 await pool.release(client)

@@ -797,6 +797,57 @@ async def handle_generate_titles(request: web.Request) -> web.Response:
     })
 
 
+async def handle_inject_message(request: web.Request) -> web.Response:
+    """POST /api/conversations/{id}/inject — send a message to an active agent mid-stream."""
+    from agent.active_streams import get_for_user
+
+    cid = request.match_info["conversation_id"]
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    body = await request.json()
+    message = body.get("message", "")
+    if not message:
+        return web.json_response({"error": "Missing message"}, status=400)
+
+    stream = await get_for_user(cid, user_email)
+    if not stream:
+        return web.json_response({"error": "No active stream for this conversation"}, status=404)
+
+    try:
+        await stream.client.query(message)
+        db = request.app["db"]
+        from observability.observer import ConversationObserver
+        observer = ConversationObserver(db, {}, conversation_id=cid)
+        await observer.record_injected_message(message)
+        return web.json_response({"injected": True, "conversation_id": cid})
+    except Exception as e:
+        logger.exception("Failed to inject message into conversation %s", cid)
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_interrupt_agent(request: web.Request) -> web.Response:
+    """POST /api/conversations/{id}/interrupt — interrupt the active agent."""
+    from agent.active_streams import get_for_user
+
+    cid = request.match_info["conversation_id"]
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    stream = await get_for_user(cid, user_email)
+    if not stream:
+        return web.json_response({"error": "No active stream for this conversation"}, status=404)
+
+    try:
+        await stream.client.interrupt()
+        return web.json_response({"interrupted": True, "conversation_id": cid})
+    except Exception as e:
+        logger.exception("Failed to interrupt conversation %s", cid)
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_chat(request: web.Request) -> web.Response:
     """POST /api/chat — SSE stream for dashboard chat.
 
@@ -1872,6 +1923,8 @@ def setup_api_routes(app: web.Application):
     app.router.add_post("/api/conversations/{conversation_id}/pin", handle_pin_conversation)
     app.router.add_delete("/api/conversations/{conversation_id}/pin", handle_unpin_conversation)
     app.router.add_put("/api/conversations/{conversation_id}/share", handle_share_conversation)
+    app.router.add_post("/api/conversations/{conversation_id}/inject", handle_inject_message)
+    app.router.add_post("/api/conversations/{conversation_id}/interrupt", handle_interrupt_agent)
     app.router.add_get("/api/stats", handle_get_stats)
     app.router.add_get("/api/cost-stats", handle_cost_stats)
     app.router.add_get("/api/token-usage", handle_token_usage)

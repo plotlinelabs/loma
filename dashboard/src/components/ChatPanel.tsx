@@ -8,7 +8,7 @@ import { filesToChatFiles } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
-import { streamChat, fetchConversation, basePath } from "../lib/api";
+import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
@@ -757,6 +757,9 @@ export default function ChatPanel({
   }, []);
 
   const handleStop = useCallback(() => {
+    if (conversationId) {
+      interruptAgent(conversationId).catch(() => {});
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -765,7 +768,7 @@ export default function ChatPanel({
       setIsStreaming(false);
       setStreamStartedAt(null);
     }
-  }, [isRecovering]);
+  }, [isRecovering, conversationId]);
 
   useEffect(() => {
     const handleEscapeKey = (e: KeyboardEvent) => {
@@ -866,11 +869,12 @@ export default function ChatPanel({
       const isOverride = overrideMessage !== undefined;
       const filesToQueue = !isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined;
       const fileNames = filesToQueue?.map((f) => f.name);
-      queuedMessagesRef.current.push({ text: displayText, files: filesToQueue });
-      setQueuedCount(queuedMessagesRef.current.length);
+      const hasFiles = filesToQueue && filesToQueue.length > 0;
+
+      // Show message immediately
       setItems((prev) => [
         ...prev,
-        { role: "user", content: displayText, fileNames, files: filesToQueue, queued: true },
+        { role: "user", content: displayText, fileNames, files: filesToQueue, queued: !conversationId || hasFiles },
       ]);
       if (!isOverride) {
         setInput("");
@@ -879,9 +883,26 @@ export default function ChatPanel({
           if (inputRef.current) inputRef.current.style.height = "auto";
         });
       }
-      // User sent a message — always snap down and resume following the stream.
       isAtBottomRef.current = true;
       scrollToBottom({ force: true });
+
+      // Try mid-stream injection (text-only; files fall back to queue)
+      if (conversationId && !hasFiles) {
+        try {
+          await injectMessage(conversationId, displayText);
+          return;
+        } catch {
+          // Stream likely ended — fall back to queue-and-send
+        }
+      }
+      // Fallback: queue for delivery after current stream ends
+      queuedMessagesRef.current.push({ text: displayText, files: filesToQueue });
+      setQueuedCount(queuedMessagesRef.current.length);
+      setItems((prev) =>
+        prev.map((item, i) =>
+          i === prev.length - 1 && !item.queued ? { ...item, queued: true } : item
+        )
+      );
       return;
     }
     const message = systemContext && overrideMessage
