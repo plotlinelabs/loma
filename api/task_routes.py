@@ -29,6 +29,7 @@ from aiohttp import web
 
 from observability.db import get_db
 from api.auth_helpers import get_system_role, get_user_email
+from api.drain import DRAIN_MESSAGE, is_draining
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +274,11 @@ async def handle_create_task(request: web.Request) -> web.Response:
         if total > MAX_DRAFT_FILES_BYTES:
             return web.json_response(
                 {"error": "Attachments too large (max 8MB total)"}, status=400)
+
+    # Quick-add fires an agent run immediately; refuse while a deploy drains.
+    # Plain drafts are fine — nothing runs until the user sends a message.
+    if body.get("start") and is_draining():
+        return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
 
     board = await _get_board_config_for(db, user_email)
     lane_ids = [lane["id"] for lane in board["lanes"]]

@@ -13,7 +13,10 @@ from datetime import datetime, timedelta, timezone
 from agent.client import stream_agent
 from observability.db import get_db
 from observability.observer import ConversationObserver, HEARTBEAT_INTERVAL_SECONDS
-from recovery_handlers import post_recovery_response
+from observability.notifications import create_notification
+from observability.push import send_task_needs_input_push
+from api.drain import drain_reason
+from recovery_handlers import post_recovery_response, _post_to_slack
 
 logger = logging.getLogger(__name__)
 
@@ -24,34 +27,95 @@ RECOVERY_WINDOW_MINUTES = int(os.environ.get("RECOVERY_WINDOW_MINUTES", "10"))
 # A heartbeat is considered stale after 2x the interval (missed at least one beat).
 HEARTBEAT_STALE_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 2
 
+# Cap on how long shutdown waits to notify owners of interrupted runs. Must fit
+# inside the container's stop_grace_period (docker-compose.yml) with room for
+# the Mongo writes that precede it.
+SHUTDOWN_NOTIFY_TIMEOUT_SECONDS = 8
+
 
 async def mark_all_running_interrupted():
-    """Mark all currently-running conversations as interrupted.
+    """Mark all currently-running conversations as interrupted and tell their owners.
 
     Called during graceful shutdown so the next server instance doesn't
-    have to wait for heartbeats to go stale.
+    have to wait for heartbeats to go stale. A drain-aware deploy (see
+    api/drain.py) waits for runs to finish first, so anything still running
+    here overran the drain window; make sure its owner hears about it instead
+    of finding a task that silently stopped moving.
     """
     db = get_db()
     if db is None:
         return
     now = datetime.now(timezone.utc)
+    reason = drain_reason()
+    error = f"Interrupted by {reason}" if reason else "Server shutting down"
     try:
+        affected = await db.conversations.find(
+            {"status": "running"},
+            {"conversation_id": 1, "source": 1, "metadata": 1, "task_status": 1,
+             "title": 1, "prompt": 1},
+        ).to_list(length=500)
         result = await db.conversations.update_many(
             {"status": "running"},
             {"$set": {
                 "status": "interrupted",
                 "finished_at": now,
-                "error": "Server shutting down",
+                "error": error,
             }},
         )
         if result.modified_count > 0:
             logger.info(
-                "[RECOVERY] Graceful shutdown: marked %d running conversation(s) as interrupted",
-                result.modified_count,
+                "[RECOVERY] Graceful shutdown: marked %d running conversation(s) as interrupted (%s)",
+                result.modified_count, error,
             )
     except Exception:
         logger.exception("[RECOVERY] Failed to mark conversations during shutdown")
+        return
 
+    if not affected:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(
+                *(_notify_interrupted(db, convo, error) for convo in affected),
+                return_exceptions=True,
+            ),
+            timeout=SHUTDOWN_NOTIFY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[RECOVERY] Timed out notifying owners of interrupted conversations")
+
+
+async def _notify_interrupted(db, convo: dict, error: str):
+    """Best-effort: tell one conversation's owner the restart cut their run short."""
+    conversation_id = convo.get("conversation_id", "")
+    source = convo.get("source") or ""
+    metadata = convo.get("metadata") or {}
+    try:
+        if source == "dashboard":
+            owner = metadata.get("user_name") or ""
+            if owner and "@" in owner:
+                is_task = convo.get("task_status") == "active"
+                label = (convo.get("title") or convo.get("prompt") or "")[:200]
+                # Inbox entry persists until dismissed; push is handled below.
+                await create_notification(
+                    db,
+                    user_email=owner,
+                    title=("Task" if is_task else "Chat") + " interrupted by a restart",
+                    body=f"{error}. Open the conversation and send a message to continue.\n\n{label}".strip(),
+                    conversation_id=conversation_id,
+                    source="system",
+                    fire_push=False,
+                )
+                if is_task:
+                    # Existing "Task was interrupted" push, deep-linked to the task.
+                    await send_task_needs_input_push(db, conversation_id)
+        elif source in ("slack_mention", "slack_dm") or source.startswith("slack_channel_"):
+            await _post_to_slack(
+                metadata,
+                f":warning: {error}. This request was cut short; reply in this thread to continue.",
+            )
+    except Exception as e:
+        logger.warning("[RECOVERY] Failed to notify owner of %s: %s", conversation_id, e)
 
 def start_recovery_loop():
     """Start a background task that periodically checks for interrupted conversations.

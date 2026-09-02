@@ -27,6 +27,10 @@ services:
       # side path so the container keeps a writable /root/.ssh for known_hosts.
       # Override LOMA_SSH_DIR if the key lives elsewhere on the host.
       - ${LOMA_SSH_DIR:-/home/ubuntu/.ssh}:/root/.ssh-host:ro
+    # On SIGTERM the backend marks in-flight runs interrupted and notifies their
+    # owners (recovery.mark_all_running_interrupted); give it time to finish
+    # before Docker's SIGKILL (default grace is only 10s).
+    stop_grace_period: 30s
     restart: unless-stopped
 
   loma-dashboard:

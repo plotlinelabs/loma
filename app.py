@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import signal
 from pathlib import Path
 
 from aiohttp import web
@@ -41,6 +42,7 @@ from api.file_routes import setup_file_routes
 from api.integration_routes import setup_integration_routes
 from api.prompt_settings_routes import setup_prompt_settings_routes
 from api.telegram_routes import setup_telegram_routes
+from api.drain import setup_drain_routes
 from recovery import start_recovery_loop, mark_all_running_interrupted
 from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
@@ -141,24 +143,51 @@ async def main():
     setup_integration_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
     setup_telegram_routes(webhook_app)
+    setup_drain_routes(webhook_app)
+
     async def on_shutdown(_app):
         await mark_all_running_interrupted()
 
     webhook_app.on_shutdown.append(on_shutdown)
-    runner = web.AppRunner(webhook_app)
+    # Short connection-drain: open SSE chats are already accounted for by
+    # on_shutdown, so don't sit on them for aiohttp's default 60s.
+    runner = web.AppRunner(webhook_app, shutdown_timeout=5.0)
     await runner.setup()
     port = int(os.environ.get("WEBHOOK_PORT", "3000"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     logger.info("Webhook server running on port %d", port)
 
+    # Graceful shutdown. Docker stops the container with SIGTERM; without a
+    # handler Python exits immediately and on_shutdown (which marks in-flight
+    # runs interrupted and notifies their owners) never gets to run.
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _request_stop, stop, sig)
+
     logger.info("%s is running!", APP_NAME)
     if handler:
-        await handler.start_async()
+        # connect_async runs Socket Mode in background tasks (start_async is
+        # just this plus an infinite sleep), so we can wait on `stop` instead.
+        await handler.connect_async()
     else:
         logger.info("Slack Socket Mode not started; keeping HTTP server alive")
-        # Keep the process alive for the HTTP server
-        await asyncio.Event().wait()
+    await stop.wait()
+
+    logger.info("Shutting down...")
+    if handler:
+        try:
+            await handler.close_async()
+        except Exception:
+            logger.warning("Failed to close Slack Socket Mode cleanly", exc_info=True)
+    await runner.cleanup()  # fires on_shutdown -> mark_all_running_interrupted
+    logger.info("Shutdown complete")
+
+
+def _request_stop(stop: asyncio.Event, sig: int) -> None:
+    logger.info("Received %s; starting graceful shutdown", signal.Signals(sig).name)
+    stop.set()
 
 
 if __name__ == "__main__":

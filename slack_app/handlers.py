@@ -6,6 +6,7 @@ import re as re_module
 
 from agent.client import stream_agent
 from api.dashboard_ingestion import ingest_dashboard_chat
+from api.drain import DRAIN_MESSAGE, is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
 from slack_app.channels import get_channel_config
@@ -113,6 +114,16 @@ async def _handle_agent_request(
     Used by app_mention, DM, monitored-channel, and Slack-flow handlers to avoid
     duplication. When ``flow_id`` is set, the run is attributed to that flow.
     """
+    # A deploy is waiting for in-flight runs to finish; tell the user to retry
+    # rather than start a run that the restart would cut short.
+    if is_draining():
+        logger.info("[SLACK] Draining for a deploy; refusing new run in %s/%s", channel, thread_ts)
+        try:
+            await client.chat_postMessage(channel=channel, text=DRAIN_MESSAGE, thread_ts=thread_ts)
+        except Exception as e:
+            logger.warning("[SLACK] Failed to post drain notice: %s", e)
+        return
+
     # Add hourglass reaction as acknowledgement
     logger.info("[SLACK] Adding hourglass reaction to message...")
     try:

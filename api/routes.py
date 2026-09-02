@@ -26,6 +26,7 @@ from api.auth_helpers import (
     require_maintainer_or_above,
 )
 from api.dashboard_ingestion import ingest_dashboard_chat
+from api.drain import DRAIN_MESSAGE, is_draining
 from api import skill_service
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -834,6 +835,11 @@ async def handle_chat(request: web.Request) -> web.Response:
     user_email = get_user_email(request)
     if not user_email:
         return web.json_response({"error": "Authentication required"}, status=401)
+
+    # A deploy is waiting for in-flight runs to finish; don't start a new one
+    # that would only get killed. The client surfaces the message as-is.
+    if is_draining():
+        return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
 
     # Set up observability — reuse existing conversation if conversation_id provided
     observer = None
