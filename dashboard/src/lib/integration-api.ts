@@ -33,6 +33,7 @@ export interface Integration {
   has_token?: boolean;
   auth_mode?: "none" | "static" | "oauth";
   user_oauth_status?: "connected" | "not_connected" | "expired";
+  shared_with?: { mode: "everyone" | "specific"; users?: string[]; teams?: string[] };
 }
 
 export interface ProbeResult {
@@ -149,4 +150,19 @@ export async function getWebhookUrl(provider: string): Promise<string> {
   if (!res.ok) throw new Error(`Failed to get webhook URL: ${res.status}`);
   const data = await res.json();
   return data.webhook_url;
+}
+
+export async function updateIntegrationSharing(
+  provider: string,
+  sharedWith: { mode: "everyone" | "specific"; users?: string[]; teams?: string[] },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/integrations/${provider}/sharing`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shared_with: sharedWith }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to update sharing: ${res.status}`);
+  }
 }

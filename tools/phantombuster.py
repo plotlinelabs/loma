@@ -47,10 +47,23 @@ PHANTOM_ID_ENV_MAP = {
 VALID_INBOX_TYPES = ("all", "archived", "unread", "inMail", "spam")
 
 
+_PB_ENV_TO_FIELD = {
+    "PHANTOMBUSTER_API_KEY": None,
+    "PHANTOMBUSTER_PHANTOM_ID": "phantom_id",
+    "PHANTOMBUSTER_MESSAGE_PHANTOM_ID": "message_phantom_id",
+    "PHANTOMBUSTER_INBOX_PHANTOM_ID": "inbox_phantom_id",
+    "PHANTOMBUSTER_LI_SESSION_COOKIE": "li_session_cookie",
+}
+
+
 def _env(name: str) -> str:
     val = os.environ.get(name, "")
+    if not val and name in _PB_ENV_TO_FIELD:
+        from tools._integration_key import get_integration_key, get_integration_extra
+        field = _PB_ENV_TO_FIELD[name]
+        val = get_integration_key("phantombuster") if field is None else get_integration_extra("phantombuster", field)
     if not val:
-        raise ValueError(f"{name} environment variable is not set.")
+        raise ValueError(f"{name} not set and no PhantomBuster integration found on the dashboard.")
     return val
 
 

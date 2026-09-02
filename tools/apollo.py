@@ -46,9 +46,12 @@ APOLLO_BASE_URL = "https://api.apollo.io/api/v1"
 def _get_api_key() -> str:
     key = os.environ.get("APOLLO_API_KEY", "")
     if not key:
+        from tools._integration_key import get_integration_key
+        key = get_integration_key("apollo")
+    if not key:
         raise ValueError(
-            "APOLLO_API_KEY environment variable is not set. "
-            "Please configure it before using Apollo.io tools."
+            "APOLLO_API_KEY environment variable is not set and no "
+            "Apollo integration found on the dashboard."
         )
     return key
 

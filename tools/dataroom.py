@@ -66,9 +66,11 @@ DEFAULT_WATERMARK_CONFIG: dict[str, Any] = {
 def _get_api_token() -> str:
     token = os.environ.get("DATAROOM_API_TOKEN", "")
     if not token:
+        from tools._integration_key import get_integration_key
+        token = get_integration_key("dataroom")
+    if not token:
         raise ValueError(
-            "DATAROOM_API_TOKEN environment variable is not set. "
-            "Please configure it before using data room tools."
+            "DATAROOM_API_TOKEN not set and no DataRoom integration found on the dashboard."
         )
     return token
 
@@ -76,9 +78,11 @@ def _get_api_token() -> str:
 def _get_base_url() -> str:
     url = os.environ.get("DATAROOM_BASE_URL", "")
     if not url:
+        from tools._integration_key import get_integration_extra
+        url = get_integration_extra("dataroom", "base_url")
+    if not url:
         raise ValueError(
-            "DATAROOM_BASE_URL environment variable is not set. "
-            "Please configure it before using data room tools."
+            "DATAROOM_BASE_URL not set and no DataRoom integration found on the dashboard."
         )
     return url.rstrip("/")
 
@@ -86,9 +90,11 @@ def _get_base_url() -> str:
 def _get_team_id() -> str:
     team_id = os.environ.get("DATAROOM_TEAM_ID", "")
     if not team_id:
+        from tools._integration_key import get_integration_extra
+        team_id = get_integration_extra("dataroom", "team_id")
+    if not team_id:
         raise ValueError(
-            "DATAROOM_TEAM_ID environment variable is not set. "
-            "Please configure it before using data room tools."
+            "DATAROOM_TEAM_ID not set and no DataRoom integration found on the dashboard."
         )
     return team_id
 

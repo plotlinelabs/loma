@@ -45,6 +45,7 @@ async def _list_integrations(request: web.Request) -> web.Response:
                 "connected_by": doc.get("connected_by"),
                 "connected_at": doc.get("connected_at", "").isoformat() if doc.get("connected_at") else None,
                 "has_webhook_secret": bool(doc.get("webhook_secret_encrypted")),
+                "shared_with": doc.get("shared_with", {"mode": "everyone"}),
             }
 
     # Merge catalog with DB status
@@ -302,9 +303,10 @@ async def _discover_oauth_metadata(
 async def _add_custom_connector(request: web.Request) -> web.Response:
     """POST /api/integrations/custom — register a custom remote MCP server.
 
-    Admin-only. Supports static token, per-user OAuth, or no auth.
+    Any user can add. Supports static token, per-user OAuth, or no auth.
+    If a connector with the same URL already exists, returns it instead of
+    creating a duplicate (dedup by URL).
     """
-    require_admin(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "Database not available"}, status=503)
@@ -320,6 +322,17 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
         return web.json_response({"error": "name and url are required"}, status=400)
     if not re.match(r"^https?://", url):
         return web.json_response({"error": "url must start with http:// or https://"}, status=400)
+
+    # Dedup by URL: if a connector with this URL already exists, return it
+    # so the user can connect their own auth to it instead of duplicating.
+    existing_by_url = await db.integrations.find_one({"mcp_url": url, "is_custom": True})
+    if existing_by_url:
+        return web.json_response({
+            "status": "already_exists",
+            "provider": existing_by_url["provider"],
+            "display_name": existing_by_url.get("display_name", existing_by_url["provider"]),
+            "auth_mode": existing_by_url.get("auth_mode", "none"),
+        })
 
     # Infer auth_mode if not explicitly provided
     if not auth_mode:
@@ -499,6 +512,38 @@ async def _reload_pool():
         logger.exception("[INTEGRATIONS] Failed to reload Codex pool")
 
 
+async def _update_integration_sharing(request: web.Request) -> web.Response:
+    """PATCH /api/integrations/{provider}/sharing — update sharing config (admin-only)."""
+    require_admin(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Database not available"}, status=503)
+
+    provider = request.match_info["provider"]
+    body = await request.json()
+    shared_with = body.get("shared_with")
+    if not shared_with or shared_with.get("mode") not in ("everyone", "specific"):
+        return web.json_response(
+            {"error": "shared_with must have mode 'everyone' or 'specific'"}, status=400,
+        )
+    if shared_with["mode"] == "specific":
+        if not shared_with.get("users") and not shared_with.get("teams"):
+            return web.json_response(
+                {"error": "specific mode requires at least one user or team"}, status=400,
+            )
+
+    result = await db.integrations.find_one_and_update(
+        {"provider": provider, "status": "active"},
+        {"$set": {"shared_with": shared_with, "updated_at": datetime.now(timezone.utc)}},
+        return_document=True,
+    )
+    if result is None:
+        return web.json_response({"error": f"Integration '{provider}' not found"}, status=404)
+
+    logger.info("[INTEGRATIONS] Updated sharing for %s: %s", provider, shared_with.get("mode"))
+    return web.json_response({"status": "updated", "shared_with": shared_with})
+
+
 def setup_integration_routes(app: web.Application):
     """Register integration API routes."""
     app.router.add_get("/api/integrations", _list_integrations)
@@ -508,3 +553,4 @@ def setup_integration_routes(app: web.Application):
     app.router.add_delete("/api/integrations/custom/{provider}", _remove_custom_connector)
     app.router.add_delete("/api/integrations/{provider}", _disconnect_integration)
     app.router.add_get("/api/integrations/{provider}/webhook-url", _get_webhook_url)
+    app.router.add_patch("/api/integrations/{provider}/sharing", _update_integration_sharing)

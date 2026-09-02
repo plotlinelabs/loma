@@ -161,6 +161,11 @@ async def merge_db_integrations(config: dict) -> dict:
             catalog_entry = PROVIDER_CATALOG.get(provider)
             if not catalog_entry:
                 continue
+            # CLI-tool integrations have no MCP template — they store
+            # credentials in the DB and tools read them via _integration_key.
+            if not catalog_entry.get("mcp_config_template"):
+                logger.info("Skipping CLI-tool integration %s (no MCP template)", provider)
+                continue
             try:
                 api_key = decrypt_token(integration["api_key_encrypted"])
                 # Decrypt extra fields (e.g., GitBook URL)
@@ -182,21 +187,72 @@ async def merge_db_integrations(config: dict) -> dict:
     return config
 
 
-async def build_user_mcp_overrides(user_email: str) -> dict:
-    """Build per-user MCP server config for OAuth-requiring custom connectors.
+async def get_excluded_integrations_for_user(user_email: str) -> set[str]:
+    """Return MCP server names the user should NOT have access to.
 
-    Returns a dict of MCP server configs keyed by provider slug.
-    Only includes connectors where the user has a valid token.
+    Checks `shared_with` on each integration. If mode is "specific", the
+    user must be in the users list or a member of one of the listed teams.
     """
     try:
         from observability.db import get_db
-        from api.oauth_helpers import get_valid_custom_mcp_token
+        from integrations.registry import PROVIDER_CATALOG
+
+        db = get_db()
+        if db is None:
+            return set()
+
+        excluded = set()
+        async for integration in db.integrations.find({
+            "status": "active",
+            "shared_with.mode": "specific",
+        }):
+            provider = integration["provider"]
+            shared = integration.get("shared_with", {})
+            allowed_users = set(shared.get("users") or [])
+            allowed_teams = set(shared.get("teams") or [])
+
+            has_access = user_email in allowed_users
+            if not has_access and allowed_teams:
+                team_count = await db.teams.count_documents({
+                    "team_id": {"$in": list(allowed_teams)},
+                    "members": user_email,
+                })
+                has_access = team_count > 0
+
+            if not has_access:
+                catalog = PROVIDER_CATALOG.get(provider)
+                server_name = catalog["mcp_server_name"] if catalog and catalog.get("mcp_server_name") else provider
+                excluded.add(server_name)
+                logger.info("User %s excluded from integration %s", user_email, provider)
+
+        return excluded
+    except Exception:
+        logger.exception("Failed to compute excluded integrations for %s", user_email)
+        return set()
+
+
+async def build_user_mcp_overrides(user_email: str) -> dict:
+    """Build per-user MCP server config for OAuth-requiring connectors.
+
+    Covers two cases:
+    1. Custom MCP connectors with auth_mode "oauth" (existing)
+    2. Catalog providers that support per-user OAuth (hubspot, notion, grain)
+       — the user's personal token overrides the org-level shared key.
+
+    Returns a dict of MCP server configs keyed by server name.
+    """
+    try:
+        from observability.db import get_db
+        from api.oauth_helpers import get_valid_custom_mcp_token, get_valid_provider_token
+        from integrations.registry import PROVIDER_CATALOG
 
         db = get_db()
         if db is None:
             return {}
 
         overrides = {}
+
+        # 1. Custom MCP OAuth connectors
         async for integration in db.integrations.find({
             "is_custom": True, "status": "active", "auth_mode": "oauth",
         }):
@@ -210,6 +266,21 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
                     "headers": {header: f"Bearer {token}"},
                 }
                 logger.info("Built per-user MCP config for %s / %s", user_email, provider)
+
+        # 2. Catalog providers with personal OAuth (hubspot, notion, grain)
+        for provider in ("hubspot", "notion", "grain"):
+            token = await get_valid_provider_token(user_email, provider, db=db)
+            if not token:
+                continue
+            catalog = PROVIDER_CATALOG.get(provider)
+            if not catalog or not catalog.get("mcp_config_template"):
+                continue
+            mcp_cfg = _resolve_mcp_template(
+                catalog["mcp_config_template"], token, {},
+            )
+            server_name = catalog["mcp_server_name"]
+            overrides[server_name] = mcp_cfg
+            logger.info("Built per-user %s MCP config for %s", provider, user_email)
 
         return overrides
     except Exception:
@@ -893,8 +964,10 @@ async def stream_agent(
 
     # Build per-user MCP overrides for OAuth-requiring custom connectors
     user_mcp_overrides: dict = {}
+    excluded_integrations: set[str] = set()
     if user_email:
         user_mcp_overrides = await build_user_mcp_overrides(user_email)
+        excluded_integrations = await get_excluded_integrations_for_user(user_email)
 
     # Codex (ChatGPT subscription) selections route through the Codex account
     # pool — same round-robin architecture as the Claude pool.
@@ -973,8 +1046,8 @@ async def stream_agent(
     client = None
     account_email: str | None = None
 
-    if user_mcp_overrides and selected_claude_model:
-        # Per-user MCP overrides: create an ephemeral client with merged config
+    if (user_mcp_overrides or excluded_integrations) and selected_claude_model:
+        # Per-user MCP overrides / sharing exclusions: ephemeral client with merged config
         account = pool._next_account()
         if account is None:
             yield "No Claude accounts are currently available."
@@ -983,6 +1056,8 @@ async def stream_agent(
             options = pool._build_options(model_override=selected_claude_model)
             merged_mcp = dict(options.mcp_servers or {})
             merged_mcp.update(user_mcp_overrides)
+            for excluded in excluded_integrations:
+                merged_mcp.pop(excluded, None)
             options.mcp_servers = merged_mcp
             allowed_tools = list(options.allowed_tools or [])
             for server_name in user_mcp_overrides:

@@ -42,9 +42,11 @@ logger = logging.getLogger(__name__)
 def _get_base_url() -> str:
     url = os.environ.get("MONETIZE_NOW_BASE_URL", "")
     if not url:
+        from tools._integration_key import get_integration_extra
+        url = get_integration_extra("monetize_now", "base_url")
+    if not url:
         raise ValueError(
-            "MONETIZE_NOW_BASE_URL environment variable is not set. "
-            "Expected value: https://api.monetizeplatform.com/api"
+            "MONETIZE_NOW_BASE_URL not set and no MonetizeNow integration found on the dashboard."
         )
     return url.rstrip("/")
 
@@ -52,9 +54,11 @@ def _get_base_url() -> str:
 def _get_api_key() -> str:
     key = os.environ.get("MONETIZE_NOW_API_KEY", "")
     if not key:
+        from tools._integration_key import get_integration_key
+        key = get_integration_key("monetize_now")
+    if not key:
         raise ValueError(
-            "MONETIZE_NOW_API_KEY environment variable is not set. "
-            "Please configure it before using MonetizeNow tools."
+            "MONETIZE_NOW_API_KEY not set and no MonetizeNow integration found on the dashboard."
         )
     return key
 

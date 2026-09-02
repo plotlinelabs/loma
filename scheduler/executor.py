@@ -56,17 +56,18 @@ async def execute_flow(flow_id: str):
         flow.get("created_by", {}).get("source", "")
         or flow.get("created_by", {}).get("user_name", "")
     )
+    run_as_email = flow.get("run_as") or creator_email
 
-    # Only pass creator's email for personal tool auth if the account is still active.
+    # Only pass user email for personal tool auth if the account is still active.
     # Prevents orphaned flows from using deactivated users' OAuth tokens.
     effective_user_email = None
-    if creator_email and "@" in creator_email:
-        creator_user = await db.users.find_one({"email": creator_email}, {"status": 1})
-        if creator_user and creator_user.get("status", "active") == "active":
-            effective_user_email = creator_email
+    if run_as_email and "@" in run_as_email:
+        run_as_user = await db.users.find_one({"email": run_as_email}, {"status": 1})
+        if run_as_user and run_as_user.get("status", "active") == "active":
+            effective_user_email = run_as_email
         else:
-            logger.warning("[SCHEDULER] Flow %s creator %s is inactive; running without personal tools",
-                           flow_id, creator_email)
+            logger.warning("[SCHEDULER] Flow %s run_as user %s is inactive; running without personal tools",
+                           flow_id, run_as_email)
 
     selected_model = _flow_model(flow)
 

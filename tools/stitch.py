@@ -57,10 +57,13 @@ DEFAULT_TIMEOUT = 300  # 5 minutes — generation can take 30-60s
 # -- MCP JSON-RPC helpers ------------------------------------------------------
 
 def _get_api_key() -> str:
-    """Get the Stitch API key from environment."""
+    """Get the Stitch API key from environment or dashboard integration."""
     key = os.environ.get("STITCH_API_KEY", "")
     if not key:
-        print(json.dumps({"error": "STITCH_API_KEY environment variable not set."}))
+        from tools._integration_key import get_integration_key
+        key = get_integration_key("stitch")
+    if not key:
+        print(json.dumps({"error": "STITCH_API_KEY not set and no Stitch integration found on the dashboard."}))
         sys.exit(1)
     return key
 
