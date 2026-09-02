@@ -28,6 +28,7 @@ function DrawerConversation({
   const [draftPrompt, setDraftPrompt] = useState<string | null>(null);
   const [draftFiles, setDraftFiles] = useState<ChatFile[] | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [toolConfig, setToolConfig] = useState<import("@/lib/api").ToolConfig | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,6 +37,7 @@ function DrawerConversation({
         const data = await fetchConversation(conversationId);
         if (cancelled) return;
         setModel(data.conversation.model || null);
+        setToolConfig(data.conversation.tool_config || null);
         if (data.conversation.task_status === "todo" && !data.conversation.status) {
           // Unstarted board draft: nothing has been sent yet — put the staged
           // prompt in the composer instead of rendering it as a sent message
@@ -97,6 +99,7 @@ function DrawerConversation({
         initialPrompt={draftPrompt || undefined}
         initialFiles={draftFiles || undefined}
         initialModel={model || undefined}
+        initialToolConfig={toolConfig}
         initialStatus={initialStatus}
         draftStorageKey={`loma-task-draft-${conversationId}`}
         onStreamComplete={onStreamComplete}

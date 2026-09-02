@@ -882,6 +882,18 @@ async def handle_chat(request: web.Request) -> web.Response:
     if selected_model is not None and not isinstance(selected_model, str):
         return web.json_response({"error": "model must be a provider/model string"}, status=400)
 
+    # Per-chat tool/skill restrictions
+    tool_config = body.get("tool_config")
+    if tool_config is not None:
+        if not isinstance(tool_config, dict):
+            return web.json_response({"error": "tool_config must be an object"}, status=400)
+        for key in ("enabled_skills", "enabled_tools"):
+            val = tool_config.get(key)
+            if val is not None and not isinstance(val, list):
+                return web.json_response(
+                    {"error": f"tool_config.{key} must be an array or null"}, status=400,
+                )
+
     # Build conversation context from history
     history = body.get("conversation_history", [])
     context_parts: list[str] = []
@@ -924,7 +936,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             # Check if conversation already exists (resume) or is client-generated (start)
             existing = await db.conversations.find_one(
                 {"conversation_id": existing_conversation_id},
-                {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1},
+                {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1},
             )
             if existing and not _check_conversation_access(
                 existing, user_email, get_system_role(request)
@@ -980,11 +992,21 @@ async def handle_chat(request: web.Request) -> web.Response:
                         {"$set": flip, "$unset": {"draft_files": ""}},
                     )
                 await observer.resume()
+                # Use stored tool_config from existing conversation if not in request
+                if tool_config is None and existing.get("tool_config"):
+                    tool_config = existing["tool_config"]
             else:
                 await observer.start()
         else:
             observer = ConversationObserver(db, metadata=metadata)
             await observer.start()
+
+        # Persist tool_config on the conversation document
+        if tool_config and observer:
+            await db.conversations.update_one(
+                {"conversation_id": observer.conversation_id},
+                {"$set": {"tool_config": tool_config}},
+            )
 
         # Board tasks carry the owner's personal working context on every turn.
         if existing and existing.get("task_status"):
@@ -1057,6 +1079,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             source="dashboard",
             user_email=user_email,
             selected_model=selected_model,
+            tool_config=tool_config,
         ):
             # If the client already disconnected, keep consuming events so the
             # agent runs to completion (observability still records everything)
@@ -1687,6 +1710,83 @@ async def handle_list_mcp_servers(request: web.Request) -> web.Response:
     return web.json_response({"servers": servers})
 
 
+_BUILTIN_TOOLS = [
+    {"id": "Bash", "name": "Bash", "group": "built-in", "description": "Run shell commands"},
+    {"id": "Read", "name": "Read", "group": "built-in", "description": "Read files"},
+    {"id": "WebSearch", "name": "Web Search", "group": "built-in", "description": "Search the web"},
+    {"id": "Agent", "name": "Agent", "group": "built-in", "description": "Spawn sub-agents"},
+]
+
+
+async def handle_available_tools(request: web.Request) -> web.Response:
+    """GET /api/available-tools — catalog of tools and skills for the picker."""
+    tools = list(_BUILTIN_TOOLS)
+
+    # MCP tools from config.yaml
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH) as f:
+                config = yaml.safe_load(f) or {}
+            for name in config.get("mcp_servers", {}):
+                tools.append({
+                    "id": f"mcp__{name}",
+                    "name": name.replace("_", " ").title(),
+                    "group": "integrations",
+                    "description": _MCP_DESCRIPTIONS.get(name, ""),
+                })
+        except Exception as e:
+            logger.warning("Failed to read config.yaml for available tools: %s", e)
+
+    # MCP tools from DB integrations
+    db = get_db()
+    if db is not None:
+        try:
+            from integrations.registry import PROVIDER_CATALOG
+            async for integration in db.integrations.find({"status": "active"}):
+                provider = integration["provider"]
+                if integration.get("is_custom"):
+                    tool_id = f"mcp__{provider}"
+                    if not any(t["id"] == tool_id for t in tools):
+                        tools.append({
+                            "id": tool_id,
+                            "name": provider.replace("_", " ").title(),
+                            "group": "integrations",
+                            "description": "",
+                        })
+                    continue
+                catalog_entry = PROVIDER_CATALOG.get(provider)
+                if not catalog_entry or not catalog_entry.get("mcp_config_template"):
+                    continue
+                server_name = catalog_entry["mcp_server_name"]
+                tool_id = f"mcp__{server_name}"
+                if not any(t["id"] == tool_id for t in tools):
+                    tools.append({
+                        "id": tool_id,
+                        "name": catalog_entry.get("display_name", server_name),
+                        "group": "integrations",
+                        "description": catalog_entry.get("description", ""),
+                    })
+        except Exception as e:
+            logger.warning("Failed to read DB integrations for available tools: %s", e)
+
+    # Skills from DB
+    skills = []
+    if db is not None:
+        try:
+            raw = await skill_service.list_skills(db)
+            for s in raw:
+                skills.append({
+                    "slug": s["slug"],
+                    "name": s.get("name") or s["slug"],
+                    "description": s.get("description", ""),
+                    "tags": s.get("tags", []),
+                })
+        except Exception as e:
+            logger.warning("Failed to read skills for available tools: %s", e)
+
+    return web.json_response({"tools": tools, "skills": skills})
+
+
 async def handle_pool_status(request):
     """Return agent pool status (available/in_use/queued)."""
     from agent.pool import get_pool
@@ -2008,6 +2108,7 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/skills/{name}", handle_get_skill)
     app.router.add_get("/api/memory/recent", handle_memory_recent)
     app.router.add_get("/api/mcp-servers", handle_list_mcp_servers)
+    app.router.add_get("/api/available-tools", handle_available_tools)
     app.router.add_get("/api/pool-status", handle_pool_status)
     app.router.add_get("/api/files/{file_id}", handle_serve_file)
 

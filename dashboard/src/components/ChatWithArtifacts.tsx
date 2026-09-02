@@ -79,6 +79,7 @@ export default function ChatWithArtifacts({
   initialFiles,
   initialModel,
   initialAgentId,
+  initialToolConfig,
   autoSend,
   systemContext,
   initialStatus,
@@ -93,6 +94,7 @@ export default function ChatWithArtifacts({
   initialFiles?: ChatFile[];
   initialModel?: string;
   initialAgentId?: string | null;
+  initialToolConfig?: import("@/lib/api").ToolConfig | null;
   autoSend?: boolean;
   systemContext?: string;
   initialStatus?: string;
@@ -165,6 +167,7 @@ export default function ChatWithArtifacts({
           initialFiles={initialFiles}
           initialModel={initialModel}
           initialAgentId={initialAgentId}
+          initialToolConfig={initialToolConfig}
           autoSend={autoSend}
           systemContext={systemContext}
           initialStatus={initialStatus}

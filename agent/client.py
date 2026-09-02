@@ -776,6 +776,7 @@ async def stream_agent(
     user_email: str | None = None,
     selected_model: str | None = None,
     raise_on_opencode_error: bool = False,
+    tool_config: dict | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     """
     Run the Claude agent and yield text blocks as they arrive.
@@ -805,6 +806,15 @@ async def stream_agent(
     """
     # Build text portion of the prompt with source marker for the pooled system prompt
     text_parts = [f"[Source: {source}]"]
+
+    # Per-chat skill restriction
+    if tool_config and tool_config.get("enabled_skills") is not None:
+        slugs = ", ".join(tool_config["enabled_skills"])
+        text_parts.append(
+            f"[Skill Restriction: For this conversation, only use these Loma skills: "
+            f"{slugs}. Do not read or apply other skills even if they appear in the "
+            f"skill index.]"
+        )
 
     # Inject authenticated user identity and auth token for personal tools
     if user_email:
@@ -1046,8 +1056,13 @@ async def stream_agent(
     client = None
     account_email: str | None = None
 
-    if (user_mcp_overrides or excluded_integrations) and selected_claude_model:
-        # Per-user MCP overrides / sharing exclusions: ephemeral client with merged config
+    needs_ephemeral = bool(
+        (user_mcp_overrides or excluded_integrations)
+        or (tool_config and tool_config.get("enabled_tools") is not None)
+    )
+
+    if needs_ephemeral and selected_claude_model:
+        # Per-user MCP overrides / sharing exclusions / per-chat tool filtering
         account = pool._next_account()
         if account is None:
             yield "No Claude accounts are currently available."
@@ -1064,6 +1079,12 @@ async def stream_agent(
                 tool_name = f"mcp__{server_name}"
                 if tool_name not in allowed_tools:
                     allowed_tools.append(tool_name)
+            # Per-chat tool filtering
+            if tool_config and tool_config.get("enabled_tools") is not None:
+                enabled_set = set(tool_config["enabled_tools"])
+                # Always keep Skill (internal plumbing for loma_skills CLI)
+                enabled_set.add("Skill")
+                allowed_tools = [t for t in allowed_tools if t in enabled_set]
             options.allowed_tools = allowed_tools
             options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
             client = ClaudeSDKClient(options=options)
