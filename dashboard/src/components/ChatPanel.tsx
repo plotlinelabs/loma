@@ -10,6 +10,7 @@ import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { filesToChatFiles } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
 import { ToolsPicker } from "./composer/ToolsPicker";
+import { SkillsPicker } from "./composer/SkillsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
 import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath } from "../lib/api";
@@ -622,6 +623,7 @@ export default function ChatPanel({
   } = useAgentModels(initialModel);
   const {
     agents: agentIdentities,
+    selectedAgent,
     selectedAgentId,
     selectAgent,
     loadState: agentLoadState,
@@ -629,17 +631,22 @@ export default function ChatPanel({
   const {
     tools: availableTools,
     skills: availableSkills,
-    selection: toolsSelection,
     loadState: toolsLoadState,
     loadCatalog: loadToolsCatalog,
     toggleTool,
     toggleSkill,
-    enableAll: enableAllTools,
-    isAllEnabled: allToolsEnabled,
-    disabledCount: toolsDisabledCount,
+    enableAllTools,
+    enableAllSkills,
+    isAllToolsEnabled,
+    isAllSkillsEnabled,
+    disabledToolsCount,
+    disabledSkillsCount,
+    isToolEnabled,
+    isSkillEnabled,
     toolConfig,
     isAlwaysEnabled,
-  } = useToolsPicker(initialToolConfig);
+    hasAgentScope,
+  } = useToolsPicker(initialToolConfig, selectedAgent);
   /** Internal artifact store — synced to parent via callbacks */
   const [internalArtifacts, setInternalArtifacts] = useState<Artifact[]>(initialArtifacts || []);
   // Use external artifacts if they have entries, otherwise fall back to internal.
@@ -1433,7 +1440,8 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center gap-0.5">
                     <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
-                    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} />
+                    <ToolsPicker tools={availableTools} isToolEnabled={isToolEnabled} onToggleTool={toggleTool} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={isAllToolsEnabled} disabledCount={disabledToolsCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} hasAgentScope={hasAgentScope} />
+                    <SkillsPicker skills={availableSkills} isSkillEnabled={isSkillEnabled} onToggleSkill={toggleSkill} onEnableAll={enableAllSkills} onOpen={loadToolsCatalog} isAllEnabled={isAllSkillsEnabled} disabledCount={disabledSkillsCount} loadState={toolsLoadState} disabled={isStreaming} hasAgentScope={hasAgentScope} />
                   </div>
                   <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton
@@ -1755,7 +1763,8 @@ export default function ChatPanel({
                   <div className="flex min-w-0 items-center gap-0.5">
                     <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
-                    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} />
+                    <ToolsPicker tools={availableTools} isToolEnabled={isToolEnabled} onToggleTool={toggleTool} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={isAllToolsEnabled} disabledCount={disabledToolsCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} hasAgentScope={hasAgentScope} />
+                    <SkillsPicker skills={availableSkills} isSkillEnabled={isSkillEnabled} onToggleSkill={toggleSkill} onEnableAll={enableAllSkills} onOpen={loadToolsCatalog} isAllEnabled={isAllSkillsEnabled} disabledCount={disabledSkillsCount} loadState={toolsLoadState} disabled={isStreaming} hasAgentScope={hasAgentScope} />
                   </div>
                   <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton

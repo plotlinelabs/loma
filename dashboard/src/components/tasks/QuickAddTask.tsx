@@ -10,6 +10,7 @@ import { useAgentModels } from "@/hooks/useAgentModels";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { ModelPicker } from "@/components/composer/ModelPicker";
 import { ToolsPicker } from "@/components/composer/ToolsPicker";
+import { SkillsPicker } from "@/components/composer/SkillsPicker";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
 import { cn } from "@/lib/utils";
@@ -33,14 +34,18 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
   const {
     tools: availableTools,
     skills: availableSkills,
-    selection: toolsSelection,
     loadState: toolsLoadState,
     loadCatalog: loadToolsCatalog,
     toggleTool,
     toggleSkill,
-    enableAll: enableAllTools,
-    isAllEnabled: allToolsEnabled,
-    disabledCount: toolsDisabledCount,
+    enableAllTools,
+    enableAllSkills,
+    isAllToolsEnabled,
+    isAllSkillsEnabled,
+    disabledToolsCount,
+    disabledSkillsCount,
+    isToolEnabled,
+    isSkillEnabled,
     toolConfig,
     isAlwaysEnabled,
   } = useToolsPicker();
@@ -124,7 +129,8 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               onSelect={selectModel}
               loadState={loadState}
             />
-            <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} isAlwaysEnabled={isAlwaysEnabled} />
+            <ToolsPicker tools={availableTools} isToolEnabled={isToolEnabled} onToggleTool={toggleTool} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={isAllToolsEnabled} disabledCount={disabledToolsCount} loadState={toolsLoadState} isAlwaysEnabled={isAlwaysEnabled} />
+            <SkillsPicker skills={availableSkills} isSkillEnabled={isSkillEnabled} onToggleSkill={toggleSkill} onEnableAll={enableAllSkills} onOpen={loadToolsCatalog} isAllEnabled={isAllSkillsEnabled} disabledCount={disabledSkillsCount} loadState={toolsLoadState} />
           </div>
           <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
             <DictationButton

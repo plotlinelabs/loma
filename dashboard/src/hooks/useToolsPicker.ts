@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAvailableTools,
   type AvailableTool,
   type AvailableSkill,
   type ToolConfig,
 } from "@/lib/api";
+import type { AgentIdentity } from "@/lib/agents-api";
 
 export type ToolsLoadState = "idle" | "loading" | "ready" | "error";
 
@@ -17,23 +18,24 @@ export interface ToolsSelection {
 
 const ALWAYS_ENABLED_TOOLS = new Set(["Bash", "Read"]);
 
-export function useToolsPicker(initial?: ToolConfig | null) {
-  const [tools, setTools] = useState<AvailableTool[]>([]);
-  const [skills, setSkills] = useState<AvailableSkill[]>([]);
+export function useToolsPicker(
+  initial?: ToolConfig | null,
+  selectedAgent?: AgentIdentity | null,
+) {
+  const [allTools, setAllTools] = useState<AvailableTool[]>([]);
+  const [allSkills, setAllSkills] = useState<AvailableSkill[]>([]);
   const [loadState, setLoadState] = useState<ToolsLoadState>("idle");
   const [selection, setSelection] = useState<ToolsSelection>({
     enabledSkills: initial?.enabled_skills ?? null,
     enabledTools: initial?.enabled_tools ?? null,
   });
   const fetchedRef = useRef(false);
-  const toolsRef = useRef<AvailableTool[]>([]);
-  const skillsRef = useRef<AvailableSkill[]>([]);
+  const allToolsRef = useRef<AvailableTool[]>([]);
+  const allSkillsRef = useRef<AvailableSkill[]>([]);
 
-  // Keep refs in sync with state
-  toolsRef.current = tools;
-  skillsRef.current = skills;
+  allToolsRef.current = allTools;
+  allSkillsRef.current = allSkills;
 
-  // Sync with external initial value (e.g. when loading an existing conversation)
   useEffect(() => {
     if (initial) {
       setSelection({
@@ -43,16 +45,21 @@ export function useToolsPicker(initial?: ToolConfig | null) {
     }
   }, [initial]);
 
+  // Reset selection when agent changes
+  useEffect(() => {
+    setSelection({ enabledSkills: null, enabledTools: null });
+  }, [selectedAgent?.agent_id]);
+
   const loadCatalog = useCallback(async () => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
     setLoadState("loading");
     try {
       const data = await fetchAvailableTools();
-      setTools(data.tools);
-      setSkills(data.skills);
-      toolsRef.current = data.tools;
-      skillsRef.current = data.skills;
+      setAllTools(data.tools);
+      setAllSkills(data.skills);
+      allToolsRef.current = data.tools;
+      allSkillsRef.current = data.skills;
       setLoadState("ready");
     } catch (e) {
       console.warn("Failed to load available tools", e);
@@ -60,11 +67,24 @@ export function useToolsPicker(initial?: ToolConfig | null) {
     }
   }, []);
 
+  // Scope tools/skills to the selected agent's allowed set
+  const tools = useMemo(() => {
+    if (!selectedAgent || selectedAgent.tools.length === 0) return allTools;
+    const agentToolSet = new Set(selectedAgent.tools);
+    return allTools.filter((t) => agentToolSet.has(t.id));
+  }, [allTools, selectedAgent]);
+
+  const skills = useMemo(() => {
+    if (!selectedAgent || selectedAgent.skills.length === 0) return allSkills;
+    const agentSkillSet = new Set(selectedAgent.skills);
+    return allSkills.filter((s) => agentSkillSet.has(s.slug));
+  }, [allSkills, selectedAgent]);
+
   const toggleTool = useCallback((toolId: string) => {
     if (ALWAYS_ENABLED_TOOLS.has(toolId)) return;
     setSelection((prev) => {
       if (prev.enabledTools === null) {
-        const allIds = toolsRef.current.map((t) => t.id);
+        const allIds = allToolsRef.current.map((t) => t.id);
         return { ...prev, enabledTools: allIds.filter((id) => id !== toolId) };
       }
       const isEnabled = prev.enabledTools.includes(toolId);
@@ -80,8 +100,8 @@ export function useToolsPicker(initial?: ToolConfig | null) {
   const toggleSkill = useCallback((slug: string) => {
     setSelection((prev) => {
       if (prev.enabledSkills === null) {
-        const allSlugs = skillsRef.current.map((s) => s.slug);
-        return { ...prev, enabledSkills: allSlugs.filter((s) => s !== slug) };
+        const slugs = allSkillsRef.current.map((s) => s.slug);
+        return { ...prev, enabledSkills: slugs.filter((s) => s !== slug) };
       }
       const isEnabled = prev.enabledSkills.includes(slug);
       return {
@@ -93,25 +113,35 @@ export function useToolsPicker(initial?: ToolConfig | null) {
     });
   }, []);
 
-  const enableAll = useCallback(() => {
-    setSelection({ enabledSkills: null, enabledTools: null });
+  const enableAllTools = useCallback(() => {
+    setSelection((prev) => ({ ...prev, enabledTools: null }));
   }, []);
 
-  const isAllEnabled = selection.enabledSkills === null && selection.enabledTools === null;
+  const enableAllSkills = useCallback(() => {
+    setSelection((prev) => ({ ...prev, enabledSkills: null }));
+  }, []);
 
-  const disabledCount = (() => {
-    let count = 0;
-    if (selection.enabledTools !== null) {
-      count += tools.filter((t) => !selection.enabledTools!.includes(t.id)).length;
-    }
-    if (selection.enabledSkills !== null) {
-      count += skills.filter((s) => !selection.enabledSkills!.includes(s.slug)).length;
-    }
-    return count;
-  })();
+  const isAllToolsEnabled = selection.enabledTools === null;
+  const isAllSkillsEnabled = selection.enabledSkills === null;
+
+  const disabledToolsCount = selection.enabledTools === null
+    ? 0
+    : tools.filter((t) => !selection.enabledTools!.includes(t.id)).length;
+
+  const disabledSkillsCount = selection.enabledSkills === null
+    ? 0
+    : skills.filter((s) => !selection.enabledSkills!.includes(s.slug)).length;
+
+  const isToolEnabled = useCallback((id: string) =>
+    selection.enabledTools === null || selection.enabledTools.includes(id),
+  [selection.enabledTools]);
+
+  const isSkillEnabled = useCallback((slug: string) =>
+    selection.enabledSkills === null || selection.enabledSkills.includes(slug),
+  [selection.enabledSkills]);
 
   const toolConfig: ToolConfig | undefined =
-    isAllEnabled ? undefined : {
+    (isAllToolsEnabled && isAllSkillsEnabled) ? undefined : {
       enabled_skills: selection.enabledSkills,
       enabled_tools: selection.enabledTools,
     };
@@ -119,15 +149,20 @@ export function useToolsPicker(initial?: ToolConfig | null) {
   return {
     tools,
     skills,
-    selection,
     loadState,
     loadCatalog,
     toggleTool,
     toggleSkill,
-    enableAll,
-    isAllEnabled,
-    disabledCount,
+    enableAllTools,
+    enableAllSkills,
+    isAllToolsEnabled,
+    isAllSkillsEnabled,
+    disabledToolsCount,
+    disabledSkillsCount,
+    isToolEnabled,
+    isSkillEnabled,
     toolConfig,
     isAlwaysEnabled: (toolId: string) => ALWAYS_ENABLED_TOOLS.has(toolId),
+    hasAgentScope: !!selectedAgent && (selectedAgent.tools.length > 0 || selectedAgent.skills.length > 0),
   };
 }
