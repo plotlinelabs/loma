@@ -1221,7 +1221,11 @@ async def _emit_text(
                 emitted_file_paths.add(fpath)
                 try:
                     from api.routes import register_served_file
-                    file_info = register_served_file(fpath)
+                    file_info = register_served_file(
+                        fpath,
+                        conversation_id=getattr(observer, "conversation_id", None),
+                        owner_email=(getattr(observer, "metadata", None) or {}).get("user_name"),
+                    )
                     yield {
                         "type": "file",
                         "file_id": file_info["file_id"],

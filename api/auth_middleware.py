@@ -51,7 +51,7 @@ async def auth_middleware(request, handler):
     if request.method == "OPTIONS":
         return await handler(request)
 
-    # API routes: attach user identity if available (never block)
+    # API routes require an authenticated, approved identity.
     if request.path.startswith("/api/"):
         user_email = request.headers.get("X-User-Email", "").strip()
         using_preview_fallback = False
@@ -77,7 +77,9 @@ async def auth_middleware(request, handler):
         db = get_db()
         user = await db.users.find_one({"email": user_email}) if db is not None else None
         request["user"] = user
-        if using_preview_fallback or db is None:
+        if db is None and not using_preview_fallback:
+            return web.json_response({"error": "Authentication unavailable"}, status=503)
+        if using_preview_fallback:
             request["system_role"] = _DEFAULT_ROLE
             request["user_status"] = "active"
         else:
@@ -85,14 +87,13 @@ async def auth_middleware(request, handler):
                 user.get("system_role", _DEFAULT_ROLE) if user else _DEFAULT_ROLE
             )
             # Legacy users (no status field) are treated as active.
-            request["user_status"] = user.get("status", "active") if user else "active"
+            request["user_status"] = user.get("status", "active") if user else "pending"
 
-        # Gate users awaiting admin approval: they may only read their own profile
-        # (/api/governance/me, so the dashboard can show the pending screen). Every
-        # other API call is denied until an admin approves them.
-        if request.get("user_status") == "pending" and request.path != "/api/governance/me":
+        # Inactive/unprovisioned users may only read their approval status.
+        is_profile_read = request.method == "GET" and request.path == "/api/governance/me"
+        if request.get("user_status") != "active" and not is_profile_read:
             return web.json_response(
-                {"error": "Account pending admin approval"}, status=403,
+                {"error": "Account is not active"}, status=403,
             )
 
     return await handler(request)

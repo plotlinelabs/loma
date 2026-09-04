@@ -13,33 +13,40 @@ import time
 
 from aiohttp import web, WSMsgType
 
+from api.auth_helpers import get_user_email, require_maintainer_or_above
+
 
 logger = logging.getLogger(__name__)
 
-# One-time tokens: token -> expiry timestamp
-_terminal_tokens: dict[str, float] = {}
+# One-time tokens: token -> (expiry timestamp, authenticated owner)
+_terminal_tokens: dict[str, tuple[float, str]] = {}
 TOKEN_TTL = 30  # seconds
 
 
 async def handle_terminal_token(request: web.Request) -> web.Response:
     """POST /api/terminal/token — issue a one-time token for WebSocket auth."""
+    require_maintainer_or_above(request)
+    if not get_user_email(request):
+        raise web.HTTPUnauthorized()
     # Clean expired tokens
     now = time.time()
-    expired = [t for t, exp in _terminal_tokens.items() if exp < now]
+    expired = [t for t, (exp, _) in _terminal_tokens.items() if exp < now]
     for t in expired:
         _terminal_tokens.pop(t, None)
 
     token = secrets.token_urlsafe(32)
-    _terminal_tokens[token] = now + TOKEN_TTL
+    _terminal_tokens[token] = (now + TOKEN_TTL, get_user_email(request))
     return web.json_response({"token": token})
 
 
 async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     """GET /api/terminal/ws?token=... — WebSocket endpoint that spawns a PTY shell."""
+    require_maintainer_or_above(request)
     # Validate one-time token
     token = request.query.get("token", "")
-    expiry = _terminal_tokens.pop(token, None)
-    if not expiry or expiry < time.time():
+    grant = _terminal_tokens.pop(token, None)
+    user_email = get_user_email(request)
+    if not grant or grant[0] < time.time() or not user_email or grant[1] != user_email:
         return web.json_response({"error": "Invalid or expired token"}, status=403)
 
     ws = web.WebSocketResponse()
