@@ -28,10 +28,54 @@ from datetime import date, datetime, timezone
 from aiohttp import web
 
 from observability.db import get_db
+from agent.prompt import get_prompt_setting
 from api.auth_helpers import get_system_role, get_user_email
 from api.drain import DRAIN_MESSAGE, is_draining
 
 logger = logging.getLogger(__name__)
+
+BOARD_CONTEXT_HEADING = "## User's role & working context (apply to this task)"
+BOARD_PERSONAL_HEADING = "### Personal additions"
+# Placeholders admins can use in the global default context (Admin > Settings).
+_BOARD_PLACEHOLDER_RE = re.compile(r"\{\{\s*(user_name|user_email)\s*\}\}")
+
+
+def render_board_default_context(template: str, owner_doc: dict | None, owner_email: str) -> str:
+    """Fill {{user_name}} / {{user_email}} in the global default board context."""
+    template = (template or "").strip()
+    if not template:
+        return ""
+    email = ((owner_doc or {}).get("email") or owner_email or "").strip()
+    name = ((owner_doc or {}).get("name") or "").strip() or email.split("@")[0] or "the user"
+    values = {"user_name": name, "user_email": email}
+    return _BOARD_PLACEHOLDER_RE.sub(lambda m: values[m.group(1)], template)
+
+
+def merge_board_context(default_context: str, personal_prompt: str) -> str:
+    """Compose the per-task context block: global default first, then the
+    owner's personal board context. Empty when neither is configured."""
+    default_context = (default_context or "").strip()
+    personal_prompt = (personal_prompt or "").strip()
+    if not default_context and not personal_prompt:
+        return ""
+    parts = [BOARD_CONTEXT_HEADING]
+    if default_context:
+        parts.append(default_context)
+    if personal_prompt:
+        if default_context:
+            parts.append(f"\n{BOARD_PERSONAL_HEADING}")
+        parts.append(personal_prompt)
+    return "\n".join(parts)
+
+
+async def build_board_context(db, owner: str) -> str:
+    """The context block injected on every turn of a board task owned by `owner`."""
+    owner_doc = await db.users.find_one(
+        {"email": owner}, {"task_board": 1, "name": 1, "email": 1})
+    personal = ((owner_doc or {}).get("task_board") or {}).get("prompt", "")
+    default_context = render_board_default_context(
+        get_prompt_setting("task_board_default_context"), owner_doc, owner)
+    return merge_board_context(default_context, personal)
 
 
 async def _run_task_headless(db, conversation_id: str, prompt: str,
@@ -49,12 +93,7 @@ async def _run_task_headless(db, conversation_id: str, prompt: str,
         from observability.observer import ConversationObserver
 
         # Same per-task context block handle_chat injects for board tasks.
-        owner_doc = await db.users.find_one({"email": owner}, {"task_board": 1})
-        board_prompt = ((owner_doc or {}).get("task_board") or {}).get("prompt", "").strip()
-        conversation_context = (
-            f"## User's role & working context (apply to this task)\n{board_prompt}"
-            if board_prompt else ""
-        )
+        conversation_context = await build_board_context(db, owner)
 
         observer = ConversationObserver(
             db,
@@ -729,7 +768,13 @@ async def handle_get_board_settings(request: web.Request) -> web.Response:
     if not user_email:
         return web.json_response({"error": "Authentication required"}, status=401)
 
-    board = await _get_board_config_for(db, user_email)
+    user_doc = await db.users.find_one(
+        {"email": user_email}, {"task_board": 1, "name": 1, "email": 1})
+    board = get_board_config(user_doc)
+    # Resolved global default (Admin > Settings) so the drawer can show what
+    # is already applied ahead of the personal context.
+    board["default_context"] = render_board_default_context(
+        get_prompt_setting("task_board_default_context"), user_doc, user_email)
     return web.json_response(board)
 
 

@@ -1707,7 +1707,9 @@ export default function AdminPage() {
                         onChange={(e) => setPromptDrafts((prev) => ({ ...prev, [setting.setting_key]: e.target.value }))}
                         placeholder={setting.setting_key === "identity_guidelines"
                           ? "Describe Loma's identity, tone, operating rules, and general guidelines."
-                          : "Describe the company, product, customer context, terminology, and other always-on company facts."}
+                          : setting.setting_key === "task_board_default_context"
+                            ? "Context applied to every task on every user's board, ahead of their personal board context. Use {{user_name}} and {{user_email}} for the task owner."
+                            : "Describe the company, product, customer context, terminology, and other always-on company facts."}
                         className="w-full min-h-[260px] resize-y text-[13px] leading-6 font-mono border border-border rounded-lg px-3 py-2 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent-200"
                       />
                     </section>
