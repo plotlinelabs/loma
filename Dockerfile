@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
     && claude --version \
     # Codex CLI pinned: the app-server protocol is not stability-guaranteed,
     # so version bumps must go through CI (see agent/codex_runtime.py)
-    && npm install -g @openai/codex@0.144.1 \
+    && npm install -g @openai/codex@0.153.3 \
     && codex --version \
     && pip install --no-cache-dir uv \
     && uv --version \

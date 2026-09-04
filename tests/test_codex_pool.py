@@ -53,6 +53,8 @@ def test_selected_model_is_codex():
 
     assert selected_model_is_codex("codex/gpt-5.6-sol")
     assert normalize_codex_model("codex/gpt-5.6-sol") == "gpt-5.6-sol"
+    assert selected_model_is_codex("codex/gpt-6-astra")
+    assert normalize_codex_model("codex/gpt-6-astra") == "gpt-6-astra"
     assert not selected_model_is_codex("anthropic/claude-opus-4-8")
     assert not selected_model_is_codex("openai/gpt-5.5")
     assert not selected_model_is_codex("gpt-5.6-sol")  # no provider prefix
