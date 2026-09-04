@@ -110,3 +110,62 @@ async def test_capture_does_not_acknowledge_duplicate_with_reaction():
 
     bot.reactions_add.assert_not_awaited()
     assert bot.chat_postEphemeral.await_args.kwargs["text"].startswith(":inbox_tray: Already added")
+
+
+@pytest.mark.asyncio
+async def test_capture_falls_back_to_replies_for_thread_reply_messages():
+    """Thread replies are invisible to conversations.history — the capture must
+    fall back to conversations.replies so reacting inside a thread still works."""
+    bot = MagicMock()
+    bot.users_info = AsyncMock(return_value={"user": {"profile": {"email": "owner@example.com"}}})
+    bot.chat_postEphemeral = AsyncMock()
+    bot.reactions_add = AsyncMock()
+    user = MagicMock()
+    # history returns nothing for thread replies
+    user.conversations_history = AsyncMock(return_value={"messages": []})
+
+    reply_message = {
+        "ts": "1700000000.000001", "thread_ts": "1699999999.000001",
+        "user": "U_AUTHOR", "text": "Reply inside a thread",
+    }
+
+    async def replies_side_effect(channel=None, ts=None, **kwargs):
+        if ts == "1700000000.000001":  # fetch of the reply itself
+            return {"messages": [reply_message]}
+        return {"messages": [  # full-thread fetch by parent ts
+            {"ts": "1699999999.000001", "user": "U_PARENT", "text": "Parent context"},
+            reply_message,
+        ]}
+
+    user.conversations_replies = AsyncMock(side_effect=replies_side_effect)
+    user.chat_getPermalink = AsyncMock(return_value={"permalink": "https://slack.test/reply"})
+
+    with patch("slack_app.handlers.get_user_slack_token", AsyncMock(return_value="xoxp-token")), \
+         patch("slack_sdk.web.async_client.AsyncWebClient", return_value=user), \
+         patch("slack_app.handlers.get_db", return_value=MagicMock()), \
+         patch("api.task_service.create_staged_task", AsyncMock(return_value=({"title": "Slack: Reply inside a thread"}, True))) as create:
+        await _capture_loma_task(bot, _event())
+
+    args, kwargs = create.await_args
+    assert args[1] == "owner@example.com"
+    assert "[U_AUTHOR] [selected]: Reply inside a thread" in args[2]
+    assert "[U_PARENT]: Parent context" in args[2]
+    assert kwargs["metadata"]["slack_thread_ts"] == "1699999999.000001"
+    assert bot.chat_postEphemeral.await_args.kwargs["text"].startswith(":inbox_tray: Added")
+
+
+@pytest.mark.asyncio
+async def test_capture_reports_error_when_message_unreadable_everywhere():
+    bot = MagicMock()
+    bot.users_info = AsyncMock(return_value={"user": {"profile": {"email": "owner@example.com"}}})
+    bot.chat_postEphemeral = AsyncMock()
+    user = MagicMock()
+    user.conversations_history = AsyncMock(return_value={"messages": []})
+    user.conversations_replies = AsyncMock(return_value={"messages": []})
+
+    with patch("slack_app.handlers.get_user_slack_token", AsyncMock(return_value="xoxp-token")), \
+         patch("slack_sdk.web.async_client.AsyncWebClient", return_value=user), \
+         patch("slack_app.handlers.get_db", return_value=MagicMock()):
+        await _capture_loma_task(bot, _event())
+
+    assert "Couldn't read the reacted Slack message" in bot.chat_postEphemeral.await_args.kwargs["text"]
