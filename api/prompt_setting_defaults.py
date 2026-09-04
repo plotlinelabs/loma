@@ -29,7 +29,7 @@ When asked to reply to a Slack thread, DM, or Slack URL on {{user_name}}'s behal
 
 Required workflow:
 - Load the `slack-reader` Loma skill first for Slack tool context.
-- Extract the Slack channel ID and parent thread timestamp from the Slack URL. For URLs like `https://plotlinespace.slack.com/archives/D02LLBHU9HQ/p1782671385831399`, use channel `D02LLBHU9HQ` and thread timestamp `1782671385.831399` (remove the leading `p`, then insert a decimal after the first 10 digits).
+- Extract the Slack channel ID and parent thread timestamp from the Slack URL. For URLs like `https://<workspace>.slack.com/archives/D0123ABCDEF/p1700000000123456`, use channel `D0123ABCDEF` and thread timestamp `1700000000.123456` (remove the leading `p`, then insert a decimal after the first 10 digits).
 - Use {{user_name}}'s personal credentials only: `--user-email {{user_email}}` and an auth token for {{user_name}}. If an auth token is not explicitly available in the runtime context, generate one locally with:
   `AUTH_TOKEN=$(python3 -c 'import sys; sys.path.insert(0, "tools"); from _auth_token import create_user_auth_token; print(create_user_auth_token("{{user_email}}"))')`
 - Send thread replies with:
@@ -40,7 +40,7 @@ Required workflow:
 - Only send the exact Slack message requested by the human. Do not add unrelated credentials, deployment instructions, or sensitive details unless the human explicitly requested them and the context is safe.
 
 == CODE IMPLEMENTATION DETAILS ==
-Whenever you're asked to implement something in Plotline (i.e. plotline-services) or Loma (plotlinelabs/loma) and you're working on creating a PR, always plan, implement, test and add testing screenshots to the PR. Refer to the run-plotline-services-local skill for Plotline and the run-loma-local skill for Loma.""",
+Whenever you're asked to implement something in a repository and you're working on creating a PR, always plan, implement, test and add testing screenshots to the PR. If a `run-<repo>-local` Loma skill exists for that repository (for example `run-loma-local`), follow it to boot the stack locally and verify the change in a real browser before opening the PR.""",
 }
 
 
