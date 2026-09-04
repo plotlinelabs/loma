@@ -263,6 +263,11 @@ async def handle_create_task(request: web.Request) -> web.Response:
     title = (body.get("title") or "").strip() or None
 
     model = (body.get("model") or "").strip()
+    priority = body.get("task_priority")
+    if priority is not None and priority not in TASK_PRIORITIES:
+        return web.json_response(
+            {"error": "task_priority must be low, medium, high, urgent or null"},
+            status=400)
 
     tool_config = body.get("tool_config")
     if tool_config is not None:
@@ -346,7 +351,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_started_at": now if start else None,
         "task_done_at": None,
         "task_tag_ids": [],
-        "task_priority": None,
+        "task_priority": priority,
         "task_deadline": None,
         **({"tool_config": tool_config} if tool_config else {}),
     }
