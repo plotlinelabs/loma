@@ -147,6 +147,7 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 )
 
 FAVORITE_MODEL_IDS = (
+    "codex/gpt-6-astra",
     "codex/gpt-5.6-sol",
     "anthropic/claude-fable-5-1",
     "opencode-go/glm-5.3-flash",

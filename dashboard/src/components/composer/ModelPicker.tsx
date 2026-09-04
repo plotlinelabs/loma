@@ -17,6 +17,7 @@ import type { AgentModel } from "@/lib/api";
 import { favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks/useAgentModels";
 
 const FAVORITE_LABELS: Record<string, string> = {
+  "codex/gpt-6-astra": "GPT 6 Astra",
   "codex/gpt-5.6-sol": "GPT 5.6 Sol",
   "opencode-go/glm-5.3-flash": "GLM 5.3 Flash",
   "anthropic/claude-fable-5-1": "Claude Fable 5.1",

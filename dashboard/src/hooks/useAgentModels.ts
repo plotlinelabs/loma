@@ -6,6 +6,7 @@ import { fetchAgentModels, type AgentModel } from "@/lib/api";
 const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 
 export const FAVORITE_MODEL_IDS = [
+  "codex/gpt-6-astra",
   "codex/gpt-5.6-sol",
   "anthropic/claude-fable-5-1",
   "opencode-go/glm-5.3-flash",
