@@ -465,7 +465,7 @@ export default function Sidebar({
       ) : (
         <>
           {/* Navigation */}
-          <nav className="px-3 space-y-0.5">
+          <nav className="px-3 space-y-0.5 shrink-0">
             {visibleNav.map((item) => {
               const isActive = item.href === "/"
                 ? pathname === "/" || pathname === ""
@@ -508,98 +508,100 @@ export default function Sidebar({
             })}
           </nav>
 
-          {/* Projects */}
-          {!collapsed && projects.length > 0 && (
-            <div className="mt-2 flex flex-col">
-              <div className="px-2.5 pb-1">
-                <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Projects
-                </span>
-              </div>
-              <div className="px-2 space-y-px">
-                {projects.map((p) => (
-                  <Link
-                    key={p.project_id}
-                    href={`/conversations?project=${p.project_id}`}
-                    prefetch
-                    onClick={onClose}
-                    className="group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
-                  >
-                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
-                    <span className="truncate flex-1 min-w-0">{p.name}</span>
-                    <span className="text-[10px] text-muted-foreground tabular-nums">{p.conversation_count || 0}</span>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Pinned */}
-          {!collapsed && pinnedConversations.length > 0 && (
-            <div className="mt-2 flex flex-col">
-              <div className="px-2.5 pb-1">
-                <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Pinned
-                </span>
-              </div>
-              <div className="px-2 space-y-px">
-                {pinnedConversations.map((c) => {
-                  const title = c.title || c.prompt?.slice(0, 50) || "Untitled";
-                  const displayTitle = title.length > 32 ? title.slice(0, 32) + "..." : title;
-                  const isConvoActive = activeContinueId === c.conversation_id;
-                  return (
-                    <div
-                      key={c.conversation_id}
-                      className={cn(
-                        "group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
-                        isConvoActive
-                          ? "text-brand-700 bg-brand-100/80 font-medium"
-                          : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                      )}
+          {/* Scrollable middle: projects, pinned, recents. `min-h-0` lets this region
+              shrink and scroll instead of overflowing on top of the footer below. */}
+          <ScrollArea className="flex-1 min-h-0">
+            {/* Projects */}
+            {!collapsed && projects.length > 0 && (
+              <div className="mt-2 flex flex-col">
+                <div className="px-2.5 pb-1">
+                  <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Projects
+                  </span>
+                </div>
+                <div className="px-2 space-y-px">
+                  {projects.map((p) => (
+                    <Link
+                      key={p.project_id}
+                      href={`/conversations?project=${p.project_id}`}
+                      prefetch
+                      onClick={onClose}
+                      className="group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
                     >
-                      <Link
-                        href={`/chat?continue=${c.conversation_id}`}
-                        prefetch
-                        onClick={onClose}
-                        className="truncate flex-1 min-w-0"
-                        title={title}
-                      >
-                        {displayTitle}
-                      </Link>
-                      <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <ChatContextMenu
-                          conversationId={c.conversation_id}
-                          conversationTitle={title}
-                          isPinned={true}
-                          projectId={c.project_id}
-                          taskStatus={c.task_status}
-                          projects={projects}
-                          onRename={async (id, newTitle) => { await renameConversation(id, newTitle); reloadConversations(); }}
-                          onDelete={async (id) => { await removeConversation(id); reloadConversations(); }}
-                          onTogglePin={togglePin}
-                          onAssignProject={async (id, pid) => { await assignToProject(id, pid); reloadConversations(); }}
-                          onRemoveProject={async (id) => { await unassignFromProject(id); reloadConversations(); }}
-                          onCreateProject={async (name) => { await addProject(name); }}
-                          triggerClassName="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
+                      <span className="truncate flex-1 min-w-0">{p.name}</span>
+                      <span className="text-[10px] text-muted-foreground tabular-nums">{p.conversation_count || 0}</span>
+                    </Link>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Recents (excluding pinned) */}
-          {!collapsed && myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
-            <div className="mt-1 flex-1 min-h-0 flex flex-col">
-              <div className="px-2.5 pb-1">
-                <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Recents
-                </span>
+            {/* Pinned */}
+            {!collapsed && pinnedConversations.length > 0 && (
+              <div className="mt-2 flex flex-col">
+                <div className="px-2.5 pb-1">
+                  <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Pinned
+                  </span>
+                </div>
+                <div className="px-2 space-y-px">
+                  {pinnedConversations.map((c) => {
+                    const title = c.title || c.prompt?.slice(0, 50) || "Untitled";
+                    const displayTitle = title.length > 32 ? title.slice(0, 32) + "..." : title;
+                    const isConvoActive = activeContinueId === c.conversation_id;
+                    return (
+                      <div
+                        key={c.conversation_id}
+                        className={cn(
+                          "group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
+                          isConvoActive
+                            ? "text-brand-700 bg-brand-100/80 font-medium"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                        )}
+                      >
+                        <Link
+                          href={`/chat?continue=${c.conversation_id}`}
+                          prefetch
+                          onClick={onClose}
+                          className="truncate flex-1 min-w-0"
+                          title={title}
+                        >
+                          {displayTitle}
+                        </Link>
+                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <ChatContextMenu
+                            conversationId={c.conversation_id}
+                            conversationTitle={title}
+                            isPinned={true}
+                            projectId={c.project_id}
+                            taskStatus={c.task_status}
+                            projects={projects}
+                            onRename={async (id, newTitle) => { await renameConversation(id, newTitle); reloadConversations(); }}
+                            onDelete={async (id) => { await removeConversation(id); reloadConversations(); }}
+                            onTogglePin={togglePin}
+                            onAssignProject={async (id, pid) => { await assignToProject(id, pid); reloadConversations(); }}
+                            onRemoveProject={async (id) => { await unassignFromProject(id); reloadConversations(); }}
+                            onCreateProject={async (name) => { await addProject(name); }}
+                            triggerClassName="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <ScrollArea className="flex-1 px-2">
-                <div className="space-y-px">
+            )}
+
+            {/* Recents (excluding pinned) */}
+            {!collapsed && myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
+              <div className="mt-2 flex flex-col">
+                <div className="px-2.5 pb-1">
+                  <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Recents
+                  </span>
+                </div>
+                <div className="px-2 space-y-px">
                   {myConversations.filter((c) => !isPinned(c.conversation_id)).map((c) => {
                     const title = c.title || c.prompt?.slice(0, 50) || "Untitled";
                     const displayTitle = title.length > 36 ? title.slice(0, 36) + "..." : title;
@@ -644,12 +646,12 @@ export default function Sidebar({
                     );
                   })}
                 </div>
-              </ScrollArea>
-            </div>
-          )}
+              </div>
+            )}
+          </ScrollArea>
 
           {/* Bottom section: pool status, theme toggle, user */}
-          <div className="mt-auto">
+          <div className="mt-auto shrink-0">
             {/* Pool status — expandable */}
             {poolStatus && <PoolStatusWidget poolStatus={poolStatus} collapsed={collapsed} />}
 
