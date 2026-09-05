@@ -112,13 +112,17 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 
 The reviewed command schemas cover the original Google/personal tools plus
 Telegram, real PostHog event commands, Ashby, Grafana command groups, Sentry,
-Pylon read/update commands, MonetizeNow, PhantomBuster, Linear and GitHub thread
+Pylon commands, Zoho Books, MonetizeNow, PhantomBuster, Linear and GitHub thread
 operations. Only explicitly declared flags may repeat. Unlisted commands and
 renderer utilities still fail closed. This is not full feature parity.
 
 Uploads support bounded UTF-8 text and explicitly tagged, strictly validated
 base64 binary inputs. Worker paths are replaced by request-owned backend paths.
-Returning generated binary artifacts and stdin-based commands remains unfinished.
+Reviewed output flags are rewritten to request-owned files and returned as bounded
+base64 artifacts; workers refuse output paths outside their workspace. Symlinks,
+hardlinks and special files are rejected. Stdin is forwarded only for explicitly
+approved commands, including Pylon notes/replies, Slack bot messages and Zoho email
+commands. Zoho invoice/estimate PDF downloads use the artifact channel.
 
 ## Deployment requirements (NOT provided by this repo)
 

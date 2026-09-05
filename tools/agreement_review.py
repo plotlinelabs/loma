@@ -128,8 +128,9 @@ async def cmd_download(args):
     if not file_name.endswith(".docx"):
         file_name = file_name.rsplit(".", 1)[0] + ".docx"
 
-    output_path = f"/tmp/{file_name}"
-    with open(output_path, "wb") as f:
+    import tempfile
+    with tempfile.NamedTemporaryFile(prefix="loma-agreement-", suffix=".docx", delete=False) as f:
+        output_path = f.name
         f.write(content)
 
     return {

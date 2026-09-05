@@ -17,6 +17,8 @@ class Command:
     csv_files: str = ''
     positionals: int = 0
     repeatable: str = ''
+    stdin: bool = False
+    outputs: str = ''
 
 
 POLICY = {
@@ -107,6 +109,8 @@ POLICY = {
     'pylon': {
         'issue': Command(positionals=1), 'messages': Command(positionals=1),
         'threads': Command(positionals=1), 'teams': Command(),
+        'reply': Command('to cc', files='attachment', positionals=2, repeatable='to cc attachment', stdin=True),
+        'note': Command('thread message', files='attachment', positionals=1, repeatable='attachment', stdin=True),
         'issues': Command('days state team'), 'update': Command('state status', positionals=1),
         'create-thread': Command(positionals=2),
     },
@@ -120,6 +124,27 @@ POLICY = {
         'query synthetic-logs': Command('range start end', positionals=1),
         'oncall current': Command('schedule'), 'oncall next': Command('schedule'),
         'oncall schedules': Command(),
+    },
+    'slack_reader': {
+        'channels': Command('query'), 'history': Command('limit thread-ts', positionals=1),
+        'send': Command('text thread-ts file-title', switches='require-thread', files='file', positionals=1, stdin=True),
+    },
+    'zoho_books': {
+        'get-contact': Command('region', positionals=1),
+        'search-contacts': Command('region name status'),
+        'search-contacts-by-company': Command('region company status'),
+        'list-invoices': Command('region customer-id status'),
+        'get-invoice': Command('region', positionals=1),
+        'download-invoice-pdf': Command('region', positionals=1, outputs='output'),
+        'list-estimates': Command('region customer-id status'),
+        'get-estimate': Command('region', positionals=1),
+        'download-estimate-pdf': Command('region', positionals=1, outputs='output'),
+        'list-credit-notes': Command('region customer-id'),
+        'get-credit-note': Command('region', positionals=1),
+        'list-payments': Command('region customer-id'), 'get-payment': Command('region', positionals=1),
+        'list-recurring-invoices': Command('region customer-id'),
+        'send-invoice': Command('region', positionals=1, stdin=True),
+        'send-estimate': Command('region', positionals=1, stdin=True),
     },
     'telegram': {'send-message': Command('text'), 'status': Command()},
     'posthog': {
@@ -154,19 +179,38 @@ POLICY = {
 }
 
 
-def prepare_argv(tool: str, argv: list[str], uploads: dict[str, str]) -> list[str]:
-    """Validate exact flags and map *only* local-file parameters to uploads."""
+def command_spec(tool: str, argv: list[str]) -> tuple[Command, int]:
     if not argv:
         raise Denied()
-    # Only declared two-token command groups may consume a second token.
     name = " ".join(argv[:2]) if len(argv) >= 2 and " ".join(argv[:2]) in POLICY.get(tool, {}) else argv[0]
     if name not in POLICY.get(tool, {}):
         raise Denied()
-    spec = POLICY[tool][name]
-    command_length = len(name.split())
+    return POLICY[tool][name], len(name.split())
+
+
+def output_paths(tool: str, argv: list[str]) -> list[str]:
+    spec, command_length = command_spec(tool, argv)
+    flags = {"--" + name for name in spec.outputs.split()}
+    paths = []
+    for index in range(command_length, len(argv)):
+        flag, sep, value = argv[index].partition("=")
+        if flag in flags:
+            if not sep:
+                if index + 1 >= len(argv):
+                    raise Denied()
+                value = argv[index + 1]
+            if not value or len(value) > 4096 or "\0" in value:
+                raise Denied()
+            paths.append(value)
+    return paths
+
+
+def prepare_argv(tool: str, argv: list[str], uploads: dict[str, str]) -> list[str]:
+    """Validate exact flags and map *only* local-file parameters to uploads."""
+    spec, command_length = command_spec(tool, argv)
     values = set(spec.values.split())
     switches = set(spec.switches.split())
-    files = set(spec.files.split())
+    files = set(spec.files.split()) | set(spec.outputs.split())
     csv_files = set(spec.csv_files.split())
     result = argv[:command_length]
     seen = set()

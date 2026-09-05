@@ -650,6 +650,7 @@ import urllib.error
 import urllib.request
 
 TOOL = {tool!r}
+STDIN_COMMANDS = {stdin_commands!r}
 MAX_UPLOAD_BYTES = 1024 * 1024
 
 
@@ -675,7 +676,7 @@ def main():
     total = 0
     workspace = os.environ.get("HOME", "")
     input_flags = {{"--attachments", "--file", "--file-path", "--content-file",
-                   "--skill-md", "--html-body-file", "--files-json-file", "--code-file"}}
+                   "--skill-md", "--attachment", "--html-body-file", "--files-json-file", "--code-file"}}
     candidates = []
     for index, arg in enumerate(argv):
         flag, sep, value = arg.partition("=")
@@ -699,10 +700,26 @@ def main():
         except (OSError, UnicodeDecodeError, ValueError):
             continue
 
+    stdin_text = ""
+    clean = []
+    skip = False
+    for arg in argv:
+        if skip:
+            skip = False
+            continue
+        if arg in ("--auth-token", "--user-email"):
+            skip = True
+        elif not arg.startswith(("--auth-token=", "--user-email=")):
+            clean.append(arg)
+    if clean and clean[0] in STDIN_COMMANDS and not sys.stdin.isatty():
+        stdin_text = sys.stdin.read(200001)
+        if len(stdin_text.encode("utf-8")) > 200000:
+            print(json.dumps({{"error": "Tool input is too large"}}))
+            return 1
     payload = json.dumps({{
         "operation": "tool.invoke",
         "resource": TOOL,
-        "params": {{"argv": argv, "files": files}},
+        "params": {{"argv": argv, "files": files, "stdin": stdin_text}},
     }}).encode()
     request = urllib.request.Request(
         broker_url + "/v1/invoke", data=payload,
@@ -724,6 +741,23 @@ def main():
         return 1
 
     if isinstance(body, dict) and "stdout" in body:
+        for output_path, artifact in body.get("artifacts", {{}}).items():
+            try:
+                target = os.path.abspath(output_path)
+                root = os.path.realpath(workspace)
+                if os.path.commonpath([os.path.realpath(target), root]) != root:
+                    raise ValueError("Output must be inside this workspace")
+                if artifact.get("encoding") != "base64":
+                    raise ValueError("Invalid output encoding")
+                content = base64.b64decode(artifact["data"], validate=True)
+                if len(content) > 1500000:
+                    raise ValueError("Output too large")
+                fd = os.open(target, os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(content)
+            except (OSError, ValueError, KeyError):
+                print(json.dumps({{"error": "Could not safely save the generated artifact"}}))
+                return 1
         sys.stdout.write(body.get("stdout") or "")
         stderr_text = body.get("stderr") or ""
         if stderr_text:
@@ -751,7 +785,9 @@ def populate_tool_shims(workspace: Path | str, tool_names: list[str]) -> None:
         if not re.fullmatch(r"[a-z0-9_]{1,64}", tool):
             raise WorkerIsolationError(f"Invalid tool shim name: {tool}")
         shim = tools_dir / f"{tool}.py"
-        shim.write_text(_SHIM_TEMPLATE.format(tool=tool))
+        from broker.tool_policy import POLICY
+        stdin_commands = sorted(name for name, spec in POLICY.get(tool, {}).items() if spec.stdin)
+        shim.write_text(_SHIM_TEMPLATE.format(tool=tool, stdin_commands=stdin_commands))
         os.chmod(shim, 0o755)
     identity = workspace_identity(workspace)
     if identity.uid is not None:

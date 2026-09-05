@@ -16,11 +16,12 @@ import logging
 import os
 import sys
 import signal
+import stat
 import tempfile
 from pathlib import Path
 
 from broker.service import Denied
-from broker.tool_policy import prepare_argv
+from broker.tool_policy import prepare_argv, command_spec, output_paths
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class ToolOutputLimit(RuntimeError):
     pass
 
 
-async def _collect_tool_output(process):
+async def _collect_tool_output(process, input_data=None):
     async def bounded_read(stream):
         data = bytearray()
         while chunk := await stream.read(65536):
@@ -91,9 +92,19 @@ async def _collect_tool_output(process):
     tasks = [asyncio.create_task(bounded_read(process.stdout)),
              asyncio.create_task(bounded_read(process.stderr)),
              asyncio.create_task(process.wait())]
+    async def write_input():
+        try:
+            process.stdin.write(input_data)
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            process.stdin.close()
+    if input_data is not None:
+        tasks.append(asyncio.create_task(write_input()))
     try:
-        stdout, stderr, _ = await asyncio.gather(*tasks)
-        return stdout, stderr
+        results = await asyncio.gather(*tasks)
+        return results[0], results[1]
     finally:
         for task in tasks:
             if not task.done():
@@ -138,7 +149,10 @@ class ToolInvoke:
 
     @staticmethod
     def _validate_params(params) -> tuple[list[str], dict[str, str]]:
-        if not isinstance(params, dict) or set(params) - {"argv", "files"}:
+        if not isinstance(params, dict) or set(params) - {"argv", "files", "stdin"}:
+            raise Denied()
+        stdin = params.get("stdin", "")
+        if not isinstance(stdin, str) or len(stdin.encode("utf-8")) > 200_000:
             raise Denied()
         argv = params.get("argv", [])
         files = params.get("files", {})
@@ -179,7 +193,13 @@ class ToolInvoke:
         argv = _strip_identity_flags(argv)
 
         # Validate before touching disk or invoking privileged backend tools.
-        argv = prepare_argv(tool_name, argv, {key: key for key in files})
+        outputs = output_paths(tool_name, argv)
+        if set(outputs) & set(files):
+            raise Denied()
+        argv = prepare_argv(tool_name, argv, {key: key for key in [*files, *outputs]})
+        stdin = params.get("stdin", "")
+        if stdin and not command_spec(tool_name, argv)[0].stdin:
+            raise Denied()
 
         script = PROJECT_ROOT / "tools" / f"{tool_name}.py"
         if not script.is_file():
@@ -188,9 +208,11 @@ class ToolInvoke:
 
         tmp_dir = None
         identity_token = None
+        artifacts = {}
+        output_mapping = {}
         try:
             # Only request-owned uploads may become local CLI inputs.
-            if files:
+            if files or outputs:
                 tmp_dir = tempfile.mkdtemp(prefix="loma-broker-files-")
                 os.chmod(tmp_dir, 0o700)
                 mapping: dict[str, str] = {}
@@ -202,6 +224,13 @@ class ToolInvoke:
                     with open(local, "wb") as fh:
                         fh.write(content)
                     mapping[worker_path] = local
+                for index, worker_path in enumerate(outputs):
+                    suffix = Path(worker_path).suffix
+                    if not suffix.isascii() or not suffix[1:].isalnum() or len(suffix) > 12:
+                        suffix = ""
+                    local = os.path.join(tmp_dir, f"output-{index}{suffix}")
+                    mapping[worker_path] = local
+                    output_mapping[worker_path] = local
                 argv = prepare_argv(tool_name, argv, mapping)
 
             if tool_name in AUTH_TOOLS or tool_name in INTEGRATION_TOOLS:
@@ -213,13 +242,13 @@ class ToolInvoke:
             process = await asyncio.create_subprocess_exec(
                 sys.executable, str(script), *argv,
                 cwd=str(PROJECT_ROOT), start_new_session=True,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.PIPE if stdin else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    _collect_tool_output(process), timeout=_TOOL_TIMEOUT_SECONDS,
+                    _collect_tool_output(process, stdin.encode("utf-8")) if stdin else _collect_tool_output(process), timeout=_TOOL_TIMEOUT_SECONDS,
                 )
             except (asyncio.TimeoutError, ToolOutputLimit) as exc:
                 await _terminate_tool(process)
@@ -228,6 +257,23 @@ class ToolInvoke:
             except BaseException:
                 await _terminate_tool(process)
                 raise
+            # Only explicit request-owned outputs can be returned. Never follow
+            # symlinks or accept a CLI's stdout as authority to read a path.
+            total_output = 0
+            for worker_path, local in output_mapping.items():
+                try:
+                    fd = os.open(local, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except FileNotFoundError:
+                    continue
+                with os.fdopen(fd, "rb") as fh:
+                    info = os.fstat(fh.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        raise Denied()
+                    content = fh.read(_MAX_FILES_CHARS + 1)
+                total_output += len(content)
+                if total_output > _MAX_FILES_CHARS:
+                    raise Denied()
+                artifacts[worker_path] = {"encoding": "base64", "data": base64.b64encode(content).decode("ascii")}
         finally:
             if tmp_dir:
                 import shutil
@@ -238,9 +284,11 @@ class ToolInvoke:
             text = data.decode("utf-8", errors="replace")
             if identity_token:
                 text = text.replace(identity_token, "[REDACTED]")
+            for worker_path, local in output_mapping.items():
+                text = text.replace(local, worker_path)
             return redact_secrets(text)
         return {"exit_code": process.returncode,
-                "stdout": clean_output(stdout), "stderr": clean_output(stderr)}
+                "stdout": clean_output(stdout), "stderr": clean_output(stderr), "artifacts": artifacts}
 
 
 
