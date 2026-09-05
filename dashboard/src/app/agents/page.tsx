@@ -9,10 +9,14 @@ import {
   createAgentIdentity,
   deleteAgentIdentity,
   fetchAgentIdentities,
+  fetchShareDirectory,
   updateAgentIdentity,
   type AgentIdentity,
   type AgentIdentityInput,
   type AgentMotif,
+  type AgentSharedWith,
+  type DirectoryTeam,
+  type DirectoryUser,
 } from "@/lib/agents-api";
 import { AgentAvatar, randomAvatarSpec } from "@/components/AgentAvatar";
 import { cn } from "@/lib/utils";
@@ -33,6 +37,7 @@ import {
 import {
   RiAddLine,
   RiChat1Line,
+  RiCloseLine,
   RiDeleteBinLine,
   RiPencilLine,
   RiRefreshLine,
@@ -53,14 +58,20 @@ const PERSONAL_TOOLS = [
   "telegram",
 ];
 
+type ShareMode = "private" | "specific" | "workspace";
+
 interface EditorState {
   agent: AgentIdentity | null; // null = creating
-  input: Required<Pick<AgentIdentityInput, "name" | "description" | "identity_prompt" | "skills" | "tools" | "visibility" | "avatar">>;
+  shareMode: ShareMode;
+  input: Required<Pick<AgentIdentityInput, "name" | "description" | "identity_prompt" | "skills" | "tools" | "visibility" | "avatar">> & {
+    shared_with: AgentSharedWith;
+  };
 }
 
 function emptyEditor(): EditorState {
   return {
     agent: null,
+    shareMode: "private",
     input: {
       name: "",
       description: "",
@@ -68,14 +79,22 @@ function emptyEditor(): EditorState {
       skills: [],
       tools: [],
       visibility: "private",
+      shared_with: { users: [], teams: [] },
       avatar: randomAvatarSpec(),
     },
   };
 }
 
 function editorFor(agent: AgentIdentity): EditorState {
+  const shared = agent.shared_with || { users: [], teams: [] };
   return {
     agent,
+    shareMode:
+      agent.visibility === "workspace"
+        ? "workspace"
+        : shared.users.length || shared.teams.length
+          ? "specific"
+          : "private",
     input: {
       name: agent.name,
       description: agent.description,
@@ -83,6 +102,7 @@ function editorFor(agent: AgentIdentity): EditorState {
       skills: agent.skills || [],
       tools: agent.tools || [],
       visibility: agent.visibility,
+      shared_with: { users: shared.users || [], teams: shared.teams || [] },
       avatar: agent.avatar || randomAvatarSpec(),
     },
   };
@@ -93,11 +113,13 @@ function ChipToggle({
   active,
   onToggle,
   title,
+  dotColor,
 }: {
   label: string;
   active: boolean;
   onToggle: () => void;
   title?: string;
+  dotColor?: string;
 }) {
   return (
     <button
@@ -105,15 +127,42 @@ function ChipToggle({
       onClick={onToggle}
       title={title}
       className={cn(
-        "rounded-full px-2.5 py-1 text-xs transition-colors",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors",
         active
           ? "bg-brand-800 text-brand-50 dark:bg-brand-200 dark:text-brand-900"
           : "bg-muted text-muted-foreground hover:text-foreground",
       )}
     >
+      {dotColor && <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: dotColor }} />}
       {label}
     </button>
   );
+}
+
+function GroupHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+/** Skills grouped scope-first (workspace vs personal), then by folder — the
+ *  same hierarchy the Skills page uses, so nothing is a flat chip wall. */
+function groupSkillsByFolder(list: Skill[]) {
+  const map = new Map<string, Skill[]>();
+  for (const skill of list) {
+    const key = skill.folder || "Ungrouped";
+    const group = map.get(key);
+    if (group) group.push(skill);
+    else map.set(key, [skill]);
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => (a === "Ungrouped" ? 1 : b === "Ungrouped" ? -1 : a.localeCompare(b)))
+    .map(([folder, items]) => ({
+      folder,
+      items: [...items].sort((a, b) => a.name.localeCompare(b.name)),
+    }));
 }
 
 export default function AgentsPage() {
@@ -123,12 +172,16 @@ export default function AgentsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
+  const [directoryTeams, setDirectoryTeams] = useState<DirectoryTeam[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [saving, setSaving] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [skillSearch, setSkillSearch] = useState("");
+  const [peopleSearch, setPeopleSearch] = useState("");
 
   const loadAgents = useCallback(async () => {
     try {
@@ -153,12 +206,34 @@ export default function AgentsPage() {
     fetchIntegrations()
       .then((list) => setIntegrations(list.filter((i) => i.status === "connected")))
       .catch(() => setIntegrations([]));
+    fetchShareDirectory()
+      .then((data) => {
+        setDirectoryUsers(data.users || []);
+        setDirectoryTeams(data.teams || []);
+      })
+      .catch(() => {
+        setDirectoryUsers([]);
+        setDirectoryTeams([]);
+      });
   }, [loadAgents]);
 
-  const toolOptions = useMemo(() => {
-    const fromIntegrations = integrations.map((i) => i.display_name || i.provider);
-    return [...new Set([...fromIntegrations, ...PERSONAL_TOOLS])];
-  }, [integrations]);
+  const integrationTools = useMemo(
+    () => [...new Set(integrations.map((i) => i.display_name || i.provider))],
+    [integrations],
+  );
+
+  const skillGroups = useMemo(() => {
+    const query = skillSearch.trim().toLowerCase();
+    const visible = query
+      ? skills.filter((s) =>
+          `${s.name} ${s.slug || ""} ${s.description}`.toLowerCase().includes(query),
+        )
+      : skills;
+    return {
+      workspace: groupSkillsByFolder(visible.filter((s) => s.scope !== "personal")),
+      personal: groupSkillsByFolder(visible.filter((s) => s.scope === "personal")),
+    };
+  }, [skills, skillSearch]);
 
   const canManage = useCallback(
     (agent: AgentIdentity) =>
@@ -170,10 +245,65 @@ export default function AgentsPage() {
     setEditor(state);
     setEditorError(null);
     setConfirmingDelete(false);
+    setSkillSearch("");
+    setPeopleSearch("");
   };
 
   const updateInput = (patch: Partial<EditorState["input"]>) => {
     setEditor((prev) => (prev ? { ...prev, input: { ...prev.input, ...patch } } : prev));
+  };
+
+  const setShareMode = (shareMode: ShareMode) => {
+    setEditor((prev) => (prev ? { ...prev, shareMode } : prev));
+  };
+
+  const toggleSkill = (slug: string) => {
+    if (!editor) return;
+    const active = editor.input.skills.includes(slug);
+    updateInput({
+      skills: active
+        ? editor.input.skills.filter((s) => s !== slug)
+        : [...editor.input.skills, slug],
+    });
+  };
+
+  const toggleTool = (tool: string) => {
+    if (!editor) return;
+    const active = editor.input.tools.includes(tool);
+    updateInput({
+      tools: active
+        ? editor.input.tools.filter((t) => t !== tool)
+        : [...editor.input.tools, tool],
+    });
+  };
+
+  const toggleShareTeam = (teamId: string) => {
+    if (!editor) return;
+    const { shared_with } = editor.input;
+    const active = shared_with.teams.includes(teamId);
+    updateInput({
+      shared_with: {
+        ...shared_with,
+        teams: active
+          ? shared_with.teams.filter((t) => t !== teamId)
+          : [...shared_with.teams, teamId],
+      },
+    });
+  };
+
+  const toggleShareUser = (email: string) => {
+    if (!editor) return;
+    const { shared_with } = editor.input;
+    const active = shared_with.users.includes(email);
+    updateInput({
+      shared_with: {
+        ...shared_with,
+        users: active
+          ? shared_with.users.filter((u) => u !== email)
+          : [...shared_with.users, email],
+      },
+    });
+    setPeopleSearch("");
   };
 
   const handleSave = async () => {
@@ -181,10 +311,18 @@ export default function AgentsPage() {
     setSaving(true);
     setEditorError(null);
     try {
+      const payload: AgentIdentityInput = {
+        ...editor.input,
+        visibility: editor.shareMode === "workspace" ? "workspace" : "private",
+        shared_with:
+          editor.shareMode === "specific"
+            ? editor.input.shared_with
+            : { users: [], teams: [] },
+      };
       if (editor.agent) {
-        await updateAgentIdentity(editor.agent.agent_id, editor.input);
+        await updateAgentIdentity(editor.agent.agent_id, payload);
       } else {
-        await createAgentIdentity(editor.input);
+        await createAgentIdentity(payload);
       }
       setEditor(null);
       await loadAgents();
@@ -215,6 +353,49 @@ export default function AgentsPage() {
     } catch {}
     router.push(`${basePath}/chat`);
   };
+
+  const shareLabel = (agent: AgentIdentity) => {
+    if (agent.visibility === "workspace") return { label: "Everyone", dot: "bg-emerald-500" };
+    const shared = agent.shared_with;
+    const count = (shared?.users.length || 0) + (shared?.teams.length || 0);
+    if (count > 0) return { label: `Shared with ${count}`, dot: "bg-amber-500" };
+    return { label: "Private", dot: "bg-gray-400" };
+  };
+
+  const selectedPeople = editor?.input.shared_with.users || [];
+  const peopleMatches = useMemo(() => {
+    const query = peopleSearch.trim().toLowerCase();
+    const unselected = directoryUsers.filter(
+      (u) => !selectedPeople.includes(u.email) && u.email !== user?.email,
+    );
+    if (!query) return unselected.slice(0, directoryUsers.length <= 15 ? 15 : 0);
+    return unselected
+      .filter((u) => `${u.email} ${u.name}`.toLowerCase().includes(query))
+      .slice(0, 8);
+  }, [directoryUsers, selectedPeople, peopleSearch, user?.email]);
+
+  const renderSkillGroups = (
+    groups: { folder: string; items: Skill[] }[],
+  ) =>
+    groups.map((group) => (
+      <div key={group.folder} className="grid gap-1.5">
+        <GroupHeading>{group.folder}</GroupHeading>
+        <div className="flex flex-wrap gap-1.5">
+          {group.items.map((skill) => {
+            const slug = skill.slug || skill.name;
+            return (
+              <ChipToggle
+                key={slug}
+                label={skill.name}
+                title={skill.description}
+                active={editor?.input.skills.includes(slug) || false}
+                onToggle={() => toggleSkill(slug)}
+              />
+            );
+          })}
+        </div>
+      </div>
+    ));
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -258,56 +439,54 @@ export default function AgentsPage() {
           />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {agents.map((agent) => (
-              <Card key={agent.agent_id} className="p-4 flex flex-col gap-3">
-                <div className="flex items-start gap-3">
-                  <AgentAvatar avatar={agent.avatar} size={44} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-foreground truncate">{agent.name}</p>
-                    <p className="text-xs text-muted-foreground line-clamp-2">{agent.description}</p>
+            {agents.map((agent) => {
+              const share = shareLabel(agent);
+              return (
+                <Card key={agent.agent_id} className="p-4 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    <AgentAvatar avatar={agent.avatar} size={44} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-foreground truncate">{agent.name}</p>
+                      <p className="text-xs text-muted-foreground line-clamp-2">{agent.description}</p>
+                    </div>
                   </div>
-                </div>
-                <div className="mt-auto flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span
-                      className={cn(
-                        "h-1.5 w-1.5 rounded-full",
-                        agent.visibility === "workspace" ? "bg-emerald-500" : "bg-gray-400",
-                      )}
-                    />
-                    {agent.visibility === "workspace" ? "Shared" : "Private"}
-                  </span>
-                  <span className="truncate">
-                    {agent.created_by === user?.email ? "by you" : `by ${agent.created_by}`}
-                  </span>
-                  {(agent.conversation_count ?? 0) > 0 && (
-                    <span className="shrink-0">{agent.conversation_count} chats</span>
-                  )}
-                  <span className="ml-auto flex items-center gap-0.5">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      title={`Chat with ${agent.name}`}
-                      onClick={() => startChat(agent)}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <RiChat1Line size={14} />
-                    </Button>
-                    {canManage(agent) && (
+                  <div className="mt-auto flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className={cn("h-1.5 w-1.5 rounded-full", share.dot)} />
+                      {share.label}
+                    </span>
+                    <span className="truncate">
+                      {agent.created_by === user?.email ? "by you" : `by ${agent.created_by}`}
+                    </span>
+                    {(agent.conversation_count ?? 0) > 0 && (
+                      <span className="shrink-0">{agent.conversation_count} chats</span>
+                    )}
+                    <span className="ml-auto flex items-center gap-0.5">
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        title="Edit agent"
-                        onClick={() => openEditor(editorFor(agent))}
+                        title={`Chat with ${agent.name}`}
+                        onClick={() => startChat(agent)}
                         className="text-muted-foreground hover:text-foreground"
                       >
-                        <RiPencilLine size={14} />
+                        <RiChat1Line size={14} />
                       </Button>
-                    )}
-                  </span>
-                </div>
-              </Card>
-            ))}
+                      {canManage(agent) && (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          title="Edit agent"
+                          onClick={() => openEditor(editorFor(agent))}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <RiPencilLine size={14} />
+                        </Button>
+                      )}
+                    </span>
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>
@@ -392,81 +571,178 @@ export default function AgentsPage() {
 
               {skillsError && <p role="alert" className="text-sm text-destructive">{skillsError}</p>}
               {skills.length > 0 && (
-                <div className="grid gap-1.5">
-                  <Label>Skills</Label>
-                  <p className="text-xs text-muted-foreground -mt-1">
-                    Leave empty for all skills; pick some to focus the agent.
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {skills.map((skill) => {
-                      const slug = skill.slug || skill.name;
-                      const active = editor.input.skills.includes(slug);
-                      return (
-                        <ChipToggle
-                          key={slug}
-                          label={skill.name}
-                          title={skill.description}
-                          active={active}
-                          onToggle={() =>
-                            updateInput({
-                              skills: active
-                                ? editor.input.skills.filter((s) => s !== slug)
-                                : [...editor.input.skills, slug],
-                            })
-                          }
-                        />
-                      );
-                    })}
+                <div className="grid gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <Label>Skills</Label>
+                    <span className="text-xs text-muted-foreground">
+                      {editor.input.skills.length > 0 ? (
+                        <>
+                          {editor.input.skills.length} selected
+                          {" · "}
+                          <button
+                            type="button"
+                            onClick={() => updateInput({ skills: [] })}
+                            className="underline-offset-2 hover:underline"
+                          >
+                            clear
+                          </button>
+                        </>
+                      ) : (
+                        "empty = all skills"
+                      )}
+                    </span>
+                  </div>
+                  <Input
+                    value={skillSearch}
+                    onChange={(e) => setSkillSearch(e.target.value)}
+                    placeholder="Search skills"
+                    className="h-8 text-[13px]"
+                  />
+                  <div className="grid max-h-56 gap-2.5 overflow-y-auto rounded-lg bg-muted/40 p-2.5">
+                    {skillGroups.workspace.length === 0 && skillGroups.personal.length === 0 && (
+                      <p className="py-2 text-center text-xs text-muted-foreground">
+                        No skills match that search.
+                      </p>
+                    )}
+                    {renderSkillGroups(skillGroups.workspace)}
+                    {skillGroups.personal.length > 0 && (
+                      <div className="grid gap-2.5 border-t border-border pt-2.5">
+                        <GroupHeading>Your personal skills</GroupHeading>
+                        {renderSkillGroups(skillGroups.personal)}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
-              {toolOptions.length > 0 && (
-                <div className="grid gap-1.5">
-                  <Label>Tools</Label>
-                  <p className="text-xs text-muted-foreground -mt-1">
-                    Leave empty for all tools; pick some to scope what the agent may use.
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {toolOptions.map((tool) => {
-                      const active = editor.input.tools.includes(tool);
-                      return (
-                        <ChipToggle
-                          key={tool}
-                          label={tool}
-                          active={active}
-                          onToggle={() =>
-                            updateInput({
-                              tools: active
-                                ? editor.input.tools.filter((t) => t !== tool)
-                                : [...editor.input.tools, tool],
-                            })
-                          }
-                        />
-                      );
-                    })}
+              {(integrationTools.length > 0 || PERSONAL_TOOLS.length > 0) && (
+                <div className="grid gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <Label>Tools</Label>
+                    <span className="text-xs text-muted-foreground">
+                      {editor.input.tools.length > 0 ? `${editor.input.tools.length} selected` : "empty = all tools"}
+                    </span>
+                  </div>
+                  <div className="grid gap-2.5 rounded-lg bg-muted/40 p-2.5">
+                    {integrationTools.length > 0 && (
+                      <div className="grid gap-1.5">
+                        <GroupHeading>Integrations</GroupHeading>
+                        <div className="flex flex-wrap gap-1.5">
+                          {integrationTools.map((tool) => (
+                            <ChipToggle
+                              key={tool}
+                              label={tool}
+                              active={editor.input.tools.includes(tool)}
+                              onToggle={() => toggleTool(tool)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid gap-1.5">
+                      <GroupHeading>Personal tools</GroupHeading>
+                      <div className="flex flex-wrap gap-1.5">
+                        {PERSONAL_TOOLS.map((tool) => (
+                          <ChipToggle
+                            key={tool}
+                            label={tool}
+                            active={editor.input.tools.includes(tool)}
+                            onToggle={() => toggleTool(tool)}
+                          />
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
 
-              <div className="grid gap-1.5">
+              <div className="grid gap-2">
                 <Label>Sharing</Label>
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <ChipToggle
                     label="Private"
-                    active={editor.input.visibility === "private"}
-                    onToggle={() => updateInput({ visibility: "private" })}
+                    active={editor.shareMode === "private"}
+                    onToggle={() => setShareMode("private")}
+                  />
+                  <ChipToggle
+                    label="Specific people & teams"
+                    active={editor.shareMode === "specific"}
+                    onToggle={() => setShareMode("specific")}
                   />
                   <ChipToggle
                     label="Everyone in workspace"
-                    active={editor.input.visibility === "workspace"}
-                    onToggle={() => updateInput({ visibility: "workspace" })}
+                    active={editor.shareMode === "workspace"}
+                    onToggle={() => setShareMode("workspace")}
                   />
                 </div>
+
+                {editor.shareMode === "specific" && (
+                  <div className="grid gap-2.5 rounded-lg bg-muted/40 p-2.5">
+                    {directoryTeams.length > 0 && (
+                      <div className="grid gap-1.5">
+                        <GroupHeading>Teams</GroupHeading>
+                        <div className="flex flex-wrap gap-1.5">
+                          {directoryTeams.map((team) => (
+                            <ChipToggle
+                              key={team.team_id}
+                              label={team.name}
+                              dotColor={team.color}
+                              active={editor.input.shared_with.teams.includes(team.team_id)}
+                              onToggle={() => toggleShareTeam(team.team_id)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid gap-1.5">
+                      <GroupHeading>People</GroupHeading>
+                      {selectedPeople.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedPeople.map((email) => {
+                            const person = directoryUsers.find((u) => u.email === email);
+                            return (
+                              <button
+                                key={email}
+                                type="button"
+                                onClick={() => toggleShareUser(email)}
+                                title="Remove"
+                                className="inline-flex items-center gap-1 rounded-full bg-brand-800 px-2.5 py-1 text-xs text-brand-50 dark:bg-brand-200 dark:text-brand-900"
+                              >
+                                {person?.name || email}
+                                <RiCloseLine size={12} />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <Input
+                        value={peopleSearch}
+                        onChange={(e) => setPeopleSearch(e.target.value)}
+                        placeholder={directoryUsers.length > 0 ? "Search people by name or email" : "No teammates found"}
+                        disabled={directoryUsers.length === 0}
+                        className="h-8 text-[13px]"
+                      />
+                      {peopleMatches.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {peopleMatches.map((person) => (
+                            <ChipToggle
+                              key={person.email}
+                              label={person.name || person.email}
+                              title={person.email}
+                              active={false}
+                              onToggle={() => toggleShareUser(person.email)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <p className="text-xs text-muted-foreground">
                   Agents act with the credentials of whoever is chatting with them.
-                  {editor.input.visibility === "workspace" && !hasRole("operator") &&
-                    " Sharing with the workspace requires operator access."}
+                  {editor.shareMode === "workspace" && !hasRole("operator") &&
+                    " Sharing with the whole workspace requires operator access."}
                 </p>
               </div>
 
