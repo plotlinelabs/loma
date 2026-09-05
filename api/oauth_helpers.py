@@ -6,7 +6,6 @@ The encryption key is read from OAUTH_ENCRYPTION_KEY env var.
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -129,70 +128,49 @@ def generate_pkce_pair() -> tuple[str, str]:
     return code_verifier, code_challenge
 
 
-# ── HMAC state for CSRF protection ───────────────────────────────────────
+# OAuth state is opaque, short-lived, single-use and bound to a browser cookie.
+# Keep the PKCE verifier server-side, never in the provider-visible state.
+OAUTH_STATE_TTL = 600
 
 
-def create_oauth_state(email: str, code_verifier: str | None = None) -> str:
-    """Create an HMAC-signed OAuth state parameter.
-
-    Encodes user email + timestamp, signed with OAUTH_ENCRYPTION_KEY.
-    Optionally embeds a PKCE code_verifier for retrieval during callback.
-    """
-    key = os.environ.get("OAUTH_ENCRYPTION_KEY", "").strip().strip("'\"")
-    ts = str(int(time.time()))
-    payload = f"{email}:{ts}"
-    sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    state_data: dict = {"email": email, "ts": ts, "sig": sig}
-    if code_verifier:
-        state_data["cv"] = code_verifier
-    return base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
+def oauth_state_cookie(state: str) -> str:
+    return "loma_oauth_" + hashlib.sha256(state.encode()).hexdigest()[:24]
 
 
-def verify_oauth_state(state: str, max_age: int = 600) -> str | None:
-    """Verify an HMAC-signed OAuth state and return the email.
+async def create_oauth_state(db, email: str, provider: str,
+                             code_verifier: str | None = None) -> tuple[str, str]:
+    state = secrets.token_urlsafe(32)
+    browser_secret = secrets.token_urlsafe(32)
+    await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
+    await db.oauth_states.insert_one({
+        "_id": hashlib.sha256(state.encode()).hexdigest(),
+        "email": email,
+        "provider": provider,
+        "browser_hash": hashlib.sha256(browser_secret.encode()).hexdigest(),
+        "code_verifier": code_verifier,
+        "expires_at": datetime.fromtimestamp(time.time() + OAUTH_STATE_TTL, timezone.utc),
+    })
+    return state, browser_secret
 
-    Returns None if invalid or expired (default: 10 minute max age).
-    """
-    try:
-        state_data = json.loads(base64.urlsafe_b64decode(state).decode())
-    except Exception:
-        logger.warning("Invalid OAuth state encoding")
+
+async def consume_oauth_state(db, state: str, provider: str,
+                              browser_secret: str) -> dict | None:
+    if not state or not browser_secret or len(state) > 128 or len(browser_secret) > 128:
         return None
-
-    email = state_data.get("email", "")
-    ts = state_data.get("ts", "")
-    sig = state_data.get("sig", "")
-
-    if not email or not ts or not sig:
-        logger.warning("Missing fields in OAuth state")
+    # Match AND consume atomically: a wrong browser must not burn a valid state.
+    # Expiry is checked here too because Mongo TTL cleanup is asynchronous.
+    record = await db.oauth_states.find_one_and_delete({
+        "_id": hashlib.sha256(state.encode()).hexdigest(),
+        "provider": provider,
+        "browser_hash": hashlib.sha256(browser_secret.encode()).hexdigest(),
+        "expires_at": {"$gt": datetime.now(timezone.utc)},
+    })
+    if record is None:
         return None
-
-    # Check expiry
-    try:
-        if int(time.time()) - int(ts) > max_age:
-            logger.warning("OAuth state expired for %s", email)
-            return None
-    except ValueError:
+    user = await db.users.find_one({"email": record["email"]})
+    if not user or user.get("status", "active") != "active":
         return None
-
-    # Verify HMAC
-    key = os.environ.get("OAUTH_ENCRYPTION_KEY", "").strip().strip("'\"")
-    payload = f"{email}:{ts}"
-    expected_sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected_sig):
-        logger.warning("OAuth state HMAC mismatch for %s", email)
-        return None
-
-    return email
-
-
-def extract_code_verifier(state: str) -> str | None:
-    """Extract the PKCE code_verifier from an OAuth state, if present."""
-    try:
-        state_data = json.loads(base64.urlsafe_b64decode(state).decode())
-        return state_data.get("cv")
-    except Exception:
-        return None
+    return record
 
 
 # ── Token storage ─────────────────────────────────────────────────────────

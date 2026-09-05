@@ -28,6 +28,7 @@ from datetime import date, datetime, timezone
 from aiohttp import web
 
 from observability.db import get_db
+from utils.secret_redaction import redact_secrets
 from api.auth_helpers import get_system_role, get_user_email
 from api.drain import DRAIN_MESSAGE, is_draining
 
@@ -128,7 +129,8 @@ MAX_DRAFT_FILES_BYTES = 8 * 1024 * 1024
 
 
 def _serialize(doc):
-    """Make a MongoDB document JSON-serializable."""
+    """Make a MongoDB document JSON-serializable without historical credentials."""
+    doc = redact_secrets(doc)
     if doc is None:
         return None
     if isinstance(doc, list):

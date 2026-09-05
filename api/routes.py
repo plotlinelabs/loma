@@ -17,6 +17,7 @@ from agent.opencode_runtime import get_agent_models, get_opencode_pool_status
 from agent.pool import ClientPool, get_pool
 from agent.prompt import refresh_loma_skill_index_from_db
 from observability.db import get_db
+from utils.secret_redaction import redact_secrets
 from observability.observer import ConversationObserver
 from api.auth_helpers import (
     get_system_role,
@@ -249,7 +250,8 @@ _search_index_ensured = False
 
 
 def _serialize(doc):
-    """Make a MongoDB document JSON-serializable."""
+    """Make a MongoDB document JSON-serializable without historical credentials."""
+    doc = redact_secrets(doc)
     if doc is None:
         return None
     if isinstance(doc, list):
@@ -1117,9 +1119,9 @@ async def handle_chat(request: web.Request) -> web.Response:
 
             try:
                 if isinstance(event, dict):
-                    data = json.dumps(event)
+                    data = json.dumps(redact_secrets(event))
                 else:
-                    data = json.dumps({"type": "text", "text": event})
+                    data = json.dumps({"type": "text", "text": redact_secrets(event)})
                 await response.write(f"data: {data}\n\n".encode())
                 await response.drain()
             except (ConnectionResetError, ConnectionError, Exception) as write_err:
