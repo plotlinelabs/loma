@@ -44,7 +44,11 @@ from api.prompt_settings_routes import setup_prompt_settings_routes
 from api.agent_identity_routes import setup_agent_identity_routes
 from api.telegram_routes import setup_telegram_routes
 from api.drain import setup_drain_routes
-from broker.controller import init_execution_controller, get_proxy_registry
+from broker.controller import (
+    init_execution_controller,
+    get_proxy_registry,
+    get_subscription_registry,
+)
 from broker.gateway import create_gateway_app
 from broker.http import create_app as create_broker_app
 from recovery import start_recovery_loop, mark_all_running_interrupted
@@ -99,7 +103,8 @@ async def main():
             os.environ.get("LOMA_BROKER_HOST", "127.0.0.1"),
             int(os.environ.get("LOMA_BROKER_PORT", "3100")),
         ).start()
-        gateway_runner = web.AppRunner(create_gateway_app(broker, get_proxy_registry()))
+        gateway_runner = web.AppRunner(create_gateway_app(
+            broker, get_proxy_registry(), get_subscription_registry()))
         await gateway_runner.setup()
         await web.TCPSite(
             gateway_runner,

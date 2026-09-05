@@ -265,7 +265,8 @@ def test_generated_shim_uploads_only_declared_file_arguments(monkeypatch, tmp_pa
     monkeypatch.setattr('urllib.request.urlopen', urlopen)
     shim = runpy.run_path(str(tmp_path / 'tools/gmail.py'))
     assert shim['main']() == 0
-    assert captured[0]['params']['files'] == {str(attachment): 'synthetic content'}
+    assert captured[0]['params']['files'] == {str(attachment): {
+        'encoding': 'base64', 'data': 'c3ludGhldGljIGNvbnRlbnQ='}}
 
 
 @pytest.mark.asyncio

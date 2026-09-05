@@ -88,6 +88,9 @@ def _tracked_insert_text(para_element, text, after_element, author, rev_id, rpr_
 
 async def cmd_download(args):
     """Download a .docx from Google Drive."""
+    from tools._auth_token import verify_user_auth_token
+    if not verify_user_auth_token(getattr(args, "auth_token", ""), getattr(args, "user_email", "")):
+        return {"error": "Authentication required"}
     sys.path.insert(0, os.path.dirname(__file__))
     from _google_auth import get_google_access_token
     import aiohttp
@@ -438,6 +441,9 @@ def cmd_annotate(args):
 
 async def cmd_upload(args):
     """Upload a .docx to Google Drive and return the link."""
+    from tools._auth_token import verify_user_auth_token
+    if not verify_user_auth_token(getattr(args, "auth_token", ""), getattr(args, "user_email", "")):
+        return {"error": "Authentication required"}
     sys.path.insert(0, os.path.dirname(__file__))
     from _google_auth import get_google_access_token
     import aiohttp

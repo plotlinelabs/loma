@@ -16,6 +16,7 @@ class Command:
     files: str = ''
     csv_files: str = ''
     positionals: int = 0
+    repeatable: str = ''
 
 
 POLICY = {
@@ -86,24 +87,92 @@ POLICY = {
         'delete-file': Command('slug path'),
         # import-dir intentionally absent: it reads a backend directory.
     },
-    'posthog': {'query': Command('sql')},
+    'ashby': {
+        'check-auth': Command(), 'list-jobs': Command('status'),
+        'get-job': Command(positionals=1), 'list-stages': Command('job-id'),
+        'list-candidates': Command('limit'), 'get-candidate': Command(positionals=1),
+        'list-applications': Command('job-id status'), 'get-application': Command(positionals=1),
+        'export-application': Command(positionals=1),
+        'export-job-applications': Command('job-id status limit'),
+        'list-departments': Command(), 'list-locations': Command(), 'list-openings': Command('limit'),
+        'create-job': Command('title team-id location-id default-interview-plan-id job-template-id'),
+        'update-job': Command('title team-id location-id default-interview-plan-id custom-requisition-id', positionals=1),
+        'set-job-status': Command('status', positionals=1),
+        'duplicate-job': Command('title', positionals=1),
+        'create-opening': Command('identifier description team-id location-ids employment-type job-ids'),
+        'add-job-to-opening': Command('opening-id job-id'),
+    },
+    'sentry': {'projects': Command(), 'daily': Command('days environment', positionals=1),
+               'slow': Command('days limit environment', positionals=1)},
+    'pylon': {
+        'issue': Command(positionals=1), 'messages': Command(positionals=1),
+        'threads': Command(positionals=1), 'teams': Command(),
+        'issues': Command('days state team'), 'update': Command('state status', positionals=1),
+        'create-thread': Command(positionals=2),
+    },
+    'grafana': {
+        'alerts list': Command('state'), 'alerts rules': Command(),
+        'alerts silence': Command('duration comment', positionals=1),
+        'alerts history': Command('range', positionals=1),
+        'query lag': Command('range time', positionals=1),
+        'query state': Command(positionals=1), 'query members': Command(positionals=1),
+        'query all-lag': Command(), 'query synthetics': Command('range', positionals=1),
+        'query synthetic-logs': Command('range start end', positionals=1),
+        'oncall current': Command('schedule'), 'oncall next': Command('schedule'),
+        'oncall schedules': Command(),
+    },
+    'telegram': {'send-message': Command('text'), 'status': Command()},
+    'posthog': {
+        'projects': Command('project'), 'definitions': Command('project search limit'),
+        'definition-properties': Command('project', positionals=1),
+        'events': Command('project from to limit filter', positionals=1, repeatable='filter'),
+    },
+    'github_pr_resolve': {
+        'resolve': Command('thread-id'), 'list-unresolved': Command('repo pr'),
+    },
+    'linear': {'velocity': Command('month'), 'bucket-split': Command('month')},
+    'phantombuster': {
+        'send': Command(positionals=2), 'message': Command(positionals=2),
+        'inbox': Command('type count'), 'status': Command(positionals=1),
+    },
+    'monetize_now': {
+        'search-accounts': Command(positionals=16), 'get-account': Command(positionals=1),
+        'get-account-by-custom-id': Command(positionals=1),
+        'list-accounts': Command('status page page-size sort'),
+        'get-contract': Command(positionals=1),
+        'list-contracts': Command('status account-id page page-size sort'),
+        'account-contracts': Command('status page page-size sort', positionals=1),
+        'get-bill-group': Command(positionals=1),
+        'account-bill-groups': Command('status page page-size sort', positionals=1),
+        'get-account-bill-group': Command(positionals=2), 'get-invoice': Command(positionals=1),
+        'account-invoices': Command('status bill-group-id page page-size sort', positionals=1),
+        'bill-group-invoices': Command('page page-size sort', positionals=2),
+        'get-subscription': Command(positionals=1),
+        'account-subscriptions': Command('billing-status page page-size sort', positionals=1),
+        'bill-group-subscriptions': Command('billing-status page page-size sort', positionals=1),
+    },
 }
 
 
 def prepare_argv(tool: str, argv: list[str], uploads: dict[str, str]) -> list[str]:
     """Validate exact flags and map *only* local-file parameters to uploads."""
-    if not argv or argv[0] not in POLICY.get(tool, {}):
+    if not argv:
         raise Denied()
-    spec = POLICY[tool][argv[0]]
+    # Only declared two-token command groups may consume a second token.
+    name = " ".join(argv[:2]) if len(argv) >= 2 and " ".join(argv[:2]) in POLICY.get(tool, {}) else argv[0]
+    if name not in POLICY.get(tool, {}):
+        raise Denied()
+    spec = POLICY[tool][name]
+    command_length = len(name.split())
     values = set(spec.values.split())
     switches = set(spec.switches.split())
     files = set(spec.files.split())
     csv_files = set(spec.csv_files.split())
-    result = [argv[0]]
+    result = argv[:command_length]
     seen = set()
     used_uploads = set()
     positional_count = 0
-    i = 1
+    i = command_length
     while i < len(argv):
         arg = argv[i]
         i += 1
@@ -116,7 +185,7 @@ def prepare_argv(tool: str, argv: list[str], uploads: dict[str, str]) -> list[st
             result.append(arg)
             continue
         name, sep, value = arg[2:].partition('=')
-        if name in seen or name not in values | switches | files | csv_files:
+        if (name in seen and name not in spec.repeatable.split()) or name not in values | switches | files | csv_files:
             raise Denied()
         seen.add(name)
         if name in switches:

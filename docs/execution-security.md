@@ -5,8 +5,8 @@
 **P0 remains incomplete. Do not deploy this branch as a security isolation boundary.**
 The current implementation provides environment filtering, per-run capabilities,
 private workspaces and broker admission, but it is not sufficient to contain
-arbitrary agent code. Production worker separation, credential-free subscription
-runtimes, complete adapter coverage and deployed adversarial validation
+arbitrary agent code. Production worker separation, subscription-protocol validation and renewal,
+complete adapter coverage and deployed adversarial validation
 remain release blockers. Unit tests do not establish isolation between workers.
 
 ## Architecture
@@ -42,8 +42,8 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
   bound to its own uid from the range: two concurrent runs of different
   users are different Unix identities and cannot read or write each other's
   workspaces, temp files, or shims. Uids are allocated at workspace
-  creation, tracked in-process, cross-checked against on-disk workspace
-  owners (restart safety), and released only after the workspace is
+  creation under a process-shared file lock, cross-checked against workspace
+  owners and live process uids (including detached children), and released only after the workspace is
   deleted. Exhausting the range, configuring a range without root, or a
   malformed range fails closed.
   **Fallback (weaker boundary):** without a range, workers drop to the
@@ -56,7 +56,7 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
   Deployments that run concurrent multi-user workloads must configure the
   uid range (or provide kernel-level per-worker sandboxes).
 - **Resource limits**: CPU time, address space, file size, open files,
-  process count, no core dumps (`RLIMIT_*`), own session/process group,
+  process count, no core dumps (`RLIMIT_*`), Linux no-new-privileges, own session/process group,
   wall-clock watchdog, umask 077. Optional bubblewrap wrapping
   (`LOMA_WORKER_BWRAP=1`) adds mount/pid/ipc/uts namespace isolation where
   bubblewrap is installed. Explicitly requesting bubblewrap now fails closed
@@ -110,17 +110,15 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 
 ## Command compatibility
 
-The command schemas currently cover Gmail, Google Drive/Calendar/Sheets/Slides/
-Docs/Apps Script, personal Slack, Grain search/recent/transcript, notifications,
-skill reads and single-file writes, and PostHog `query --sql`.
-Other organization CLI commands, Telegram and backend renderer utilities remain
-**disabled through the broker** pending reviewed adapters. This is a deliberate
-compatibility restriction, not completed feature parity. These integrations may
-still be available through independently authorized MCP paths. Directory-based
-skill import is never enabled through the worker broker.
+The reviewed command schemas cover the original Google/personal tools plus
+Telegram, real PostHog event commands, Ashby, Grafana command groups, Sentry,
+Pylon read/update commands, MonetizeNow, PhantomBuster, Linear and GitHub thread
+operations. Only explicitly declared flags may repeat. Unlisted commands and
+renderer utilities still fail closed. This is not full feature parity.
 
-Uploads currently support bounded inline UTF-8 text, not binary artifact transfer.
-Do not treat this bridge as a completed artifact/storage migration.
+Uploads support bounded UTF-8 text and explicitly tagged, strictly validated
+base64 binary inputs. Worker paths are replaced by request-owned backend paths.
+Returning generated binary artifacts and stdin-based commands remains unfinished.
 
 ## Deployment requirements (NOT provided by this repo)
 
@@ -141,12 +139,19 @@ The subprocess boundary is real but not kernel-grade. Production must add:
 
 ## Known caveats
 
-- Subscription-based CLIs own their auth material: the Claude CLI's pool
-  account `CLAUDE_CONFIG_DIR`, the Codex `CODEX_HOME`, and the OpenCode
-  `auth.json` copy are readable inside that worker's sandbox. These are
-  pooled model-account credentials (deliberately shared across runs), not
-  backend infrastructure secrets; fully brokering them requires a
-  protocol-level auth proxy (future work).
+- Claude and Codex now use fresh worker configuration and run-bound subscription
+  proxy references. Real credentials are read only by the backend gateway, which
+  restricts subscription calls to inference routes and rechecks run admission.
+  Anonymous proxy registration and credential-file fallback do not exist.
+  **Real vendor compatibility and backend refresh-token rotation remain unverified/
+  unfinished.** Expired Claude tokens fail closed; operators must reconnect rather
+  than exposing refresh tokens to a worker. Codex uses a custom Responses provider
+  as described in the [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+- OpenCode no longer stages provider auth.json into workers or catalog storage.
+  Gateway-configured API providers remain supported; subscription-only OpenCode
+  plugins still require reviewed adapters. Existing legacy catalog auth files cause
+  a startup error and require operator cleanup. Managed servers use separate
+  random passwords so another worker cannot anonymously query their API.
 - OpenCode/Codex warm-session and prewarm optimizations that shared server
   processes across runs are disabled/removed; each run pays a worker start.
   Conversation continuity is carried by the textual conversation context.
@@ -175,3 +180,12 @@ injection, and source-level guards that the legacy env-inheriting execution
 path stays gone. These are synthetic tests: they do not replace deployed
 adversarial end-to-end verification under the production runtime/network
 policy, which remains a release gate.
+
+## Current implementation validation
+
+The additional synthetic subscription tests exercise proxy admission, credential
+injection, route limits, revocation, malformed auth, fresh runtime configuration,
+binary input validation and per-server OpenCode authentication. They deliberately
+make no calls using real provider credentials. The local environment rejects
+namespace creation (`unshare: Operation not permitted`) and has no container
+runtime; it cannot supply the production isolation release evidence.

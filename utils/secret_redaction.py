@@ -17,7 +17,7 @@ _ASSIGNMENT = re.compile(
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 # Run-scoped execution capabilities and gateway proxy tokens must never
 # survive into logs/transcripts.
-_RUN_CAPABILITY = re.compile(r"\b(?:loma_run_v1|loma_mcpproxy)_[A-Za-z0-9_-]+")
+_RUN_CAPABILITY = re.compile(r"\b(?:loma_run_v1|loma_mcpproxy|loma_subproxy|loma_ocserver)_[A-Za-z0-9_-]+")
 
 
 def _redact_personal_token(match):

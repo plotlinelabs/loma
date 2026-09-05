@@ -99,7 +99,7 @@ async def test_tool_invoke_injects_identity_for_integration_cli_guard(captured_e
     )
     op = ToolInvoke()
     db = SimpleNamespace(integrations=SimpleNamespace(find_one=AsyncMock(return_value={"status": "active"})))
-    await op.execute(db, EMAIL, "posthog", {"argv": ["query", "--sql", "select 1"], "files": {}})
+    await op.execute(db, EMAIL, "posthog", {"argv": ["definitions", "--limit", "1"], "files": {}})
     argv = captured_exec[0]["argv"]
     assert argv[2:4] == ["--auth-token", "minted"]
     assert argv[-2:] == ["--user-email", EMAIL]

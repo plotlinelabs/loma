@@ -1125,8 +1125,12 @@ async def _stream_agent_impl(
                 enabled_set.add("Skill")
                 allowed_tools = [t for t in allowed_tools if t in enabled_set]
             options.allowed_tools = allowed_tools
-            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
+            from agent.pool import _prepare_worker_subscription_env
+            options.env, sub_tokens = _prepare_worker_subscription_env(account, options._worker_workspace)
             client = ClaudeSDKClient(options=options)
+            client._worker_workspace = options._worker_workspace
+            client._mcp_proxy_tokens = options._mcp_proxy_tokens
+            client._sub_proxy_tokens = sub_tokens
             await asyncio.wait_for(client.connect(), timeout=90)
             client._pool_account = account
             client._pool_model = options.model

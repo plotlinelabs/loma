@@ -441,17 +441,39 @@ class CodexWorker:
                 "this Codex worker (fail closed): %s", disabled,
             )
         self._mcp_proxy_tokens = proxy_tokens
-        write_managed_codex_config(self.account["config_dir"], proxied_servers)
-        # The sandboxed (non-root) app-server must read the managed config
-        # and refresh its own auth state.
-        worker_mod.grant_worker_access(self.account["config_dir"])
-
+        from broker.controller import current_run, get_subscription_registry, run_worker_env_extra
+        ctx = current_run.get()
+        if ctx is None or not ctx.capability:
+            raise CodexError("Subscription execution requires an authenticated run")
         self._workspace = worker_mod.create_workspace(prefix="codex")
         worker_mod.populate_tool_shims(self._workspace, sorted(ALL_TOOLS))
-        from broker.controller import run_worker_env_extra
+        # The real account home stays backend-only. The worker gets fresh
+        # configuration and a revocable proxy reference, never auth.json.
+        config_home = self._workspace / "codex-config"
+        config_home.mkdir(mode=0o700)
+        token = get_subscription_registry().register(
+            "codex", Path(self.account["config_dir"]) / "auth.json", capability=ctx.capability)
+        ctx.sub_proxy_tokens.append(token)
+        self._sub_proxy_tokens = [token]
+        write_managed_codex_config(config_home, proxied_servers)
+        path = config_home / "config.toml"
+        provider = '\n'.join([
+            'model_provider = "loma_subscription"',
+            '[model_providers.loma_subscription]',
+            'name = "Loma subscription gateway"',
+            'base_url = ' + _toml_str(f"{gateway_base_url()}/sub/{token}"),
+            'env_key = "LOMA_RUN_CAPABILITY"',
+            'wire_api = "responses"',
+            'requires_openai_auth = false',
+            'supports_websockets = false',
+            '',
+        ])
+        # Top-level provider selection must precede any TOML table.
+        path.write_text('model_provider = "loma_subscription"\n' + path.read_text()
+                        + '\n' + provider.split('\n', 1)[1])
+        worker_mod.grant_worker_access(config_home, workspace=self._workspace)
         env = worker_mod.build_worker_env(self._workspace, extra={
-            "CODEX_HOME": self.account["config_dir"],
-            **run_worker_env_extra(),
+            "CODEX_HOME": str(config_home), **run_worker_env_extra(),
         })
         # Subscription auth only — the scrubbed env can never fall back to
         # API billing, and no provider API keys exist in the worker at all.
@@ -518,6 +540,9 @@ class CodexWorker:
         self._proc = None
         # Revoke gateway proxy tokens and remove the private workspace.
         from broker import worker as worker_mod
+        for token in getattr(self, "_sub_proxy_tokens", None) or []:
+            from broker.controller import get_subscription_registry
+            get_subscription_registry().revoke(token)
         for proxy_token in getattr(self, "_mcp_proxy_tokens", None) or []:
             try:
                 from broker.controller import get_proxy_registry

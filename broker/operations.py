@@ -10,6 +10,8 @@ key, the database URI) never enter a worker process.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
 import os
 import sys
@@ -145,10 +147,27 @@ class ToolInvoke:
                 or sum(len(a) for a in argv) > _MAX_ARGV_CHARS):
             raise Denied()
         if (not isinstance(files, dict) or len(files) > _MAX_FILES
-                or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items())
-                or sum(len(v) for v in files.values()) > _MAX_FILES_CHARS):
+                or not all(isinstance(k, str) and 0 < len(k) <= 4096 for k in files)):
             raise Denied()
-        return argv, files
+        decoded = {}
+        total = 0
+        for name, value in files.items():
+            if isinstance(value, str):
+                content = value.encode("utf-8")
+            elif (isinstance(value, dict) and set(value) == {"encoding", "data"}
+                  and value["encoding"] == "base64" and isinstance(value["data"], str)
+                  and len(value["data"]) <= _MAX_FILES_CHARS * 4 // 3 + 4):
+                try:
+                    content = base64.b64decode(value["data"], validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    raise Denied() from exc
+            else:
+                raise Denied()
+            total += len(content)
+            if total > _MAX_FILES_CHARS:
+                raise Denied()
+            decoded[name] = content
+        return argv, decoded
 
     async def execute(self, db, email, tool_name, params=None):
         if not self.valid_resource(tool_name):
@@ -180,7 +199,7 @@ class ToolInvoke:
                     if not suffix.isascii() or not suffix[1:].isalnum() or len(suffix) > 12:
                         suffix = ""
                     local = os.path.join(tmp_dir, f"input-{index}{suffix}")
-                    with open(local, "w", encoding="utf-8") as fh:
+                    with open(local, "wb") as fh:
                         fh.write(content)
                     mapping[worker_path] = local
                 argv = prepare_argv(tool_name, argv, mapping)
@@ -238,6 +257,25 @@ class ModelRequest:
 
     def valid_resource(self, value) -> bool:
         return isinstance(value, str) and value in self._providers
+
+    async def execute(self, db, email, provider):
+        if not self.valid_resource(provider):
+            raise Denied()
+        return {"ok": True, "provider": provider}
+
+
+class SubscriptionRequest:
+    """Admission-only operation for the subscription-credential gateway.
+
+    Checked on every proxied request for a pooled subscription account
+    (Claude today). Performs no I/O itself: admission gives revocation,
+    call-budget, TTL, and active-account semantics per request.
+    """
+
+    RESOURCES = frozenset({"claude", "codex", "opencode"})
+
+    def valid_resource(self, value) -> bool:
+        return isinstance(value, str) and value in self.RESOURCES
 
     async def execute(self, db, email, provider):
         if not self.valid_resource(provider):

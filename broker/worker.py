@@ -26,6 +26,8 @@ the broker/gateway and approved model endpoints. See
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import fcntl
 import logging
 import os
 import re
@@ -55,7 +57,6 @@ FORBIDDEN_ENV_NAMES = frozenset({
     "SLACK_APP_TOKEN",
     "SLACK_SIGNING_SECRET",
     "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "OPENAI_API_KEY",
     "OPENAI_AUTH_TOKEN",
@@ -80,9 +81,21 @@ _SENSITIVE_NAME_RE = re.compile(
 )
 
 # Worker-scoped values that intentionally look sensitive but are safe:
-# the run capability is *designed* to be handed to the worker.
+# the run capability is *designed* to be handed to the worker, and in
+# subscription-proxy mode ANTHROPIC_AUTH_TOKEN carries a revocable gateway
+# proxy token (never the real subscription credential). Backend-held values
+# under these names are still rejected by the value-level check below.
 _EXTRA_ALLOWED_SENSITIVE = frozenset({
     "LOMA_RUN_CAPABILITY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "OPENCODE_SERVER_PASSWORD",
+})
+
+# Names whose BACKEND values must never appear in a worker env under any
+# key, even where the name itself is legitimate for worker-scoped values.
+_VALUE_DENYLIST_EXTRA = frozenset({
+    "ANTHROPIC_AUTH_TOKEN",
+    "OPENCODE_SERVER_PASSWORD",
 })
 
 # Baseline vars copied from the backend env when present (never secret).
@@ -173,6 +186,17 @@ def _uids_in_use(low: int, high: int) -> set[int]:
                 continue
             if low <= owner <= high:
                 used.add(owner)
+    # A process can outlive workspace cleanup (including a detached child).
+    # Do not recycle its uid into a new user's run.
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            owner = entry.stat().st_uid
+        except FileNotFoundError:
+            continue
+        if low <= owner <= high:
+            used.add(owner)
     return used
 
 
@@ -246,7 +270,10 @@ def create_workspace(prefix: str = "run") -> Path:
     os.chmod(root, 0o711)  # traversable, not listable, for non-root workers
     workspace = root / f"{prefix}-{secrets.token_hex(8)}"
 
-    with _identity_lock:
+    # File lock also serializes independent backend processes on this host.
+    lock_fd = os.open(root / ".identity.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, "w") as allocation_lock, _identity_lock:
+        fcntl.flock(allocation_lock, fcntl.LOCK_EX)
         identity = _allocate_identity()
         workspace.mkdir(mode=0o700)
         (workspace / "tmp").mkdir(mode=0o700)
@@ -362,14 +389,14 @@ def assert_worker_env_clean(env: dict[str, str]) -> None:
             raise WorkerIsolationError(f"Worker env contains forbidden variable {name}")
     # Value-level check: no backend secret value may be smuggled under any name.
     backend_secret_values = {
-        value for name in FORBIDDEN_ENV_NAMES
+        value for name in FORBIDDEN_ENV_NAMES | _VALUE_DENYLIST_EXTRA
         if (value := os.environ.get(name, "").strip())
     }
     if not backend_secret_values:
         return
     for key, value in env.items():
-        if key in _EXTRA_ALLOWED_SENSITIVE:
-            continue
+        # No exemptions: even worker-scoped keys may never carry a value
+        # equal to a backend secret.
         for secret_value in backend_secret_values:
             if secret_value and secret_value in value:
                 raise WorkerIsolationError(
@@ -419,10 +446,14 @@ def worker_preexec_fn(setsid: bool = True,
     if as_bytes > 0:
         limits.append((resource.RLIMIT_AS, (as_bytes, as_bytes)))
     nproc = _limit("LOMA_WORKER_NPROC")
+    # Load libc before fork; never permit setuid binaries to regain privilege.
+    libc = ctypes.CDLL(None, use_errno=True)
 
     def _preexec():  # pragma: no cover - runs in the forked child
         if setsid:
             os.setsid()
+        if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
+            raise WorkerIsolationError("Could not disable privilege escalation")
         os.umask(0o077)
         for which, limit in limits:
             try:
@@ -576,7 +607,7 @@ def write_cli_launcher(
     if uid is not None:
         if not shutil.which("setpriv"):
             raise WorkerIsolationError("Cannot enforce SDK worker identity: setpriv is missing")
-        drop = f"setpriv --reuid {uid} --regid {gid} --clear-groups "
+        drop = f"setpriv --no-new-privs --reuid {uid} --regid {gid} --clear-groups "
 
     lines = [
         "#!/bin/sh",
@@ -611,6 +642,7 @@ Runs inside an isolated worker with no backend credentials. Forwards the
 invocation to the execution broker, which authenticates the run capability
 and executes the real tool server-side with the run owner's identity.
 """
+import base64
 import json
 import os
 import sys
@@ -658,11 +690,11 @@ def main():
             if (workspace and arg and os.path.isfile(arg)
                     and os.path.commonpath([os.path.realpath(arg), os.path.realpath(workspace)]) == os.path.realpath(workspace)
                     and len(files) < 8):
-                with open(arg, "r", encoding="utf-8") as fh:
+                with open(arg, "rb") as fh:
                     content = fh.read(MAX_UPLOAD_BYTES + 1)
-                size = len(content.encode("utf-8"))
+                size = len(content)
                 if size <= MAX_UPLOAD_BYTES and total + size <= MAX_UPLOAD_BYTES:
-                    files[arg] = content
+                    files[arg] = {{"encoding": "base64", "data": base64.b64encode(content).decode("ascii")}}
                     total += size
         except (OSError, UnicodeDecodeError, ValueError):
             continue

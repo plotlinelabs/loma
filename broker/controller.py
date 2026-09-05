@@ -22,6 +22,7 @@ from pathlib import Path
 
 from broker.gateway import (
     McpProxyRegistry,
+    SubscriptionProxyRegistry,
     configured_model_providers,
     gateway_base_url,
 )
@@ -33,6 +34,7 @@ from broker.operations import (
     UTILITY_TOOLS,
     ModelRequest,
     McpRequest,
+    SubscriptionRequest,
     ToolInvoke,
 )
 from broker.service import Broker
@@ -44,6 +46,7 @@ current_run: ContextVar = ContextVar("loma_run", default=None)
 
 _broker: Broker | None = None
 _registry: McpProxyRegistry | None = None
+_sub_registry: SubscriptionProxyRegistry | None = None
 
 
 class ExecutionUnavailable(RuntimeError):
@@ -66,16 +69,18 @@ def _deployment_id() -> str:
 
 async def init_execution_controller(db) -> Broker:
     """Create the broker + proxy registry singletons. Called at startup."""
-    global _broker, _registry
+    global _broker, _registry, _sub_registry
     operations = {
         "tool.invoke": ToolInvoke(),
         "mcp.request": McpRequest(),
         "grain.transcript": GrainTranscript(),
         "model.request": ModelRequest(configured_model_providers()),
+        "subscription.request": SubscriptionRequest(),
     }
     _broker = Broker(db, _deployment_id(), operations)
     await _broker.initialize()
     _registry = McpProxyRegistry()
+    _sub_registry = SubscriptionProxyRegistry()
     logger.info(
         "Execution controller initialized (deployment=%s, model_providers=%s)",
         _deployment_id(), sorted(configured_model_providers()),
@@ -95,6 +100,12 @@ def get_proxy_registry() -> McpProxyRegistry:
     return _registry
 
 
+def get_subscription_registry() -> SubscriptionProxyRegistry:
+    if _sub_registry is None:
+        raise ExecutionUnavailable("Subscription proxy registry is not initialized")
+    return _sub_registry
+
+
 def controller_ready() -> bool:
     return _broker is not None and _registry is not None
 
@@ -109,6 +120,7 @@ class RunContext:
     workspace: Path
     user_email: str | None
     proxy_tokens: list[str] = field(default_factory=list)
+    sub_proxy_tokens: list[str] = field(default_factory=list)
 
     @property
     def worker_env_extra(self) -> dict[str, str]:
@@ -199,6 +211,8 @@ async def start_run(user_email: str | None, *, source: str = "run") -> RunContex
     providers = configured_model_providers()
     if providers:
         grants["model.request"] = sorted(providers)
+    # Subscription-account gateway admission (revocation/budget per call).
+    grants["subscription.request"] = sorted(SubscriptionRequest.RESOURCES)
 
     ttl = int(os.environ.get("LOMA_RUN_TTL_SECONDS", "3600"))
     max_calls = int(os.environ.get("LOMA_RUN_MAX_CALLS", "500"))
@@ -229,6 +243,9 @@ async def end_run(ctx: RunContext) -> None:
     if ctx.proxy_tokens and _registry is not None:
         for token in ctx.proxy_tokens:
             _registry.revoke(token)
+    if getattr(ctx, "sub_proxy_tokens", None) and _sub_registry is not None:
+        for token in ctx.sub_proxy_tokens:
+            _sub_registry.revoke(token)
     worker_mod.cleanup_workspace(ctx.workspace)
 
 

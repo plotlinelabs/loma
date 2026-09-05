@@ -38,6 +38,7 @@ RUN groupadd -g 990 loma-worker \
     && chmod 700 /root
 ENV LOMA_WORKER_UID=990
 ENV LOMA_WORKER_GID=990
+ENV LOMA_WORKER_UID_RANGE=200000-200999
 # Persistent in-container workspace for cloning & running repos (named volume
 # loma-workspace -> /opt/loma-workspace in docker-compose.yml). Lets long-running
 # agent tasks keep their clone across container recreation, unlike /tmp's

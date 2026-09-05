@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import socket
+import secrets
 import tempfile
 import time
 from pathlib import Path
@@ -119,6 +120,7 @@ class _OpenCodeServer:
         return data[-OPENCODE_SERVER_LOG_TAIL_BYTES:].decode("utf-8", errors="ignore").strip()
 
     async def terminate(self) -> None:
+        _managed_server_passwords.pop(self.base_url, None)
         if self.is_alive:
             self.process.terminate()
             try:
@@ -269,12 +271,19 @@ def _configured_server_url() -> str:
     return f"http://{host}:{port}"
 
 
-def _auth() -> aiohttp.BasicAuth | None:
+_managed_server_passwords: dict[str, str] = {}
+
+
+def _auth(base_url: str | None = None) -> aiohttp.BasicAuth | None:
+    if base_url in _managed_server_passwords:
+        return aiohttp.BasicAuth("opencode", _managed_server_passwords[base_url])
+    # Only explicitly configured external servers use operator credentials.
+    if base_url is not None and base_url.rstrip("/") != _configured_server_url():
+        return None
     password = os.environ.get("OPENCODE_SERVER_PASSWORD")
     if not password:
         return None
-    username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
-    return aiohttp.BasicAuth(username, password)
+    return aiohttp.BasicAuth(os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"), password)
 
 
 async def _request_json(
@@ -289,7 +298,7 @@ async def _request_json(
     if base_url is None:
         base_url = await ensure_opencode_server()
     request_timeout = aiohttp.ClientTimeout(total=timeout or OPENCODE_REQUEST_TIMEOUT_SECONDS)
-    async with aiohttp.ClientSession(timeout=request_timeout, auth=_auth()) as session:
+    async with aiohttp.ClientSession(timeout=request_timeout, auth=_auth(base_url)) as session:
         async with session.request(
             method,
             f"{base_url}{path}",
@@ -312,7 +321,7 @@ async def _request_json(
 async def _health_check(base_url: str, directory: str | None = None) -> bool:
     try:
         timeout = aiohttp.ClientTimeout(total=3)
-        async with aiohttp.ClientSession(timeout=timeout, auth=_auth()) as session:
+        async with aiohttp.ClientSession(timeout=timeout, auth=_auth(base_url)) as session:
             async with session.get(
                 f"{base_url}/config/providers",
                 params={"directory": directory or _catalog_dir()},
@@ -500,26 +509,17 @@ async def ensure_opencode_server(
 
 def _prepare_opencode_data_home(config_home: Path,
                                 workspace: str | Path | None = None) -> Path:
-    """Copy ONLY OpenCode's own auth material into an isolated XDG data home.
+    """Empty per-worker provider store. Real provider auth stays backend-only.
 
-    The OpenCode CLI owns its model-provider auth file; without it the server
-    cannot authenticate to subscription/zen providers. The worker gets a
-    private copy of that single file — never the backend user's real home.
+    Only gateway-configured providers are available to isolated runs.
+    Subscription-only provider plugins need separate reviewed adapters.
     """
     data_home = config_home / "share"
     target_dir = data_home / "opencode"
     target_dir.mkdir(parents=True, exist_ok=True)
-    source = (
-        Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
-        / "opencode" / "auth.json"
-    )
-    try:
-        if source.is_file():
-            target = target_dir / "auth.json"
-            target.write_bytes(source.read_bytes())
-            target.chmod(0o600)
-    except OSError:
-        logger.warning("Could not stage OpenCode auth.json into isolated data home")
+    # Refuse stale shared catalog data rather than loading legacy auth.
+    if (target_dir / "auth.json").exists():
+        raise OpenCodeError("Legacy OpenCode credentials must be removed from the catalog cache")
     worker_mod.grant_worker_access(data_home, workspace=workspace)
     return data_home
 
@@ -545,19 +545,28 @@ async def _spawn_opencode_server_process(
     worker_mod.grant_worker_access(config_home, workspace=workspace)
     from broker.controller import run_worker_env_extra
 
+    base_url = f"http://{host}:{port}"
+    password = "loma_ocserver_" + secrets.token_urlsafe(32)
+    _managed_server_passwords[base_url] = password
     env = worker_mod.build_worker_env(workspace, extra={
+        "OPENCODE_SERVER_USERNAME": "opencode",
+        "OPENCODE_SERVER_PASSWORD": password,
         "XDG_CONFIG_HOME": str(config_home),
         "XDG_DATA_HOME": str(data_home),
         "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
         **run_worker_env_extra(),
     })
-    return await worker_mod.spawn_worker(
-        [opencode_bin, "serve", "--port", str(port), "--hostname", host],
-        workspace=workspace,
-        env=env,
-        stdout=log_file if log_file is not None else asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.STDOUT if log_file is not None else asyncio.subprocess.DEVNULL,
-    )
+    try:
+        return await worker_mod.spawn_worker(
+            [opencode_bin, "serve", "--port", str(port), "--hostname", host],
+            workspace=workspace,
+            env=env,
+            stdout=log_file if log_file is not None else asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.STDOUT if log_file is not None else asyncio.subprocess.DEVNULL,
+        )
+    except BaseException:
+        _managed_server_passwords.pop(base_url, None)
+        raise
 
 
 def _provider_gateway_overrides(run_capability: str | None) -> dict:
@@ -1199,7 +1208,7 @@ async def _iter_opencode_turn_events(
     timeout = _turn_client_timeout(request_timeout_seconds)
     directory = directory or _catalog_dir()
     prompt_task: asyncio.Task | None = None
-    async with aiohttp.ClientSession(timeout=timeout, auth=_auth()) as session:
+    async with aiohttp.ClientSession(timeout=timeout, auth=_auth(base_url)) as session:
         try:
             async with session.get(
                 f"{base_url}/event",
