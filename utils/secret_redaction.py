@@ -15,6 +15,9 @@ _ASSIGNMENT = re.compile(
     r'''["']?\s*(?:[:=]\s*|\s+))(?:"[^"\n]*"|'[^'\n]*'|[^\s,;\]}"']+)'''
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+# Run-scoped execution capabilities and gateway proxy tokens must never
+# survive into logs/transcripts.
+_RUN_CAPABILITY = re.compile(r"\b(?:loma_run_v1|loma_mcpproxy)_[A-Za-z0-9_-]+")
 
 
 def _redact_personal_token(match):
@@ -31,6 +34,7 @@ def _redact_personal_token(match):
 def redact_secrets(value):
     """Return a sanitized copy, including historical personal-tool token formats."""
     if isinstance(value, str):
+        value = _RUN_CAPABILITY.sub(REDACTED, value)
         value = _BASE64.sub(_redact_personal_token, value)
         value = _ASSIGNMENT.sub(lambda m: m[1] + REDACTED, value)
         return _BEARER.sub("Bearer " + REDACTED, value)

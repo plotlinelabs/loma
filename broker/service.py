@@ -39,8 +39,8 @@ class Broker:
         Each issuance creates a new run, so resumed workers need fresh grants.
         """
         if (not isinstance(user_email, str) or not user_email
-                or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 900
-                or type(max_calls) is not int or not 1 <= max_calls <= 100
+                or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 7200
+                or type(max_calls) is not int or not 1 <= max_calls <= 1000
                 or not isinstance(grants, dict) or not grants or len(grants) > 20):
             raise ValueError("Invalid execution grant")
         await self._active(user_email)
@@ -74,13 +74,17 @@ class Broker:
             {"$set": {"revoked": True}},
         )
 
-    async def execute(self, token, operation_name, resource):
+    async def execute(self, token, operation_name, resource, params=None):
         if (not isinstance(token, str)
                 or not re.fullmatch(r"loma_run_v1_[A-Za-z0-9_-]{43}", token)
                 or not isinstance(operation_name, str)):
             raise Denied()
         operation = self.operations.get(operation_name)
         if operation is None or not operation.valid_resource(resource):
+            raise Denied()
+        # Params are only defined for operations that declare support; any
+        # attempt to smuggle arguments into a param-less operation is denied.
+        if params is not None and not getattr(operation, "accepts_params", False):
             raise Denied()
         # Atomic admission: concurrent workers cannot overspend the call budget.
         # Failed calls consume budget too; no refunds/retries that can evade limits.
@@ -101,4 +105,6 @@ class Broker:
             "operation": operation_name, "event": "admitted",
             "at": datetime.now(timezone.utc),
         })
+        if getattr(operation, "accepts_params", False):
+            return await operation.execute(self.db, grant["user_email"], resource, params)
         return await operation.execute(self.db, grant["user_email"], resource)

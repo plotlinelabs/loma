@@ -129,8 +129,8 @@ async def test_dependency_failure_prevents_provider_call(setup, target):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('kwargs', [{'ttl_seconds': 0}, {'ttl_seconds': 901}, {'ttl_seconds': True},
-                                   {'max_calls': 0}, {'max_calls': 101}, {'max_calls': False}])
+@pytest.mark.parametrize('kwargs', [{'ttl_seconds': 0}, {'ttl_seconds': 7201}, {'ttl_seconds': True},
+                                   {'max_calls': 0}, {'max_calls': 1001}, {'max_calls': False}])
 async def test_invalid_issuance_bounds(setup, kwargs):
     with pytest.raises(ValueError): await issue(setup[1], **kwargs)
 
@@ -263,7 +263,7 @@ async def test_http_oversize_and_invalid_json(setup):
     _, broker, operation = setup
     _, token = await issue(broker)
     async with TestClient(TestServer(create_app(broker))) as client:
-        for body, status in [('x' * 5000, 413), ('{bad', 400)]:
+        for body, status in [('x' * (3 * 1024 * 1024), 413), ('{bad', 400)]:
             response = await client.post('/v1/invoke', headers={'Authorization': 'Bearer ' + token}, data=body)
             assert response.status == status
     operation.execute.assert_not_awaited()

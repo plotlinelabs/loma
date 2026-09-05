@@ -20,11 +20,13 @@ def create_app(broker):
                 raise Denied()
             token = auth[7:]
             body = await request.json()
-            if not isinstance(body, dict) or set(body) != {"operation", "resource"}:
+            if (not isinstance(body, dict)
+                    or not {"operation", "resource"} <= set(body)
+                    or set(body) - {"operation", "resource", "params"}):
                 return web.json_response({"error": "Invalid request"}, status=400)
             result = await asyncio.wait_for(broker.execute(
-                token, body["operation"], body["resource"],
-            ), timeout=35)
+                token, body["operation"], body["resource"], body.get("params"),
+            ), timeout=240)
             # Capabilities must not reappear in provider-generated output.
             encoded = json.dumps(redact_secrets(result), allow_nan=False).replace(token, "[REDACTED]")
             return web.Response(text=encoded, content_type="application/json",
@@ -39,6 +41,7 @@ def create_app(broker):
             # Never relay/log exception strings: they may include URLs or tokens.
             return web.json_response({"error": "Broker unavailable"}, status=503)
 
-    app = web.Application(client_max_size=4096)
+    # Sized for tool invocations that upload small workspace files inline.
+    app = web.Application(client_max_size=2 * 1024 * 1024)
     app.router.add_post("/v1/invoke", invoke)
     return app
