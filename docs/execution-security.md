@@ -2,12 +2,12 @@
 
 ## Status
 
-**P0 remains incomplete. Do not deploy this branch as a security isolation boundary.**
-The current implementation provides environment filtering, per-run capabilities,
-private workspaces and broker admission, but it is not sufficient to contain
-arbitrary agent code. Production worker separation, subscription-protocol validation,
-renderer and plugin adapter coverage and deployed adversarial validation
-remain release blockers. Unit tests do not establish isolation between workers.
+**P0 is not verified and this PR remains draft.** The default worker path now
+uses separate gVisor OCI sandboxes, a secrets-free image and broker-only socket
+transports. See [the current worker implementation and rollout gates](worker-sandbox.md).
+Real-runtime CI could not be installed with the available GitHub credential;
+local namespaces are unavailable. Personal OpenCode provider adapters are now implemented, but live
+vendor compatibility is still unresolved. Unit tests do not close these gates.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ broker/gateway.py (loopback)        ◄──  MCP + model traffic; the gateway
   server-side, never into the worker       server-side
 ```
 
-### Worker boundary (implemented)
+### Development subprocess boundary (not the production default)
 
 Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 
@@ -115,7 +115,8 @@ The reviewed command schemas cover the original Google/personal tools plus
 Telegram, real PostHog event commands, Ashby, Grafana command groups, Sentry,
 Pylon commands, Zoho Books, MonetizeNow, PhantomBuster, Linear and GitHub thread
 operations. Only explicitly declared flags may repeat. Unlisted commands and
-renderer utilities still fail closed. This is not full feature parity.
+credential-bearing plugins still fail closed. PPTX rendering now runs inside
+the independent worker; this is not full plugin feature parity.
 
 Uploads support bounded UTF-8 text and explicitly tagged, strictly validated
 base64 binary inputs. Worker paths are replaced by request-owned backend paths.
@@ -125,22 +126,13 @@ hardlinks and special files are rejected. Stdin is forwarded only for explicitly
 approved commands, including Pylon notes/replies, Slack bot messages and Zoho email
 commands. Zoho invoice/estimate PDF downloads use the artifact channel.
 
-## Deployment requirements (NOT provided by this repo)
+## Deployment requirements
 
-The subprocess boundary is real but not kernel-grade. Production must add:
-
-1. Separate hardened sandboxes for each worker, distinct from the backend
-   (gVisor, Kata, or Firecracker class isolation). Placing the backend and all
-   workers inside one hardened container does not provide this separation. No docker socket, no host mounts beyond
-   the declared volumes, no cloud metadata service reachability.
-2. Network policy: workers may reach only the loopback broker/gateway and
-   approved model endpoints. Adapter/gateway destination pinning is not
-   DNS/IP-level egress control.
-3. In multi-host setups, private TLS/mTLS ingress for broker/gateway and
-   worker network identity binding; bearer capabilities alone are
-   transferable if stolen.
-4. File permissions: keep `.env`, secrets and SSH mounts at 0600/0700 so
-   the non-root worker uid cannot read them (the image sets `/root` to 0700).
+The independent runsc/image/socket implementation is described in
+[worker-sandbox.md](worker-sandbox.md). A namespace/cgroup-capable host and the
+real-runtime validation remain required. The old subprocess environment is
+available only through explicit development settings. It is not an acceptable
+production fallback. Multi-host transports are not implemented.
 
 ## Known caveats
 
@@ -151,14 +143,13 @@ The subprocess boundary is real but not kernel-grade. Production must add:
   Backend refresh now renews expiring Claude tokens and expiry-bearing Codex
   access tokens with pinned provider endpoints, a per-account process-shared lock,
   bounded responses and atomic 0600 credential replacement. Revocation is checked
-  again after refresh. Non-refreshable expired tokens fail closed. Opaque tokens
-  without expiry metadata cannot be proactively renewed; upstream rejection still
-  requires reconnecting. **Live vendor compatibility remains unverified**, including
+  again after refresh. Non-refreshable expired tokens fail closed. Opaque tokens without expiry metadata can now recover from a pre-stream 401
+  with one bounded, backend-only refresh/retry; non-refreshable tokens require reconnecting. **Live vendor compatibility remains unverified**, including
   subscription-only OpenCode plugins. No refresh token enters a worker. Codex uses a custom Responses provider
   as described in the [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 - OpenCode no longer stages provider auth.json into workers or catalog storage.
-  Gateway-configured API providers remain supported; subscription-only OpenCode
-  plugins still require reviewed adapters. Existing legacy catalog auth files cause
+  Gateway-configured API providers remain supported; personal Claude/Codex subscription providers now use reviewed standard SDK
+  adapters, without credential-reading plugins. Vendor compatibility is not verified. Existing legacy catalog auth files cause
   a startup error and require operator cleanup. Managed servers use separate
   random passwords so another worker cannot anonymously query their API.
 - OpenCode/Codex warm-session and prewarm optimizations that shared server
@@ -174,8 +165,8 @@ The subprocess boundary is real but not kernel-grade. Production must add:
   delivery path serves them. Worker-side files can be passed INTO tools
   only via the bounded inline upload in the shim.
 - `OPENCODE_SERVER_URL` (operator-managed external server) bypasses the
-  managed worker spawn; isolation of an external server is the operator's
-  responsibility.
+  managed worker spawn in development mode only. It is rejected by the
+  independent sandbox path.
 
 ## Validation
 

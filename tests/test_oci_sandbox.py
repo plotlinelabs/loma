@@ -206,3 +206,42 @@ def test_worker_renderer_is_local_not_privileged_broker(oci):
     source = (workspace / 'tools/pptx_creator.py').read_text()
     assert 'runpy.run_path' in source
     assert 'urlopen' not in source
+
+
+def test_runner_uses_fixed_isolation_flags_and_keeps_args_in_container(oci, monkeypatch):
+    from broker import sandbox_runner
+    workspace, _ = oci
+    command = sandbox.prepare(['python3'], workspace, worker.build_worker_env(workspace))
+    bundle = Path(command[-1])
+    seen = []
+    class Child:
+        def wait(self):
+            return 0
+        def poll(self):
+            return 0
+    monkeypatch.setattr(sandbox_runner.sys, 'argv', ['runner', str(bundle), '--network=host'])
+    monkeypatch.setattr(sandbox_runner.subprocess, 'Popen', lambda argv, **kwargs: seen.append((argv, kwargs)) or Child())
+    monkeypatch.setattr(sandbox_runner.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(sandbox_runner.signal, 'signal', lambda *a: None)
+    assert sandbox_runner.main() == 0
+    argv, kwargs = seen[0]
+    assert '--network=none' in argv
+    assert '--network=host' not in argv
+    assert '--directfs=false' in argv
+    assert kwargs['env'] == {'PATH': '/usr/local/bin:/usr/bin:/bin'}
+    config = json.loads((bundle / 'config.json').read_text())
+    assert config['process']['args'][-1] == '--network=host'
+
+
+def test_blank_pptx_composition_has_no_backend_asset_dependency(tmp_path, monkeypatch):
+    from tools import pptx_creator
+    from pptx import Presentation
+    monkeypatch.setattr(pptx_creator, 'SLIDE_INDEX_PATH', tmp_path / 'absent.json')
+    monkeypatch.setattr(pptx_creator, 'OUTPUT_DIR', tmp_path / 'artifacts')
+    spec = tmp_path / 'deck.json'
+    spec.write_text(json.dumps({'output': 'synthetic.pptx', 'slides': [
+        {'action': 'create', 'layout': 'section-divider', 'content': {'title': 'Synthetic test'}}]}))
+    pptx_creator.cmd_compose(SimpleNamespace(spec=str(spec)))
+    output = tmp_path / 'artifacts/synthetic.pptx'
+    assert output.exists()
+    assert len(Presentation(output).slides) == 1

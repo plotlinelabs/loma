@@ -666,6 +666,8 @@ async def _start_dedicated_server(
         "permission": _opencode_permission_config(),
     }
     provider_overrides = _provider_gateway_overrides(getattr(run_ctx, "capability", None))
+    from agent.subscription_providers import worker_providers
+    provider_overrides.update(worker_providers(run_ctx))
     if provider_overrides:
         opencode_config["provider"] = provider_overrides
 

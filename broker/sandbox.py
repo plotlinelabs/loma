@@ -67,6 +67,7 @@ async def serve_transports(broker_runner, gateway_runner):
             # Do not unlink another live server's socket at startup.
             import socket
             probe = socket.socket(socket.AF_UNIX)
+            probe.settimeout(1)
             try:
                 probe.connect(str(path))
             except ConnectionRefusedError:

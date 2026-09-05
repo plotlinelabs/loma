@@ -1198,9 +1198,12 @@ async def handle_agent_models(request: web.Request) -> web.Response:
     except RuntimeError:
         pass
 
+    from agent.subscription_providers import model_catalog as personal_subscription_models
+    personal_models = personal_subscription_models(get_user_email(request))
+
     try:
         catalog = await get_agent_models()
-        filtered_models = list(claude_models) + list(codex_models)
+        filtered_models = list(claude_models) + list(codex_models) + personal_models
         for model in catalog.get("models", []):
             model_id = model.get("model_id") or ""
             provider_id = model.get("provider_id") or ""
@@ -1225,7 +1228,7 @@ async def handle_agent_models(request: web.Request) -> web.Response:
         logger.exception("Failed to load OpenCode model catalog")
         return web.json_response({
             "default_model": default_agent_model,
-            "models": _order_agent_models(_ensure_favorite_models(claude_models + codex_models)),
+            "models": _order_agent_models(_ensure_favorite_models(claude_models + codex_models + personal_models)),
             "warning": str(e),
         })
 
