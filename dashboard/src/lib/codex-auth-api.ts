@@ -21,7 +21,7 @@ export async function fetchCodexAuthStatus(): Promise<CodexAuthStatus> {
   return res.json();
 }
 
-export async function getCodexLoginTerminalToken(): Promise<{ token: string; autoCommand: string }> {
+export async function getCodexLoginTerminalToken(): Promise<{ token: string }> {
   const res = await fetch(`${API_BASE}/api/codex-auth/terminal-token`, { method: "POST" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Unknown error" }));

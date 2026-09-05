@@ -25,3 +25,6 @@ pywebpush>=2.0
 google-auth>=2.22.0
 google-api-python-client>=2.100.0
 boto3>=1.28.0
+
+# Worker-local presentation rendering (no provider credentials)
+python-pptx==1.0.2

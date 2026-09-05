@@ -215,31 +215,19 @@ async def download_file(url: str, output_path: str) -> dict:
     request the original full-resolution image instead of Google's default
     downscaled thumbnail.
     """
-    # Google's image CDN (lh3.googleusercontent.com) serves downscaled thumbnails
-    # by default. Appending '=s0' requests the original full-resolution image.
-    download_url = url
-    if "lh3.googleusercontent.com" in url and "=s" not in url:
-        download_url = url + "=s0"
-
+    from tools._public_download import download_public, validate_url
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                download_url,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if resp.status != 200:
-                    return {"error": f"Download failed — HTTP {resp.status}"}
-                data = await resp.read()
-                with open(output_path, "wb") as f:
-                    f.write(data)
-                return {
-                    "success": True,
-                    "output": output_path,
-                    "size_bytes": len(data),
-                    "content_type": resp.headers.get("Content-Type", "unknown"),
-                }
-    except aiohttp.ClientError as e:
-        return {"error": f"Download failed: {str(e)}"}
+        parsed = validate_url(url)
+        download_url = url
+        if parsed.hostname == 'lh3.googleusercontent.com' and '=s' not in url:
+            download_url += '=s0'
+        data, content_type = await download_public(download_url)
+        with open(output_path, 'wb') as output:
+            output.write(data)
+        return {'success': True, 'output': output_path,
+                'size_bytes': len(data), 'content_type': content_type}
+    except (aiohttp.ClientError, ValueError, asyncio.TimeoutError):
+        return {'error': 'Public HTTPS download failed or exceeded its limits'}
 
 
 # -- CLI entry point -----------------------------------------------------------
@@ -253,6 +241,8 @@ def _parse_flag(args: list, flag: str, default: str = "") -> str:
 
 
 if __name__ == "__main__":
+    from _integration_access import authorize_cli
+    authorize_cli('stitch')
     from dotenv import load_dotenv
     load_dotenv()
 

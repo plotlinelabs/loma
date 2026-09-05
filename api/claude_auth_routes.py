@@ -99,21 +99,10 @@ async def handle_claude_terminal_token(request: web.Request) -> web.Response:
     if not user_email:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
-    # Ensure user dir exists
-    config_dir = _get_claude_users_dir() / user_email
-    config_dir.mkdir(parents=True, exist_ok=True)
+    from api.terminal_routes import register_login_terminal
+    token = register_login_terminal(user_email, "claude", _get_claude_users_dir() / user_email)
+    return web.json_response({"token": token})
 
-    # Clean expired tokens
-    now = time.time()
-    expired = [t for t, v in _claude_terminal_tokens.items() if v["expiry"] < now]
-    for t in expired:
-        _claude_terminal_tokens.pop(t, None)
-
-    token = secrets.token_urlsafe(32)
-    auto_command = f"CLAUDE_CONFIG_DIR={config_dir} claude login"
-    _claude_terminal_tokens[token] = {"expiry": now + TOKEN_TTL, "auto_command": auto_command}
-
-    return web.json_response({"token": token, "autoCommand": auto_command})
 
 
 async def handle_claude_disconnect(request: web.Request) -> web.Response:
