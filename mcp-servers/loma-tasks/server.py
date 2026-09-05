@@ -24,6 +24,8 @@ Run: python server.py   (deps: aiohttp, motor — same as the backend)
 
 import asyncio
 import hashlib
+import hmac
+import time
 import json
 import logging
 import os
@@ -140,7 +142,14 @@ async def _backend(request: web.Request, method: str, path: str, *,
                    json_body=None, params=None):
     """Call the Loma backend as the authenticated user."""
     session: ClientSession = request.app["http"]
-    headers = {"X-User-Email": request["user_email"]}
+    secret = os.environ.get("BACKEND_PROXY_SECRET") or os.environ.get("OAUTH_ENCRYPTION_KEY", "")
+    if len(secret) < 32:
+        raise ToolError("Backend authentication unavailable")
+    email = request["user_email"]
+    timestamp = str(int(time.time()))
+    signature = hmac.new(secret.encode(),
+        f"loma-proxy-identity-v1\n{timestamp}\n{email}".encode(), hashlib.sha256).hexdigest()
+    headers = {"X-User-Email": email, "X-Auth-Timestamp": timestamp, "X-Auth-Signature": signature}
     try:
         async with session.request(
             method, f"{BACKEND_URL}{path}", headers=headers,

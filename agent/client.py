@@ -140,22 +140,8 @@ async def merge_db_integrations(config: dict) -> dict:
 
             # Custom connectors carry their own inline remote MCP config (no
             # catalog entry). Added by admins from the Integrations page.
-            if integration.get("is_custom"):
-                # OAuth connectors are handled per-user at stream_agent() time
-                if integration.get("auth_mode") == "oauth":
-                    logger.info("Skipping OAuth custom connector '%s' from shared pool config", provider)
-                    continue
-                try:
-                    cfg = {"type": "http", "url": integration["mcp_url"]}
-                    if integration.get("api_key_encrypted"):
-                        header = integration.get("auth_header") or "Authorization"
-                        cfg["headers"] = {
-                            header: decrypt_token(integration["api_key_encrypted"]),
-                        }
-                    mcp_servers[provider] = cfg
-                    logger.info("Loaded custom MCP connector '%s' from DB", provider)
-                except Exception:
-                    logger.exception("Failed to load custom MCP connector %s", provider)
+            if integration.get("is_custom") or provider in ("grain", "hubspot", "notion"):
+                mcp_servers.pop(provider, None)
                 continue
 
             catalog_entry = PROVIDER_CATALOG.get(provider)
@@ -188,47 +174,20 @@ async def merge_db_integrations(config: dict) -> dict:
 
 
 async def get_excluded_integrations_for_user(user_email: str) -> set[str]:
-    """Return MCP server names the user should NOT have access to.
-
-    Checks `shared_with` on each integration. If mode is "specific", the
-    user must be in the users list or a member of one of the listed teams.
-    """
-    try:
-        from observability.db import get_db
-        from integrations.registry import PROVIDER_CATALOG
-
-        db = get_db()
-        if db is None:
-            return set()
-
-        excluded = set()
-        async for integration in db.integrations.find({
-            "status": "active",
-            "shared_with.mode": "specific",
-        }):
+    from observability.db import get_db
+    from integrations.registry import PROVIDER_CATALOG
+    from integrations.access import can_access
+    db = get_db()
+    if db is None:
+        raise RuntimeError("Integration authorization unavailable")
+    excluded = set()
+    async for integration in db.integrations.find({}):
+        if integration.get("provider") in ("grain", "hubspot", "notion"):
+            continue  # personal OAuth is authorized independently of org sharing
+        if not await can_access(db, integration, user_email):
             provider = integration["provider"]
-            shared = integration.get("shared_with", {})
-            allowed_users = set(shared.get("users") or [])
-            allowed_teams = set(shared.get("teams") or [])
-
-            has_access = user_email in allowed_users
-            if not has_access and allowed_teams:
-                team_count = await db.teams.count_documents({
-                    "team_id": {"$in": list(allowed_teams)},
-                    "members": user_email,
-                })
-                has_access = team_count > 0
-
-            if not has_access:
-                catalog = PROVIDER_CATALOG.get(provider)
-                server_name = catalog["mcp_server_name"] if catalog and catalog.get("mcp_server_name") else provider
-                excluded.add(server_name)
-                logger.info("User %s excluded from integration %s", user_email, provider)
-
-        return excluded
-    except Exception:
-        logger.exception("Failed to compute excluded integrations for %s", user_email)
-        return set()
+            excluded.add(PROVIDER_CATALOG.get(provider, {}).get("mcp_server_name") or provider)
+    return excluded
 
 
 async def build_user_mcp_overrides(user_email: str) -> dict:
@@ -254,9 +213,17 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
 
         # 1. Custom MCP OAuth connectors
         async for integration in db.integrations.find({
-            "is_custom": True, "status": "active", "auth_mode": "oauth",
+            "is_custom": True, "status": "active", "connected_by": user_email,
         }):
             provider = integration["provider"]
+            if integration.get("auth_mode") != "oauth":
+                cfg = {"type": "http", "url": integration["mcp_url"]}
+                if integration.get("api_key_encrypted"):
+                    from api.oauth_helpers import decrypt_token
+                    cfg["headers"] = {integration.get("auth_header") or "Authorization":
+                                      decrypt_token(integration["api_key_encrypted"])}
+                overrides[provider] = cfg
+                continue
             token = await get_valid_custom_mcp_token(user_email, provider, db=db)
             if token:
                 header = integration.get("auth_header") or "Authorization"
@@ -285,7 +252,7 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
         return overrides
     except Exception:
         logger.exception("Failed to build user MCP overrides for %s", user_email)
-        return {}
+        raise RuntimeError("Personal integration authorization unavailable") from None
 
 
 def _resolve_mcp_template(template: dict, api_key: str, extra_fields: dict | None = None) -> dict:
@@ -527,7 +494,7 @@ def _encode_file_id(file_path: str) -> str:
     return base64.urlsafe_b64encode(file_path.encode()).decode().rstrip("=")
 
 
-def _detect_file_artifact(file_path: str) -> dict | None:
+def _detect_file_artifact(file_path: str, *, owner_email=None, conversation_id=None) -> dict | None:
     """
     Check if a file path corresponds to a binary file artifact.
     Registers the file for serving via /api/files/ and returns an artifact dict.
@@ -549,7 +516,7 @@ def _detect_file_artifact(file_path: str) -> dict | None:
     # and adds it to the in-memory registry so /api/files/{id} can serve it.
     try:
         from api.routes import register_served_file
-        file_info = register_served_file(file_path)
+        file_info = register_served_file(file_path, owner_email=owner_email, conversation_id=conversation_id)
         file_url = file_info["url"]
         logger.info("[FILE ARTIFACT] Registered %s -> %s", file_path, file_url)
     except Exception as e:
@@ -778,6 +745,63 @@ async def stream_agent(
     raise_on_opencode_error: bool = False,
     tool_config: dict | None = None,
 ) -> AsyncGenerator[str | dict, None]:
+    """Run one agent turn inside an isolated, broker-mediated run.
+
+    This wrapper owns the run lifecycle: it starts a run (fresh private
+    workspace + revocable run capability) before any runtime executes, and
+    always revokes the capability and cleans the workspace afterwards.
+    There is no non-isolated execution path.
+    """
+    from broker import controller as execution_controller
+
+    try:
+        run_ctx = await execution_controller.start_run(user_email, source=source)
+    except Exception:
+        logger.exception("Failed to start isolated run — refusing to execute")
+        if observer:
+            await observer.record_error("Execution environment unavailable")
+        yield ("The execution environment is unavailable right now. "
+               "Please try again shortly.")
+        return
+
+    context_token = execution_controller.current_run.set(run_ctx)
+    try:
+        async for event in _stream_agent_impl(
+            prompt,
+            conversation_context=conversation_context,
+            files=files,
+            observer=observer,
+            include_steps=include_steps,
+            source=source,
+            user_email=user_email,
+            selected_model=selected_model,
+            raise_on_opencode_error=raise_on_opencode_error,
+            tool_config=tool_config,
+            run_ctx=run_ctx,
+        ):
+            yield event
+    finally:
+        try:
+            await execution_controller.end_run(run_ctx)
+        except Exception:
+            logger.exception("Failed to finalize isolated run %s", run_ctx.run_id)
+        finally:
+            execution_controller.current_run.reset(context_token)
+
+
+async def _stream_agent_impl(
+    prompt: str,
+    conversation_context: str = "",
+    files: list | None = None,
+    observer=None,
+    include_steps: bool = False,
+    source: str = "slack",
+    user_email: str | None = None,
+    selected_model: str | None = None,
+    raise_on_opencode_error: bool = False,
+    tool_config: dict | None = None,
+    run_ctx=None,
+) -> AsyncGenerator[str | dict, None]:
     """
     Run the Claude agent and yield text blocks as they arrive.
 
@@ -816,34 +840,49 @@ async def stream_agent(
             f"skill index.]"
         )
 
-    # Inject authenticated user identity and auth token for personal tools
-    if user_email:
-        from tools._auth_token import create_user_auth_token
-        auth_token = create_user_auth_token(user_email)
+    # Inject authenticated user identity and the run-scoped capability for
+    # personal tools. The capability is the worker's ONLY credential: tools
+    # forward it to the execution broker, which runs the real tool
+    # server-side for this run's owner. It expires with the run and is
+    # revoked when the run ends.
+    auth_token = getattr(run_ctx, "capability", None)
+    if user_email and not auth_token:
         text_parts.append(
             f"[Authenticated User: {user_email}]\n"
-            f"[Personal Tools Auth Token: {auth_token}]\n"
+            f"[Personal tools are DISABLED for this run: the execution "
+            f"broker is unavailable. Do not attempt to use personal CLI "
+            f"tools; tell the user tool access is temporarily unavailable "
+            f"if they ask for an action that needs them.]"
+        )
+    if user_email and auth_token:
+        # The run capability is delivered to tool shims via the worker
+        # environment (LOMA_RUN_CAPABILITY), never via prompt text: it must
+        # not enter model context, transcripts, or tool argv.
+        text_parts.append(
+            f"[Authenticated User: {user_email}]\n"
             f"SECURITY RULE: You are acting on behalf of {user_email}. "
             f"You MUST ONLY use the personal CLI tools for Gmail, Google Drive, "
             f"Google Calendar, Google Sheets, Google Slides, Google Docs, and Slack. "
             f"You MUST NEVER use mcp__claude_ai_Gmail__*, mcp__claude_ai_Google_Drive__*, "
             f"mcp__claude_ai_Google_Calendar__*, or any other mcp__claude_ai_* tools. "
             f"These tools belong to a different account and would violate user privacy.\n"
-            f"When using personal tools (gmail, google_drive, google_calendar, "
-            f"google_sheets, google_slides, google_docs_personal, google_apps_script, slack_user, telegram, notify), you MUST pass "
-            f"`--user-email {user_email} --auth-token {auth_token}`. "
-            f"Never use a different user's email with --user-email."
+            f"Personal tools (gmail, google_drive, google_calendar, google_sheets, "
+            f"google_slides, google_docs_personal, google_apps_script, slack_user, "
+            f"telegram, notify) authenticate automatically as {user_email}: run them "
+            f"as `python3 tools/<name>.py <command> ...` with NO --user-email or "
+            f"--auth-token flags. Identity is enforced server-side and cannot be "
+            f"overridden."
         )
 
     # Expose the conversation id so tools (e.g. tools/notify.py) can deep-link
     # notifications back to this conversation.
     conversation_id = getattr(observer, "conversation_id", None) if observer else None
-    if user_email and conversation_id:
+    if user_email and auth_token and conversation_id:
         text_parts.append(
             f"[Conversation ID: {conversation_id}]\n"
             f"To leave a persistent notification in this user's Loma inbox (the bell icon "
-            f"in the dashboard), run `python3 tools/notify.py --user-email {user_email} "
-            f"--auth-token {auth_token} send --title \"...\" --body \"...\" "
+            f"in the dashboard), run `python3 tools/notify.py "
+            f"send --title \"...\" --body \"...\" "
             f"--conversation-id {conversation_id}`. Use it when a flow or long-running "
             f"task finishes with a result the user should see — the notification "
             f"deep-links back to this conversation and persists until dismissed. "
@@ -994,6 +1033,7 @@ async def stream_agent(
                 include_steps=include_steps,
                 source=source,
                 user_email=user_email,
+                run_ctx=run_ctx,
             ):
                 yield event
         except Exception as e:
@@ -1030,6 +1070,7 @@ async def stream_agent(
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
                 image_files=image_files or None,
+                run_ctx=run_ctx,
             ):
                 yield event
         except Exception as e:
@@ -1068,17 +1109,15 @@ async def stream_agent(
             yield "No Claude accounts are currently available."
             return
         try:
-            options = pool._build_options(model_override=selected_claude_model)
-            merged_mcp = dict(options.mcp_servers or {})
-            merged_mcp.update(user_mcp_overrides)
-            for excluded in excluded_integrations:
-                merged_mcp.pop(excluded, None)
-            options.mcp_servers = merged_mcp
+            # Per-user MCP overrides and sharing exclusions are resolved
+            # inside _build_options, which also rewrites every MCP server to
+            # go through the credential gateway (no tokens enter the worker).
+            options = pool._build_options(
+                model_override=selected_claude_model,
+                user_mcp_overrides=user_mcp_overrides,
+                excluded_servers=excluded_integrations,
+            )
             allowed_tools = list(options.allowed_tools or [])
-            for server_name in user_mcp_overrides:
-                tool_name = f"mcp__{server_name}"
-                if tool_name not in allowed_tools:
-                    allowed_tools.append(tool_name)
             # Per-chat tool filtering
             if tool_config and tool_config.get("enabled_tools") is not None:
                 enabled_set = set(tool_config["enabled_tools"])
@@ -1086,12 +1125,19 @@ async def stream_agent(
                 enabled_set.add("Skill")
                 allowed_tools = [t for t in allowed_tools if t in enabled_set]
             options.allowed_tools = allowed_tools
-            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
+            from agent.pool import _prepare_worker_subscription_env
+            options.env, sub_tokens = _prepare_worker_subscription_env(account, options._worker_workspace)
             client = ClaudeSDKClient(options=options)
+            client._worker_workspace = options._worker_workspace
+            client._mcp_proxy_tokens = options._mcp_proxy_tokens
+            client._sub_proxy_tokens = sub_tokens
             await asyncio.wait_for(client.connect(), timeout=90)
             client._pool_account = account
             client._pool_model = options.model
             client._pool_ephemeral = True
+            client._worker_workspace = getattr(options, "_worker_workspace", None)
+            client._mcp_proxy_tokens = getattr(options, "_mcp_proxy_tokens", [])
+            client._disabled_mcp_servers = getattr(options, "_disabled_mcp_servers", [])
             pool._in_use += 1
             account_email = account.get("email")
             logger.info(
@@ -1102,8 +1148,7 @@ async def stream_agent(
             logger.error("Failed to create per-user MCP client: %s", e)
             if client is not None:
                 await pool.safe_disconnect(client)
-            client = None
-            user_mcp_overrides = {}
+            raise RuntimeError("Personal integration initialization failed; no shared fallback was started") from None
 
     if client is None:
         try:
@@ -1320,7 +1365,7 @@ async def stream_agent(
                                             emitted_file_paths.add(fpath)
                                             try:
                                                 from api.routes import register_served_file
-                                                file_info = register_served_file(fpath)
+                                                file_info = register_served_file(fpath, owner_email=user_email, conversation_id=conversation_id)
                                                 logger.info(
                                                     "[FILE] Registered %s as %s (%s, %d bytes)",
                                                     fpath, file_info["file_id"],
@@ -1462,7 +1507,7 @@ async def stream_agent(
                                     for fpath in file_paths:
                                         if fpath in emitted_file_paths:
                                             continue
-                                        artifact = _detect_file_artifact(fpath)
+                                        artifact = _detect_file_artifact(fpath, owner_email=user_email, conversation_id=conversation_id)
                                         if artifact:
                                             emitted_file_paths.add(fpath)
                                             logger.info(

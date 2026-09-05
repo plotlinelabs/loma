@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { signProxyIdentity } from "@/lib/proxy-identity";
 
 export const runtime = "nodejs";
 
@@ -16,8 +17,11 @@ export async function GET() {
   if (!email) {
     return new Response(null, { status: 401 });
   }
-  return new Response(null, {
-    status: 200,
-    headers: { "X-Auth-Email": email },
-  });
+  try {
+    return new Response(null, { status: 200, headers: {
+      ...await signProxyIdentity(email), "Cache-Control": "no-store",
+    } });
+  } catch {
+    return new Response(null, { status: 503 });
+  }
 }

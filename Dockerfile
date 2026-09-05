@@ -1,11 +1,13 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS worker-base
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git curl ca-certificates \
     poppler-utils tesseract-ocr openssh-client \
-    && OPENCODE_INSTALL_DIR=/usr/local/bin sh -c 'curl -fsSL https://opencode.ai/install | bash' \
-    && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
+    && curl -fsSL https://opencode.ai/install -o /tmp/install-opencode.sh \
+    && bash /tmp/install-opencode.sh --no-modify-path \
+    && install -m 0755 /root/.opencode/bin/opencode /usr/local/bin/opencode \
+    && rm -rf /root/.opencode /tmp/install-opencode.sh \
     && opencode --version \
     && npm install -g @anthropic-ai/claude-code \
     && claude --version \
@@ -23,12 +25,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
         @lishenxydlgzs/aws-athena-mcp \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
+# Fail the image build if a CLI relies on root's home or shell startup files.
+COPY scripts/check_worker_clis.py /tmp/check_worker_clis.py
+RUN python /tmp/check_worker_clis.py && rm /tmp/check_worker_clis.py
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# This image contains runtimes and public dependencies, never application code,
+# .env files, account directories, or backend signing/provider credentials.
+COPY broker/sandbox_entry.py /usr/local/lib/loma_worker_entry.py
+COPY tools/pptx_creator.py /opt/loma-render/tools/pptx_creator.py
+RUN printf '1\n' > /.loma-worker-image && mkdir -p /run/loma /opt/loma-render/ppt/output
+
+FROM worker-base AS backend
+# Independent read-only image for each OCI worker, not the backend rootfs.
+COPY --from=worker-base / /opt/loma-worker-rootfs
+# Install the authenticated gVisor distribution only into the trusted backend.
+RUN apt-get update && apt-get install -y --no-install-recommends gnupg \
+    && curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor.gpg] https://storage.googleapis.com/gvisor/releases release main" > /etc/apt/sources.list.d/gvisor.list \
+    && apt-get update && apt-get install -y --no-install-recommends runsc \
+    && rm -rf /var/lib/apt/lists/*
 COPY . .
+ENV LOMA_WORKER_SANDBOX=runsc
+ENV LOMA_WORKER_ROOTFS=/opt/loma-worker-rootfs
 ENV PYTHONPATH=/app
 ENV WEBHOOK_PORT=3000
+# Dedicated non-root identity for isolated per-run agent workers. The backend
+# (root in this image) drops every worker subprocess to this uid/gid, so
+# malicious run code cannot read backend-owned files (.env, /root/.ssh-host,
+# other runs' workspaces). See broker/worker.py and docs/execution-security.md.
+RUN groupadd -g 990 loma-worker \
+    && useradd -u 990 -g 990 -M -s /usr/sbin/nologin loma-worker \
+    && chmod 700 /root
+ENV LOMA_WORKER_UID=990
+ENV LOMA_WORKER_GID=990
+ENV LOMA_WORKER_UID_RANGE=200000-200999
 # Persistent in-container workspace for cloning & running repos (named volume
 # loma-workspace -> /opt/loma-workspace in docker-compose.yml). Lets long-running
 # agent tasks keep their clone across container recreation, unlike /tmp's

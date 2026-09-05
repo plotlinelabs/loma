@@ -433,6 +433,8 @@ def _extract_project_flag(args: list[str]) -> list[str]:
 
 
 if __name__ == "__main__":
+    from _integration_access import authorize_cli
+    authorize_cli('posthog')
     from dotenv import load_dotenv
     load_dotenv()
 

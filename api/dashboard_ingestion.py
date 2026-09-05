@@ -64,20 +64,17 @@ async def _extract_thread_refs_llm(prompt: str) -> dict[str, list[str]]:
     )
 
     try:
-        from agent.pool import background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", message,
-            "--model", "claude-haiku-4-5-20251001",
-            "--max-turns", "1",
-            "--output-format", "json",
-            "--allowedTools", "",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
+        from agent.pool import run_background_cli
+        returncode, stdout, _ = await run_background_cli(
+            ["claude", "-p", message,
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "1",
+             "--output-format", "json",
+             "--allowedTools", ""],
+            timeout=15,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
 
-        if proc.returncode != 0:
+        if returncode != 0:
             return {}
 
         output = stdout.decode().strip()

@@ -54,12 +54,12 @@ async def handle_grain_webhook(request: web.Request) -> web.Response:
 
     logger.info("[GRAIN-WEBHOOK] received recording_id=%s", recording_id)
 
-    # Fire-and-forget: ingestion fetches transcript + recording details from Grain API.
-    asyncio.create_task(ingest_grain_webhook(body, recording_id))
-
-    return web.json_response({"status": "accepted", "recording_id": recording_id})
+    # No verified personal principal is bound to legacy organization webhooks.
+    return web.json_response({"error": "Grain webhook enrichment requires a per-user subscription"}, status=503)
 
 
 def setup_grain_webhook_routes(app: web.Application) -> None:
     """Register the Grain webhook route."""
     app.router.add_post("/webhooks/grain", handle_grain_webhook)
+    from webhooks.grain_personal import setup_routes
+    setup_routes(app)

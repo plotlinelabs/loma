@@ -486,6 +486,8 @@ def _collect_flag_list(args: list[str], flag: str) -> list[str]:
 
 
 if __name__ == "__main__":
+    from _integration_access import authorize_cli
+    authorize_cli('pylon')
     from dotenv import load_dotenv
     load_dotenv()
 

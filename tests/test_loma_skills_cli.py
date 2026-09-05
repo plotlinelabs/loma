@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 from tools import loma_skills
@@ -14,10 +15,11 @@ def test_get_notes_that_it_returns_skill_md_only(monkeypatch, capsys):
             "content": "Main instructions",
         }
 
-    monkeypatch.setattr(loma_skills, "_connect_db", lambda: (SimpleNamespace(close=lambda: None), object()))
+    monkeypatch.setattr(loma_skills, "_connect_db", lambda: (SimpleNamespace(close=lambda: None), SimpleNamespace(skills=SimpleNamespace(find_one=AsyncMock(return_value=None)))))
+    monkeypatch.setattr(loma_skills, "_require_reader", AsyncMock(return_value="owner@example.test"))
     monkeypatch.setattr(loma_skills.skill_service, "get_skill", fake_get_skill)
 
-    status = asyncio.run(loma_skills._run(SimpleNamespace(command="get", slug="demo")))
+    status = asyncio.run(loma_skills._run(SimpleNamespace(command="get", slug="demo", user_email="owner@example.test", auth_token="sample")))
 
     assert status == 0
     output = capsys.readouterr().out
@@ -29,11 +31,12 @@ def test_dump_prints_markdown(monkeypatch, capsys):
     async def fake_get_skill(db, slug):
         return {"slug": slug, "name": "Demo", "files": []}
 
-    monkeypatch.setattr(loma_skills, "_connect_db", lambda: (SimpleNamespace(close=lambda: None), object()))
+    monkeypatch.setattr(loma_skills, "_connect_db", lambda: (SimpleNamespace(close=lambda: None), SimpleNamespace(skills=SimpleNamespace(find_one=AsyncMock(return_value=None)))))
+    monkeypatch.setattr(loma_skills, "_require_reader", AsyncMock(return_value="owner@example.test"))
     monkeypatch.setattr(loma_skills.skill_service, "get_skill", fake_get_skill)
     monkeypatch.setattr(loma_skills.skill_service, "format_skill_dump_markdown", lambda skill: "# Demo\n")
 
-    status = asyncio.run(loma_skills._run(SimpleNamespace(command="dump", slug="demo")))
+    status = asyncio.run(loma_skills._run(SimpleNamespace(command="dump", slug="demo", user_email="owner@example.test", auth_token="sample")))
 
     assert status == 0
     assert capsys.readouterr().out == "# Demo\n"
