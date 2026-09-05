@@ -167,7 +167,9 @@ The subprocess boundary is real but not kernel-grade. Production must add:
 - Fixed-argv admin utilities (`claude auth status/logout`, `codex logout`
   in auth/usage routes) still run backend-side; they execute no
   model-driven code. Background `claude -p` utility calls (titles/topics)
-  run with the scrubbed worker env and a scratch workspace.
+  require a current authenticated run and use the same subscription proxy with
+  fresh configuration and a scratch workspace. Unscoped calls use the caller's
+  deterministic fallback, never ambient account credentials.
 - Tool outputs that are files are produced server-side; the existing file
   delivery path serves them. Worker-side files can be passed INTO tools
   only via the bounded inline upload in the shim.
@@ -292,3 +294,15 @@ not included in this API implementation.
 No preview deployment testing was performed for these additions, as requested.
 Unit and local subprocess checks are not evidence of independent worker isolation
 or real vendor subscription compatibility.
+
+
+### Legacy credential directories and background utilities
+
+Before proxy-backed Claude/Codex execution, account directories are made private
+and reclaimed by the trusted backend identity. Non-root backends fail closed if
+they cannot secure a legacy worker-owned directory; symlink directories are
+rejected. Stop all workers from older deployments before upgrading: permission
+changes cannot revoke already-open file descriptors. Background utility calls
+also revoke their proxy and wait for process termination before deleting scratch
+state, including cancellation/error paths. This closes a credential-directory
+fallback, not the independent worker containment requirement.

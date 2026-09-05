@@ -451,6 +451,8 @@ class CodexWorker:
         # configuration and a revocable proxy reference, never auth.json.
         config_home = self._workspace / "codex-config"
         config_home.mkdir(mode=0o700)
+        from broker.credential_files import protect_account_directory
+        protect_account_directory(self.account["config_dir"])
         token = get_subscription_registry().register(
             "codex", Path(self.account["config_dir"]) / "auth.json", capability=ctx.capability)
         ctx.sub_proxy_tokens.append(token)

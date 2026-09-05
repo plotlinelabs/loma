@@ -67,6 +67,8 @@ def _prepare_worker_subscription_env(account: dict, workspace) -> tuple[dict[str
     if workspace is None or not capability:
         raise ExecutionUnavailable("Subscription execution requires an authenticated run")
     registry = get_subscription_registry()
+    from broker.credential_files import protect_account_directory
+    protect_account_directory(account["config_dir"])
     config_copy = _prepare_worker_claude_config(account, workspace)
     token = registry.register("claude", os.path.join(account["config_dir"], ".credentials.json"),
                               capability=capability)
@@ -165,37 +167,34 @@ async def shutdown_pool():
 
 
 async def run_background_cli(argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
-    """Run a fixed-argv background `claude` utility call (titles, topics).
+    """Run a background utility with the current run's brokered subscription.
 
-    Each call gets a FRESH private workspace (removed afterwards — never a
-    shared, reused scratch directory) and the same scrubbed worker boundary
-    as agent runs: allowlist-only env, resource limits, privilege drop.
-
-    The server process has no Claude credentials of its own — bare `claude`
-    subprocesses exit 1. Borrow an authenticated pool account's
-    CLAUDE_CONFIG_DIR (round-robin, cooldown-aware) so the CLI can run.
-
-    Returns (returncode, stdout, stderr); raises asyncio.TimeoutError after
-    killing the worker on timeout.
+    No authenticated run means no credential access. Existing callers use their
+    deterministic fallback rather than borrowing ambient pooled credentials.
     """
+    from broker.controller import current_run, get_subscription_registry
+    from broker.operations import _collect_tool_output
+    ctx = current_run.get()
+    if not getattr(ctx, 'capability', None):
+        return 1, b'', b'Authenticated run required for background inference'
     workspace = worker_mod.create_workspace(prefix="bgcli")
+    tokens = []
+    process = None
     try:
-        extra: dict[str, str] = {}
-        try:
-            account = get_pool()._next_account()
-            if account:
-                extra["CLAUDE_CONFIG_DIR"] = account["config_dir"]
-        except RuntimeError:
-            pass
+        account = get_pool()._next_account()
+        if not account:
+            return 1, b'', b'No subscription account available'
+        extra, tokens = _prepare_worker_subscription_env(account, workspace)
         env = worker_mod.build_worker_env(workspace, extra=extra)
         process = await worker_mod.spawn_worker(argv, workspace=workspace, env=env)
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            worker_mod.terminate_worker(process)
-            raise
+        stdout, stderr = await asyncio.wait_for(_collect_tool_output(process), timeout=timeout)
         return process.returncode, stdout, stderr
     finally:
+        if process is not None and process.returncode is None:
+            worker_mod.terminate_worker(process)
+            await process.wait()
+        for token in tokens:
+            get_subscription_registry().revoke(token)
         worker_mod.cleanup_workspace(workspace)
 
 

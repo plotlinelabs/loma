@@ -234,6 +234,14 @@ async def test_background_cli_env_is_scrubbed_and_workspace_cleaned(monkeypatch,
     monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", "synthetic-key")
     monkeypatch.setenv("OBSERVABILITY_MONGODB_URI", "mongodb://synthetic")
     import agent.pool as pool_mod
+    from broker.gateway import SubscriptionProxyRegistry
+    account_dir = tmp_path / "account"
+    account_dir.mkdir()
+    monkeypatch.setattr(pool_mod, 'get_pool', lambda: SimpleNamespace(
+        _next_account=lambda: {'config_dir': str(account_dir)}))
+    monkeypatch.setattr(controller_mod, '_sub_registry', SubscriptionProxyRegistry())
+    ctx = SimpleNamespace(capability='synthetic', sub_proxy_tokens=[])
+    monkeypatch.setattr(controller_mod, 'current_run', SimpleNamespace(get=lambda: ctx))
 
     returncode, stdout, _ = await pool_mod.run_background_cli(
         ["python3", "-c", "import os, json; print(json.dumps(dict(os.environ)))"],
@@ -244,6 +252,9 @@ async def test_background_cli_env_is_scrubbed_and_workspace_cleaned(monkeypatch,
     assert "OAUTH_ENCRYPTION_KEY" not in env
     assert "OBSERVABILITY_MONGODB_URI" not in env
     assert "bgcli-" in env["HOME"]
+    assert env['CLAUDE_CONFIG_DIR'].startswith(env['HOME'])
+    assert str(account_dir) not in str(env)
+    assert not controller_mod._sub_registry._entries
     # Each call gets a FRESH workspace that is removed afterwards.
     workers_root = tmp_path / "workers"
     assert not any(workers_root.glob("bgcli-*"))
