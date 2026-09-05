@@ -4,7 +4,10 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git curl ca-certificates \
     poppler-utils tesseract-ocr openssh-client \
-    && OPENCODE_INSTALL_DIR=/usr/local/bin sh -c 'curl -fsSL https://opencode.ai/install | bash' \
+    && curl -fsSL https://opencode.ai/install -o /tmp/install-opencode.sh \
+    && bash /tmp/install-opencode.sh --no-modify-path \
+    && install -m 0755 /root/.opencode/bin/opencode /usr/local/bin/opencode \
+    && rm -rf /root/.opencode /tmp/install-opencode.sh \
     && opencode --version \
     && npm install -g @anthropic-ai/claude-code \
     && claude --version \
@@ -21,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
         @sentry/mcp-server \
         @lishenxydlgzs/aws-athena-mcp \
     && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# Fail the image build if a CLI relies on root's home or shell startup files.
+COPY scripts/check_worker_clis.py /tmp/check_worker_clis.py
+RUN python /tmp/check_worker_clis.py && rm /tmp/check_worker_clis.py
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
