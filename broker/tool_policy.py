@@ -19,9 +19,94 @@ class Command:
     repeatable: str = ''
     stdin: bool = False
     outputs: str = ''
+    required: str = ''
 
 
 POLICY = {
+    'agreement_review': {
+        'download': Command('file-id', outputs='output-path', required='file-id output-path'),
+        'read': Command(files='file-path', required='file-path'),
+        'annotate': Command(files='file-path', outputs='output-path', stdin=True, required='file-path output-path'),
+        'upload': Command('folder-id name', files='file-path', required='file-path'),
+    },
+    'cdn_upload': {
+        'upload': Command('key', files='file'),
+        'upload-url': Command('url key'),
+    },
+    'apollo': {
+        'search': Command('title seniority location domain company_size keywords page per_page', repeatable='title seniority location domain company_size'),
+        'enrich': Command('name apollo_id email company domain linkedin_url', switches='reveal_emails reveal_phone'),
+        'bulk-enrich': Command('data', switches='reveal_emails reveal_phone'),
+        'org-search': Command('domain location company_size keywords page per_page', repeatable='domain location company_size'),
+        'org-enrich': Command('domain'),
+        'org-bulk-enrich': Command('domain', repeatable='domain'),
+        'org-get': Command('id'),
+        'org-job-postings': Command('id'),
+        'news-search': Command('keywords org_ids page per_page', repeatable='org_ids'),
+        'contacts-create': Command('data first_name last_name email title company account_id owner_id'),
+        'contacts-bulk-create': Command('data'),
+        'contacts-bulk-update': Command('data'),
+        'contacts-get': Command('id'),
+        'contacts-update': Command('id data'),
+        'contacts-search': Command('keywords page per_page'),
+        'contacts-update-stage': Command('id contact_stage_id'),
+        'contacts-update-owner': Command('id owner_id'),
+        'contact-stages': Command(),
+        'contact-lists': Command(),
+        'deals-create': Command('data name amount opportunity_stage_id account_id owner_id closed_date'),
+        'deals-get': Command('id'),
+        'deals-update': Command('id data'),
+        'deals-list': Command('page per_page'),
+        'deal-stages': Command(),
+        'sequences-search': Command('keywords page per_page'),
+        'sequences-add-contacts': Command('sequence_id contact_ids email_account_id', repeatable='contact_ids'),
+        'sequences-update-touch': Command('campaign_id touch_id status data'),
+        'tasks-create': Command('data contact_id account_id user_id type priority due_date note'),
+        'tasks-search': Command('keywords page per_page'),
+        'calls-create': Command('data contact_id account_id user_id disposition direction note duration'),
+        'calls-update': Command('data'),
+        'calls-search': Command('page per_page'),
+        'emails-search': Command('page per_page'),
+        'email-stats': Command('id'),
+        'email-accounts': Command(),
+        'custom-fields': Command(),
+        'custom-fields-create': Command('name field_type entity_type'),
+        'users': Command(),
+        'api-usage': Command(),
+        'api-health': Command(),
+    },
+    'dataroom': {
+        'create-room': Command(positionals=1),
+        'list-rooms': Command('search'),
+        'get-room': Command(positionals=1),
+        'delete-room': Command(positionals=1),
+        'update-room': Command('internal-name name permission-strategy tags bulk-download show-last-updated notifications', positionals=1),
+        'list-docs': Command('search'),
+        'add-doc': Command('folder', positionals=2),
+        'list-room-docs': Command(positionals=1),
+        'create-doc': Command('url', positionals=1),
+        'create-folder': Command('path', positionals=2),
+        'create-link': Command('type password name allow-list deny-list agreement-id domain slug expiry-days watermark-config show-banner allow-download', switches='enable-agreement enable-feedback no-email-protection no-email-auth no-watermark no-screenshot-protection no-notification', positionals=1),
+        'update-link': Command('expiry-days password allow-list deny-list agreement-id name watermark screenshot-protection email-protection email-auth notification allow-download watermark-config enable-agreement show-banner enable-feedback', positionals=1),
+        'delete-link': Command(positionals=1),
+        'get-link': Command(positionals=1),
+        'list-links': Command(positionals=1),
+        'viewers': Command(positionals=1),
+        'team-viewers': Command('search'),
+        'get-branding': Command(positionals=1),
+        'set-branding': Command('logo banner brand-color accent-color welcome-message', positionals=1),
+    },
+    'stitch': {
+        'download': Command('url', outputs='output', required='url output'),
+        'list-projects': Command(),
+        'create-project': Command('title'),
+        'get-project': Command('id'),
+        'list-screens': Command('project-id'),
+        'get-screen': Command('project-id screen-id'),
+        'generate': Command('project-id prompt device model'),
+        'edit': Command('project-id screen-ids prompt'),
+        'variants': Command('project-id screen-ids prompt count range'),
+    },
     'gmail': {
         'list-inbox': Command('limit query'),
         'read-email': Command('message-id'),
@@ -254,6 +339,8 @@ def prepare_argv(tool: str, argv: list[str], uploads: dict[str, str]) -> list[st
                 used_uploads.update(parts)
                 value = ','.join(uploads[part] for part in parts)
         result.extend(['--' + name, value])
+    if not set(spec.required.split()).issubset(seen):
+        raise Denied()
     if set(uploads) != used_uploads:
         raise Denied()
     return result

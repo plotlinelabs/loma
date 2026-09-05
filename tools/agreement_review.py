@@ -123,15 +123,24 @@ async def cmd_download(args):
             if resp.status != 200:
                 text = await resp.text()
                 return {"error": f"Failed to download file (HTTP {resp.status}): {text[:300]}"}
-            content = await resp.read()
+            content = bytearray()
+            async for chunk in resp.content.iter_chunked(65536):
+                content.extend(chunk)
+                if len(content) > 1_000_000:
+                    return {"error": "Document exceeds download size limit"}
+            content = bytes(content)
 
     if not file_name.endswith(".docx"):
         file_name = file_name.rsplit(".", 1)[0] + ".docx"
 
-    import tempfile
-    with tempfile.NamedTemporaryFile(prefix="loma-agreement-", suffix=".docx", delete=False) as f:
-        output_path = f.name
-        f.write(content)
+    output_path = getattr(args, 'output_path', None)
+    if output_path:
+        Path(output_path).write_bytes(content)
+    else:
+        import tempfile
+        with tempfile.NamedTemporaryFile(prefix="loma-agreement-", suffix=".docx", delete=False) as f:
+            output_path = f.name
+            f.write(content)
 
     return {
         "file_path": output_path,
@@ -140,11 +149,23 @@ async def cmd_download(args):
     }
 
 
+def _validate_docx(path):
+    """Reject archive expansion bombs before handing uploads to the XML parser."""
+    from zipfile import ZipFile
+    with ZipFile(path) as archive:
+        entries = archive.infolist()
+        if len(entries) > 2000 or sum(entry.file_size for entry in entries) > 50_000_000:
+            raise ValueError('Document exceeds archive limits')
+        if any(entry.file_size > 20_000_000 for entry in entries):
+            raise ValueError('Document entry exceeds size limit')
+
+
 def cmd_read(args):
     """Read a .docx and return paragraphs as JSON."""
     from docx import Document
 
     try:
+        _validate_docx(args.file_path)
         doc = Document(args.file_path)
     except Exception as e:
         return {"error": f"Failed to open document: {e}"}
@@ -192,6 +213,7 @@ def cmd_annotate(args):
     comments = payload.get("comments", [])
 
     try:
+        _validate_docx(args.file_path)
         doc = Document(args.file_path)
     except Exception as e:
         return {"error": f"Failed to open document: {e}"}
@@ -506,14 +528,19 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     dl = subparsers.add_parser("download", help="Download a .docx from Google Drive")
+    dl.add_argument("--output-path", help="Explicit output file")
     dl.add_argument("--file-id", required=True, help="Google Drive file ID")
     dl.add_argument("--user-email", required=True)
     dl.add_argument("--auth-token", required=True)
 
     rd = subparsers.add_parser("read", help="Read a .docx and return paragraphs as JSON")
+    rd.add_argument("--user-email")
+    rd.add_argument("--auth-token")
     rd.add_argument("--file-path", required=True, help="Path to the .docx file")
 
     an = subparsers.add_parser("annotate", help="Apply tracked changes and comments from stdin JSON")
+    an.add_argument("--user-email")
+    an.add_argument("--auth-token")
     an.add_argument("--file-path", required=True, help="Path to the .docx file")
     an.add_argument("--output-path", required=False, help="Output path (defaults to *_reviewed.docx)")
 

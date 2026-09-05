@@ -117,3 +117,23 @@ def test_worker_only_reads_stdin_for_declared_commands(tmp_path, monkeypatch):
     monkeypatch.setattr('urllib.request.urlopen', urlopen)
     shim = runpy.run_path(str(tmp_path / 'tools' / 'pylon.py'))
     assert shim['main']() == 0
+
+
+@pytest.mark.asyncio
+async def test_agreement_identity_and_binary_output_roundtrip(sandbox_tool):
+    tools, db = sandbox_tool
+    (tools / 'agreement_review.py').write_text('''import sys,json
+from pathlib import Path
+assert sys.argv[1] == 'download'
+assert sys.argv[sys.argv.index('--user-email')+1] == 'owner@example.test'
+assert sys.argv[sys.argv.index('--auth-token')+1] == 'synthetic'
+output = sys.argv[sys.argv.index('--output-path')+1]
+Path(output).write_bytes(bytes(range(256)))
+print(json.dumps({'file_path': output}))
+''')
+    result = await ToolInvoke().execute(db, 'owner@example.test', 'agreement_review', {
+        'argv': ['download', '--file-id', 'sample', '--output-path', '/workspace/review.docx',
+                 '--user-email', 'forged@example.test', '--auth-token', 'forged']})
+    assert result['exit_code'] == 0
+    assert base64.b64decode(result['artifacts']['/workspace/review.docx']['data']) == bytes(range(256))
+    assert 'loma-broker-files-' not in result['stdout']
