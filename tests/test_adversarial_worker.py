@@ -25,7 +25,7 @@ FAKE_SECRETS = {
     "OAUTH_ENCRYPTION_KEY": "synthetic-master-key-1234567890abcdef",
     "ANTHROPIC_API_KEY": "synthetic-anthropic-value",
     "OPENAI_API_KEY": "synthetic-openai-value",
-    "SLACK_BOT_TOKEN": "xoxb-synthetic-bot-token",
+    "SLACK_BOT_TOKEN": "synthetic-slack-bot-value",
 }
 
 IS_ROOT = os.geteuid() == 0

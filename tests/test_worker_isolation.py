@@ -31,7 +31,7 @@ FAKE_SECRETS = {
     "OBSERVABILITY_MONGODB_URI": "mongodb://synthetic-host/db",
     "OAUTH_ENCRYPTION_KEY": "synthetic-fernet-key-000000000000000000000000",
     "ANTHROPIC_API_KEY": "sk-ant-synthetic-000",
-    "SLACK_BOT_TOKEN": "xoxb-synthetic-000",
+    "SLACK_BOT_TOKEN": "synthetic-slack-value-000",
     "OPENAI_API_KEY": "sk-synthetic-000",
 }
 
