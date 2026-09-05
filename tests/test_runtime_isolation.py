@@ -2,6 +2,7 @@
 the broker; the legacy in-process execution path no longer exists."""
 
 import copy
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -225,17 +226,27 @@ def test_pool_build_options_isolates_worker(monkeypatch, tmp_path):
     assert "mcp__sentry" not in options.allowed_tools
 
 
-def test_background_cli_env_is_scrubbed(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_background_cli_env_is_scrubbed_and_workspace_cleaned(monkeypatch, tmp_path):
     monkeypatch.setenv("LOMA_WORKER_ROOT", str(tmp_path / "workers"))
+    monkeypatch.delenv("LOMA_WORKER_UID", raising=False)
+    monkeypatch.delenv("LOMA_WORKER_UID_RANGE", raising=False)
     monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", "synthetic-key")
     monkeypatch.setenv("OBSERVABILITY_MONGODB_URI", "mongodb://synthetic")
     import agent.pool as pool_mod
 
-    monkeypatch.setattr(pool_mod, "_background_cli_workspace", None)
-    env = pool_mod.background_cli_env()
+    returncode, stdout, _ = await pool_mod.run_background_cli(
+        ["python3", "-c", "import os, json; print(json.dumps(dict(os.environ)))"],
+        timeout=30,
+    )
+    assert returncode == 0
+    env = json.loads(stdout.decode())
     assert "OAUTH_ENCRYPTION_KEY" not in env
     assert "OBSERVABILITY_MONGODB_URI" not in env
-    assert env["HOME"] == pool_mod.background_cli_cwd()
+    assert "bgcli-" in env["HOME"]
+    # Each call gets a FRESH workspace that is removed afterwards.
+    workers_root = tmp_path / "workers"
+    assert not any(workers_root.glob("bgcli-*"))
 
 
 # ── stream_agent lifecycle ───────────────────────────────────────────────
@@ -280,10 +291,13 @@ async def test_stream_agent_delivers_capability_and_revokes(monkeypatch, tmp_pat
 
     assert "ok" in events
     assert lifecycle == {"started": 1, "ended": 1}
-    # The prompt carries the run capability (the worker's only credential)…
-    assert capability in seen["full_prompt"]
+    # The capability is delivered via the worker environment, NEVER via
+    # prompt text (it must not enter model context or transcripts)…
+    assert capability not in seen["full_prompt"]
+    assert f"[Authenticated User: {EMAIL}]" in seen["full_prompt"]
     # …and the run context reaches the runtime for workspace/sandbox use.
     assert seen["run_ctx"].workspace == workspace
+    assert seen["run_ctx"].worker_env_extra["LOMA_RUN_CAPABILITY"] == capability
 
 
 @pytest.mark.asyncio

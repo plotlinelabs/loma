@@ -498,7 +498,8 @@ async def ensure_opencode_server(
     return server.base_url
 
 
-def _prepare_opencode_data_home(config_home: Path) -> Path:
+def _prepare_opencode_data_home(config_home: Path,
+                                workspace: str | Path | None = None) -> Path:
     """Copy ONLY OpenCode's own auth material into an isolated XDG data home.
 
     The OpenCode CLI owns its model-provider auth file; without it the server
@@ -519,7 +520,7 @@ def _prepare_opencode_data_home(config_home: Path) -> Path:
             target.chmod(0o600)
     except OSError:
         logger.warning("Could not stage OpenCode auth.json into isolated data home")
-    worker_mod.grant_worker_access(data_home)
+    worker_mod.grant_worker_access(data_home, workspace=workspace)
     return data_home
 
 
@@ -539,18 +540,16 @@ async def _spawn_opencode_server_process(
     provider API keys stay on the backend and are reached through the
     credential gateway (see _provider_gateway_overrides).
     """
-    data_home = _prepare_opencode_data_home(config_home)
+    data_home = _prepare_opencode_data_home(config_home, workspace=workspace)
     # The sandboxed (non-root) server must read its isolated config home.
-    worker_mod.grant_worker_access(config_home)
-    from broker.controller import broker_url
-    from broker.gateway import gateway_base_url
+    worker_mod.grant_worker_access(config_home, workspace=workspace)
+    from broker.controller import run_worker_env_extra
 
     env = worker_mod.build_worker_env(workspace, extra={
         "XDG_CONFIG_HOME": str(config_home),
         "XDG_DATA_HOME": str(data_home),
         "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
-        "LOMA_BROKER_URL": broker_url(),
-        "LOMA_GATEWAY_URL": gateway_base_url(),
+        **run_worker_env_extra(),
     })
     return await worker_mod.spawn_worker(
         [opencode_bin, "serve", "--port", str(port), "--hostname", host],

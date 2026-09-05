@@ -190,6 +190,8 @@ def test_sdk_launcher_obeys_namespace_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(worker, '_worker_uid_gid', lambda: (None, None))
     monkeypatch.setenv('LOMA_WORKER_BWRAP', '1')
     monkeypatch.setattr(worker.shutil, 'which', lambda name: '/usr/bin/' + name)
+    (tmp_path / 'tmp').mkdir(mode=0o700)
+    tmp_path.chmod(0o700)
     launcher = worker.write_cli_launcher(tmp_path, '/usr/bin/example-cli', {'HOME': str(tmp_path)})
     text = launcher.read_text()
     assert "'bwrap'" in text and "'--unshare-pid'" in text

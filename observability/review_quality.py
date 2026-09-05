@@ -85,23 +85,19 @@ async def assess_review_quality(
     )
 
     try:
-        from agent.pool import background_cli_cwd, background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
-            "--model", "claude-opus-4-8",
-            "--max-turns", "1",
-            "--output-format", "json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
-            cwd=background_cli_cwd(),
+        from agent.pool import run_background_cli
+        returncode, stdout, stderr = await run_background_cli(
+            ["claude", "-p", prompt,
+             "--model", "claude-opus-4-8",
+             "--max-turns", "1",
+             "--output-format", "json"],
+            timeout=60,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
 
-        if proc.returncode != 0:
+        if returncode != 0:
             logger.error(
                 "[REVIEW-QUALITY] CLI failed (rc=%d): %s",
-                proc.returncode, stderr.decode()[:200],
+                returncode, stderr.decode()[:200],
             )
             return None
 

@@ -855,19 +855,23 @@ async def _stream_agent_impl(
             f"if they ask for an action that needs them.]"
         )
     if user_email and auth_token:
+        # The run capability is delivered to tool shims via the worker
+        # environment (LOMA_RUN_CAPABILITY), never via prompt text: it must
+        # not enter model context, transcripts, or tool argv.
         text_parts.append(
             f"[Authenticated User: {user_email}]\n"
-            f"[Personal Tools Auth Token: {auth_token}]\n"
             f"SECURITY RULE: You are acting on behalf of {user_email}. "
             f"You MUST ONLY use the personal CLI tools for Gmail, Google Drive, "
             f"Google Calendar, Google Sheets, Google Slides, Google Docs, and Slack. "
             f"You MUST NEVER use mcp__claude_ai_Gmail__*, mcp__claude_ai_Google_Drive__*, "
             f"mcp__claude_ai_Google_Calendar__*, or any other mcp__claude_ai_* tools. "
             f"These tools belong to a different account and would violate user privacy.\n"
-            f"When using personal tools (gmail, google_drive, google_calendar, "
-            f"google_sheets, google_slides, google_docs_personal, google_apps_script, slack_user, telegram, notify), you MUST pass "
-            f"`--user-email {user_email} --auth-token {auth_token}`. "
-            f"Never use a different user's email with --user-email."
+            f"Personal tools (gmail, google_drive, google_calendar, google_sheets, "
+            f"google_slides, google_docs_personal, google_apps_script, slack_user, "
+            f"telegram, notify) authenticate automatically as {user_email}: run them "
+            f"as `python3 tools/<name>.py <command> ...` with NO --user-email or "
+            f"--auth-token flags. Identity is enforced server-side and cannot be "
+            f"overridden."
         )
 
     # Expose the conversation id so tools (e.g. tools/notify.py) can deep-link
@@ -877,8 +881,8 @@ async def _stream_agent_impl(
         text_parts.append(
             f"[Conversation ID: {conversation_id}]\n"
             f"To leave a persistent notification in this user's Loma inbox (the bell icon "
-            f"in the dashboard), run `python3 tools/notify.py --user-email {user_email} "
-            f"--auth-token {auth_token} send --title \"...\" --body \"...\" "
+            f"in the dashboard), run `python3 tools/notify.py "
+            f"send --title \"...\" --body \"...\" "
             f"--conversation-id {conversation_id}`. Use it when a flow or long-running "
             f"task finishes with a result the user should see — the notification "
             f"deep-links back to this conversation and persists until dismissed. "

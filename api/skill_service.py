@@ -599,22 +599,18 @@ async def auto_organize_skills(db) -> dict[str, Any]:
         )
 
         try:
-            from agent.pool import background_cli_cwd, background_cli_env
-            proc = await asyncio.create_subprocess_exec(
-                "claude", "-p", message,
-                "--model", "claude-haiku-4-5-20251001",
-                "--max-turns", "1",
-                "--output-format", "json",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=background_cli_env(),
-                cwd=background_cli_cwd(),
+            from agent.pool import run_background_cli
+            returncode, stdout, stderr = await run_background_cli(
+                ["claude", "-p", message,
+                 "--model", "claude-haiku-4-5-20251001",
+                 "--max-turns", "1",
+                 "--output-format", "json"],
+                timeout=120,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-            if proc.returncode != 0:
+            if returncode != 0:
                 detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip() or "no output"
-                logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, detail)
-                errors.append(f"{batch_label}: claude CLI exited {proc.returncode}: {detail}")
+                logger.warning("Skill organize CLI failed (rc=%d): %s", returncode, detail)
+                errors.append(f"{batch_label}: claude CLI exited {returncode}: {detail}")
                 continue
 
             output = stdout.decode().strip()

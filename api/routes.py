@@ -329,22 +329,18 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
-        from agent.pool import background_cli_cwd, background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", message,
-            "--model", "claude-haiku-4-5-20251001",
-            "--max-turns", "1",
-            "--output-format", "json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
-            cwd=background_cli_cwd(),
+        from agent.pool import run_background_cli
+        returncode, stdout, stderr = await run_background_cli(
+            ["claude", "-p", message,
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "1",
+             "--output-format", "json"],
+            timeout=15,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
-        if proc.returncode != 0:
+        if returncode != 0:
             detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
-            logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, detail)
+            logger.warning("Title generation CLI failed (rc=%d): %s", returncode, detail)
             return _fallback_title(prompt)
 
         output = stdout.decode().strip()
@@ -387,22 +383,18 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
-        from agent.pool import background_cli_cwd, background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", message,
-            "--model", "claude-haiku-4-5-20251001",
-            "--max-turns", "1",
-            "--output-format", "json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
-            cwd=background_cli_cwd(),
+        from agent.pool import run_background_cli
+        returncode, stdout, stderr = await run_background_cli(
+            ["claude", "-p", message,
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "1",
+             "--output-format", "json"],
+            timeout=15,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
-        if proc.returncode != 0:
+        if returncode != 0:
             detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
-            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, detail)
+            logger.warning("Topic classification CLI failed (rc=%d): %s", returncode, detail)
             return "other"
 
         output = stdout.decode().strip()

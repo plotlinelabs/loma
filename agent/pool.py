@@ -129,36 +129,39 @@ async def shutdown_pool():
         _pool = None
 
 
-_background_cli_workspace: Path | None = None
+async def run_background_cli(argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
+    """Run a fixed-argv background `claude` utility call (titles, topics).
 
-
-def background_cli_cwd() -> str:
-    """Private scratch directory for background `claude -p` utility calls."""
-    global _background_cli_workspace
-    if _background_cli_workspace is None or not _background_cli_workspace.exists():
-        _background_cli_workspace = worker_mod.create_workspace(prefix="bgcli")
-    return str(_background_cli_workspace)
-
-
-def background_cli_env() -> dict[str, str]:
-    """Scrubbed env for background `claude -p` utility calls (titles, topics).
+    Each call gets a FRESH private workspace (removed afterwards — never a
+    shared, reused scratch directory) and the same scrubbed worker boundary
+    as agent runs: allowlist-only env, resource limits, privilege drop.
 
     The server process has no Claude credentials of its own — bare `claude`
     subprocesses exit 1. Borrow an authenticated pool account's
     CLAUDE_CONFIG_DIR (round-robin, cooldown-aware) so the CLI can run.
 
-    The backend environment is NEVER inherited: like agent workers, these
-    utility subprocesses get an allowlisted minimal environment with no
-    DB URIs, encryption keys, or provider API keys.
+    Returns (returncode, stdout, stderr); raises asyncio.TimeoutError after
+    killing the worker on timeout.
     """
-    extra: dict[str, str] = {}
+    workspace = worker_mod.create_workspace(prefix="bgcli")
     try:
-        account = get_pool()._next_account()
-        if account:
-            extra["CLAUDE_CONFIG_DIR"] = account["config_dir"]
-    except RuntimeError:
-        pass
-    return worker_mod.build_worker_env(background_cli_cwd(), extra=extra)
+        extra: dict[str, str] = {}
+        try:
+            account = get_pool()._next_account()
+            if account:
+                extra["CLAUDE_CONFIG_DIR"] = account["config_dir"]
+        except RuntimeError:
+            pass
+        env = worker_mod.build_worker_env(workspace, extra=extra)
+        process = await worker_mod.spawn_worker(argv, workspace=workspace, env=env)
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            worker_mod.terminate_worker(process)
+            raise
+        return process.returncode, stdout, stderr
+    finally:
+        worker_mod.cleanup_workspace(workspace)
 
 
 class ClientPool:
@@ -432,10 +435,9 @@ class ClientPool:
         # Isolation boundary: private workspace + broker-backed tool shims.
         from broker.controller import (
             ExecutionUnavailable,
-            broker_url,
             proxy_mcp_servers_for_worker,
+            run_worker_env_extra,
         )
-        from broker.gateway import gateway_base_url
         from broker.operations import ALL_TOOLS
 
         workspace = worker_mod.create_workspace(prefix="claude")
@@ -449,10 +451,7 @@ class ClientPool:
                 "Execution gateway unavailable — all MCP servers disabled for "
                 "this worker (fail closed): %s", disabled,
             )
-        worker_env = worker_mod.build_worker_env(workspace, extra={
-            "LOMA_BROKER_URL": broker_url(),
-            "LOMA_GATEWAY_URL": gateway_base_url(),
-        })
+        worker_env = worker_mod.build_worker_env(workspace, extra=run_worker_env_extra())
         real_cli = _shutil.which("claude") or "claude"
         launcher = worker_mod.write_cli_launcher(
             workspace, real_cli, worker_env, passthrough=_SDK_PASSTHROUGH_VARS,

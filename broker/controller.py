@@ -118,7 +118,31 @@ class RunContext:
         }
         if self.run_id:
             extra["LOMA_RUN_ID"] = self.run_id
+        if self.capability:
+            # The run capability is DESIGNED to be handed to the worker: it
+            # is the worker's only broker credential. Delivering it in the
+            # environment keeps it out of prompt text and model context.
+            extra["LOMA_RUN_CAPABILITY"] = self.capability
         return extra
+
+
+def run_worker_env_extra() -> dict[str, str]:
+    """Worker env additions for a spawn inside the current run context.
+
+    Falls back to the broker/gateway URLs alone (no capability) when no run
+    context is active — such workers get no brokered access (fail closed).
+    """
+    extra = {
+        "LOMA_BROKER_URL": broker_url(),
+        "LOMA_GATEWAY_URL": gateway_base_url(),
+    }
+    ctx = current_run.get()
+    if ctx is not None:
+        if getattr(ctx, "run_id", None):
+            extra["LOMA_RUN_ID"] = ctx.run_id
+        if getattr(ctx, "capability", None):
+            extra["LOMA_RUN_CAPABILITY"] = ctx.capability
+    return extra
 
 
 async def _denied_integration_providers(db, user_email: str) -> set[str]:

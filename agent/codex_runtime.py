@@ -448,10 +448,10 @@ class CodexWorker:
 
         self._workspace = worker_mod.create_workspace(prefix="codex")
         worker_mod.populate_tool_shims(self._workspace, sorted(ALL_TOOLS))
+        from broker.controller import run_worker_env_extra
         env = worker_mod.build_worker_env(self._workspace, extra={
             "CODEX_HOME": self.account["config_dir"],
-            "LOMA_BROKER_URL": broker_url(),
-            "LOMA_GATEWAY_URL": gateway_base_url(),
+            **run_worker_env_extra(),
         })
         # Subscription auth only — the scrubbed env can never fall back to
         # API billing, and no provider API keys exist in the worker at all.

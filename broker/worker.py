@@ -55,7 +55,10 @@ FORBIDDEN_ENV_NAMES = frozenset({
     "SLACK_APP_TOKEN",
     "SLACK_SIGNING_SECRET",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
     "OPENAI_API_KEY",
+    "OPENAI_AUTH_TOKEN",
     "OPENROUTER_API_KEY",
     "OPENCODE_API_KEY",
     "GOOGLE_OAUTH_CLIENT_ID",
@@ -632,8 +635,8 @@ def main():
     broker_url = os.environ.get("LOMA_BROKER_URL", "http://127.0.0.1:3100").rstrip("/")
     capability = _capability(argv)
     if not capability:
-        print(json.dumps({{"error": "Missing --auth-token (run capability). "
-                          "Pass the Personal Tools Auth Token from the current message."}}))
+        print(json.dumps({{"error": "No run capability is available in this "
+                          "environment; personal tools are disabled for this run."}}))
         return 1
 
     files = {{}}

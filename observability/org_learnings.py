@@ -98,22 +98,18 @@ LEARNING B:
 Answer ONLY "yes" or "no". If they cover the same topic and teach the same lesson, answer "yes" even if one has more detail than the other."""
 
     try:
-        from agent.pool import background_cli_cwd, background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
-            "--model", HAIKU_MODEL,
-            "--max-turns", "1",
-            "--allowedTools", "",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
-            cwd=background_cli_cwd(),
+        from agent.pool import run_background_cli
+        returncode, stdout, stderr = await run_background_cli(
+            ["claude", "-p", prompt,
+             "--model", HAIKU_MODEL,
+             "--max-turns", "1",
+             "--allowedTools", ""],
+            timeout=HAIKU_TIMEOUT,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=HAIKU_TIMEOUT)
 
-        if proc.returncode != 0:
+        if returncode != 0:
             err_msg = stderr.decode().strip()[:200] if stderr else "unknown"
-            logger.warning("[ORG-LEARNINGS] Haiku CLI failed (rc=%d): %s", proc.returncode, err_msg)
+            logger.warning("[ORG-LEARNINGS] Haiku CLI failed (rc=%d): %s", returncode, err_msg)
             return False
 
         answer = stdout.decode().strip().lower()

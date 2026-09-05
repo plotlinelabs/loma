@@ -265,7 +265,7 @@ async def test_shim_fails_closed_without_capability(workspace):
     )
     stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30)
     assert process.returncode == 1
-    assert "Missing --auth-token" in stdout.decode()
+    assert "No run capability" in stdout.decode()
 
 
 @pytest.mark.asyncio
