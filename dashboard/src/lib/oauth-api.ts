@@ -96,29 +96,3 @@ export async function disconnectCustomMcp(provider: string): Promise<void> {
   });
   if (!res.ok) throw await apiError(res, "Failed to disconnect");
 }
-
-// Owner-bound custom Grain automation. Secrets are returned only on rotation.
-export interface GrainWebhookStatus {
-  enabled: boolean;
-  expires_at: string | null;
-  path: string;
-}
-export interface GrainWebhookCredential {
-  authorization: string;
-  expires_at: string;
-  path: string;
-}
-export async function fetchGrainWebhook(): Promise<GrainWebhookStatus> {
-  const res = await fetch(`${API_BASE}/api/integrations/grain/webhook`, { cache: "no-store" });
-  if (!res.ok) throw await apiError(res, "Failed to load personal webhook");
-  return res.json();
-}
-export async function rotateGrainWebhook(): Promise<GrainWebhookCredential> {
-  const res = await fetch(`${API_BASE}/api/integrations/grain/webhook`, { method: "PUT" });
-  if (!res.ok) throw await apiError(res, "Failed to configure personal webhook");
-  return res.json();
-}
-export async function revokeGrainWebhook(): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/integrations/grain/webhook`, { method: "DELETE" });
-  if (!res.ok) throw await apiError(res, "Failed to revoke personal webhook");
-}

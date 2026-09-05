@@ -258,8 +258,6 @@ class CodexWorker:
         self.thread_id: str | None = None
         self.available_models: list[dict] = []
         self.last_rate_limits: dict | None = None
-        self._workspace = None
-        self._mcp_proxy_tokens: list[str] = []
         # Pool bookkeeping (mirrors client._pool_account on ClaudeSDKClient)
         self._pool_account = account
         self._pool_model = self.model
@@ -420,68 +418,13 @@ class CodexWorker:
         acquire -> first token is near-instant, mirroring the Claude pool's
         pre-warmed MCP handshake.
         """
-        # Isolated worker boundary: MCP servers are rewritten through the
-        # credential gateway (stdio servers whose env would carry secrets
-        # into the worker are disabled — fail closed), the worker gets a
-        # fresh private workspace, and the backend environment is never
-        # inherited. Workers are single-use, so per-worker == per-run.
-        from broker import worker as worker_mod
-        from broker.controller import broker_url, proxy_mcp_servers_for_worker
-        from broker.gateway import gateway_base_url
-        from broker.operations import ALL_TOOLS
+        write_managed_codex_config(self.account["config_dir"], mcp_servers or {})
 
-        try:
-            proxied_servers, proxy_tokens, disabled = proxy_mcp_servers_for_worker(
-                mcp_servers or {},
-            )
-        except Exception:
-            proxied_servers, proxy_tokens, disabled = {}, [], sorted(mcp_servers or {})
-            logger.error(
-                "Execution gateway unavailable — all MCP servers disabled for "
-                "this Codex worker (fail closed): %s", disabled,
-            )
-        self._mcp_proxy_tokens = proxy_tokens
-        from broker.controller import current_run, get_subscription_registry, run_worker_env_extra
-        ctx = current_run.get()
-        if ctx is None or not ctx.capability:
-            raise CodexError("Subscription execution requires an authenticated run")
-        self._workspace = worker_mod.create_workspace(prefix="codex")
-        worker_mod.populate_tool_shims(self._workspace, sorted(ALL_TOOLS))
-        # The real account home stays backend-only. The worker gets fresh
-        # configuration and a revocable proxy reference, never auth.json.
-        config_home = self._workspace / "codex-config"
-        config_home.mkdir(mode=0o700)
-        from broker.credential_files import protect_account_directory
-        protect_account_directory(self.account["config_dir"])
-        token = get_subscription_registry().register(
-            "codex", Path(self.account["config_dir"]) / "auth.json", capability=ctx.capability)
-        ctx.sub_proxy_tokens.append(token)
-        self._sub_proxy_tokens = [token]
-        write_managed_codex_config(config_home, proxied_servers)
-        path = config_home / "config.toml"
-        provider = '\n'.join([
-            'model_provider = "loma_subscription"',
-            '[model_providers.loma_subscription]',
-            'name = "Loma subscription gateway"',
-            'base_url = ' + _toml_str(f"{gateway_base_url()}/sub/{token}"),
-            'env_key = "LOMA_RUN_CAPABILITY"',
-            'wire_api = "responses"',
-            'requires_openai_auth = false',
-            'supports_websockets = false',
-            '',
-        ])
-        # Top-level provider selection must precede any TOML table.
-        path.write_text('model_provider = "loma_subscription"\n' + path.read_text()
-                        + '\n' + provider.split('\n', 1)[1])
-        worker_mod.grant_worker_access(config_home, workspace=self._workspace)
-        env = worker_mod.build_worker_env(self._workspace, extra={
-            "CODEX_HOME": str(config_home), **run_worker_env_extra(),
-        })
-        # Subscription auth only — the scrubbed env can never fall back to
-        # API billing, and no provider API keys exist in the worker at all.
-        self._proc = await worker_mod.spawn_worker(
-            ["codex", "app-server"],
-            workspace=self._workspace,
+        env = {**os.environ, "CODEX_HOME": self.account["config_dir"]}
+        env.pop("OPENAI_API_KEY", None)  # subscription auth only — never fall back to API billing
+        self._proc = await asyncio.create_subprocess_exec(
+            "codex", "app-server",
+            cwd=str(PROJECT_ROOT),
             env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -498,7 +441,7 @@ class CodexWorker:
 
         params: dict = {
             "model": self.model,
-            "cwd": str(self._workspace),
+            "cwd": str(PROJECT_ROOT),
             "approvalPolicy": "never",
             "sandboxPolicy": {"mode": "danger-full-access"},
         }
@@ -540,22 +483,6 @@ class CodexWorker:
                 self._proc.kill()
                 await self._proc.wait()
         self._proc = None
-        # Revoke gateway proxy tokens and remove the private workspace.
-        from broker import worker as worker_mod
-        for token in getattr(self, "_sub_proxy_tokens", None) or []:
-            from broker.controller import get_subscription_registry
-            get_subscription_registry().revoke(token)
-        for proxy_token in getattr(self, "_mcp_proxy_tokens", None) or []:
-            try:
-                from broker.controller import get_proxy_registry
-                get_proxy_registry().revoke(proxy_token)
-            except Exception:
-                pass
-        self._mcp_proxy_tokens = []
-        workspace = getattr(self, "_workspace", None)
-        if workspace is not None:
-            worker_mod.cleanup_workspace(workspace)
-            self._workspace = None
 
     # ── Turn streaming ───────────────────────────────────────────────
 
@@ -784,16 +711,11 @@ async def run_codex_agent(
     include_steps: bool = False,
     source: str = "dashboard",
     user_email: str | None = None,
-    run_ctx=None,
 ) -> AsyncGenerator[str | dict, None]:
     """Run one turn through the Codex account pool, yielding dashboard events.
 
-    Same event contract as run_opencode_agent / the Claude SDK path. Workers
-    are single-use sandboxed subprocesses with private workspaces and a
-    scrubbed environment (see CodexWorker.connect); the run capability from
-    ``run_ctx`` reaches tools via the prompt, like the Claude runtime.
+    Same event contract as run_opencode_agent / the Claude SDK path.
     """
-    del run_ctx  # capability is prompt-delivered; nothing else is needed here
     from agent.codex_pool import get_codex_pool
 
     model_id = normalize_codex_model(selected_model) or default_codex_model()

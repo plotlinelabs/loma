@@ -378,8 +378,6 @@ def _parse_common_flags(args: list[str]) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    from _integration_access import authorize_cli
-    authorize_cli('monetize_now')
     from dotenv import load_dotenv
     load_dotenv()
 

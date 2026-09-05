@@ -37,7 +37,11 @@ async def test_custom_connector_with_token():
          patch("api.oauth_helpers.decrypt_token", return_value="tok-123"):
         config = await merge_db_integrations({"mcp_servers": {}})
 
-    assert "acme" not in config["mcp_servers"]
+    assert config["mcp_servers"]["acme"] == {
+        "type": "http",
+        "url": "https://mcp.acme.com/mcp",
+        "headers": {"Authorization": "tok-123"},
+    }
 
 
 @pytest.mark.asyncio
@@ -55,7 +59,7 @@ async def test_custom_connector_custom_header():
          patch("api.oauth_helpers.decrypt_token", return_value="tok-123"):
         config = await merge_db_integrations({"mcp_servers": {}})
 
-    assert "acme" not in config["mcp_servers"]
+    assert config["mcp_servers"]["acme"]["headers"] == {"X-Api-Key": "tok-123"}
 
 
 @pytest.mark.asyncio
@@ -72,4 +76,8 @@ async def test_custom_connector_without_token_has_no_headers():
     with patch("observability.db.get_db", return_value=db):
         config = await merge_db_integrations({"mcp_servers": {}})
 
-    assert "acme" not in config["mcp_servers"]
+    assert config["mcp_servers"]["acme"] == {
+        "type": "http",
+        "url": "https://mcp.acme.com/mcp",
+    }
+    assert "headers" not in config["mcp_servers"]["acme"]

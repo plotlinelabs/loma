@@ -74,11 +74,7 @@ def _write_env_in_place(path: str, key: str, value: str | None) -> None:
             out.append(line)
     if value is not None and not found:
         out.append(f"{key}={value}")
-    # Create new files privately and tighten existing bind mounts before writing.
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as target:
-        os.fchmod(target.fileno(), 0o600)
-        target.write("\n".join(out) + ("\n" if out else ""))
+    p.write_text("\n".join(out) + ("\n" if out else ""))
 
 
 def _is_sensitive(key: str) -> bool:
