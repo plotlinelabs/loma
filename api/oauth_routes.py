@@ -1,7 +1,5 @@
 """OAuth API routes — Google & Slack OAuth flows for personal tool integrations."""
 
-import html
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -28,9 +26,8 @@ from api.oauth_helpers import (
     SLACK_TOKEN_URL,
     SLACK_USER_SCOPES,
     create_oauth_state,
-    consume_oauth_state,
-    oauth_state_cookie,
-    OAUTH_STATE_TTL,
+    verify_oauth_state,
+    extract_code_verifier,
     generate_pkce_pair,
     store_google_tokens,
     revoke_google_tokens,
@@ -95,16 +92,6 @@ def _serialize(doc):
     return doc
 
 
-def _authorize_response(authorize_url: str, state: str, browser_secret: str,
-                        redirect_uri: str) -> web.Response:
-    response = web.json_response({"authorize_url": authorize_url},
-                                 headers={"Cache-Control": "no-store"})
-    response.set_cookie(oauth_state_cookie(state), browser_secret,
-                        max_age=OAUTH_STATE_TTL, httponly=True, samesite="Lax",
-                        secure=redirect_uri.startswith("https://"), path="/api/oauth/")
-    return response
-
-
 # ── Google OAuth flow ─────────────────────────────────────────────────────
 
 
@@ -127,7 +114,7 @@ async def handle_google_authorize(request: web.Request) -> web.Response:
             status=503,
         )
 
-    state, browser_secret = await create_oauth_state(db, email, "google")
+    state = create_oauth_state(email)
 
     params = {
         "client_id": client_id,
@@ -140,14 +127,14 @@ async def handle_google_authorize(request: web.Request) -> web.Response:
     }
 
     authorize_url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
-    return _authorize_response(authorize_url, state, browser_secret, redirect_uri)
+    return web.json_response({"authorize_url": authorize_url})
 
 
 async def handle_google_callback(request: web.Request) -> web.Response:
     """GET /api/oauth/google/callback — handle Google OAuth redirect.
 
     This route is public (no X-User-Email header) because Google redirects
-    directly here. Authentication uses single-use state bound to the initiating browser.
+    directly here. Authentication is via the HMAC-signed state parameter.
     """
     db = get_db()
     if db is None:
@@ -166,10 +153,7 @@ async def handle_google_callback(request: web.Request) -> web.Response:
         return _callback_error("Missing authorization code or state")
 
     # Verify state (CSRF protection + user identification)
-    record = await consume_oauth_state(
-        db, state, "google", request.cookies.get(oauth_state_cookie(state), ""),
-    )
-    email = record["email"] if record else None
+    email = verify_oauth_state(state)
     if email is None:
         return _callback_error("Invalid or expired authorization state")
 
@@ -246,27 +230,48 @@ async def handle_google_callback(request: web.Request) -> web.Response:
     return _callback_success(google_email)
 
 
-def _callback_page(message: str, payload: dict, *, error: bool = False) -> web.Response:
-    # Provider strings and query errors are untrusted in both HTML and script contexts.
-    script_payload = json.dumps(payload).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    page = f"""<!DOCTYPE html><html><head><title>Connection</title></head><body>
-<p>{html.escape(message)}</p>
-<script>
-if (window.opener) window.opener.postMessage({script_payload}, window.location.origin);
-{'setTimeout(function() { window.close(); }, 1500);' if not error else ''}
-</script></body></html>"""
-    return web.Response(text=page, content_type="text/html", status=400 if error else 200,
-                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
-
-
 def _callback_success(google_email: str) -> web.Response:
-    return _callback_page(f"Google account ({google_email}) connected successfully.",
-                          {"type": "oauth-complete", "provider": "google", "email": google_email})
+    """Return HTML page that signals OAuth success to the opener and closes."""
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>Connected</title></head>
+<body>
+<p>Google account ({google_email}) connected successfully. This window will close.</p>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{
+      type: 'oauth-complete',
+      provider: 'google',
+      email: '{google_email}'
+    }}, '*');
+  }}
+  setTimeout(function() {{ window.close(); }}, 1500);
+</script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
 
 
 def _callback_error(message: str, provider: str = "google") -> web.Response:
-    return _callback_page(f"Error: {message}. You can close this window and try again.",
-                          {"type": "oauth-error", "provider": provider, "error": message}, error=True)
+    """Return HTML page that signals OAuth error to the opener and closes."""
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>Error</title></head>
+<body>
+<p>Error: {message}</p>
+<p>You can close this window and try again.</p>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{
+      type: 'oauth-error',
+      provider: '{provider}',
+      error: '{message}'
+    }}, '*');
+  }}
+</script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
 
 
 # ── Slack OAuth flow ──────────────────────────────────────────────────────
@@ -291,7 +296,7 @@ async def handle_slack_authorize(request: web.Request) -> web.Response:
             status=503,
         )
 
-    state, browser_secret = await create_oauth_state(db, email, "slack")
+    state = create_oauth_state(email)
 
     # Slack v2 OAuth uses "user_scope" (not "scope") for user token scopes
     params = {
@@ -302,14 +307,14 @@ async def handle_slack_authorize(request: web.Request) -> web.Response:
     }
 
     authorize_url = f"{SLACK_AUTH_URL}?{urlencode(params)}"
-    return _authorize_response(authorize_url, state, browser_secret, redirect_uri)
+    return web.json_response({"authorize_url": authorize_url})
 
 
 async def handle_slack_callback(request: web.Request) -> web.Response:
     """GET /api/oauth/slack/callback — handle Slack OAuth redirect.
 
     This route is public (no X-User-Email header) because Slack redirects
-    directly here. Authentication uses single-use state bound to the initiating browser.
+    directly here. Authentication is via the HMAC-signed state parameter.
     """
     db = get_db()
     if db is None:
@@ -328,10 +333,7 @@ async def handle_slack_callback(request: web.Request) -> web.Response:
         return _callback_error("Missing authorization code or state", provider="slack")
 
     # Verify state (CSRF protection + user identification)
-    record = await consume_oauth_state(
-        db, state, "slack", request.cookies.get(oauth_state_cookie(state), ""),
-    )
-    email = record["email"] if record else None
+    email = verify_oauth_state(state)
     if email is None:
         return _callback_error("Invalid or expired authorization state", provider="slack")
 
@@ -405,8 +407,27 @@ async def handle_slack_callback(request: web.Request) -> web.Response:
 
 
 def _callback_success_generic(provider: str, display_name: str) -> web.Response:
-    return _callback_page(f"{display_name} connected successfully.",
-                          {"type": "oauth-complete", "provider": provider})
+    """Return HTML page that signals OAuth success for any provider."""
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>Connected</title></head>
+<body>
+<p>{display_name} connected successfully. This window will close.</p>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{
+      type: 'oauth-complete',
+      provider: '{provider}'
+    }}, '*');
+  }}
+  setTimeout(function() {{ window.close(); }}, 1500);
+</script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+# ── Connections management ────────────────────────────────────────────────
 
 
 async def handle_list_connections(request: web.Request) -> web.Response:
@@ -558,7 +579,7 @@ async def handle_provider_authorize(request: web.Request) -> web.Response:
             status=503,
         )
 
-    state, browser_secret = await create_oauth_state(db, email, provider)
+    state = create_oauth_state(email)
 
     params: dict = {
         "client_id": client_id,
@@ -572,7 +593,7 @@ async def handle_provider_authorize(request: web.Request) -> web.Response:
         params["owner"] = cfg["owner_type"]
 
     authorize_url = f"{cfg['auth_url']}?{urlencode(params)}"
-    return _authorize_response(authorize_url, state, browser_secret, redirect_uri)
+    return web.json_response({"authorize_url": authorize_url})
 
 
 async def handle_provider_callback(request: web.Request) -> web.Response:
@@ -595,10 +616,7 @@ async def handle_provider_callback(request: web.Request) -> web.Response:
     if not code or not state:
         return _callback_error("Missing authorization code or state", provider)
 
-    record = await consume_oauth_state(
-        db, state, provider, request.cookies.get(oauth_state_cookie(state), ""),
-    )
-    email = record["email"] if record else None
+    email = verify_oauth_state(state)
     if email is None:
         return _callback_error("Invalid or expired authorization state", provider)
 
@@ -642,7 +660,23 @@ async def handle_provider_callback(request: web.Request) -> web.Response:
 
     logger.info("%s OAuth completed for %s", provider.title(), email)
 
-    return _callback_success_generic(provider, provider.title())
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>Connected</title></head>
+<body>
+<p>{provider.title()} connected successfully. This window will close.</p>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{
+      type: 'oauth-complete',
+      provider: '{provider}'
+    }}, '*');
+  }}
+  setTimeout(function() {{ window.close(); }}, 1500);
+</script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_disconnect_provider(request: web.Request) -> web.Response:
@@ -682,7 +716,6 @@ async def handle_custom_mcp_authorize(request: web.Request) -> web.Response:
 
     integration = await db.integrations.find_one({
         "provider": provider, "is_custom": True, "auth_mode": "oauth",
-        "connected_by": email, "status": "active",
     })
     if not integration:
         return web.json_response({"error": "No OAuth-configured connector found"}, status=404)
@@ -698,9 +731,7 @@ async def handle_custom_mcp_authorize(request: web.Request) -> web.Response:
 
     redirect_uri = _oauth_redirect_uri(request, f"custom-mcp/{provider}")
     code_verifier, code_challenge = generate_pkce_pair()
-    state, browser_secret = await create_oauth_state(
-        db, email, f"custom-mcp/{provider}", code_verifier=code_verifier,
-    )
+    state = create_oauth_state(email, code_verifier=code_verifier)
 
     params = {
         "client_id": client_id,
@@ -715,7 +746,7 @@ async def handle_custom_mcp_authorize(request: web.Request) -> web.Response:
         params["scope"] = " ".join(scopes)
 
     authorize_url = f"{auth_endpoint}?{urlencode(params)}"
-    return _authorize_response(authorize_url, state, browser_secret, redirect_uri)
+    return web.json_response({"authorize_url": authorize_url})
 
 
 async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
@@ -736,20 +767,14 @@ async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
     if not code or not state:
         return _callback_error("Missing authorization code or state", provider=provider)
 
-    record = await consume_oauth_state(
-        db, state, f"custom-mcp/{provider}", request.cookies.get(oauth_state_cookie(state), ""),
-    )
-    email = record["email"] if record else None
+    email = verify_oauth_state(state)
     if email is None:
         return _callback_error("Invalid or expired authorization state", provider=provider)
 
-    code_verifier = record.get("code_verifier")
-    if not code_verifier:
-        return _callback_error("Missing PKCE verifier; reconnect the integration", provider)
+    code_verifier = extract_code_verifier(state)
 
     integration = await db.integrations.find_one({
         "provider": provider, "is_custom": True, "auth_mode": "oauth",
-        "connected_by": email, "status": "active",
     })
     if not integration:
         return _callback_error("Connector not found", provider=provider)

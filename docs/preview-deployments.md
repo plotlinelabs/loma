@@ -62,18 +62,6 @@ so they run with two guards to avoid disturbing production:
   Slack testing, put a **separate** Slack app's `SLACK_APP_TOKEN` in the preview
   secrets and set `LOMA_ENABLE_SLACK=true`.)
 
-## Disk hygiene
-
-Each deploy runs `docker compose up -d --build`, so every PR synchronize
-produces fresh image layers. `preview_up.sh` prunes dangling images and stale
-(>72h) build cache before each build, and `preview_down.sh` removes the
-stack's locally-built images (`--rmi local`) at teardown. If the box was
-already full before these guards existed, one manual
-`docker system prune -f` (NOT `-a --volumes`, which would delete active
-previews' data) by an operator may be needed once; after that the per-deploy
-pruning keeps usage bounded. `preview_up.sh` refuses to build with <4GiB free
-so failures are explicit instead of a mid-build ENOSPC.
-
 ## One-time setup (preview box + GitHub)
 
 **Preview EC2**

@@ -45,7 +45,6 @@ services:
     env_file: ./dashboard/.env
     environment:
       BACKEND_URL: http://loma-backend:3000
-      BACKEND_PROXY_SECRET: ${BACKEND_PROXY_SECRET:-${OAUTH_ENCRYPTION_KEY}}
     # Loopback only — reached externally through the nginx proxy, not directly.
     ports:
       - "127.0.0.1:${DASHBOARD_HOST_PORT:-3001}:3001"
@@ -63,7 +62,6 @@ services:
     env_file: .env
     environment:
       BACKEND_URL: http://loma-backend:3000
-      BACKEND_PROXY_SECRET: ${BACKEND_PROXY_SECRET:-${OAUTH_ENCRYPTION_KEY}}
     depends_on:
       - loma-backend
     restart: unless-stopped

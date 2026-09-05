@@ -50,9 +50,7 @@ async def _require_maintainer(db, user_email: str | None, auth_token: str | None
     if not verify_user_auth_token(auth_token, user_email):
         raise skill_service.SkillError("Invalid or expired auth token", status=403)
     user = await db.users.find_one({"email": user_email})
-    if not user or user.get("status") != "active":
-        raise skill_service.SkillError("Active account required", status=403)
-    role = user.get("system_role", "chatter")
+    role = (user or {}).get("system_role", "chatter")
     if ROLE_HIERARCHY.get(role, 0) < ROLE_HIERARCHY["maintainer"]:
         raise skill_service.SkillError("Maintainer access required", status=403)
     return user_email
@@ -69,33 +67,15 @@ def _compact_skill(skill: dict) -> dict:
     }
 
 
-def _readable(skill: dict, email: str) -> bool:
-    return skill.get("scope") != "personal" or skill.get("created_by") == email
-
-
-async def _require_reader(db, user_email, auth_token):
-    if not user_email or not auth_token or not verify_user_auth_token(auth_token, user_email):
-        raise skill_service.SkillError("Authenticated user required", status=403)
-    user = await db.users.find_one({"email": user_email})
-    if not user or user.get("status") != "active":
-        raise skill_service.SkillError("Active account required", status=403)
-    return user_email
-
-
 async def _run(args) -> int:
     client, db = _connect_db()
     try:
-        email = await _require_reader(db, args.user_email, args.auth_token)
-        if getattr(args, "slug", None):
-            existing = await db.skills.find_one({"slug": args.slug})
-            if existing and not _readable(existing, email):
-                raise skill_service.SkillError("Skill not available", status=403)
         if args.command == "list":
-            return _json({"skills": [_compact_skill(s) for s in await skill_service.list_skills(db) if _readable(s, email)]})
+            return _json({"skills": [_compact_skill(s) for s in await skill_service.list_skills(db)]})
 
         if args.command == "search":
             query = args.query or args.query_text or ""
-            return _json({"skills": [_compact_skill(s) for s in await skill_service.search_skills(db, query) if _readable(s, email)]})
+            return _json({"skills": [_compact_skill(s) for s in await skill_service.search_skills(db, query)]})
 
         if args.command == "get":
             skill = await skill_service.get_skill(db, args.slug)
@@ -211,10 +191,10 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_auth(p):
-        p.add_argument("--user-email", default=argparse.SUPPRESS)
-        p.add_argument("--auth-token", default=argparse.SUPPRESS)
+        p.add_argument("--user-email")
+        p.add_argument("--auth-token")
 
-    add_auth(sub.add_parser("list"))
+    sub.add_parser("list")
     search = sub.add_parser("search")
     search.add_argument("query_text", nargs="?")
     search.add_argument("--query")

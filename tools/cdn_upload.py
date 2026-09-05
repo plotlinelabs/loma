@@ -110,12 +110,20 @@ def upload_file(file_path: str, custom_key: str | None = None) -> dict:
 async def upload_from_url(url: str, custom_key: str | None = None) -> dict:
     """Download a file from a URL and upload it to R2."""
     try:
-        from tools._public_download import download_public
-        from urllib.parse import urlparse
-        data, content_type = await download_public(url)
-        ext = os.path.splitext(urlparse(url).path)[1].lower()
-        if not ext or not ext[1:].isalnum() or len(ext) > 12:
-            ext = mimetypes.guess_extension(content_type.split(';')[0].strip()) or ''
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                if resp.status != 200:
+                    return {"error": f"Failed to download URL (HTTP {resp.status}): {url}"}
+                data = await resp.read()
+
+                # Determine extension from URL or content-type
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                ext = os.path.splitext(parsed.path)[1].lower()
+                if not ext:
+                    ct = resp.headers.get("Content-Type", "")
+                    ext_guess = mimetypes.guess_extension(ct.split(";")[0].strip())
+                    ext = ext_guess or ""
 
         # Write to temp file
         suffix = ext if ext else ""
@@ -129,8 +137,8 @@ async def upload_from_url(url: str, custom_key: str | None = None) -> dict:
         finally:
             os.unlink(tmp_path)
 
-    except (aiohttp.ClientError, ValueError, asyncio.TimeoutError):
-        return {"error": "Public HTTPS download failed or exceeded its limits"}
+    except aiohttp.ClientError as e:
+        return {"error": f"Failed to download URL: {e}"}
 
 
 # -- CLI entry point -----------------------------------------------------------
@@ -144,8 +152,6 @@ def _parse_flag(args, flag, default=""):
 
 
 if __name__ == "__main__":
-    from _integration_access import authorize_cli
-    authorize_cli('cdn_r2')
     from dotenv import load_dotenv
     load_dotenv()
 

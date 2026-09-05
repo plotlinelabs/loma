@@ -340,7 +340,5 @@ async def _cli():
 
 
 if __name__ == "__main__":
-    from _integration_access import authorize_cli
-    authorize_cli('sentry')
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     asyncio.run(_cli())
