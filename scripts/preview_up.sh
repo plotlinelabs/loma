@@ -77,6 +77,22 @@ LOMA_SETUP_TOKEN=${setup_value}
 EOF
 
 echo "[preview] up ${COMPOSE_PROJECT_NAME} (backend=${BACKEND_HOST_PORT} dashboard=${DASHBOARD_HOST_PORT} nginx=${NGINX_HOST_PORT})"
+
+# --- Reclaim space before building ---
+# Every `up --build` on every PR synchronize creates fresh image layers, and
+# teardown historically kept images, so dangling layers + build cache grow
+# until the box hits ENOSPC mid-build. Prune only unreferenced data: dangling
+# images and build cache unused for 72h. Never containers or volumes.
+docker image prune -f >/dev/null 2>&1 || true
+docker builder prune -f --filter 'until=72h' >/dev/null 2>&1 || true
+avail_kb=$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
+if [ "${avail_kb:-0}" -lt $(( 4 * 1024 * 1024 )) ]; then
+  echo "[preview] ERROR: less than 4GiB free on the docker filesystem after pruning" \
+       "(${avail_kb}KiB available). The build would fail with ENOSPC;" \
+       "an operator needs to free space on the preview box." >&2
+  exit 4
+fi
+
 docker compose up -d --build
 
 # --- Front-proxy vhost: route the PR subdomain to this stack's nginx ---
