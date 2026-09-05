@@ -228,7 +228,24 @@ sandbox boundary described above.
   are unfinished. OpenCode subscription-only plugins still need adapters.
 - Broker schemas remain missing for Apollo, Dataroom, CDN, Stitch, agreement
   operations and renderer utilities. These remain denied, not silently restored.
-- Deployed browser/OAuth and signed-proxy validation require a working preview.
-  The current preview host reports 2,023,676 KiB free, below the 4 GiB build gate.
+- Preview deployment testing, including deployed browser/OAuth and signed-proxy
+  validation, is explicitly skipped at the requester's direction for this handoff.
+  It has not passed. No preview host changes or deployment retries are part of
+  this validation pass.
 
-Passing local tests/CI does not close these gates. Keep the PR draft.
+The preview-testing waiver does not close the implementation gaps above. Passing
+local tests/CI does not establish production isolation. Keep the PR draft until
+the remaining implementation scope and compatibility risks are reviewed.
+
+### Reproducible local verification
+
+Run the backend suite without inherited model or signing-key configuration:
+
+```bash
+env -u AGENT_DEFAULT_MODEL -u BACKEND_PROXY_SECRET -u OAUTH_ENCRYPTION_KEY python3 -m pytest -q
+```
+
+Request-signing tests supply synthetic keys through scoped fixtures. They must
+not depend on local credentials; missing production configuration still fails
+closed. The integration-access suite explicitly imports the signing fixture used
+by its shared request helper so it also works in a clean CI environment.

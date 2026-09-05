@@ -10,7 +10,7 @@ from integrations.access import allows_user, require_provider
 from broker.operations import ToolInvoke, McpRequest, _strip_identity_flags
 from broker.service import Denied
 from api import integration_routes, routes, skill_service
-from tests.test_security_boundaries import Request
+from tests.test_security_boundaries import Request, proxy_secret
 
 EMAIL = 'owner@example.test'
 
