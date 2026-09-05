@@ -126,3 +126,52 @@ async def test_nonrefreshable_tokens_work_only_until_expiry(tmp_path, monkeypatc
     with pytest.raises(Denied):
         await refresh.ensure_fresh('claude', path)
     exchange.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider', ['claude', 'codex'])
+async def test_rejected_opaque_tokens_coalesce_recovery(tmp_path, monkeypatch, provider):
+    path = account(tmp_path, provider, time.time() + 3600)
+    data = json.loads(path.read_text())
+    oauth = data['claudeAiOauth' if provider == 'claude' else 'tokens']
+    key = 'accessToken' if provider == 'claude' else 'access_token'
+    oauth[key] = 'test-opaque'
+    if provider == 'claude':
+        del oauth['expiresAt']
+    path.write_text(json.dumps(data))
+    async def exchange(*args):
+        await asyncio.sleep(0.01)
+        return {'access_token': 'test-renewed', 'expires_in': 3600}
+    mock = AsyncMock(side_effect=exchange)
+    monkeypatch.setattr(refresh, '_exchange', mock)
+    assert all(await asyncio.gather(*(refresh.ensure_fresh(
+        provider, path, rejected_access_token='test-opaque') for _ in range(5))))
+    mock.assert_awaited_once()
+    with pytest.raises(Denied):
+        await refresh.ensure_fresh(provider, path, rejected_access_token='test-renewed')
+    mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_recovery_is_throttled_across_attempts(tmp_path, monkeypatch):
+    path = account(tmp_path, 'claude', time.time() + 3600)
+    mock = AsyncMock(side_effect=Denied())
+    monkeypatch.setattr(refresh, '_exchange', mock)
+    for _ in range(2):
+        with pytest.raises(Denied):
+            await refresh.ensure_fresh('claude', path, rejected_access_token='synthetic-old')
+    mock.assert_awaited_once()
+    assert json.loads(path.read_text())['claudeAiOauth']['accessToken'] == 'synthetic-old'
+
+
+@pytest.mark.asyncio
+async def test_nonrefreshable_opaque_token_is_not_retried(tmp_path, monkeypatch):
+    path = account(tmp_path, 'claude', time.time() + 3600)
+    data = json.loads(path.read_text())
+    del data['claudeAiOauth']['refreshToken']
+    path.write_text(json.dumps(data))
+    mock = AsyncMock()
+    monkeypatch.setattr(refresh, '_exchange', mock)
+    with pytest.raises(Denied):
+        await refresh.ensure_fresh('claude', path, rejected_access_token='synthetic-old')
+    mock.assert_not_awaited()

@@ -279,3 +279,65 @@ async def test_model_grant_is_not_general_provider_account_access(monkeypatch, m
             headers={'Authorization': 'Bearer sample'})
         assert response.status == 403
         assert (await response.json()) == {'error': 'Unsupported model operation'}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', [401, 403, 429, 500])
+async def test_gateway_recovery_only_retries_auth_rejections(account, monkeypatch, status):
+    from broker import gateway, subscription_refresh
+    path = Path(account['config_dir']) / 'auth.json'
+    data = json.loads(path.read_text())
+    data['tokens']['refresh_token'] = 'synthetic-refresh'
+    path.write_text(json.dumps(data))
+    registry = SubscriptionProxyRegistry()
+    token = registry.register('codex', path, capability='sample')
+    broker = SimpleNamespace(execute=AsyncMock(return_value={}))
+    calls = []
+    async def upstream(request):
+        calls.append((request.headers['Authorization'], await request.read()))
+        return web.json_response({'ok': True}, status=status if len(calls) == 1 else 200)
+    exchange = AsyncMock(return_value={'access_token': 'synthetic-renewed'})
+    monkeypatch.setattr(subscription_refresh, '_exchange', exchange)
+    app = web.Application()
+    app.router.add_post('/responses', upstream)
+    async with TestServer(app) as server:
+        monkeypatch.setitem(gateway.SUBSCRIPTION_UPSTREAMS, 'codex', str(server.make_url('')).rstrip('/'))
+        async with TestClient(TestServer(create_gateway_app(broker, McpProxyRegistry(), registry))) as client:
+            response = await client.post(f'/sub/{token}/responses', data=b'synthetic-request')
+            assert response.status == (200 if status == 401 else status)
+            await response.read()
+    assert len(calls) == (2 if status == 401 else 1)
+    if status == 401:
+        exchange.assert_awaited_once()
+        assert calls[1] == ('Bearer synthetic-renewed', b'synthetic-request')
+    else:
+        exchange.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gateway_never_replays_after_revocation_during_recovery(account, monkeypatch):
+    from broker import gateway, subscription_refresh
+    path = Path(account['config_dir']) / 'auth.json'
+    data = json.loads(path.read_text())
+    data['tokens']['refresh_token'] = 'synthetic-refresh'
+    path.write_text(json.dumps(data))
+    registry = SubscriptionProxyRegistry()
+    token = registry.register('codex', path, capability='sample')
+    broker = SimpleNamespace(execute=AsyncMock(return_value={}))
+    calls = []
+    async def upstream(request):
+        calls.append(True)
+        return web.Response(status=401)
+    async def exchange(*args):
+        registry.revoke(token)
+        return {'access_token': 'synthetic-renewed'}
+    monkeypatch.setattr(subscription_refresh, '_exchange', exchange)
+    app = web.Application()
+    app.router.add_post('/responses', upstream)
+    async with TestServer(app) as server:
+        monkeypatch.setitem(gateway.SUBSCRIPTION_UPSTREAMS, 'codex', str(server.make_url('')).rstrip('/'))
+        async with TestClient(TestServer(create_gateway_app(broker, McpProxyRegistry(), registry))) as client:
+            response = await client.post(f'/sub/{token}/responses')
+            assert response.status == 502
+            assert 'synthetic-renewed' not in await response.text()
+    assert calls == [True]

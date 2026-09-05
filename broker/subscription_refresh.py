@@ -128,16 +128,23 @@ def _persist(path, original_raw, updated):
             os.unlink(tmp)
 
 
-async def ensure_fresh(provider, credentials_path):
-    """Refresh expiring credentials once across concurrent runs/processes."""
+async def ensure_fresh(provider, credentials_path, *, rejected_access_token=None):
+    """Refresh expiring credentials, or recover a provider-rejected token.
+
+    Forced recovery is for an upstream HTTP 401 before streaming only. Comparing
+    the rejected access token under the account lock coalesces concurrent callers.
+    A persisted cooldown bounds refresh attempts even across backend processes.
+    """
     fd = None
     try:
         if provider not in PROVIDERS:
             raise Denied()
+        if rejected_access_token is not None:
+            _token(rejected_access_token)
         path = Path(credentials_path)
         _, current = _read(path)
         expiry = _expiry(provider, current)
-        if expiry is None or expiry > time.time() + 60:
+        if rejected_access_token is None and (expiry is None or expiry > time.time() + 60):
             return
         fd = os.open(str(path) + '.refresh.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         info = os.fstat(fd)
@@ -152,17 +159,30 @@ async def ensure_fresh(provider, credentials_path):
                     await asyncio.sleep(0.05)
             raw, current = _read(path)
             expiry = _expiry(provider, current)
-            if expiry is None or expiry > time.time() + 60:
+            if rejected_access_token is None and (expiry is None or expiry > time.time() + 60):
                 return
             oauth = current.get('claudeAiOauth' if provider == 'claude' else 'tokens', {})
+            if rejected_access_token is not None:
+                access = oauth.get('accessToken' if provider == 'claude' else 'access_token')
+                if _token(access) != rejected_access_token:
+                    # Another admitted request already refreshed this account.
+                    return True
+                attempted = current.get('_loma_recovery_at', 0)
+                if (not isinstance(attempted, (int, float)) or isinstance(attempted, bool)
+                        or not math.isfinite(attempted) or time.time() - attempted < 60):
+                    raise Denied()
             refresh_value = oauth.get('refreshToken' if provider == 'claude' else 'refresh_token')
             # Non-refreshable setup tokens remain usable until their actual expiry.
-            if not refresh_value and expiry > time.time():
+            if not refresh_value and rejected_access_token is None and expiry is not None and expiry > time.time():
                 return
             refresh = _token(refresh_value)
             scopes = oauth.get('scopes', []) if provider == 'claude' else []
             if not isinstance(scopes, list) or not all(isinstance(s, str) and len(s) < 200 for s in scopes):
                 raise Denied()
+            if rejected_access_token is not None:
+                attempted = dict(current, _loma_recovery_at=time.time())
+                _persist(path, raw, attempted)
+                raw, current = _read(path)
             response = await _exchange(provider, refresh, scopes)
             _persist(path, raw, _updated(provider, current, response))
             return True

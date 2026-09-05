@@ -231,7 +231,7 @@ def _codex_subscription_auth(credentials_path: str) -> dict[str, str]:
 def create_gateway_app(broker, registry: McpProxyRegistry,
                        sub_registry: "SubscriptionProxyRegistry | None" = None) -> web.Application:
     async def _forward(request: web.Request, upstream_url: str,
-                       inject_headers: dict[str, str]) -> web.StreamResponse:
+                       inject_headers: dict[str, str], recover_auth=None) -> web.StreamResponse:
         headers = {
             key: value for key, value in request.headers.items()
             if key.lower() not in _STRIP_REQUEST_HEADERS
@@ -244,20 +244,27 @@ def create_gateway_app(broker, registry: McpProxyRegistry,
         async with aiohttp.ClientSession(
             timeout=_UPSTREAM_TIMEOUT, trust_env=False, auto_decompress=False,
         ) as session:
-            async with session.request(
-                request.method, upstream_url, data=body or None,
-                headers=headers, allow_redirects=False,
-            ) as upstream:
-                response = web.StreamResponse(status=upstream.status)
-                for key, value in upstream.headers.items():
-                    if key.lower() not in _STRIP_RESPONSE_HEADERS:
-                        response.headers[key] = value
-                response.headers["Cache-Control"] = "no-store"
-                await response.prepare(request)
-                async for chunk in upstream.content.iter_chunked(65536):
-                    await response.write(chunk)
-                await response.write_eof()
-                return response
+            # Retry only a pre-stream authentication rejection, never a timeout,
+            # transport failure, 403, 429 or a response that has begun streaming.
+            for attempt in range(2):
+                async with session.request(
+                    request.method, upstream_url, data=body or None,
+                    headers=headers, allow_redirects=False,
+                ) as upstream:
+                    if upstream.status == 401 and recover_auth is not None and attempt == 0:
+                        upstream.close()
+                        headers.update(await recover_auth(headers))
+                        continue
+                    response = web.StreamResponse(status=upstream.status)
+                    for key, value in upstream.headers.items():
+                        if key.lower() not in _STRIP_RESPONSE_HEADERS:
+                            response.headers[key] = value
+                    response.headers["Cache-Control"] = "no-store"
+                    await response.prepare(request)
+                    async for chunk in upstream.content.iter_chunked(65536):
+                        await response.write(chunk)
+                    await response.write_eof()
+                    return response
 
     async def mcp_proxy(request: web.Request) -> web.StreamResponse:
         try:
@@ -381,8 +388,26 @@ def create_gateway_app(broker, registry: McpProxyRegistry,
             upstream_url += f"/{tail}"
         if request.query_string:
             upstream_url += f"?{request.query_string}"
+        async def recover_auth(sent_headers):
+            # Admission happens before credential access AND after a potentially
+            # slow refresh. Revoking either the proxy or run stops the replay.
+            sub_registry.lookup(request.match_info["token"])
+            await asyncio.wait_for(broker.execute(
+                entry["capability"], "subscription.request", entry["provider"],
+            ), timeout=15)
+            await ensure_fresh(entry["provider"], entry["credentials_path"],
+                               rejected_access_token=sent_headers["Authorization"][7:])
+            sub_registry.lookup(request.match_info["token"])
+            await asyncio.wait_for(broker.execute(
+                entry["capability"], "subscription.request", entry["provider"],
+            ), timeout=15)
+            if entry["provider"] == "codex":
+                return _codex_subscription_auth(entry["credentials_path"])
+            access, _ = _claude_subscription_auth(entry["credentials_path"])
+            return {"Authorization": f"Bearer {access}"}
+
         try:
-            return await _forward(request, upstream_url, inject)
+            return await _forward(request, upstream_url, inject, recover_auth=recover_auth)
         except Exception:
             # Never relay upstream/connection error text (may embed secrets).
             return web.json_response({"error": "Upstream unavailable"}, status=502)
