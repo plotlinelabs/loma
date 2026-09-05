@@ -1,59 +1,135 @@
-# Execution isolation migration
+# Execution isolation
 
 ## Status
 
-The broker implementation is stage 1 infrastructure, **not a P0 fix by itself**.
-It is intentionally not mounted on the public API or connected to current agent
-runtimes. Existing runtimes still execute with backend filesystem/environment
-access. Do not enable broker issuance to these runtimes or mark P0 resolved.
+Isolated per-run workers are implemented and are the ONLY execution path.
+All three agent runtimes (Claude Agent SDK, OpenCode, Codex), scheduled and
+webhook flows (which execute through the same `stream_agent` entry point),
+and dashboard terminals run inside the worker boundary described below and
+obtain credentials/tool results exclusively through the execution broker.
+The legacy in-process execution path (backend env inheritance, backend cwd,
+tools reading the database/encryption key directly inside agent runs) has
+been removed.
 
-## Broker contract
+## Architecture
 
-- Trusted controller creates a new run and opaque capability using `Broker.issue`.
-  Identity must come from authenticated controller state, and resource grants from
-  controller policy/explicit approval, never prompts or model-generated arguments.
-- A single deployment identity is the tenant boundary. Use a separate database and
-  broker for every organization; this does not implement multi-tenant membership.
-- Call `Broker.initialize` before serving to install the capability TTL index.
-- `broker.http.create_app` exposes only `POST /v1/invoke`. Workers supply a bearer
-  capability plus `operation` and `resource`. There are no public issuance APIs.
-- Capabilities expire within 15 minutes and are stored only as SHA-256 digests.
-  Revocation and remaining-call admission are atomic database operations. No token
-  cache; expiry is checked independently of MongoDB's asynchronous TTL cleanup.
-- Revocation/status changes prevent subsequent admission, not already-admitted
-  requests. Run cancellation must also terminate the worker and in-flight requests.
-- Audit records contain run/operation/time only. Admission audit failure blocks I/O.
-  Outcome/denial metrics and retention controls remain rollout work.
-- Initial adapter: `grain.transcript`, exact recording UUID allowlist, personal OAuth
-  only. It never falls back to an organization API key. Tokens stay in the broker.
-  Fixed HTTPS destination, no redirects or environment proxies, bounded responses.
-  Expired OAuth tokens are denied; automatic refresh is intentionally not implemented.
-- The broker's only supported permission policy currently is personal Grain access.
-  Shared/organization connections and other operations remain disabled. Do not
-  describe this as centralized authorization for existing tools/runtimes.
+```
+backend (trusted)                          worker (untrusted, per run)
+─────────────────────────────              ───────────────────────────
+broker/controller.py  ── issues ──────►  run capability (opaque, TTL,
+  per-run capability + workspace           call budget, revocable)
+broker/service.py + broker/http.py  ◄──  tools/<name>.py shims call
+  POST /v1/invoke (loopback)               tool.invoke via the broker;
+  executes real tools server-side          the capability is the worker's
+  with the run owner's identity            ONLY credential
+broker/gateway.py (loopback)        ◄──  MCP + model traffic; the gateway
+  injects org/user/provider secrets        injects real credentials
+  server-side, never into the worker       server-side
+```
 
-## Required follow-up stages
+### Worker boundary (implemented)
 
-1. Trusted controller integration: authenticate execution owners (including scheduled
-   flows), authorize requested resource grants, issue/revoke runs, and wire lifecycle
-   cancellation. Add distributed rate limits and concurrent-request limits.
-2. Deploy per-run hardened workers (gVisor/Kata/microVM boundary selected and verified
-   by infrastructure owners), non-root and resource-limited. No host/socket mounts,
-   backend environment, shared homes, credential stores, or cloud metadata access.
-3. Private TLS/mTLS broker ingress; bind capability admission to worker identity.
-   Bearer capabilities alone are transferable if stolen, not proof of worker identity.
-   Enforce egress at the network layer; adapter destination pinning is not DNS/IP
-   isolation. Only broker/model gateways may be reached. No public ingress.
-4. Broker model calls and migrate all three runtimes, CLI/MCP operations, terminals,
-   scheduled flows, artifacts and session resume. Disable unsupported operations;
-   remove legacy execution only after replacements are validated.
-5. Rotate exposed credentials, conduct adversarial deployed end-to-end tests, then
-   staged rollout. Rollback disables execution, never restores unsafe execution.
+Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 
-## Release criteria
+- **Fresh private workspace per run** (0700) under `LOMA_WORKER_ROOT`;
+  HOME/TMPDIR/cwd point inside it; it is deleted when the run ends.
+- **No backend environment inheritance.** Workers receive only an
+  allowlist-built minimal env (PATH/HOME/TMPDIR/TERM/locale + explicitly
+  validated runtime settings). A denylist of backend secret names AND their
+  values is enforced fail-closed at build and spawn time. For the Claude
+  Agent SDK (which merges `os.environ` into its CLI subprocess), a generated
+  launcher re-execs the CLI through `env -i` with the scrubbed allowlist.
+- **Non-root.** With `LOMA_WORKER_UID`/`LOMA_WORKER_GID` set (defaulted in
+  the Docker image to the dedicated `loma-worker` user), every worker drops
+  privileges (setuid/setgid via `preexec_fn`, `setpriv` in the CLI
+  launcher). Workers then cannot read backend-owned files (`/app/.env`,
+  mounted secret/SSH dirs) or other runs' workspaces.
+- **Resource limits**: CPU time, address space, file size, open files,
+  process count, no core dumps (`RLIMIT_*`), own session/process group,
+  wall-clock watchdog, umask 077. Optional bubblewrap wrapping
+  (`LOMA_WORKER_BWRAP=1`) adds mount/pid/ipc/uts namespace isolation where
+  bubblewrap is installed.
+- Runs are revoked and workers/workspaces torn down at run end; pool clients
+  and Codex workers are single-use (one conversation per process).
 
-The current unit tests use synthetic credentials and mocked DB/provider responses.
-They are not a deployment test or proof of sandbox containment. Before release,
-verify MongoDB atomic budget/revocation behavior across processes, TLS identity and
-network policy, cross-user filesystem isolation, metadata blocking, model-provider
-brokering, cancellation, artifacts/resume, and every alternate execution path.
+### Broker (implemented)
+
+- `tool.invoke` — first-party CLI tools (Gmail/Drive/Calendar/Sheets/
+  Slides/Docs/Apps Script/Slack/Telegram/notify/loma_skills + integration
+  tools) now execute **server-side**. Workers hold shims that forward argv
+  (plus small workspace file uploads) to the broker; worker-supplied
+  `--user-email`/`--auth-token` are stripped and replaced with server-minted
+  identity for the run owner. OAuth tokens, integration keys, the encryption
+  key and the DB URI never enter a worker.
+- `model.request` — admission for the model gateway. Providers configured
+  with server-side keys (Anthropic/OpenAI/OpenRouter/OpenCode Zen) are
+  reached via `/model/<provider>/…` on the gateway; the worker authenticates
+  with its run capability and the real key is injected server-side.
+- `grain.transcript` — unchanged personal-OAuth read-only adapter.
+- MCP: HTTP MCP servers are re-pointed at `/mcp/<proxy-token>` on the
+  gateway; real upstream URLs and auth headers stay in backend memory,
+  proxy tokens are revoked with the owning client/run. **Stdio MCP servers
+  are disabled in worker configs (fail closed)** — their env vars would
+  carry credentials into the worker; they are logged as disabled and never
+  silently fall back to org credentials.
+- Grants come from controller policy at issue time: personal tools for the
+  authenticated owner, integration tools filtered by integration sharing
+  rules, configured model providers. Runs without an authenticated owner
+  (anonymous webhooks) receive **no capability**: every brokered call is
+  denied. Controller/broker startup failure also fails closed.
+- Capabilities: opaque, stored as SHA-256 digests, ≤2h TTL (default 1h),
+  bounded call budget, atomic admission, active-account recheck per call,
+  revoked at run end. Broker + gateway bind to loopback only.
+
+## Deployment requirements (NOT provided by this repo)
+
+The subprocess boundary is real but not kernel-grade. Production must add:
+
+1. A hardened container runtime for the backend+workers (gVisor, Kata, or
+   Firecracker class isolation). No docker socket, no host mounts beyond
+   the declared volumes, no cloud metadata service reachability.
+2. Network policy: workers may reach only the loopback broker/gateway and
+   approved model endpoints. Adapter/gateway destination pinning is not
+   DNS/IP-level egress control.
+3. In multi-host setups, private TLS/mTLS ingress for broker/gateway and
+   worker network identity binding; bearer capabilities alone are
+   transferable if stolen.
+4. File permissions: keep `.env`, secrets and SSH mounts at 0600/0700 so
+   the non-root worker uid cannot read them (the image sets `/root` to 0700).
+
+## Known caveats
+
+- Subscription-based CLIs own their auth material: the Claude CLI's pool
+  account `CLAUDE_CONFIG_DIR`, the Codex `CODEX_HOME`, and the OpenCode
+  `auth.json` copy are readable inside that worker's sandbox. These are
+  pooled model-account credentials (deliberately shared across runs), not
+  backend infrastructure secrets; fully brokering them requires a
+  protocol-level auth proxy (future work).
+- OpenCode/Codex warm-session and prewarm optimizations that shared server
+  processes across runs are disabled/removed; each run pays a worker start.
+  Conversation continuity is carried by the textual conversation context.
+- Fixed-argv admin utilities (`claude auth status/logout`, `codex logout`
+  in auth/usage routes) still run backend-side; they execute no
+  model-driven code. Background `claude -p` utility calls (titles/topics)
+  run with the scrubbed worker env and a scratch workspace.
+- Tool outputs that are files are produced server-side; the existing file
+  delivery path serves them. Worker-side files can be passed INTO tools
+  only via the bounded inline upload in the shim.
+- `OPENCODE_SERVER_URL` (operator-managed external server) bypasses the
+  managed worker spawn; isolation of an external server is the operator's
+  responsibility.
+
+## Validation
+
+`tests/test_worker_isolation.py`, `tests/test_tool_invoke.py`,
+`tests/test_broker_gateway.py`, `tests/test_runtime_isolation.py`, and
+`tests/test_adversarial_worker.py` cover: no backend secrets in worker envs
+(including real subprocess env dumps and /proc scrapes), launcher scrub,
+privilege-drop file isolation (cross-user artifact reads and backend config
+reads fail), forged/expired/revoked capability rejection over HTTP,
+fail-closed authorization on datastore errors, identity-flag stripping,
+sharing-rule grant filtering, MCP credential confinement, model-key
+injection, and source-level guards that the legacy env-inheriting execution
+path stays gone. These are synthetic tests: they do not replace deployed
+adversarial end-to-end verification under the production runtime/network
+policy, which remains a release gate.
