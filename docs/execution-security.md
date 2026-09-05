@@ -217,25 +217,19 @@ environment edits preserve that mode. Preview-generated secrets are also private
 Read-only secret mounts and all other backend files still require the production
 sandbox boundary described above.
 
-### Remaining merge gates after the current changes
+### Remaining release gates
 
-- Production per-worker hardened sandbox and egress policy are not implemented or
-  deployed by this branch. The local host cannot run namespace/container tests.
-- Vendor subscription end-to-end validation remains outstanding. Proactive backend
-  refresh is implemented for expiring Claude/Codex credentials; opaque token
-  recovery and OpenCode subscription-only plugins still need compatibility work.
-- Apollo, Dataroom, CDN, Stitch and agreement commands now have reviewed schemas.
-  Renderer utilities remain denied rather than executing untrusted rendering
-  specifications beside backend secrets. Safe worker-local rendering needs the
-  independent sandbox deployment.
-- Preview deployment testing, including deployed browser/OAuth and signed-proxy
-  validation, is explicitly skipped at the requester's direction for this handoff.
-  It has not passed. No preview host changes or deployment retries are part of
-  this validation pass.
+The independent sandbox, subscription recovery and personal provider adapters are
+implemented. Their current evidence and host prerequisites are listed in
+[worker-sandbox.md](worker-sandbox.md). These supersede earlier staged status notes.
+Real gVisor execution and live vendor compatibility have not passed verification.
+The standalone `scripts/verify_worker_isolation.sh` runs the real-runtime suite
+without requiring workflow installation, on a disposable capable host.
 
-The preview-testing waiver does not close the implementation gaps above. Passing
-local tests/CI does not establish production isolation. Keep the PR draft until
-the remaining implementation scope and compatibility risks are reviewed.
+Preview deployment and browser/OAuth validation are explicitly skipped at the
+requester's direction, not passed. That waiver does not waive independent sandbox
+or vendor compatibility checks. Generic credential-bearing plugins and stdio MCP
+remain intentionally disabled; enabling them would violate credential separation.
 
 ### Reproducible local verification
 
@@ -279,8 +273,10 @@ and disconnection are checked. Delivery retries are idempotent per owner/recordi
 Transcripts go to `personal_grain_events`, **not** organization-wide changestreams.
 `GET /api/integrations/grain/recordings` returns the current user's latest 50 events.
 The legacy organization webhook remains disabled; it has no verified personal
-owner. Dashboard setup controls and additional automated downstream consumers are
-not included in this API implementation.
+owner. The personal Grain card now exposes status, enable/rotate and revoke controls.
+A one-time credential dialog clears the value on dismissal and never persists it
+in browser storage. GET status returns only owner-scoped, non-secret metadata.
+Automatic vendor registration and additional downstream consumers are not provided.
 
 No preview deployment testing was performed for these additions, as requested.
 Unit and local subprocess checks are not evidence of independent worker isolation

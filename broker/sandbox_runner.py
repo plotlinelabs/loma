@@ -50,8 +50,9 @@ def main():
     finally:
         result = subprocess.run([*base, 'delete', '--force', bundle.name], capture_output=True, timeout=30,
                                 env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
-        if result.returncode == 0:
-            (bundle / 'stopped').touch(mode=0o600)
+        if result.returncode != 0:
+            raise RuntimeError('Sandbox teardown failed; workspace retained')
+        (bundle / 'stopped').touch(mode=0o600)
 
 
 if __name__ == '__main__':

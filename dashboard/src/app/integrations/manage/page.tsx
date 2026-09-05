@@ -54,6 +54,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RiCloseLine, RiFileCopyLine, RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
+import GrainWebhookPanel from "../../../components/GrainWebhookPanel";
 import ApiKeysPanel from "../../../components/ApiKeysPanel";
 
 const INTEGRATION_TABS = ["org", "system", "custom", "personal", "api-keys"] as const;
@@ -439,7 +440,7 @@ export default function IntegrationsPage() {
   const [disconnectingOrg, setDisconnectingOrg] = useState<string | null>(null);
   const [webhookUrls, setWebhookUrls] = useState<Record<string, string>>({});
 
-  const { isAdmin } = useUser();
+  const { isAdmin, user } = useUser();
 
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [customForm, setCustomForm] = useState({
@@ -1751,6 +1752,7 @@ export default function IntegrationsPage() {
                       </Button>
                     )}
                   </div>
+                  {grainConn?.status === "connected" && <GrainWebhookPanel key={user?.email} />}
                   {grainConn?.status === "connected" && grainConn?.connected_at && (
                     <>
                       <Separator className="my-5" />

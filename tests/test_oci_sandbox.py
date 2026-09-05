@@ -245,3 +245,23 @@ def test_blank_pptx_composition_has_no_backend_asset_dependency(tmp_path, monkey
     output = tmp_path / 'artifacts/synthetic.pptx'
     assert output.exists()
     assert len(Presentation(output).slides) == 1
+
+
+def test_runner_does_not_report_success_when_teardown_fails(oci, monkeypatch):
+    from broker import sandbox_runner
+    workspace, _ = oci
+    command = sandbox.prepare(['python3'], workspace, worker.build_worker_env(workspace))
+    bundle = Path(command[-1])
+    class Child:
+        def wait(self):
+            return 0
+        def poll(self):
+            return 0
+    monkeypatch.setattr(sandbox_runner.sys, 'argv', ['runner', str(bundle)])
+    monkeypatch.setattr(sandbox_runner.subprocess, 'Popen', lambda *a, **kw: Child())
+    monkeypatch.setattr(sandbox_runner.subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=1))
+    monkeypatch.setattr(sandbox_runner.signal, 'signal', lambda *a: None)
+    with pytest.raises(RuntimeError, match='teardown failed'):
+        sandbox_runner.main()
+    assert not (bundle / 'stopped').exists()
+    assert bundle.exists()

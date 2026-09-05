@@ -670,10 +670,32 @@ def _create_slide_from_layout(prs: Presentation, layout_id: str, content: dict):
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def configure_library(directory: str):
+    """Select a caller-supplied library inside the isolated workspace.
+
+    The original proprietary asset pack is never copied from backend storage.
+    An uploaded/extracted pack uses master/slide-index.json plus the source decks
+    and assets referenced by that index.
+    """
+    global PPT_DIR, MASTER_DIR, ASSETS_DIR, SLIDE_INDEX_PATH
+    selected = Path(directory).resolve(strict=True)
+    if not selected.is_dir():
+        raise ValueError("Library must be a directory")
+    if os.environ.get("LOMA_ISOLATED_WORKER") == "1":
+        selected.relative_to(Path.home().resolve())
+    index = selected / "master" / "slide-index.json"
+    if not index.is_file():
+        raise ValueError("Library requires master/slide-index.json")
+    PPT_DIR, MASTER_DIR, ASSETS_DIR = selected, selected / "master", selected / "assets"
+    SLIDE_INDEX_PATH = index
+    _prs_cache.clear()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="PPTX Presentation Generator — Compose client-specific product decks",
     )
+    parser.add_argument("--library-dir", help="Uploaded library directory in this worker workspace")
     subparsers = parser.add_subparsers(dest="command")
 
     # catalog
@@ -702,6 +724,11 @@ def main():
     comp_parser.add_argument("--spec", "-s", required=True, help="Path to deck spec JSON")
 
     args = parser.parse_args()
+    if args.library_dir:
+        try:
+            configure_library(args.library_dir)
+        except (OSError, ValueError):
+            parser.error("Invalid library: use a workspace directory containing master/slide-index.json")
 
     if args.command == "catalog":
         cmd_catalog(args)

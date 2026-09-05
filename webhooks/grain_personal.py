@@ -32,6 +32,19 @@ async def configure(request):
     db = _db()
     owner = get_user_email(request)
     await _active(db, owner)
+    if request.method == 'GET':
+        subscription = await db.grain_webhook_subscriptions.find_one(
+            {'_id': owner}, {'expires_at': 1})
+        expiry = subscription.get('expires_at') if subscription else None
+        if expiry and expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        response = web.json_response({
+            'enabled': bool(expiry and expiry > datetime.now(timezone.utc)),
+            'expires_at': expiry.isoformat() if expiry else None,
+            'path': '/webhooks/grain/personal',
+        })
+        response.headers['Cache-Control'] = 'no-store'
+        return response
     if request.method == 'DELETE':
         await db.grain_webhook_subscriptions.delete_one({'_id': owner})
         return web.json_response({'disabled': True})
@@ -122,6 +135,7 @@ async def recordings(request):
 
 
 def setup_routes(app):
+    app.router.add_get('/api/integrations/grain/webhook', configure)
     app.router.add_put('/api/integrations/grain/webhook', configure)
     app.router.add_delete('/api/integrations/grain/webhook', configure)
     app.router.add_get('/api/integrations/grain/recordings', recordings)

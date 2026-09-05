@@ -69,8 +69,12 @@ flags and the `--force` teardown behavior were checked against upstream source.
 
 - `tools/pptx_creator.py` executes inside the independent worker, not the
   credential-bearing backend. Blank composition requires no proprietary master
-  deck. Existing preset/master-deck functions still need the asset pack; this
-  repository does not contain a `ppt/` asset library. Outputs default to the
+  deck. Preset/master-deck composition also accepts a caller-uploaded asset pack via
+  `python3 tools/pptx_creator.py --library-dir "$HOME/library" generate ...`.
+  The library directory must resolve inside this worker's HOME, including symlink
+  resolution. Supply `master/slide-index.json`, its referenced source decks and
+  assets. A synthetic library generation test passes without any backend assets.
+  The proprietary original pack is not supplied or synthesized by this branch. Outputs default to the
   worker's `HOME/artifacts` directory.
 - Diagram rendering uses a fixed public HTTPS renderer with bounded, no-redirect
   downloads; parsing/rendering does not execute on the credential-bearing backend.
@@ -102,3 +106,23 @@ CLI versions with mock provider transports, verify worker cancellation and reboo
 cleanup on the target host, and perform authorized vendor compatibility checks.
 The current evidence does not close these gates. A preview-testing waiver is not
 a substitute for a supported execution host or an implemented plugin adapter.
+
+
+## Standalone validation without workflow installation
+
+On a disposable root-capable host, install runsc and export the `worker-base`
+image using the commands in `deploy/worker-isolation-ci.example.yml`, then run:
+
+```bash
+sudo bash scripts/verify_worker_isolation.sh /opt/loma-ci-rootfs
+```
+
+The command refuses missing runtime/image/namespace support, removes inherited
+credentials from the test controller environment, and opts into (not skips) the
+real tests. Coverage includes host/sibling visibility, blocked network access,
+broker transport, startup of the installed Claude/Codex/OpenCode executables,
+and force deletion of detached worker processes. This is not preview deployment
+and does not exercise live vendor credentials or claim inference compatibility.
+No successful result is recorded yet. The regular unit suite continues to skip
+these five tests explicitly. Failed runtime teardown also returns failure instead
+of reporting a successful run with residual sandbox state.

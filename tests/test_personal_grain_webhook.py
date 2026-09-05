@@ -167,3 +167,40 @@ async def test_upstream_failure_resets_context_without_logging_provider_secret(w
     assert 'synthetic-private' not in await response.text()
     db.personal_grain_events.update_one.assert_not_awaited()
     assert grain._access_token.get() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('remaining', [None, -1, 3600])
+async def test_status_is_owner_scoped_and_never_returns_secret(webhook, remaining):
+    from datetime import datetime, timedelta, timezone
+    client, db, token, fetch = webhook
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=remaining) if remaining is not None else None
+    db.grain_webhook_subscriptions.find_one.return_value = ({'_id': OWNER, 'expires_at': expiry,
+        'token_hash': 'must-not-be-returned'} if expiry else None)
+    response = await client.get('/api/integrations/grain/webhook?owner=other')
+    assert response.status == 200
+    assert response.headers['Cache-Control'] == 'no-store'
+    body = await response.json()
+    assert body['enabled'] is (remaining is not None and remaining > 0)
+    assert set(body) == {'enabled', 'expires_at', 'path'}
+    db.grain_webhook_subscriptions.find_one.assert_awaited_once_with({'_id': OWNER}, {'expires_at': 1})
+    token.assert_not_awaited()
+    db.grain_webhook_subscriptions.replace_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_status_accepts_mongo_naive_utc_date(webhook):
+    from datetime import datetime, timedelta
+    client, db, *_ = webhook
+    db.grain_webhook_subscriptions.find_one.return_value = {'expires_at': datetime.now() + timedelta(days=1)}
+    response = await client.get('/api/integrations/grain/webhook')
+    assert (await response.json())['enabled']
+
+
+@pytest.mark.asyncio
+async def test_inactive_user_cannot_read_webhook_status(webhook):
+    client, db, *_ = webhook
+    db.users.find_one.return_value = None
+    response = await client.get('/api/integrations/grain/webhook')
+    assert response.status == 403
+    db.grain_webhook_subscriptions.find_one.assert_not_awaited()
