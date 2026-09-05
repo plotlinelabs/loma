@@ -32,7 +32,10 @@ import re
 import resource
 import secrets
 import shutil
+import stat
 import tempfile
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -96,7 +99,7 @@ def worker_root() -> Path:
 
 
 def _worker_uid_gid() -> tuple[int | None, int | None]:
-    """Dedicated non-root uid/gid for workers, when configured and permitted."""
+    """Dedicated shared non-root uid/gid for workers, when configured."""
     try:
         uid = int(os.environ.get("LOMA_WORKER_UID", "") or -1)
         gid = int(os.environ.get("LOMA_WORKER_GID", "") or -1)
@@ -111,35 +114,161 @@ def _worker_uid_gid() -> tuple[int | None, int | None]:
     return uid, (gid if gid > 0 else uid)
 
 
+# ── Per-run worker identity ──────────────────────────────────────────────
+#
+# With only the single shared worker uid, concurrent runs of different users
+# are the SAME Unix identity: 0700 directory modes do not stop one run's
+# process from reading another run's workspace. When the backend runs as
+# root and LOMA_WORKER_UID_RANGE (e.g. "200000-200999") is set, every
+# workspace instead gets its own uid from the range; two concurrent runs can
+# then never read each other's files. Without a range (or without root) we
+# fall back to the shared uid and enforce strict 0700 ownership — a weaker,
+# documented boundary (see docs/execution-security.md).
+
+
+@dataclass(frozen=True)
+class WorkerIdentity:
+    uid: int | None
+    gid: int | None
+    per_run: bool = False
+
+
+_identity_lock = threading.Lock()
+_workspace_identities: dict[str, WorkerIdentity] = {}
+
+
+def _uid_range() -> tuple[int, int] | None:
+    spec = os.environ.get("LOMA_WORKER_UID_RANGE", "").strip()
+    if not spec:
+        return None
+    match = re.fullmatch(r"(\d{4,10})-(\d{4,10})", spec)
+    if not match:
+        raise WorkerIsolationError(
+            "LOMA_WORKER_UID_RANGE must look like '200000-200999'")
+    low, high = int(match.group(1)), int(match.group(2))
+    if low < 1000 or high < low or high - low > 65535:
+        raise WorkerIsolationError("LOMA_WORKER_UID_RANGE is not a sane uid range")
+    return low, high
+
+
+def _uids_in_use(low: int, high: int) -> set[int]:
+    """Uids from the range currently allocated (registry + on-disk owners).
+
+    Scanning existing workspace owners guards against reusing a uid still
+    attached to a live workspace after a backend restart.
+    """
+    used = {
+        identity.uid for identity in _workspace_identities.values()
+        if identity.uid is not None
+    }
+    root = worker_root()
+    if root.is_dir():
+        for entry in root.iterdir():
+            try:
+                owner = entry.stat().st_uid
+            except OSError:
+                continue
+            if low <= owner <= high:
+                used.add(owner)
+    return used
+
+
+def _allocate_identity() -> WorkerIdentity:
+    """Pick the identity for a new workspace (call under _identity_lock)."""
+    uid_range = _uid_range()
+    if uid_range is not None:
+        if os.geteuid() != 0:
+            # An operator explicitly asked for per-run identities; running
+            # without the privilege to enforce them must not silently
+            # degrade to the shared-uid boundary.
+            raise WorkerIsolationError(
+                "LOMA_WORKER_UID_RANGE requires the backend to run as root")
+        low, high = uid_range
+        used = _uids_in_use(low, high)
+        for candidate in range(low, high + 1):
+            if candidate not in used:
+                return WorkerIdentity(uid=candidate, gid=candidate, per_run=True)
+        raise WorkerIsolationError("No free worker uid: all range uids are in use")
+    uid, gid = _worker_uid_gid()
+    return WorkerIdentity(uid=uid, gid=gid, per_run=False)
+
+
+def workspace_identity(workspace: Path | str) -> WorkerIdentity:
+    """The Unix identity every process of this workspace must run as."""
+    key = str(Path(workspace).resolve())
+    with _identity_lock:
+        identity = _workspace_identities.get(key)
+    if identity is not None:
+        return identity
+    # Not a registered workspace (legacy/manual path): shared configuration.
+    uid, gid = _worker_uid_gid()
+    return WorkerIdentity(uid=uid, gid=gid, per_run=False)
+
+
+def verify_workspace_ownership(workspace: Path | str) -> None:
+    """Fail closed if a workspace is not private to its assigned identity.
+
+    This is the load-bearing check for the shared-uid fallback: with one
+    worker uid the only boundary between runs is that each workspace stays
+    0700 and owned by exactly the expected identity.
+    """
+    identity = workspace_identity(workspace)
+    expected_uid = identity.uid if identity.uid is not None else os.geteuid()
+    for path in (Path(workspace), Path(workspace) / "tmp"):
+        try:
+            info = os.stat(path)
+        except OSError as exc:
+            raise WorkerIsolationError(f"Workspace path missing: {path}") from exc
+        if not stat.S_ISDIR(info.st_mode):
+            raise WorkerIsolationError(f"Workspace path is not a directory: {path}")
+        if info.st_uid != expected_uid:
+            raise WorkerIsolationError(
+                f"Workspace {path} is owned by uid {info.st_uid}, expected {expected_uid}")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise WorkerIsolationError(
+                f"Workspace {path} is group/world accessible")
+
+
 def create_workspace(prefix: str = "run") -> Path:
     """Create a fresh private workspace for one run.
 
     Layout: ``<workspace>/`` is the worker cwd and HOME, ``<workspace>/tmp``
     is its TMPDIR, ``<workspace>/tools`` holds broker-backed tool shims.
+    Each workspace is bound to a worker identity: a per-run uid when
+    LOMA_WORKER_UID_RANGE is configured (backend running as root), else the
+    shared LOMA_WORKER_UID.
     """
     root = worker_root()
     root.mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o711)  # traversable, not listable, for non-root workers
     workspace = root / f"{prefix}-{secrets.token_hex(8)}"
-    workspace.mkdir(mode=0o700)
-    (workspace / "tmp").mkdir(mode=0o700)
-    (workspace / "tools").mkdir(mode=0o700)
 
-    uid, gid = _worker_uid_gid()
-    if uid is not None:
-        for p in (workspace, workspace / "tmp", workspace / "tools"):
-            os.chown(p, uid, gid)
+    with _identity_lock:
+        identity = _allocate_identity()
+        workspace.mkdir(mode=0o700)
+        (workspace / "tmp").mkdir(mode=0o700)
+        (workspace / "tools").mkdir(mode=0o700)
+        if identity.uid is not None:
+            for p in (workspace, workspace / "tmp", workspace / "tools"):
+                os.chown(p, identity.uid, identity.gid)
+        _workspace_identities[str(workspace.resolve())] = identity
     return workspace
 
 
-def grant_worker_access(path: Path | str, recursive: bool = True) -> None:
-    """Make a path owned by the dedicated worker uid/gid (when configured).
+def grant_worker_access(path: Path | str, recursive: bool = True,
+                        workspace: Path | str | None = None) -> None:
+    """Make a path owned by a worker identity (when privilege drop is active).
 
     Needed for state the runtime CLIs themselves must read/write inside the
-    sandbox (e.g. a pool account's CLAUDE_CONFIG_DIR/CODEX_HOME, which hold
-    that CLI's own auth material). No-op when privilege drop is not active.
+    sandbox. Pass the run's ``workspace`` so ownership goes to that run's
+    identity; without it the shared configured uid is used. No-op when
+    privilege drop is not active.
     """
-    uid, gid = _worker_uid_gid()
+    if workspace is not None:
+        identity = workspace_identity(workspace)
+        uid, gid = identity.uid, identity.gid
+    else:
+        uid, gid = _worker_uid_gid()
     if uid is None:
         return
     path = Path(path)
@@ -164,6 +293,9 @@ def cleanup_workspace(workspace: Path | str) -> None:
         logger.error("Refusing to delete non-workspace path %s", workspace)
         return
     shutil.rmtree(workspace, ignore_errors=True)
+    # Release the workspace's per-run uid only after its files are gone.
+    with _identity_lock:
+        _workspace_identities.pop(str(workspace.resolve()), None)
 
 
 def _tool_path_dirs() -> list[str]:
@@ -260,14 +392,20 @@ def _limit(name: str) -> int:
         return _RLIMIT_DEFAULTS[name]
 
 
-def worker_preexec_fn(setsid: bool = True):
+def worker_preexec_fn(setsid: bool = True,
+                      workspace: Path | str | None = None):
     """Build the ``preexec_fn`` applied in the child before exec.
 
     Applies setsid, umask, rlimits, and (when configured and running as root)
-    drops privileges to the dedicated worker uid/gid. Pass ``setsid=False``
-    for children that are already session leaders (e.g. after pty.fork).
+    drops privileges to the workspace's worker identity (per-run uid when
+    allocated, else the shared configured uid). Pass ``setsid=False`` for
+    children that are already session leaders (e.g. after pty.fork).
     """
-    uid, gid = _worker_uid_gid()
+    if workspace is not None:
+        identity = workspace_identity(workspace)
+        uid, gid = identity.uid, identity.gid
+    else:
+        uid, gid = _worker_uid_gid()
     limits = [
         (resource.RLIMIT_CORE, (0, 0)),
         (resource.RLIMIT_CPU, (_limit("LOMA_WORKER_CPU_SECONDS"),) * 2),
@@ -353,6 +491,7 @@ async def spawn_worker(
     resource limits; an optional wall-clock watchdog kills the process group.
     """
     assert_worker_env_clean(env)
+    verify_workspace_ownership(workspace)
     if bwrap_available():
         argv = build_bwrap_argv(argv, workspace)
     process = await asyncio.create_subprocess_exec(
@@ -362,7 +501,7 @@ async def spawn_worker(
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
-        preexec_fn=worker_preexec_fn(),
+        preexec_fn=worker_preexec_fn(workspace=workspace),
     )
     if wall_time_seconds and wall_time_seconds > 0:
         asyncio.get_running_loop().create_task(
@@ -412,6 +551,7 @@ def write_cli_launcher(
     """
     workspace = Path(workspace)
     assert_worker_env_clean(env)
+    verify_workspace_ownership(workspace)
     for name in passthrough:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             raise WorkerIsolationError(f"Invalid passthrough var name: {name}")
@@ -423,10 +563,12 @@ def write_cli_launcher(
     def _sh_quote(value: str) -> str:
         return "'" + value.replace("'", "'\\''") + "'"
 
-    # When the backend runs as root with a dedicated worker uid configured,
-    # the launcher also drops privileges before exec'ing the CLI, so even
-    # SDK-spawned workers never run as root.
-    uid, gid = _worker_uid_gid()
+    # When the backend runs as root with a worker identity configured, the
+    # launcher also drops privileges (to the workspace's per-run uid when
+    # allocated) before exec'ing the CLI, so even SDK-spawned workers never
+    # run as root.
+    identity = workspace_identity(workspace)
+    uid, gid = identity.uid, identity.gid
     drop = ""
     if uid is not None:
         if not shutil.which("setpriv"):
@@ -452,6 +594,8 @@ def write_cli_launcher(
     launcher = workspace / "loma-cli-launcher.sh"
     launcher.write_text("\n".join(lines) + "\n")
     os.chmod(launcher, 0o755)
+    if uid is not None:
+        os.chown(launcher, uid, gid)
     return launcher
 
 
@@ -574,8 +718,8 @@ def populate_tool_shims(workspace: Path | str, tool_names: list[str]) -> None:
         shim = tools_dir / f"{tool}.py"
         shim.write_text(_SHIM_TEMPLATE.format(tool=tool))
         os.chmod(shim, 0o755)
-    uid, gid = _worker_uid_gid()
-    if uid is not None:
-        os.chown(tools_dir, uid, gid)
+    identity = workspace_identity(workspace)
+    if identity.uid is not None:
+        os.chown(tools_dir, identity.uid, identity.gid)
         for shim_file in tools_dir.iterdir():
-            os.chown(shim_file, uid, gid)
+            os.chown(shim_file, identity.uid, identity.gid)

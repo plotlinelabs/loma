@@ -62,7 +62,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     command = ["/bin/bash", "--noprofile", "--norc", "-i"]
     if worker_mod.bwrap_available():
         command = worker_mod.build_bwrap_argv(command, workspace)
-    child_setup = worker_mod.worker_preexec_fn(setsid=False)
+    child_setup = worker_mod.worker_preexec_fn(setsid=False, workspace=workspace)
     pid, fd = pty.fork()
 
     if pid == 0:

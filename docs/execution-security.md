@@ -37,12 +37,24 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
   values is enforced fail-closed at build and spawn time. For the Claude
   Agent SDK (which merges `os.environ` into its CLI subprocess), a generated
   launcher re-execs the CLI through `env -i` with the scrubbed allowlist.
-- **Non-root.** With `LOMA_WORKER_UID`/`LOMA_WORKER_GID` set (defaulted in
-  the Docker image to the dedicated `loma-worker` user), every worker drops
-  privileges (setuid/setgid via `preexec_fn`, `setpriv` in the CLI
-  launcher). This does not establish separation between workers sharing a UID.
-  Filesystem isolation must be enforced by the worker deployment, not assumed
-  from directory modes.
+- **Non-root, per-run identity.** With `LOMA_WORKER_UID_RANGE` set (e.g.
+  `200000-200999`) and the backend running as root, every workspace is
+  bound to its own uid from the range: two concurrent runs of different
+  users are different Unix identities and cannot read or write each other's
+  workspaces, temp files, or shims. Uids are allocated at workspace
+  creation, tracked in-process, cross-checked against on-disk workspace
+  owners (restart safety), and released only after the workspace is
+  deleted. Exhausting the range, configuring a range without root, or a
+  malformed range fails closed.
+  **Fallback (weaker boundary):** without a range, workers drop to the
+  single shared `LOMA_WORKER_UID`/`LOMA_WORKER_GID`. Concurrent runs then
+  share one uid, so directory modes cannot separate them — a compromised
+  run could read a concurrent run's workspace. The fallback enforces strict
+  0700 ownership verification of every workspace before spawn (fail closed
+  on foreign owner or group/world access bits), which protects against
+  backend-side tampering but NOT against a live same-uid sibling worker.
+  Deployments that run concurrent multi-user workloads must configure the
+  uid range (or provide kernel-level per-worker sandboxes).
 - **Resource limits**: CPU time, address space, file size, open files,
   process count, no core dumps (`RLIMIT_*`), own session/process group,
   wall-clock watchdog, umask 077. Optional bubblewrap wrapping
