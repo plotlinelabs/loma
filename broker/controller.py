@@ -17,6 +17,7 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from pathlib import Path
 
 from broker.gateway import (
@@ -31,12 +32,15 @@ from broker.operations import (
     PERSONAL_TOOLS,
     UTILITY_TOOLS,
     ModelRequest,
+    McpRequest,
     ToolInvoke,
 )
 from broker.service import Broker
 from broker import worker as worker_mod
 
 logger = logging.getLogger(__name__)
+
+current_run: ContextVar = ContextVar("loma_run", default=None)
 
 _broker: Broker | None = None
 _registry: McpProxyRegistry | None = None
@@ -65,6 +69,7 @@ async def init_execution_controller(db) -> Broker:
     global _broker, _registry
     operations = {
         "tool.invoke": ToolInvoke(),
+        "mcp.request": McpRequest(),
         "grain.transcript": GrainTranscript(),
         "model.request": ModelRequest(configured_model_providers()),
     }
@@ -118,23 +123,11 @@ class RunContext:
 
 async def _denied_integration_providers(db, user_email: str) -> set[str]:
     """Providers whose sharing rules exclude this user (fail closed on error)."""
-    denied: set[str] = set()
-    async for integration in db.integrations.find({
-        "status": "active", "shared_with.mode": "specific",
-    }):
-        provider = integration.get("provider")
-        shared = integration.get("shared_with") or {}
-        allowed_users = set(shared.get("users") or [])
-        allowed_teams = set(shared.get("teams") or [])
-        has_access = user_email in allowed_users
-        if not has_access and allowed_teams:
-            team_count = await db.teams.count_documents({
-                "team_id": {"$in": list(allowed_teams)},
-                "members": user_email,
-            })
-            has_access = team_count > 0
-        if not has_access and provider:
-            denied.add(provider)
+    from integrations.access import can_access
+    denied = set(INTEGRATION_TOOLS.values())
+    async for integration in db.integrations.find({"status": "active"}):
+        if await can_access(db, integration, user_email):
+            denied.discard(integration.get("provider"))
     return denied
 
 
@@ -167,6 +160,18 @@ async def start_run(user_email: str | None, *, source: str = "run") -> RunContex
 
     broker = get_broker()
     grants: dict = {"tool.invoke": await _tool_grants(broker.db, user_email)}
+    from integrations.access import can_access
+    from integrations.registry import PROVIDER_CATALOG
+    mcp_grants = []
+    async for integration in broker.db.integrations.find({"status": "active"}):
+        if await can_access(broker.db, integration, user_email):
+            provider = integration["provider"]
+            mcp_grants.append(PROVIDER_CATALOG.get(provider, {}).get("mcp_server_name") or provider)
+    for provider in ("grain", "hubspot", "notion"):
+        if await broker.db.oauth_tokens.find_one({"provider": provider, "user_email": user_email}):
+            mcp_grants.append(PROVIDER_CATALOG.get(provider, {}).get("mcp_server_name") or provider)
+    if mcp_grants:
+        grants["mcp.request"] = sorted(set(mcp_grants))
     providers = configured_model_providers()
     if providers:
         grants["model.request"] = sorted(providers)
@@ -218,6 +223,9 @@ def proxy_mcp_servers_for_worker(mcp_servers: dict) -> tuple[dict, list[str], li
     Returns (proxied_config, proxy_tokens, disabled_server_names).
     """
     registry = get_proxy_registry()
+    ctx = current_run.get()
+    if ctx is None or not ctx.capability:
+        return {}, [], sorted(mcp_servers or {})
     proxied: dict = {}
     tokens: list[str] = []
     disabled: list[str] = []
@@ -227,12 +235,13 @@ def proxy_mcp_servers_for_worker(mcp_servers: dict) -> tuple[dict, list[str], li
         server_type = conf.get("type")
         if server_type in ("http", "sse", "remote", "streamable-http") and conf.get("url"):
             try:
-                token = registry.register(name, conf["url"], conf.get("headers"))
+                token = registry.register(name, conf["url"], conf.get("headers"), capability=ctx.capability)
             except Exception:
                 logger.warning("MCP server %s could not be proxied; disabling for workers", name)
                 disabled.append(name)
                 continue
             tokens.append(token)
+            ctx.proxy_tokens.append(token)
             proxied[name] = {
                 "type": "http",
                 "url": f"{gateway_base_url()}/mcp/{token}",

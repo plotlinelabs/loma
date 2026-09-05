@@ -1201,9 +1201,9 @@ export default function IntegrationsPage() {
       ) : (
         <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList>
-            <TabsTrigger value="org">Org</TabsTrigger>
+            <TabsTrigger value="org">Organization-managed</TabsTrigger>
             <TabsTrigger value="system">System</TabsTrigger>
-            <TabsTrigger value="custom">Custom</TabsTrigger>
+            <TabsTrigger value="custom">Personal connectors</TabsTrigger>
             <TabsTrigger value="personal">Personal</TabsTrigger>
             <TabsTrigger value="api-keys">API Keys</TabsTrigger>
           </TabsList>
@@ -1408,6 +1408,7 @@ export default function IntegrationsPage() {
 
           {/* Custom MCP Connectors */}
           <TabsContent value="custom">
+            <p className="text-sm text-muted-foreground mb-3">These connectors belong to your account and are not shared with other users.</p>
             <div className="flex justify-end mb-2">
               <Button size="sm" onClick={() => setShowCustomModal(true)}>
                 Add custom connector

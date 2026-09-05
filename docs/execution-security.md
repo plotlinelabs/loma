@@ -2,14 +2,12 @@
 
 ## Status
 
-Isolated per-run workers are implemented and are the ONLY execution path.
-All three agent runtimes (Claude Agent SDK, OpenCode, Codex), scheduled and
-webhook flows (which execute through the same `stream_agent` entry point),
-and dashboard terminals run inside the worker boundary described below and
-obtain credentials/tool results exclusively through the execution broker.
-The legacy in-process execution path (backend env inheritance, backend cwd,
-tools reading the database/encryption key directly inside agent runs) has
-been removed.
+**P0 remains incomplete. Do not deploy this branch as a security isolation boundary.**
+The current implementation provides environment filtering, per-run capabilities,
+private workspaces and broker admission, but it is not sufficient to contain
+arbitrary agent code. Production worker separation, credential-free subscription
+runtimes, operation-specific broker adapters and deployed adversarial validation
+remain release blockers. Unit tests do not establish isolation between workers.
 
 ## Architecture
 
@@ -21,7 +19,7 @@ broker/controller.py  ── issues ──────►  run capability (opaqu
 broker/service.py + broker/http.py  ◄──  tools/<name>.py shims call
   POST /v1/invoke (loopback)               tool.invoke via the broker;
   executes real tools server-side          the capability is the worker's
-  with the run owner's identity            ONLY credential
+  with the run owner's identity            broker credential
 broker/gateway.py (loopback)        ◄──  MCP + model traffic; the gateway
   injects org/user/provider secrets        injects real credentials
   server-side, never into the worker       server-side
@@ -42,8 +40,9 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 - **Non-root.** With `LOMA_WORKER_UID`/`LOMA_WORKER_GID` set (defaulted in
   the Docker image to the dedicated `loma-worker` user), every worker drops
   privileges (setuid/setgid via `preexec_fn`, `setpriv` in the CLI
-  launcher). Workers then cannot read backend-owned files (`/app/.env`,
-  mounted secret/SSH dirs) or other runs' workspaces.
+  launcher). This does not establish separation between workers sharing a UID.
+  Filesystem isolation must be enforced by the worker deployment, not assumed
+  from directory modes.
 - **Resource limits**: CPU time, address space, file size, open files,
   process count, no core dumps (`RLIMIT_*`), own session/process group,
   wall-clock watchdog, umask 077. Optional bubblewrap wrapping
@@ -66,6 +65,8 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
   reached via `/model/<provider>/…` on the gateway; the worker authenticates
   with its run capability and the real key is injected server-side.
 - `grain.transcript` — unchanged personal-OAuth read-only adapter.
+- `mcp.request` binds each proxy to a run capability and rechecks account status,
+  integration ownership/sharing and personal connection availability per call.
 - MCP: HTTP MCP servers are re-pointed at `/mcp/<proxy-token>` on the
   gateway; real upstream URLs and auth headers stay in backend memory,
   proxy tokens are revoked with the owning client/run. **Stdio MCP servers
@@ -85,8 +86,9 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 
 The subprocess boundary is real but not kernel-grade. Production must add:
 
-1. A hardened container runtime for the backend+workers (gVisor, Kata, or
-   Firecracker class isolation). No docker socket, no host mounts beyond
+1. Separate hardened sandboxes for each worker, distinct from the backend
+   (gVisor, Kata, or Firecracker class isolation). Placing the backend and all
+   workers inside one hardened container does not provide this separation. No docker socket, no host mounts beyond
    the declared volumes, no cloud metadata service reachability.
 2. Network policy: workers may reach only the loopback broker/gateway and
    approved model endpoints. Adapter/gateway destination pinning is not
@@ -128,7 +130,7 @@ The subprocess boundary is real but not kernel-grade. Production must add:
 privilege-drop file isolation (cross-user artifact reads and backend config
 reads fail), forged/expired/revoked capability rejection over HTTP,
 fail-closed authorization on datastore errors, identity-flag stripping,
-sharing-rule grant filtering, MCP credential confinement, model-key
+sharing-rule admission filtering, MCP gateway admission, model-key
 injection, and source-level guards that the legacy env-inheriting execution
 path stays gone. These are synthetic tests: they do not replace deployed
 adversarial end-to-end verification under the production runtime/network

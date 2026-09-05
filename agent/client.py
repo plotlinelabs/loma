@@ -140,22 +140,8 @@ async def merge_db_integrations(config: dict) -> dict:
 
             # Custom connectors carry their own inline remote MCP config (no
             # catalog entry). Added by admins from the Integrations page.
-            if integration.get("is_custom"):
-                # OAuth connectors are handled per-user at stream_agent() time
-                if integration.get("auth_mode") == "oauth":
-                    logger.info("Skipping OAuth custom connector '%s' from shared pool config", provider)
-                    continue
-                try:
-                    cfg = {"type": "http", "url": integration["mcp_url"]}
-                    if integration.get("api_key_encrypted"):
-                        header = integration.get("auth_header") or "Authorization"
-                        cfg["headers"] = {
-                            header: decrypt_token(integration["api_key_encrypted"]),
-                        }
-                    mcp_servers[provider] = cfg
-                    logger.info("Loaded custom MCP connector '%s' from DB", provider)
-                except Exception:
-                    logger.exception("Failed to load custom MCP connector %s", provider)
+            if integration.get("is_custom") or provider in ("grain", "hubspot", "notion"):
+                mcp_servers.pop(provider, None)
                 continue
 
             catalog_entry = PROVIDER_CATALOG.get(provider)
@@ -188,47 +174,20 @@ async def merge_db_integrations(config: dict) -> dict:
 
 
 async def get_excluded_integrations_for_user(user_email: str) -> set[str]:
-    """Return MCP server names the user should NOT have access to.
-
-    Checks `shared_with` on each integration. If mode is "specific", the
-    user must be in the users list or a member of one of the listed teams.
-    """
-    try:
-        from observability.db import get_db
-        from integrations.registry import PROVIDER_CATALOG
-
-        db = get_db()
-        if db is None:
-            return set()
-
-        excluded = set()
-        async for integration in db.integrations.find({
-            "status": "active",
-            "shared_with.mode": "specific",
-        }):
+    from observability.db import get_db
+    from integrations.registry import PROVIDER_CATALOG
+    from integrations.access import can_access
+    db = get_db()
+    if db is None:
+        raise RuntimeError("Integration authorization unavailable")
+    excluded = set()
+    async for integration in db.integrations.find({}):
+        if integration.get("provider") in ("grain", "hubspot", "notion"):
+            continue  # personal OAuth is authorized independently of org sharing
+        if not await can_access(db, integration, user_email):
             provider = integration["provider"]
-            shared = integration.get("shared_with", {})
-            allowed_users = set(shared.get("users") or [])
-            allowed_teams = set(shared.get("teams") or [])
-
-            has_access = user_email in allowed_users
-            if not has_access and allowed_teams:
-                team_count = await db.teams.count_documents({
-                    "team_id": {"$in": list(allowed_teams)},
-                    "members": user_email,
-                })
-                has_access = team_count > 0
-
-            if not has_access:
-                catalog = PROVIDER_CATALOG.get(provider)
-                server_name = catalog["mcp_server_name"] if catalog and catalog.get("mcp_server_name") else provider
-                excluded.add(server_name)
-                logger.info("User %s excluded from integration %s", user_email, provider)
-
-        return excluded
-    except Exception:
-        logger.exception("Failed to compute excluded integrations for %s", user_email)
-        return set()
+            excluded.add(PROVIDER_CATALOG.get(provider, {}).get("mcp_server_name") or provider)
+    return excluded
 
 
 async def build_user_mcp_overrides(user_email: str) -> dict:
@@ -254,9 +213,17 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
 
         # 1. Custom MCP OAuth connectors
         async for integration in db.integrations.find({
-            "is_custom": True, "status": "active", "auth_mode": "oauth",
+            "is_custom": True, "status": "active", "connected_by": user_email,
         }):
             provider = integration["provider"]
+            if integration.get("auth_mode") != "oauth":
+                cfg = {"type": "http", "url": integration["mcp_url"]}
+                if integration.get("api_key_encrypted"):
+                    from api.oauth_helpers import decrypt_token
+                    cfg["headers"] = {integration.get("auth_header") or "Authorization":
+                                      decrypt_token(integration["api_key_encrypted"])}
+                overrides[provider] = cfg
+                continue
             token = await get_valid_custom_mcp_token(user_email, provider, db=db)
             if token:
                 header = integration.get("auth_header") or "Authorization"
@@ -285,7 +252,7 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
         return overrides
     except Exception:
         logger.exception("Failed to build user MCP overrides for %s", user_email)
-        return {}
+        raise RuntimeError("Personal integration authorization unavailable") from None
 
 
 def _resolve_mcp_template(template: dict, api_key: str, extra_fields: dict | None = None) -> dict:
@@ -797,6 +764,7 @@ async def stream_agent(
                "Please try again shortly.")
         return
 
+    context_token = execution_controller.current_run.set(run_ctx)
     try:
         async for event in _stream_agent_impl(
             prompt,
@@ -817,6 +785,8 @@ async def stream_agent(
             await execution_controller.end_run(run_ctx)
         except Exception:
             logger.exception("Failed to finalize isolated run %s", run_ctx.run_id)
+        finally:
+            execution_controller.current_run.reset(context_token)
 
 
 async def _stream_agent_impl(
@@ -1170,8 +1140,7 @@ async def _stream_agent_impl(
             logger.error("Failed to create per-user MCP client: %s", e)
             if client is not None:
                 await pool.safe_disconnect(client)
-            client = None
-            user_mcp_overrides = {}
+            raise RuntimeError("Personal integration initialization failed; no shared fallback was started") from None
 
     if client is None:
         try:

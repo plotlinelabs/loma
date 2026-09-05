@@ -102,7 +102,7 @@ class McpProxyRegistry:
         self._entries: dict[str, dict] = {}
 
     def register(self, server_name: str, url: str, headers: dict | None,
-                 *, ttl_seconds: int = 24 * 3600) -> str:
+                 *, ttl_seconds: int = 24 * 3600, capability: str | None = None) -> str:
         if not isinstance(url, str) or not url.startswith("https://"):
             # Plain-http upstreams would leak injected credentials in transit.
             if not url.startswith("http://127.0.0.1") and not url.startswith("http://localhost"):
@@ -110,6 +110,7 @@ class McpProxyRegistry:
         token = "loma_mcpproxy_" + secrets.token_urlsafe(24)
         self._entries[token] = {
             "name": server_name,
+            "capability": capability,
             "url": url.rstrip("/"),
             "headers": dict(headers or {}),
             "expires_at": time.monotonic() + ttl_seconds,
@@ -160,8 +161,15 @@ def create_gateway_app(broker, registry: McpProxyRegistry) -> web.Application:
     async def mcp_proxy(request: web.Request) -> web.StreamResponse:
         try:
             entry = registry.lookup(request.match_info["token"])
+            if not entry.get("capability"):
+                raise Denied()
+            await asyncio.wait_for(broker.execute(
+                entry["capability"], "mcp.request", entry["name"],
+            ), timeout=15)
         except Denied:
             return web.json_response({"error": "Access denied"}, status=403)
+        except Exception:
+            return web.json_response({"error": "Authorization unavailable"}, status=503)
         tail = request.match_info.get("tail", "")
         upstream_url = entry["url"] + (f"/{tail}" if tail else "")
         if request.query_string:

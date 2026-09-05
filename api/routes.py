@@ -1240,11 +1240,13 @@ async def handle_agent_models(request: web.Request) -> web.Response:
 
 async def handle_list_skills(request: web.Request) -> web.Response:
     """GET /api/skills — list DB-native agent skills."""
-    require_analyst_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "MongoDB is not configured"}, status=503)
     skills = await skill_service.list_skills(db)
+    email = get_user_email(request)
+    skills = [skill for skill in skills if skill.get("scope") in ("system", "workspace")
+              or skill.get("created_by") == email]
     return web.json_response({"skills": skills})
 
 

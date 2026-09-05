@@ -616,6 +616,13 @@ async def _start_dedicated_server(
     if user_mcp_overrides:
         mcp_servers.update(user_mcp_overrides)
 
+    if run_ctx and run_ctx.user_email:
+        from agent.client import get_excluded_integrations_for_user
+        excluded = await get_excluded_integrations_for_user(run_ctx.user_email)
+        mcp_servers = {name: cfg for name, cfg in mcp_servers.items() if name not in excluded}
+    else:
+        mcp_servers = {}
+
     proxy_tokens: list[str] = []
     try:
         from broker.controller import proxy_mcp_servers_for_worker

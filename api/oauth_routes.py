@@ -682,6 +682,7 @@ async def handle_custom_mcp_authorize(request: web.Request) -> web.Response:
 
     integration = await db.integrations.find_one({
         "provider": provider, "is_custom": True, "auth_mode": "oauth",
+        "connected_by": email, "status": "active",
     })
     if not integration:
         return web.json_response({"error": "No OAuth-configured connector found"}, status=404)
@@ -748,6 +749,7 @@ async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
 
     integration = await db.integrations.find_one({
         "provider": provider, "is_custom": True, "auth_mode": "oauth",
+        "connected_by": email, "status": "active",
     })
     if not integration:
         return _callback_error("Connector not found", provider=provider)

@@ -29,7 +29,7 @@ class FakeBroker:
         self.calls.append((token, operation, resource))
         if self.fail_with is not None:
             raise self.fail_with
-        if token != CAPABILITY or operation != "model.request":
+        if token != CAPABILITY or operation not in {"model.request", "mcp.request"}:
             raise Denied()
         return {"ok": True}
 
@@ -88,7 +88,7 @@ async def test_mcp_proxy_injects_credentials_and_strips_client_auth():
     try:
         registry = McpProxyRegistry()
         token = registry.register(
-            "linear", str(upstream.make_url("/mcp")), {"Authorization": "Bearer org-secret"},
+            "linear", str(upstream.make_url("/mcp")), {"Authorization": "Bearer org-secret"}, capability=CAPABILITY,
         )
         app = create_gateway_app(FakeBroker(), registry)
         async with TestClient(TestServer(app)) as client:
@@ -209,3 +209,35 @@ def test_gateway_base_url_defaults_to_loopback(monkeypatch):
     monkeypatch.delenv("LOMA_GATEWAY_HOST", raising=False)
     monkeypatch.delenv("LOMA_GATEWAY_PORT", raising=False)
     assert gateway_base_url() == "http://127.0.0.1:3101"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('capability', [None, 'invalid'])
+async def test_mcp_proxy_requires_live_bound_capability(capability):
+    seen = []
+    upstream = await make_upstream(seen)
+    try:
+        registry = McpProxyRegistry()
+        token = registry.register('linear', str(upstream.make_url('/mcp')), {}, capability=capability)
+        async with TestClient(TestServer(create_gateway_app(FakeBroker(), registry))) as client:
+            response = await client.post(f'/mcp/{token}', json={'method': 'tools/list'})
+            assert response.status == 403
+        assert seen == []
+    finally:
+        await upstream.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_proxy_rechecks_authorization_outage_before_upstream():
+    seen = []
+    upstream = await make_upstream(seen)
+    try:
+        registry = McpProxyRegistry()
+        token = registry.register('linear', str(upstream.make_url('/mcp')), {}, capability=CAPABILITY)
+        broker = FakeBroker(fail_with=RuntimeError('unavailable'))
+        async with TestClient(TestServer(create_gateway_app(broker, registry))) as client:
+            response = await client.post(f'/mcp/{token}', json={'method': 'tools/list'})
+            assert response.status == 503
+        assert seen == []
+    finally:
+        await upstream.close()

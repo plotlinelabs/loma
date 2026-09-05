@@ -610,6 +610,12 @@ async def get_valid_custom_mcp_token(user_email: str, provider: str, db=None) ->
     if db is None:
         return None
 
+    from integrations.access import require_provider
+    try:
+        await require_provider(db, provider, user_email)
+    except Exception:
+        return None
+
     doc = await db.oauth_tokens.find_one({
         "user_email": user_email, "provider": provider, "provider_type": "custom_mcp",
     })
@@ -824,10 +830,15 @@ async def get_valid_provider_token(user_email: str, provider: str, db=None) -> s
     if "refresh_token" in new_token:
         update["refresh_token"] = encrypt_token(new_token["refresh_token"])
 
-    await db.oauth_tokens.update_one(
-        {"user_email": user_email, "provider": provider},
+    updated = await db.oauth_tokens.update_one(
+        {"user_email": user_email, "provider": provider,
+         "access_token": doc["access_token"], "refresh_token": refresh_encrypted},
         {"$set": update},
     )
+    if updated.matched_count != 1:
+        # The connection was revoked, replaced or refreshed concurrently.
+        # Do not hand out this stale refresh result; retry on the next request.
+        return None
 
     logger.info("Refreshed %s token for %s", provider, user_email)
     return new_token["access_token"]

@@ -71,6 +71,7 @@ def make_db(integrations=(), user_status="active"):
         execution_audit=SimpleNamespace(insert_one=AsyncMock()),
         integrations=SimpleNamespace(find=lambda query: FakeCursor(integrations)),
         teams=SimpleNamespace(count_documents=AsyncMock(return_value=0)),
+        oauth_tokens=SimpleNamespace(find_one=AsyncMock(return_value=None)),
     )
 
 
@@ -113,7 +114,7 @@ async def test_start_run_excludes_unshared_integrations(monkeypatch, tmp_path):
         stored = list(db.execution_capabilities.docs.values())[0]
         granted = {s["resource"] for s in stored["scopes"]}
         assert "posthog" not in granted
-        assert "linear" in granted  # unrestricted integrations stay granted
+        assert "linear" not in granted  # unconfigured integrations are not granted
         await end_run(ctx)
     finally:
         controller_mod._broker = None
@@ -166,6 +167,8 @@ async def test_revoked_capability_is_rejected(monkeypatch, tmp_path):
 
 
 def test_proxy_mcp_servers_fail_closed(monkeypatch):
+    monkeypatch.setattr(controller_mod, "current_run", SimpleNamespace(get=lambda: SimpleNamespace(
+        capability="loma_run_v1_" + "a" * 43, proxy_tokens=[])))
     monkeypatch.setattr(controller_mod, "_registry", McpProxyRegistry())
     proxied, tokens, disabled = proxy_mcp_servers_for_worker({
         "linear": {"type": "http", "url": "https://mcp.linear.test/sse",
@@ -187,6 +190,8 @@ def test_proxy_mcp_servers_fail_closed(monkeypatch):
 
 
 def test_pool_build_options_isolates_worker(monkeypatch, tmp_path):
+    monkeypatch.setattr(controller_mod, "current_run", SimpleNamespace(get=lambda: SimpleNamespace(
+        capability="loma_run_v1_" + "a" * 43, proxy_tokens=[])))
     monkeypatch.setenv("LOMA_WORKER_ROOT", str(tmp_path / "workers"))
     monkeypatch.setattr(controller_mod, "_registry", McpProxyRegistry())
     from agent.pool import ClientPool
@@ -238,6 +243,8 @@ def test_background_cli_env_is_scrubbed(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_stream_agent_delivers_capability_and_revokes(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.client.build_user_mcp_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("agent.client.get_excluded_integrations_for_user", AsyncMock(return_value=set()))
     import agent.opencode_runtime as ocr
     from agent.client import stream_agent
 
@@ -281,6 +288,8 @@ async def test_stream_agent_delivers_capability_and_revokes(monkeypatch, tmp_pat
 
 @pytest.mark.asyncio
 async def test_stream_agent_without_capability_disables_personal_tools(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.client.build_user_mcp_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("agent.client.get_excluded_integrations_for_user", AsyncMock(return_value=set()))
     import agent.opencode_runtime as ocr
     from agent.client import stream_agent
 
@@ -334,6 +343,8 @@ def test_opencode_provider_overrides_use_gateway(monkeypatch):
 
 
 def test_codex_config_from_proxied_servers_has_no_secrets(monkeypatch):
+    monkeypatch.setattr(controller_mod, "current_run", SimpleNamespace(get=lambda: SimpleNamespace(
+        capability="loma_run_v1_" + "a" * 43, proxy_tokens=[])))
     monkeypatch.setattr(controller_mod, "_registry", McpProxyRegistry())
     from agent.codex_runtime import claude_mcp_to_codex_toml
 

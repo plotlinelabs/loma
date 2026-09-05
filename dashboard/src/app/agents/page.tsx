@@ -121,6 +121,7 @@ export default function AgentsPage() {
   const { user, hasRole } = useUser();
   const [agents, setAgents] = useState<AgentIdentity[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +146,10 @@ export default function AgentsPage() {
     loadAgents();
     fetchSkills()
       .then((data) => setSkills(data.skills || []))
-      .catch(() => setSkills([]));
+      .catch(() => {
+        setSkills([]);
+        setSkillsError("Skills could not be loaded. Reload the page to try again.");
+      });
     fetchIntegrations()
       .then((list) => setIntegrations(list.filter((i) => i.status === "connected")))
       .catch(() => setIntegrations([]));
@@ -386,6 +390,7 @@ export default function AgentsPage() {
                 />
               </div>
 
+              {skillsError && <p role="alert" className="text-sm text-destructive">{skillsError}</p>}
               {skills.length > 0 && (
                 <div className="grid gap-1.5">
                   <Label>Skills</Label>

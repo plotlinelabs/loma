@@ -92,7 +92,8 @@ async def test_tool_invoke_no_identity_flags_for_integration_tools(captured_exec
         "tools._auth_token.create_user_auth_token", lambda email: "minted",
     )
     op = ToolInvoke()
-    await op.execute(None, EMAIL, "posthog", {"argv": ["query", "--sql", "select 1"], "files": {}})
+    db = SimpleNamespace(integrations=SimpleNamespace(find_one=AsyncMock(return_value={"status": "active"})))
+    await op.execute(db, EMAIL, "posthog", {"argv": ["query", "--sql", "select 1"], "files": {}})
     argv = captured_exec[0]["argv"]
     assert "--auth-token" not in argv and "--user-email" not in argv
     assert "posthog" not in AUTH_TOOLS

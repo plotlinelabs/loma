@@ -488,6 +488,15 @@ async def update_skill_folder(
         raise SkillError("Skill not found", status=404)
     if skill.get("scope") == "system":
         raise SkillError("Cannot organize system skills into folders", status=403)
+    scope = skill.get("scope") or "personal"
+    if scope == "personal" and skill.get("created_by") != actor:
+        raise SkillError("You can only organize your own personal skills", status=403)
+    if scope == "workspace":
+        user = await db.users.find_one({"email": actor})
+        if not user or user.get("system_role") != "admin":
+            raise SkillError("Admin access required", status=403)
+    if folder is not None and not isinstance(folder, str):
+        raise SkillError("folder must be a string", status=400)
     folder = folder.strip() if folder else None
     await db.skills.update_one(
         {"slug": slug},

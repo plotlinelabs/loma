@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 AUTH_TOOLS = frozenset({
     "gmail", "google_drive", "google_calendar", "google_sheets",
     "google_slides", "google_docs_personal", "google_apps_script",
-    "slack_user", "telegram", "notify", "loma_skills",
+    "slack_user", "telegram", "notify", "loma_skills", "grain",
 })
 
 # Personal tools: always grantable to an active user (each tool fails closed
@@ -45,7 +45,6 @@ INTEGRATION_TOOLS = {
     "dataroom": "dataroom",
     "github_pr_resolve": "github",
     "grafana": "grafana",
-    "grain": "grain",
     "linear": "linear",
     "monetize_now": "monetize_now",
     "phantombuster": "phantombuster",
@@ -79,6 +78,8 @@ def _strip_identity_flags(argv: list[str]) -> list[str]:
     for arg in argv:
         if skip:
             skip = False
+            continue
+        if arg.startswith(("--user-email=", "--auth-token=")):
             continue
         if arg in ("--user-email", "--auth-token"):
             skip = True
@@ -115,6 +116,9 @@ class ToolInvoke:
     async def execute(self, db, email, tool_name, params=None):
         if not self.valid_resource(tool_name):
             raise Denied()
+        if tool_name in INTEGRATION_TOOLS:
+            from integrations.access import require_provider
+            await require_provider(db, INTEGRATION_TOOLS[tool_name], email)
         argv, files = self._validate_params(params)
         argv = _strip_identity_flags(argv)
 
@@ -166,10 +170,11 @@ class ToolInvoke:
                 import shutil
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
+        from utils.secret_redaction import redact_secrets
         return {
             "exit_code": process.returncode,
-            "stdout": stdout[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
-            "stderr": stderr[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
+            "stdout": redact_secrets(stdout[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")),
+            "stderr": redact_secrets(stderr[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")),
         }
 
 
@@ -191,3 +196,31 @@ class ModelRequest:
         if not self.valid_resource(provider):
             raise Denied()
         return {"ok": True, "provider": provider}
+
+
+class McpRequest:
+    """Check current provider ownership/sharing before each gateway request."""
+
+    @staticmethod
+    def valid_resource(value):
+        import re
+        return isinstance(value, str) and bool(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value))
+
+    async def execute(self, db, email, server_name):
+        from integrations.registry import PROVIDER_CATALOG
+        from integrations.access import require_provider
+        provider = next((key for key, entry in PROVIDER_CATALOG.items()
+                         if entry.get("mcp_server_name") == server_name), server_name)
+        if provider in ("grain", "hubspot", "notion"):
+            # Personal providers never silently use an organization connection.
+            from api.oauth_helpers import get_valid_provider_token
+            if not await get_valid_provider_token(email, provider, db=db):
+                raise Denied()
+        else:
+            await require_provider(db, provider, email)
+            doc = await db.integrations.find_one({"provider": provider})
+            if doc and doc.get("is_custom") and doc.get("auth_mode") == "oauth":
+                from api.oauth_helpers import get_valid_custom_mcp_token
+                if not await get_valid_custom_mcp_token(email, provider, db=db):
+                    raise Denied()
+        return {"ok": True}
