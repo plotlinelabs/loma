@@ -1322,6 +1322,8 @@ def _parse_flag(args: List[str], flag: str) -> Optional[str]:
 
 
 if __name__ == "__main__":
+    from _integration_access import authorize_cli
+    authorize_cli('grafana')
     from dotenv import load_dotenv
     load_dotenv()
 

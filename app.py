@@ -44,6 +44,13 @@ from api.prompt_settings_routes import setup_prompt_settings_routes
 from api.agent_identity_routes import setup_agent_identity_routes
 from api.telegram_routes import setup_telegram_routes
 from api.drain import setup_drain_routes
+from broker.controller import (
+    init_execution_controller,
+    get_proxy_registry,
+    get_subscription_registry,
+)
+from broker.gateway import create_gateway_app
+from broker.http import create_app as create_broker_app
 from recovery import start_recovery_loop, mark_all_running_interrupted
 from scheduler.engine import init_scheduler
 from agent.client import load_config, merge_db_integrations
@@ -73,6 +80,11 @@ async def log_404_middleware(request, handler):
 
 
 async def main():
+    # The mounted dotenv must not be readable by untrusted runtime uids.
+    # Refuse startup on permission errors instead of launching exposed workers.
+    from api.env_routes import DOTENV_PATH
+    if os.path.exists(DOTENV_PATH):
+        os.chmod(DOTENV_PATH, 0o600)
     # Initialize observability MongoDB
     await init_observability()
     # Ensure skill indexes exist (idempotent, covers new indexes on upgrades).
@@ -82,6 +94,37 @@ async def main():
     await seed_default_skills(get_db())
     await refresh_prompt_settings_from_db()
     await refresh_loma_skill_index_from_db()
+
+    # Execution broker + credential-injection gateway. Bound to loopback:
+    # workers on this host reach them; they are never publicly routable.
+    # If startup fails, agent runs proceed with NO tool/credential access
+    # (fail closed) \u2014 there is no fallback to ambient backend credentials.
+    try:
+        broker = await init_execution_controller(get_db())
+        broker_runner = web.AppRunner(create_broker_app(broker))
+        await broker_runner.setup()
+        await web.TCPSite(
+            broker_runner,
+            os.environ.get("LOMA_BROKER_HOST", "127.0.0.1"),
+            int(os.environ.get("LOMA_BROKER_PORT", "3100")),
+        ).start()
+        gateway_runner = web.AppRunner(create_gateway_app(
+            broker, get_proxy_registry(), get_subscription_registry()))
+        await gateway_runner.setup()
+        await web.TCPSite(
+            gateway_runner,
+            os.environ.get("LOMA_GATEWAY_HOST", "127.0.0.1"),
+            int(os.environ.get("LOMA_GATEWAY_PORT", "3101")),
+        ).start()
+        from broker import sandbox
+        if sandbox.enabled():
+            await sandbox.serve_transports(broker_runner, gateway_runner)
+        logger.info("Execution broker and worker gateway running")
+    except Exception:
+        logger.exception(
+            "Execution broker failed to start \u2014 worker tool/credential "
+            "access is disabled (fail closed)"
+        )
 
     # Pre-warm Claude SDK client pool (background \u2014 doesn't block startup)
     agent_config = load_config()

@@ -113,6 +113,17 @@ class CodexClientPool:
     def _mcp_servers(self) -> dict:
         return (self._config or {}).get("mcp_servers", {})
 
+    async def _authorized_mcp_servers(self) -> dict:
+        from broker.controller import current_run
+        from agent.client import build_user_mcp_overrides, get_excluded_integrations_for_user
+        ctx = current_run.get()
+        if ctx is None or not ctx.user_email:
+            return {}
+        servers = dict(self._mcp_servers())
+        servers.update(await build_user_mcp_overrides(ctx.user_email))
+        excluded = await get_excluded_integrations_for_user(ctx.user_email)
+        return {name: cfg for name, cfg in servers.items() if name not in excluded}
+
     async def reload_config(self, config: dict):
         """Drain idle workers after an MCP config change and re-warm."""
         old_servers = set(self._mcp_servers().keys()) if self._config else set()
@@ -314,7 +325,7 @@ class CodexClientPool:
             worker = CodexWorker(account, model=model_override)
             await asyncio.wait_for(
                 worker.connect(
-                    mcp_servers=self._mcp_servers(),
+                    mcp_servers=await self._authorized_mcp_servers(),
                     system_prompt=build_pooled_system_prompt(),
                 ),
                 timeout=_env_int("CODEX_CONNECT_TIMEOUT"),

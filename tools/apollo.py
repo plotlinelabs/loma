@@ -1397,6 +1397,8 @@ def _parse_json(args: list[str], flag: str) -> Any:
 
 
 if __name__ == "__main__":
+    from _integration_access import authorize_cli
+    authorize_cli('apollo')
     from dotenv import load_dotenv
     load_dotenv()
 

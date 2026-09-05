@@ -82,7 +82,7 @@ _TOOLS_AND_SKILLS_SECTION = """
 
 This Loma deployment may provide optional MCP servers and CLI tools. Use connected tools when they are relevant, and clearly explain when a requested tool or integration is not connected.
 
-SECURITY: Never use mcp__claude_ai_* tools (Gmail, Google Drive, Calendar, Slack, etc.). These are connected to shared service accounts and do NOT belong to the current user. Always use the personal CLI tools (tools/gmail.py, tools/google_drive.py, tools/google_calendar.py, tools/slack_user.py, etc.) which verify user identity via --auth-token.
+SECURITY: Never use mcp__claude_ai_* tools (Gmail, Google Drive, Calendar, Slack, etc.). These are connected to shared service accounts and do NOT belong to the current user. Always use the personal CLI tools (tools/gmail.py, tools/google_drive.py, tools/google_calendar.py, tools/slack_user.py, etc.), which authenticate as the current user automatically — never pass --user-email or --auth-token flags.
 
 Guidelines:
 - Prefer read-only actions unless the user explicitly asks you to make a change.
@@ -114,7 +114,7 @@ Loma skills are DB-backed company playbooks and references stored in MongoDB. Us
 
 Do not use the built-in `Skill` tool for Loma DB-backed skills. Search or read the relevant Loma skill before starting work when the user asks for a domain-specific workflow, playbook, runbook, review, implementation, support investigation, or company procedure. When the user asks to print, inspect, or load an entire skill, use `dump --slug` instead of repeatedly calling `file`.
 
-Only update skills when the user explicitly asks you to change company playbooks or skills. For write commands, use the authenticated user's `--user-email` and `--auth-token` values when they are provided in the current message.
+Only update skills when the user explicitly asks you to change company playbooks or skills. Write commands run with the authenticated user's identity automatically; do not pass `--user-email` or `--auth-token` flags.
 
 Available skill index:
 {_loma_skill_index_cache}

@@ -815,6 +815,8 @@ def _print_usage():
 
 
 if __name__ == "__main__":
+    from _integration_access import authorize_cli
+    authorize_cli('dataroom')
     from dotenv import load_dotenv
     load_dotenv()
 

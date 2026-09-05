@@ -4,6 +4,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+from utils.secret_redaction import redact_secrets
+
 logger = logging.getLogger(__name__)
 
 MAX_CONTENT_LEN = 10_000
@@ -18,6 +20,7 @@ STATUS_INTERRUPTED = "interrupted"
 
 def _truncate(text: str, max_len: int = MAX_CONTENT_LEN) -> tuple[str, bool]:
     """Truncate text and return (text, was_truncated)."""
+    text = redact_secrets(text)
     if len(text) <= max_len:
         return text, False
     return text[:max_len], True
@@ -26,7 +29,7 @@ def _truncate(text: str, max_len: int = MAX_CONTENT_LEN) -> tuple[str, bool]:
 def _safe_json(obj, max_len: int = MAX_CONTENT_LEN) -> tuple[str, bool]:
     """Serialize obj to JSON string, truncated."""
     try:
-        s = json.dumps(obj, ensure_ascii=False, default=str)
+        s = json.dumps(redact_secrets(obj), ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         s = str(obj)
     return _truncate(s, max_len)
@@ -38,7 +41,7 @@ class ConversationObserver:
     def __init__(self, db, metadata: dict, conversation_id: str | None = None):
         self.db = db
         self.conversation_id = conversation_id or str(uuid.uuid4())
-        self.metadata = metadata
+        self.metadata = redact_secrets(metadata)
         self.start_time: datetime | None = None
         self.turn_count = 0
         self.turn_offset = 0  # offset for resumed conversations
@@ -143,6 +146,7 @@ class ConversationObserver:
 
     async def record_text(self, turn_number: int, text: str):
         """Record a text block for a given turn."""
+        text = redact_secrets(text)
         turn_number = turn_number + self.turn_offset
         truncated_text, was_truncated = _truncate(text)
         turn_doc_update = {
@@ -223,7 +227,7 @@ class ConversationObserver:
             doc = {
                 "conversation_id": self.conversation_id,
                 "timestamp": datetime.now(timezone.utc),
-                **artifact_data,
+                **redact_secrets(artifact_data),
             }
             await self.db.artifacts.update_one(
                 {
@@ -238,6 +242,7 @@ class ConversationObserver:
 
     async def record_tool_result(self, tool_use_id: str, is_error: bool, output: str):
         """Record a tool result, attaching it to the turn that made the call."""
+        output = redact_secrets(output)
         output_str, output_truncated = _truncate(output)
         tool_result = {
             "tool_use_id": tool_use_id,
@@ -323,6 +328,7 @@ class ConversationObserver:
 
     async def finish(self, final_response: str = ""):
         """Mark conversation as completed and trigger confidence assessment."""
+        final_response = redact_secrets(final_response)
         self._stop_heartbeat()
         now = datetime.now(timezone.utc)
         duration_ms = int((now - self.start_time).total_seconds() * 1000) if self.start_time else None
@@ -387,6 +393,7 @@ class ConversationObserver:
 
     async def record_error(self, error: str):
         """Mark conversation as errored."""
+        final_response = redact_secrets(final_response)
         self._stop_heartbeat()
         now = datetime.now(timezone.utc)
         duration_ms = int((now - self.start_time).total_seconds() * 1000) if self.start_time else None
@@ -419,6 +426,7 @@ class ConversationObserver:
 
     async def mark_interrupted(self, reason: str = "Server shutdown"):
         """Mark conversation as interrupted (e.g., due to server shutdown)."""
+        final_response = redact_secrets(final_response)
         self._stop_heartbeat()
         now = datetime.now(timezone.utc)
         duration_ms = int((now - self.start_time).total_seconds() * 1000) if self.start_time else None
