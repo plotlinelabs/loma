@@ -353,6 +353,15 @@ def create_gateway_app(broker, registry: McpProxyRegistry,
         if set(request.query) - allowed_query:
             return web.json_response({"error": "Access denied"}, status=403)
         try:
+            from broker.subscription_refresh import ensure_fresh
+            refreshed = await ensure_fresh(entry["provider"], entry["credentials_path"])
+            # Refresh can take time. Recheck revocation and admission before using
+            # the renewed credential for a request whose permission may have changed.
+            sub_registry.lookup(request.match_info["token"])
+            if refreshed:
+                await asyncio.wait_for(broker.execute(
+                    entry["capability"], "subscription.request", entry["provider"],
+                ), timeout=15)
             if entry["provider"] == "codex":
                 inject = _codex_subscription_auth(entry["credentials_path"])
             else:
@@ -364,6 +373,8 @@ def create_gateway_app(broker, registry: McpProxyRegistry,
         except Denied:
             return web.json_response(
                 {"error": "Subscription auth is unavailable for this account"}, status=503)
+        except Exception:
+            return web.json_response({"error": "Subscription auth unavailable"}, status=503)
         tail = request.match_info.get("tail", "")
         upstream_url = SUBSCRIPTION_UPSTREAMS[entry["provider"]].rstrip("/")
         if tail:

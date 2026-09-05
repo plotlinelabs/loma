@@ -5,8 +5,8 @@
 **P0 remains incomplete. Do not deploy this branch as a security isolation boundary.**
 The current implementation provides environment filtering, per-run capabilities,
 private workspaces and broker admission, but it is not sufficient to contain
-arbitrary agent code. Production worker separation, subscription-protocol validation and renewal,
-complete adapter coverage and deployed adversarial validation
+arbitrary agent code. Production worker separation, subscription-protocol validation,
+renderer and plugin adapter coverage and deployed adversarial validation
 remain release blockers. Unit tests do not establish isolation between workers.
 
 ## Architecture
@@ -148,9 +148,13 @@ The subprocess boundary is real but not kernel-grade. Production must add:
   proxy references. Real credentials are read only by the backend gateway, which
   restricts subscription calls to inference routes and rechecks run admission.
   Anonymous proxy registration and credential-file fallback do not exist.
-  **Real vendor compatibility and backend refresh-token rotation remain unverified/
-  unfinished.** Expired Claude tokens fail closed; operators must reconnect rather
-  than exposing refresh tokens to a worker. Codex uses a custom Responses provider
+  Backend refresh now renews expiring Claude tokens and expiry-bearing Codex
+  access tokens with pinned provider endpoints, a per-account process-shared lock,
+  bounded responses and atomic 0600 credential replacement. Revocation is checked
+  again after refresh. Non-refreshable expired tokens fail closed. Opaque tokens
+  without expiry metadata cannot be proactively renewed; upstream rejection still
+  requires reconnecting. **Live vendor compatibility remains unverified**, including
+  subscription-only OpenCode plugins. No refresh token enters a worker. Codex uses a custom Responses provider
   as described in the [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 - OpenCode no longer stages provider auth.json into workers or catalog storage.
   Gateway-configured API providers remain supported; subscription-only OpenCode
@@ -224,10 +228,13 @@ sandbox boundary described above.
 
 - Production per-worker hardened sandbox and egress policy are not implemented or
   deployed by this branch. The local host cannot run namespace/container tests.
-- Vendor subscription end-to-end validation and automatic backend token refresh
-  are unfinished. OpenCode subscription-only plugins still need adapters.
-- Broker schemas remain missing for Apollo, Dataroom, CDN, Stitch, agreement
-  operations and renderer utilities. These remain denied, not silently restored.
+- Vendor subscription end-to-end validation remains outstanding. Proactive backend
+  refresh is implemented for expiring Claude/Codex credentials; opaque token
+  recovery and OpenCode subscription-only plugins still need compatibility work.
+- Apollo, Dataroom, CDN, Stitch and agreement commands now have reviewed schemas.
+  Renderer utilities remain denied rather than executing untrusted rendering
+  specifications beside backend secrets. Safe worker-local rendering needs the
+  independent sandbox deployment.
 - Preview deployment testing, including deployed browser/OAuth and signed-proxy
   validation, is explicitly skipped at the requester's direction for this handoff.
   It has not passed. No preview host changes or deployment retries are part of
@@ -249,3 +256,39 @@ Request-signing tests supply synthetic keys through scoped fixtures. They must
 not depend on local credentials; missing production configuration still fails
 closed. The integration-access suite explicitly imports the signing fixture used
 by its shared request helper so it also works in a clean CI environment.
+
+
+## Additional adapter and personal webhook implementation
+
+Apollo and Dataroom commands have static schemas, including declared repeatable
+flags. Stitch generation and bounded download, CDN upload/download, and agreement
+read/annotate/upload/download are covered. Explicit output paths are required for
+new download/annotation adapters; they use request-owned artifact transport.
+Agreement OAuth uses the authenticated caller, not a credential-free utility grant.
+Document archive expansion and downloads are bounded. Public URL fetches accept
+only public HTTPS destinations through the connector's checked DNS answers, deny
+redirects and enforce body-size/time limits. Unknown commands remain denied.
+
+### Personal Grain webhook setup
+
+After connecting personal Grain OAuth, the authenticated user can call
+`PUT /api/integrations/grain/webhook`. The response returns a relative webhook
+path and a one-time Authorization header. Configure the automation sender to POST
+`{"recording_id": "..."}` to that path with that header. This is an authenticated
+custom automation endpoint, not automatic registration with Grain's vendor API.
+The stored credential is a SHA-256 digest; it expires after 90 days. Repeating PUT
+rotates it immediately; DELETE on the same API path revokes it. Never put the
+credential in the URL or webhook body.
+
+The webhook derives the owner from the stored subscription and fetches through
+that owner's current personal OAuth connection. Account status, expiry, rotation
+and disconnection are checked. Delivery retries are idempotent per owner/recording.
+Transcripts go to `personal_grain_events`, **not** organization-wide changestreams.
+`GET /api/integrations/grain/recordings` returns the current user's latest 50 events.
+The legacy organization webhook remains disabled; it has no verified personal
+owner. Dashboard setup controls and additional automated downstream consumers are
+not included in this API implementation.
+
+No preview deployment testing was performed for these additions, as requested.
+Unit and local subprocess checks are not evidence of independent worker isolation
+or real vendor subscription compatibility.
