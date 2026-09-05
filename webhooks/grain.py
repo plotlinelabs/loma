@@ -61,3 +61,5 @@ async def handle_grain_webhook(request: web.Request) -> web.Response:
 def setup_grain_webhook_routes(app: web.Application) -> None:
     """Register the Grain webhook route."""
     app.router.add_post("/webhooks/grain", handle_grain_webhook)
+    from webhooks.grain_personal import setup_routes
+    setup_routes(app)
