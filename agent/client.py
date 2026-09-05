@@ -778,6 +778,60 @@ async def stream_agent(
     raise_on_opencode_error: bool = False,
     tool_config: dict | None = None,
 ) -> AsyncGenerator[str | dict, None]:
+    """Run one agent turn inside an isolated, broker-mediated run.
+
+    This wrapper owns the run lifecycle: it starts a run (fresh private
+    workspace + revocable run capability) before any runtime executes, and
+    always revokes the capability and cleans the workspace afterwards.
+    There is no non-isolated execution path.
+    """
+    from broker import controller as execution_controller
+
+    try:
+        run_ctx = await execution_controller.start_run(user_email, source=source)
+    except Exception:
+        logger.exception("Failed to start isolated run — refusing to execute")
+        if observer:
+            await observer.record_error("Execution environment unavailable")
+        yield ("The execution environment is unavailable right now. "
+               "Please try again shortly.")
+        return
+
+    try:
+        async for event in _stream_agent_impl(
+            prompt,
+            conversation_context=conversation_context,
+            files=files,
+            observer=observer,
+            include_steps=include_steps,
+            source=source,
+            user_email=user_email,
+            selected_model=selected_model,
+            raise_on_opencode_error=raise_on_opencode_error,
+            tool_config=tool_config,
+            run_ctx=run_ctx,
+        ):
+            yield event
+    finally:
+        try:
+            await execution_controller.end_run(run_ctx)
+        except Exception:
+            logger.exception("Failed to finalize isolated run %s", run_ctx.run_id)
+
+
+async def _stream_agent_impl(
+    prompt: str,
+    conversation_context: str = "",
+    files: list | None = None,
+    observer=None,
+    include_steps: bool = False,
+    source: str = "slack",
+    user_email: str | None = None,
+    selected_model: str | None = None,
+    raise_on_opencode_error: bool = False,
+    tool_config: dict | None = None,
+    run_ctx=None,
+) -> AsyncGenerator[str | dict, None]:
     """
     Run the Claude agent and yield text blocks as they arrive.
 
@@ -816,10 +870,21 @@ async def stream_agent(
             f"skill index.]"
         )
 
-    # Inject authenticated user identity and auth token for personal tools
-    if user_email:
-        from tools._auth_token import create_user_auth_token
-        auth_token = create_user_auth_token(user_email)
+    # Inject authenticated user identity and the run-scoped capability for
+    # personal tools. The capability is the worker's ONLY credential: tools
+    # forward it to the execution broker, which runs the real tool
+    # server-side for this run's owner. It expires with the run and is
+    # revoked when the run ends.
+    auth_token = getattr(run_ctx, "capability", None)
+    if user_email and not auth_token:
+        text_parts.append(
+            f"[Authenticated User: {user_email}]\n"
+            f"[Personal tools are DISABLED for this run: the execution "
+            f"broker is unavailable. Do not attempt to use personal CLI "
+            f"tools; tell the user tool access is temporarily unavailable "
+            f"if they ask for an action that needs them.]"
+        )
+    if user_email and auth_token:
         text_parts.append(
             f"[Authenticated User: {user_email}]\n"
             f"[Personal Tools Auth Token: {auth_token}]\n"
@@ -838,7 +903,7 @@ async def stream_agent(
     # Expose the conversation id so tools (e.g. tools/notify.py) can deep-link
     # notifications back to this conversation.
     conversation_id = getattr(observer, "conversation_id", None) if observer else None
-    if user_email and conversation_id:
+    if user_email and auth_token and conversation_id:
         text_parts.append(
             f"[Conversation ID: {conversation_id}]\n"
             f"To leave a persistent notification in this user's Loma inbox (the bell icon "
@@ -994,6 +1059,7 @@ async def stream_agent(
                 include_steps=include_steps,
                 source=source,
                 user_email=user_email,
+                run_ctx=run_ctx,
             ):
                 yield event
         except Exception as e:
@@ -1030,6 +1096,7 @@ async def stream_agent(
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
                 image_files=image_files or None,
+                run_ctx=run_ctx,
             ):
                 yield event
         except Exception as e:
@@ -1068,17 +1135,15 @@ async def stream_agent(
             yield "No Claude accounts are currently available."
             return
         try:
-            options = pool._build_options(model_override=selected_claude_model)
-            merged_mcp = dict(options.mcp_servers or {})
-            merged_mcp.update(user_mcp_overrides)
-            for excluded in excluded_integrations:
-                merged_mcp.pop(excluded, None)
-            options.mcp_servers = merged_mcp
+            # Per-user MCP overrides and sharing exclusions are resolved
+            # inside _build_options, which also rewrites every MCP server to
+            # go through the credential gateway (no tokens enter the worker).
+            options = pool._build_options(
+                model_override=selected_claude_model,
+                user_mcp_overrides=user_mcp_overrides,
+                excluded_servers=excluded_integrations,
+            )
             allowed_tools = list(options.allowed_tools or [])
-            for server_name in user_mcp_overrides:
-                tool_name = f"mcp__{server_name}"
-                if tool_name not in allowed_tools:
-                    allowed_tools.append(tool_name)
             # Per-chat tool filtering
             if tool_config and tool_config.get("enabled_tools") is not None:
                 enabled_set = set(tool_config["enabled_tools"])
@@ -1092,6 +1157,9 @@ async def stream_agent(
             client._pool_account = account
             client._pool_model = options.model
             client._pool_ephemeral = True
+            client._worker_workspace = getattr(options, "_worker_workspace", None)
+            client._mcp_proxy_tokens = getattr(options, "_mcp_proxy_tokens", [])
+            client._disabled_mcp_servers = getattr(options, "_disabled_mcp_servers", [])
             pool._in_use += 1
             account_email = account.get("email")
             logger.info(

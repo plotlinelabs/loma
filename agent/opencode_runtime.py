@@ -22,10 +22,21 @@ from urllib.parse import urlparse
 import aiohttp
 
 from agent.prompt import build_pooled_system_prompt
+from broker import worker as worker_mod
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Neutral scratch workspace for catalog-only servers (never runs agent code).
+_catalog_workspace: Path | None = None
+
+
+def _catalog_dir() -> str:
+    global _catalog_workspace
+    if _catalog_workspace is None or not _catalog_workspace.exists():
+        _catalog_workspace = worker_mod.create_workspace(prefix="opencode-catalog")
+    return str(_catalog_workspace)
 DEFAULT_OPENCODE_HOST = "127.0.0.1"
 DEFAULT_OPENCODE_PORT = 4097
 OPENCODE_START_TIMEOUT_SECONDS = 20
@@ -298,11 +309,14 @@ async def _request_json(
                 raise OpenCodeError(f"OpenCode returned non-JSON for {method} {path}: {text[:500]}") from exc
 
 
-async def _health_check(base_url: str) -> bool:
+async def _health_check(base_url: str, directory: str | None = None) -> bool:
     try:
         timeout = aiohttp.ClientTimeout(total=3)
         async with aiohttp.ClientSession(timeout=timeout, auth=_auth()) as session:
-            async with session.get(f"{base_url}/config/providers", params={"directory": str(PROJECT_ROOT)}) as resp:
+            async with session.get(
+                f"{base_url}/config/providers",
+                params={"directory": directory or _catalog_dir()},
+            ) as resp:
                 return resp.status == 200
     except Exception:
         return False
@@ -440,22 +454,9 @@ async def _ensure_server_instance(
             config_hash[:12],
             log_path or "/dev/null",
         )
-        env = {
-            **os.environ,
-            "XDG_CONFIG_HOME": str(config_home),
-            "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
-        }
-        process = await asyncio.create_subprocess_exec(
-            opencode_bin,
-            "serve",
-            "--port",
-            str(port),
-            "--hostname",
-            host,
-            cwd=str(PROJECT_ROOT),
-            env=env,
-            stdout=log_file if log_file is not None else asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.STDOUT if log_file is not None else asyncio.subprocess.DEVNULL,
+        process = await _spawn_opencode_server_process(
+            opencode_bin, host=host, port=port, config_home=config_home,
+            workspace=_catalog_dir(), log_file=log_file,
         )
         server = _OpenCodeServer(
             config_hash=config_hash,
@@ -497,33 +498,232 @@ async def ensure_opencode_server(
     return server.base_url
 
 
+def _prepare_opencode_data_home(config_home: Path) -> Path:
+    """Copy ONLY OpenCode's own auth material into an isolated XDG data home.
+
+    The OpenCode CLI owns its model-provider auth file; without it the server
+    cannot authenticate to subscription/zen providers. The worker gets a
+    private copy of that single file — never the backend user's real home.
+    """
+    data_home = config_home / "share"
+    target_dir = data_home / "opencode"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    source = (
+        Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+        / "opencode" / "auth.json"
+    )
+    try:
+        if source.is_file():
+            target = target_dir / "auth.json"
+            target.write_bytes(source.read_bytes())
+            target.chmod(0o600)
+    except OSError:
+        logger.warning("Could not stage OpenCode auth.json into isolated data home")
+    worker_mod.grant_worker_access(data_home)
+    return data_home
+
+
+async def _spawn_opencode_server_process(
+    opencode_bin: str,
+    *,
+    host: str,
+    port: int,
+    config_home: Path,
+    workspace: str,
+    log_file,
+) -> asyncio.subprocess.Process:
+    """Spawn `opencode serve` as an isolated worker.
+
+    The backend environment is NOT inherited: the server receives only the
+    scrubbed worker env plus its isolated XDG config/data homes. Model
+    provider API keys stay on the backend and are reached through the
+    credential gateway (see _provider_gateway_overrides).
+    """
+    data_home = _prepare_opencode_data_home(config_home)
+    # The sandboxed (non-root) server must read its isolated config home.
+    worker_mod.grant_worker_access(config_home)
+    from broker.controller import broker_url
+    from broker.gateway import gateway_base_url
+
+    env = worker_mod.build_worker_env(workspace, extra={
+        "XDG_CONFIG_HOME": str(config_home),
+        "XDG_DATA_HOME": str(data_home),
+        "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+        "LOMA_BROKER_URL": broker_url(),
+        "LOMA_GATEWAY_URL": gateway_base_url(),
+    })
+    return await worker_mod.spawn_worker(
+        [opencode_bin, "serve", "--port", str(port), "--hostname", host],
+        workspace=workspace,
+        env=env,
+        stdout=log_file if log_file is not None else asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.STDOUT if log_file is not None else asyncio.subprocess.DEVNULL,
+    )
+
+
+def _provider_gateway_overrides(run_capability: str | None) -> dict:
+    """Route env-key model providers through the credential gateway.
+
+    Providers whose API keys live in the backend env are configured with a
+    gateway baseURL and the run capability as the apiKey; the gateway admits
+    the call via the broker and injects the real key server-side. Providers
+    without a server-side key fall back to OpenCode's own auth file copy.
+    """
+    if not run_capability:
+        return {}
+    from broker.gateway import configured_model_providers, gateway_base_url
+
+    base = gateway_base_url()
+    paths = {
+        "anthropic": "/model/anthropic/v1",
+        "openai": "/model/openai/v1",
+        "openrouter": "/model/openrouter/v1",
+        "opencode": "/model/opencode",
+    }
+    overrides: dict = {}
+    for provider in configured_model_providers():
+        path = paths.get(provider)
+        if path:
+            overrides[provider] = {
+                "options": {"baseURL": base + path, "apiKey": run_capability},
+            }
+    return overrides
+
+
+async def _start_dedicated_server(
+    user_mcp_overrides: dict | None,
+    run_ctx,
+) -> _OpenCodeServer:
+    """Start a per-run, sandboxed OpenCode server (isolated worker).
+
+    Every agent run gets its own server process with a fresh workspace and
+    a per-run config: MCP servers are rewritten through the credential
+    gateway with revocable proxy tokens, model providers go through the
+    gateway with the run capability, and stdio MCP servers are disabled
+    (fail closed).
+    """
+    opencode_bin = shutil.which("opencode")
+    if not opencode_bin:
+        raise OpenCodeError("opencode binary not found on PATH")
+
+    workspace = getattr(run_ctx, "workspace", None)
+    if workspace is None:
+        workspace = worker_mod.create_workspace(prefix="opencode")
+    workspace = str(workspace)
+
+    app_config = await _load_current_agent_config()
+    mcp_servers = dict(app_config.get("mcp_servers", {}))
+    if user_mcp_overrides:
+        mcp_servers.update(user_mcp_overrides)
+
+    proxy_tokens: list[str] = []
+    try:
+        from broker.controller import proxy_mcp_servers_for_worker
+
+        proxied, proxy_tokens, disabled = proxy_mcp_servers_for_worker(mcp_servers)
+    except Exception:
+        proxied, disabled = {}, sorted(mcp_servers)
+        logger.error(
+            "Execution gateway unavailable — all MCP servers disabled for "
+            "this OpenCode run (fail closed): %s", disabled,
+        )
+    global _opencode_mcp_names
+    _opencode_mcp_names = set(proxied.keys())
+
+    opencode_config = {
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": claude_mcp_to_opencode(proxied),
+        "permission": _opencode_permission_config(),
+    }
+    provider_overrides = _provider_gateway_overrides(getattr(run_ctx, "capability", None))
+    if provider_overrides:
+        opencode_config["provider"] = provider_overrides
+
+    config_home = Path(workspace) / "opencode-config"
+    config_dir = config_home / "opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "opencode.json"
+    config_path.write_text(json.dumps(opencode_config, indent=2, sort_keys=True))
+    config_path.chmod(0o600)
+
+    host = os.environ.get("OPENCODE_HOST", DEFAULT_OPENCODE_HOST)
+    port = _find_free_port(host)
+    log_path, log_file = _open_server_log(port)
+    logger.info(
+        "Starting dedicated OpenCode server on %s:%d (workspace=%s log=%s)",
+        host, port, workspace, log_path or "/dev/null",
+    )
+    process = await _spawn_opencode_server_process(
+        opencode_bin, host=host, port=port, config_home=config_home,
+        workspace=workspace, log_file=log_file,
+    )
+    server = _OpenCodeServer(
+        config_hash=f"dedicated-{port}",
+        config_home=config_home,
+        host=host,
+        port=port,
+        process=process,
+        log_path=log_path,
+        log_file=log_file,
+    )
+    server.workspace = workspace  # type: ignore[attr-defined]
+    server.proxy_tokens = proxy_tokens  # type: ignore[attr-defined]
+
+    deadline = asyncio.get_running_loop().time() + OPENCODE_START_TIMEOUT_SECONDS
+    while asyncio.get_running_loop().time() < deadline:
+        if await _health_check(server.base_url):
+            server.touch()
+            return server
+        if not server.is_alive:
+            tail = server.log_tail()
+            await _teardown_dedicated_server(server)
+            raise OpenCodeError(
+                f"OpenCode server exited with code {server.process.returncode}"
+                + (f"; last output:\n{tail}" if tail else "")
+            )
+        await asyncio.sleep(0.5)
+
+    tail = server.log_tail()
+    await _teardown_dedicated_server(server)
+    raise OpenCodeError(
+        f"OpenCode server did not become ready at {server.base_url}"
+        + (f"; last output:\n{tail}" if tail else "")
+    )
+
+
+async def _teardown_dedicated_server(server: _OpenCodeServer) -> None:
+    """Terminate a per-run server and revoke its gateway proxy tokens."""
+    try:
+        await server.terminate()
+    finally:
+        for token in getattr(server, "proxy_tokens", None) or []:
+            try:
+                from broker.controller import get_proxy_registry
+                get_proxy_registry().revoke(token)
+            except Exception:
+                pass
+
+
 async def _write_managed_opencode_config(
     user_mcp_overrides: dict | None = None,
 ) -> tuple[Path, str]:
-    """Write isolated OpenCode config from this app's MCP source of truth.
+    """Write the config for the shared CATALOG server.
 
-    Config homes are stable per config hash so each managed server keeps its
-    own isolated XDG config dir.
+    Agent runs no longer execute on shared servers — each run gets its own
+    sandboxed dedicated server (see _start_dedicated_server). The shared
+    server only answers /config/providers, so its config intentionally
+    carries NO MCP servers and therefore no integration credentials.
     """
-    global _opencode_mcp_names
+    del user_mcp_overrides  # catalog server never runs agent turns
 
-    overrides_key = json.dumps(sorted((user_mcp_overrides or {}).keys()))
     now = time.monotonic()
-    cached = _opencode_config_cache.get(overrides_key)
+    cached = _opencode_config_cache.get("catalog")
     if cached is not None and now - cached[2] < OPENCODE_CONFIG_TTL_SECONDS:
         return cached[0], cached[1]
 
-    app_config = await _load_current_agent_config()
-    # Merge per-user MCP overrides into the app config
-    if user_mcp_overrides:
-        mcp_servers = dict(app_config.get("mcp_servers", {}))
-        mcp_servers.update(user_mcp_overrides)
-        app_config["mcp_servers"] = mcp_servers
-    mcp_config = claude_mcp_to_opencode(app_config.get("mcp_servers", {}))
-    _opencode_mcp_names = set(mcp_config.keys())
     opencode_config = {
         "$schema": "https://opencode.ai/config.json",
-        "mcp": mcp_config,
+        "mcp": {},
         "permission": _opencode_permission_config(),
     }
     config_text = json.dumps(opencode_config, indent=2, sort_keys=True)
@@ -535,7 +735,7 @@ async def _write_managed_opencode_config(
     config_path = config_dir / "opencode.json"
     config_path.write_text(config_text)
     config_path.chmod(0o600)
-    _opencode_config_cache[overrides_key] = (config_home, config_hash, now)
+    _opencode_config_cache["catalog"] = (config_home, config_hash, now)
     return config_home, config_hash
 
 
@@ -675,7 +875,7 @@ async def get_agent_models() -> dict:
     payload = await _request_json(
         "GET",
         "/config/providers",
-        params={"directory": str(PROJECT_ROOT)},
+        params={"directory": _catalog_dir()},
         timeout=30,
         base_url=server.base_url,
     )
@@ -758,25 +958,11 @@ def _schedule_configured_prewarm(server: _OpenCodeServer, catalog: dict) -> None
 
 
 def _schedule_prewarm(server: _OpenCodeServer, model_id: str) -> None:
-    if not _should_prewarm_model(model_id):
-        return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-
-    key = (server.config_hash, model_id)
-    sessions = _opencode_warm_sessions.get(key, [])
-    running_task = _opencode_prewarm_tasks.get(key)
-    if len(sessions) >= OPENCODE_PREWARM_POOL_SIZE:
-        return
-    if running_task is not None and not running_task.done():
-        return
-
-    needed = OPENCODE_PREWARM_POOL_SIZE - len(sessions)
-    _opencode_prewarm_tasks[key] = loop.create_task(
-        _prewarm_model_sessions(server, model_id, needed)
-    )
+    # Isolated worker mode: agent runs execute on dedicated per-run servers,
+    # so shared warm sessions can never be handed to a run. Prewarming is
+    # disabled; the pool-status endpoint reports available=0 accordingly.
+    del server, model_id
+    return
 
 
 async def _checkout_warm_session(server: _OpenCodeServer, model_id: str) -> str | None:
@@ -809,7 +995,9 @@ async def _checkout_warm_session(server: _OpenCodeServer, model_id: str) -> str 
     return None
 
 
-async def _create_session(title: str, *, base_url: str | None = None) -> str:
+async def _create_session(
+    title: str, *, base_url: str | None = None, directory: str | None = None,
+) -> str:
     session = await _request_json(
         "POST",
         "/session",
@@ -817,7 +1005,7 @@ async def _create_session(title: str, *, base_url: str | None = None) -> str:
             "title": title[:120],
             "permission": _opencode_session_permission_rules(),
         },
-        params={"directory": str(PROJECT_ROOT)},
+        params={"directory": directory or _catalog_dir()},
         timeout=30,
         base_url=base_url,
     )
@@ -833,7 +1021,7 @@ async def _delete_session_messages(session_id: str, *, base_url: str | None = No
             messages = await _request_json(
                 "GET",
                 f"/session/{session_id}/message",
-                params={"directory": str(PROJECT_ROOT), "limit": 20},
+                params={"directory": _catalog_dir(), "limit": 20},
                 timeout=30,
                 base_url=base_url,
             )
@@ -847,7 +1035,7 @@ async def _delete_session_messages(session_id: str, *, base_url: str | None = No
                 await _request_json(
                     "DELETE",
                     f"/session/{session_id}/message/{message_id}",
-                    params={"directory": str(PROJECT_ROOT)},
+                    params={"directory": _catalog_dir()},
                     timeout=30,
                     base_url=base_url,
                 )
@@ -873,7 +1061,7 @@ async def _warm_opencode_session(server: _OpenCodeServer, model_id: str) -> str:
         "POST",
         f"/session/{session_id}/message",
         json_body=body,
-        params={"directory": str(PROJECT_ROOT)},
+        params={"directory": _catalog_dir()},
         timeout=OPENCODE_REQUEST_TIMEOUT_SECONDS,
         base_url=server.base_url,
     )
@@ -1000,14 +1188,16 @@ async def _iter_opencode_turn_events(
     body: dict,
     idle_timeout_seconds: int,
     request_timeout_seconds: int,
+    directory: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     timeout = _turn_client_timeout(request_timeout_seconds)
+    directory = directory or _catalog_dir()
     prompt_task: asyncio.Task | None = None
     async with aiohttp.ClientSession(timeout=timeout, auth=_auth()) as session:
         try:
             async with session.get(
                 f"{base_url}/event",
-                params={"directory": str(PROJECT_ROOT)},
+                params={"directory": directory},
                 headers={"Accept": "text/event-stream"},
             ) as resp:
                 if resp.status >= 400:
@@ -1015,7 +1205,10 @@ async def _iter_opencode_turn_events(
                     raise OpenCodeError(f"OpenCode event stream failed ({resp.status}): {text[:500]}")
 
                 prompt_task = asyncio.create_task(
-                    _post_prompt_async(session, base_url, session_id=session_id, body=body)
+                    _post_prompt_async(
+                        session, base_url, session_id=session_id, body=body,
+                        directory=directory,
+                    )
                 )
 
                 buffer = b""
@@ -1145,11 +1338,12 @@ async def _post_prompt_async(
     *,
     session_id: str,
     body: dict,
+    directory: str | None = None,
 ) -> dict:
     async with session.post(
         f"{base_url}/session/{session_id}/prompt_async",
         json=body,
-        params={"directory": str(PROJECT_ROOT)},
+        params={"directory": directory or _catalog_dir()},
     ) as resp:
         text = await resp.text()
         if resp.status >= 400:
@@ -1252,8 +1446,16 @@ async def run_opencode_agent(
     user_email: str | None = None,
     user_mcp_overrides: dict | None = None,
     image_files: list[dict] | None = None,
+    run_ctx=None,
 ) -> AsyncGenerator[str | dict, None]:
-    """Run one dashboard chat turn through OpenCode and yield dashboard events."""
+    """Run one turn through a DEDICATED, sandboxed per-run OpenCode server.
+
+    Each run gets its own `opencode serve` worker process with a private
+    workspace, a scrubbed environment, gateway-proxied MCP servers, and
+    gateway-brokered model providers. The server is terminated and its proxy
+    tokens revoked when the turn ends. Conversation continuity comes from
+    the textual conversation context in the prompt.
+    """
     started_at = time.perf_counter()
     if not await is_known_model(selected_model):
         raise OpenCodeError(f"Unknown or unavailable OpenCode model: {selected_model}")
@@ -1275,30 +1477,20 @@ async def run_opencode_agent(
     if request_timeout_seconds > 0:
         request_timeout_seconds = max(request_timeout_seconds, idle_timeout_seconds + 30)
 
-    server = await _ensure_server_instance(user_mcp_overrides=user_mcp_overrides)
+    # Dedicated sandboxed server per run — never a shared server, never a
+    # shared session. The private workspace comes from the run context.
+    server = await _start_dedicated_server(user_mcp_overrides, run_ctx)
     base_url = server.base_url
+    run_directory = getattr(server, "workspace", None) or _catalog_dir()
 
     conversation_id = getattr(observer, "conversation_id", None)
-    session_cache_key = (
-        (server.config_hash, conversation_id, selected_model) if conversation_id else None
-    )
-    session_id = _opencode_session_cache.get(session_cache_key) if session_cache_key else None
     warm_session_used = False
-    reused_session = bool(session_id)
-    if not session_id:
-        session_id = await _checkout_warm_session(server, selected_model)
-        if session_id is None:
-            session_id = await _create_session(
-                full_prompt[:80] or "Dashboard chat", base_url=base_url
-            )
-            _schedule_prewarm(server, selected_model)
-        else:
-            warm_session_used = True
-            _schedule_prewarm(server, selected_model)
-        if session_cache_key:
-            _opencode_session_cache[session_cache_key] = session_id
-    else:
-        logger.info("Reusing OpenCode session %s for conversation=%s model=%s", session_id, conversation_id, selected_model)
+    reused_session = False
+    session_id = await _create_session(
+        full_prompt[:80] or "Dashboard chat",
+        base_url=base_url,
+        directory=run_directory,
+    )
     session_created_at = time.perf_counter()
 
     pool_status = get_opencode_pool_status()
@@ -1515,6 +1707,7 @@ async def run_opencode_agent(
                     body=body,
                     idle_timeout_seconds=idle_timeout_seconds,
                     request_timeout_seconds=request_timeout_seconds,
+                    directory=run_directory,
                 ):
                     if first_event_at is None:
                         first_event_at = time.perf_counter()
@@ -1546,7 +1739,7 @@ async def run_opencode_agent(
                                 "POST",
                                 f"/session/{session_id}/permissions/{permission_id}",
                                 json_body={"response": "always"},
-                                params={"directory": str(PROJECT_ROOT)},
+                                params={"directory": run_directory},
                                 timeout=30,
                                 base_url=base_url,
                             )
@@ -1636,18 +1829,20 @@ async def run_opencode_agent(
                 stream_completed = False
                 first_event_at = None
                 server.active_turns = max(0, server.active_turns - 1)
-                server = await _ensure_server_instance(user_mcp_overrides=user_mcp_overrides)
+                await _teardown_dedicated_server(server)
+                server = await _start_dedicated_server(user_mcp_overrides, run_ctx)
                 server.active_turns += 1
                 base_url = server.base_url
+                run_directory = getattr(server, "workspace", None) or _catalog_dir()
                 session_id = await _create_session(
-                    full_prompt[:80] or "Dashboard chat", base_url=base_url
+                    full_prompt[:80] or "Dashboard chat",
+                    base_url=base_url,
+                    directory=run_directory,
                 )
-                if conversation_id:
-                    session_cache_key = (server.config_hash, conversation_id, selected_model)
-                    _opencode_session_cache[session_cache_key] = session_id
     finally:
         server.active_turns = max(0, server.active_turns - 1)
-        server.touch()
+        # Per-run server: terminate the worker and revoke its proxy tokens.
+        await _teardown_dedicated_server(server)
 
     if observer:
         usage_payload = total_usage if total_usage["input_tokens"] or total_usage["output_tokens"] else None

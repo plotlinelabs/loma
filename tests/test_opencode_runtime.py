@@ -317,10 +317,14 @@ async def test_run_opencode_agent_retries_idle_timeout_on_fresh_session(monkeypa
         process=None,
     )
 
-    async def fake_ensure(user_mcp_overrides=None):
+    async def fake_start(user_mcp_overrides=None, run_ctx=None):
         return server
 
-    monkeypatch.setattr(ocr, "_ensure_server_instance", fake_ensure)
+    async def fake_teardown(target):
+        return None
+
+    monkeypatch.setattr(ocr, "_start_dedicated_server", fake_start)
+    monkeypatch.setattr(ocr, "_teardown_dedicated_server", fake_teardown)
 
     async def fake_is_known_model(model_id):
         return True
@@ -329,7 +333,7 @@ async def test_run_opencode_agent_retries_idle_timeout_on_fresh_session(monkeypa
 
     created_sessions = []
 
-    async def fake_create_session(title, *, base_url=None):
+    async def fake_create_session(title, *, base_url=None, directory=None):
         created_sessions.append(title)
         return f"ses_{len(created_sessions)}"
 
@@ -343,7 +347,7 @@ async def test_run_opencode_agent_retries_idle_timeout_on_fresh_session(monkeypa
 
     attempts = {"count": 0}
 
-    async def fake_iter(base_url, *, session_id, body, idle_timeout_seconds, request_timeout_seconds):
+    async def fake_iter(base_url, *, session_id, body, idle_timeout_seconds, request_timeout_seconds, directory=None):
         attempts["count"] += 1
         if attempts["count"] == 1:
             raise ocr.OpenCodeError(
@@ -418,17 +422,21 @@ async def test_run_opencode_agent_does_not_retry_model_errors(monkeypatch):
         process=None,
     )
 
-    async def fake_ensure(user_mcp_overrides=None):
+    async def fake_start(user_mcp_overrides=None, run_ctx=None):
         return server
 
-    monkeypatch.setattr(ocr, "_ensure_server_instance", fake_ensure)
+    async def fake_teardown(target):
+        return None
+
+    monkeypatch.setattr(ocr, "_start_dedicated_server", fake_start)
+    monkeypatch.setattr(ocr, "_teardown_dedicated_server", fake_teardown)
 
     async def fake_is_known_model(model_id):
         return True
 
     monkeypatch.setattr(ocr, "is_known_model", fake_is_known_model)
 
-    async def fake_create_session(title, *, base_url=None):
+    async def fake_create_session(title, *, base_url=None, directory=None):
         return "ses_1"
 
     monkeypatch.setattr(ocr, "_create_session", fake_create_session)
@@ -441,7 +449,7 @@ async def test_run_opencode_agent_does_not_retry_model_errors(monkeypatch):
 
     attempts = {"count": 0}
 
-    async def fake_iter(base_url, *, session_id, body, idle_timeout_seconds, request_timeout_seconds):
+    async def fake_iter(base_url, *, session_id, body, idle_timeout_seconds, request_timeout_seconds, directory=None):
         attempts["count"] += 1
         raise ocr.OpenCodeModelError("provider rejected the request")
         yield  # pragma: no cover

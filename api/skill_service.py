@@ -590,7 +590,7 @@ async def auto_organize_skills(db) -> dict[str, Any]:
         )
 
         try:
-            from agent.pool import background_cli_env
+            from agent.pool import background_cli_cwd, background_cli_env
             proc = await asyncio.create_subprocess_exec(
                 "claude", "-p", message,
                 "--model", "claude-haiku-4-5-20251001",
@@ -599,6 +599,7 @@ async def auto_organize_skills(db) -> dict[str, Any]:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=background_cli_env(),
+                cwd=background_cli_cwd(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             if proc.returncode != 0:

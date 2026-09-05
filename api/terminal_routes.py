@@ -52,14 +52,25 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    # Spawn a PTY with bash
-    env = {**os.environ, "TERM": "xterm-256color"}
-    env.pop("CLAUDECODE", None)
+    # Terminals go through the same worker boundary as agent runs: a fresh
+    # private workspace and a scrubbed allowlist environment. The backend
+    # env (DB URIs, encryption keys, provider/API tokens) is NEVER inherited.
+    from broker import worker as worker_mod
+
+    workspace = worker_mod.create_workspace(prefix="terminal")
+    env = worker_mod.build_worker_env(workspace)
+    child_setup = worker_mod.worker_preexec_fn(setsid=False)
     pid, fd = pty.fork()
 
     if pid == 0:
-        # Child process — exec into bash
-        os.execvpe("/bin/bash", ["/bin/bash", "--login"], env)
+        # Child process — apply worker limits, confine to the workspace,
+        # then exec into bash. Never fall back to an unconfined shell.
+        try:
+            child_setup()
+            os.chdir(str(workspace))
+            os.execvpe("/bin/bash", ["/bin/bash", "--noprofile", "--norc", "-i"], env)
+        except Exception:
+            pass
         os._exit(1)
 
     # Parent — bridge the PTY fd and the WebSocket
@@ -117,6 +128,11 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
             os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
             pass
+        try:
+            from broker import worker as worker_mod
+            worker_mod.cleanup_workspace(workspace)
+        except Exception:
+            logger.warning("Failed to clean terminal workspace %s", workspace)
 
     return ws
 

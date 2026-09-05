@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil as _shutil
 import signal
 import subprocess
 import time
@@ -29,8 +30,17 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 from agent.prompt import build_pooled_system_prompt
+from broker import worker as worker_mod
 
 logger = logging.getLogger(__name__)
+
+# Env vars the Claude Agent SDK itself sets on the CLI subprocess; the
+# launcher forwards ONLY these through the env scrub (never secret names).
+_SDK_PASSTHROUGH_VARS = (
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
+)
 
 # Module-level pool singleton
 _pool: "ClientPool | None" = None
@@ -119,22 +129,36 @@ async def shutdown_pool():
         _pool = None
 
 
+_background_cli_workspace: Path | None = None
+
+
+def background_cli_cwd() -> str:
+    """Private scratch directory for background `claude -p` utility calls."""
+    global _background_cli_workspace
+    if _background_cli_workspace is None or not _background_cli_workspace.exists():
+        _background_cli_workspace = worker_mod.create_workspace(prefix="bgcli")
+    return str(_background_cli_workspace)
+
+
 def background_cli_env() -> dict[str, str]:
-    """Env for background `claude -p` utility calls (titles, topics, organize).
+    """Scrubbed env for background `claude -p` utility calls (titles, topics).
 
     The server process has no Claude credentials of its own — bare `claude`
     subprocesses exit 1. Borrow an authenticated pool account's
     CLAUDE_CONFIG_DIR (round-robin, cooldown-aware) so the CLI can run.
-    Falls back to the plain server env if the pool is empty or uninitialized.
+
+    The backend environment is NEVER inherited: like agent workers, these
+    utility subprocesses get an allowlisted minimal environment with no
+    DB URIs, encryption keys, or provider API keys.
     """
-    env = dict(os.environ)
+    extra: dict[str, str] = {}
     try:
         account = get_pool()._next_account()
         if account:
-            env["CLAUDE_CONFIG_DIR"] = account["config_dir"]
+            extra["CLAUDE_CONFIG_DIR"] = account["config_dir"]
     except RuntimeError:
         pass
-    return env
+    return worker_mod.build_worker_env(background_cli_cwd(), extra=extra)
 
 
 class ClientPool:
@@ -244,6 +268,9 @@ class ClientPool:
                         logger.info("Skipping account %s (pool disabled by admin)", entry.name)
                         continue
                     _strip_account_mcp_servers(str(entry))
+                    # The sandboxed (non-root) CLI worker must be able to
+                    # read/refresh its own pool account's auth state.
+                    worker_mod.grant_worker_access(entry)
                     accounts.append({
                         "email": entry.name,
                         "config_dir": str(entry),
@@ -379,29 +406,81 @@ class ClientPool:
     def default_model() -> str:
         return os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")
 
-    def _build_options(self, model_override: str | None = None) -> ClaudeAgentOptions:
-        """Build ClaudeAgentOptions from the stored config."""
+    def _build_options(
+        self,
+        model_override: str | None = None,
+        user_mcp_overrides: dict | None = None,
+        excluded_servers: set[str] | None = None,
+    ) -> ClaudeAgentOptions:
+        """Build ClaudeAgentOptions for an ISOLATED per-run worker.
+
+        The Claude CLI subprocess (one conversation per client — clients are
+        never reused) runs inside a fresh private workspace with a scrubbed
+        environment. MCP servers are rewritten to go through the credential
+        gateway; servers the gateway cannot mediate (stdio servers whose env
+        would carry credentials into the worker) are disabled — fail closed.
+        """
         system_prompt = build_pooled_system_prompt()
         model = model_override or self.default_model()
         max_turns = int(os.environ.get("AGENT_MAX_TURNS", "500"))
-        mcp_servers = self._config.get("mcp_servers", {})
+        mcp_servers = dict(self._config.get("mcp_servers", {}))
+        if user_mcp_overrides:
+            mcp_servers.update(user_mcp_overrides)
+        for server_name in excluded_servers or ():
+            mcp_servers.pop(server_name, None)
+
+        # Isolation boundary: private workspace + broker-backed tool shims.
+        from broker.controller import (
+            ExecutionUnavailable,
+            broker_url,
+            proxy_mcp_servers_for_worker,
+        )
+        from broker.gateway import gateway_base_url
+        from broker.operations import ALL_TOOLS
+
+        workspace = worker_mod.create_workspace(prefix="claude")
+        worker_mod.populate_tool_shims(workspace, sorted(ALL_TOOLS))
+        try:
+            proxied_servers, proxy_tokens, disabled = proxy_mcp_servers_for_worker(mcp_servers)
+        except ExecutionUnavailable:
+            # No gateway -> no MCP credentials can be mediated: disable all.
+            proxied_servers, proxy_tokens, disabled = {}, [], sorted(mcp_servers)
+            logger.error(
+                "Execution gateway unavailable — all MCP servers disabled for "
+                "this worker (fail closed): %s", disabled,
+            )
+        worker_env = worker_mod.build_worker_env(workspace, extra={
+            "LOMA_BROKER_URL": broker_url(),
+            "LOMA_GATEWAY_URL": gateway_base_url(),
+        })
+        real_cli = _shutil.which("claude") or "claude"
+        launcher = worker_mod.write_cli_launcher(
+            workspace, real_cli, worker_env, passthrough=_SDK_PASSTHROUGH_VARS,
+        )
 
         allowed_tools = ["Bash", "Read", "Skill", "WebSearch", "Agent"]
-        for server_name in mcp_servers:
+        for server_name in proxied_servers:
             allowed_tools.append(f"mcp__{server_name}")
 
-        return ClaudeAgentOptions(
+        options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
             max_turns=max_turns,
-            mcp_servers=mcp_servers,
+            mcp_servers=proxied_servers,
             allowed_tools=allowed_tools,
             permission_mode="acceptEdits",
             setting_sources=["project"],
-            cwd=str(Path(__file__).parent.parent),
+            cwd=str(workspace),
+            cli_path=str(launcher),
+            env={},
             max_buffer_size=10 * 1024 * 1024,
             include_partial_messages=True,
         )
+        # Worker bookkeeping consumed by _create_client/safe_disconnect.
+        options._worker_workspace = workspace  # type: ignore[attr-defined]
+        options._mcp_proxy_tokens = proxy_tokens  # type: ignore[attr-defined]
+        options._disabled_mcp_servers = disabled  # type: ignore[attr-defined]
+        return options
 
     async def _create_client(self, account: dict, model_override: str | None = None) -> ClaudeSDKClient:
         """Create and connect a new ClaudeSDKClient for a specific account."""
@@ -415,6 +494,9 @@ class ClientPool:
             # Attach account info for diagnostics and rate-limit tracking
             client._pool_account = account  # type: ignore[attr-defined]
             client._pool_model = options.model  # type: ignore[attr-defined]
+            client._worker_workspace = getattr(options, "_worker_workspace", None)  # type: ignore[attr-defined]
+            client._mcp_proxy_tokens = getattr(options, "_mcp_proxy_tokens", [])  # type: ignore[attr-defined]
+            client._disabled_mcp_servers = getattr(options, "_disabled_mcp_servers", [])  # type: ignore[attr-defined]
             if model_override:
                 client._pool_ephemeral = True  # type: ignore[attr-defined]
             logger.info("New client connected (account=%s, model=%s)", account["email"], options.model)
@@ -594,6 +676,17 @@ class ClientPool:
             self._kill_process_tree(pid)
         else:
             logger.warning("Could not find subprocess PID on client — orphan processes may leak")
+
+        # Revoke this worker's gateway proxy tokens and remove its workspace.
+        for proxy_token in getattr(client, "_mcp_proxy_tokens", None) or []:
+            try:
+                from broker.controller import get_proxy_registry
+                get_proxy_registry().revoke(proxy_token)
+            except Exception:
+                pass
+        workspace = getattr(client, "_worker_workspace", None)
+        if workspace:
+            worker_mod.cleanup_workspace(workspace)
 
     async def _warm_one(self):
         """Warm a single replacement client in the background with retries."""

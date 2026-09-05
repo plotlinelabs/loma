@@ -98,7 +98,7 @@ LEARNING B:
 Answer ONLY "yes" or "no". If they cover the same topic and teach the same lesson, answer "yes" even if one has more detail than the other."""
 
     try:
-        from agent.pool import background_cli_env
+        from agent.pool import background_cli_cwd, background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", prompt,
             "--model", HAIKU_MODEL,
@@ -107,6 +107,7 @@ Answer ONLY "yes" or "no". If they cover the same topic and teach the same lesso
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=background_cli_env(),
+            cwd=background_cli_cwd(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=HAIKU_TIMEOUT)
 

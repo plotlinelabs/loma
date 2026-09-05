@@ -169,6 +169,10 @@ class CodexClientPool:
             if entry.name in disabled:
                 logger.info("Skipping Codex account %s (pool disabled by admin)", entry.name)
                 continue
+            # The sandboxed (non-root) app-server worker must be able to
+            # read/refresh its own pool account's auth state.
+            from broker import worker as worker_mod
+            worker_mod.grant_worker_access(entry)
             accounts.append({
                 "email": entry.name,
                 "codex_email": auth.get("email"),

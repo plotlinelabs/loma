@@ -329,7 +329,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
-        from agent.pool import background_cli_env
+        from agent.pool import background_cli_cwd, background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
             "--model", "claude-haiku-4-5-20251001",
@@ -338,6 +338,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=background_cli_env(),
+            cwd=background_cli_cwd(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
@@ -386,7 +387,7 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
-        from agent.pool import background_cli_env
+        from agent.pool import background_cli_cwd, background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
             "--model", "claude-haiku-4-5-20251001",
@@ -395,6 +396,7 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=background_cli_env(),
+            cwd=background_cli_cwd(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
