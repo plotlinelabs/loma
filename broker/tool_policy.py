@@ -23,6 +23,11 @@ class Command:
 
 
 POLICY = {
+    'diagrams': {
+        'render': Command('type theme width height scale bg-color', outputs='output', stdin=True, required='output'),
+        'upload': Command('name', files='file', required='file'),
+        'embed': Command('doc-id image-id replace-start replace-end width height', required='doc-id image-id replace-start replace-end'),
+    },
     'agreement_review': {
         'download': Command('file-id', outputs='output-path', required='file-id output-path'),
         'read': Command(files='file-path', required='file-path'),

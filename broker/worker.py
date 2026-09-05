@@ -315,13 +315,16 @@ def grant_worker_access(path: Path | str, recursive: bool = True,
 def cleanup_workspace(workspace: Path | str) -> None:
     """Best-effort removal of a run workspace after the run ends."""
     workspace = Path(workspace)
-    if os.environ.get("LOMA_KEEP_WORKSPACES", "").lower() in {"1", "true", "yes"}:
-        return
     try:
         # Only ever delete inside the worker root.
         workspace.resolve().relative_to(worker_root().resolve())
     except ValueError:
         logger.error("Refusing to delete non-workspace path %s", workspace)
+        return
+    from broker import sandbox
+    if sandbox.enabled():
+        sandbox.cleanup(workspace)
+    if os.environ.get("LOMA_KEEP_WORKSPACES", "").lower() in {"1", "true", "yes"}:
         return
     shutil.rmtree(workspace, ignore_errors=True)
     # Release the workspace's per-run uid only after its files are gone.
@@ -527,17 +530,39 @@ async def spawn_worker(
     """
     assert_worker_env_clean(env)
     verify_workspace_ownership(workspace)
-    if bwrap_available():
+    from broker import sandbox
+    isolated = sandbox.enabled()
+    ingress_server = None
+    if isolated:
+        ingress_port = env.get('LOMA_SANDBOX_INGRESS_PORT')
+        if ingress_port:
+            ingress_server = await sandbox.ingress(int(ingress_port), workspace)
+        try:
+            argv = sandbox.prepare(argv, workspace, env)
+        except BaseException:
+            if ingress_server:
+                ingress_server.close()
+            raise
+    elif bwrap_available():
         argv = build_bwrap_argv(argv, workspace)
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=str(workspace),
-        env=env,
-        stdin=stdin,
-        stdout=stdout,
-        stderr=stderr,
-        preexec_fn=worker_preexec_fn(workspace=workspace),
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv, cwd=str(workspace),
+            env={'PATH': '/usr/local/bin:/usr/bin:/bin'} if isolated else env,
+            stdin=stdin, stdout=stdout, stderr=stderr,
+            preexec_fn=None if isolated else worker_preexec_fn(workspace=workspace),
+            start_new_session=isolated,
+        )
+    except BaseException:
+        if ingress_server:
+            ingress_server.close()
+        raise
+    if ingress_server:
+        async def close_ingress():
+            await process.wait()
+            ingress_server.close()
+            await ingress_server.wait_closed()
+        asyncio.get_running_loop().create_task(close_ingress())
     if wall_time_seconds and wall_time_seconds > 0:
         asyncio.get_running_loop().create_task(
             _wall_time_watchdog(process, wall_time_seconds)
@@ -594,6 +619,10 @@ def write_cli_launcher(
             _SENSITIVE_NAME_RE.search(name) and name not in _EXTRA_ALLOWED_SENSITIVE
         ):
             raise WorkerIsolationError(f"Refusing sensitive passthrough var: {name}")
+
+    from broker import sandbox
+    if sandbox.enabled():
+        return sandbox.launcher(workspace, real_cli, env, passthrough)
 
     def _sh_quote(value: str) -> str:
         return "'" + value.replace("'", "'\\''") + "'"
@@ -788,7 +817,11 @@ def populate_tool_shims(workspace: Path | str, tool_names: list[str]) -> None:
         shim = tools_dir / f"{tool}.py"
         from broker.tool_policy import POLICY
         stdin_commands = sorted(name for name, spec in POLICY.get(tool, {}).items() if spec.stdin)
-        shim.write_text(_SHIM_TEMPLATE.format(tool=tool, stdin_commands=stdin_commands))
+        from broker import sandbox
+        if tool == 'pptx_creator' and sandbox.enabled():
+            shim.write_text("#!/usr/bin/env python3\nimport runpy\nrunpy.run_path('/opt/loma-render/tools/pptx_creator.py', run_name='__main__')\n")
+        else:
+            shim.write_text(_SHIM_TEMPLATE.format(tool=tool, stdin_commands=stdin_commands))
         os.chmod(shim, 0o755)
     identity = workspace_identity(workspace)
     if identity.uid is not None:

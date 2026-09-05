@@ -414,6 +414,9 @@ async def _ensure_server_instance(
     the operator.
     """
     if os.environ.get("OPENCODE_SERVER_URL"):
+        from broker import sandbox
+        if sandbox.enabled():
+            raise OpenCodeError("External OpenCode servers bypass per-run isolation and are disabled")
         base_url = _configured_server_url()
         if not await _health_check(base_url):
             raise OpenCodeError(f"Configured OPENCODE_SERVER_URL is not reachable: {base_url}")
@@ -540,15 +543,27 @@ async def _spawn_opencode_server_process(
     provider API keys stay on the backend and are reached through the
     credential gateway (see _provider_gateway_overrides).
     """
+    from broker import sandbox
+    if sandbox.enabled():
+        source = config_home / 'opencode' / 'opencode.json'
+        if not config_home.is_relative_to(Path(workspace)):
+            target = Path(workspace) / 'catalog-config' / 'opencode'
+            target.mkdir(parents=True, exist_ok=True)
+            (target / 'opencode.json').write_bytes(source.read_bytes())
+            config_home = target.parent
     data_home = _prepare_opencode_data_home(config_home, workspace=workspace)
     # The sandboxed (non-root) server must read its isolated config home.
     worker_mod.grant_worker_access(config_home, workspace=workspace)
     from broker.controller import run_worker_env_extra
 
+    from broker import sandbox
+    if sandbox.enabled() and host != '127.0.0.1':
+        raise OpenCodeError('Isolated OpenCode requires loopback transport')
     base_url = f"http://{host}:{port}"
     password = "loma_ocserver_" + secrets.token_urlsafe(32)
     _managed_server_passwords[base_url] = password
     env = worker_mod.build_worker_env(workspace, extra={
+        **({"LOMA_SANDBOX_INGRESS_PORT": str(port)} if sandbox.enabled() else {}),
         "OPENCODE_SERVER_USERNAME": "opencode",
         "OPENCODE_SERVER_PASSWORD": password,
         "XDG_CONFIG_HOME": str(config_home),

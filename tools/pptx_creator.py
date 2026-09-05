@@ -49,7 +49,7 @@ from pptx.util import Inches, Pt, Emu
 PROJECT_ROOT = Path(__file__).parent.parent
 PPT_DIR = PROJECT_ROOT / "ppt"
 MASTER_DIR = PPT_DIR / "master"
-OUTPUT_DIR = PPT_DIR / "output"
+OUTPUT_DIR = Path.home() / "artifacts" if os.environ.get("LOMA_ISOLATED_WORKER") == "1" else PPT_DIR / "output"
 ASSETS_DIR = PPT_DIR / "assets"
 SLIDE_INDEX_PATH = MASTER_DIR / "slide-index.json"
 
@@ -425,7 +425,12 @@ def cmd_compose(args):
     with open(spec_path) as f:
         spec = json.load(f)
 
-    index = _load_slide_index()
+    # Blank, locally-created slides need no proprietary slide library.
+    # Existing presets/templates still require the operator-provided asset pack.
+    if not SLIDE_INDEX_PATH.exists() and all(entry.get('action') == 'create' for entry in spec.get('slides', [])):
+        index = {'slides': []}
+    else:
+        index = _load_slide_index()
     _execute_compose(spec, index)
 
 

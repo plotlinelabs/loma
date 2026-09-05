@@ -33,7 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 AUTH_TOOLS = frozenset({
     "gmail", "google_drive", "google_calendar", "google_sheets",
     "google_slides", "google_docs_personal", "google_apps_script",
-    "slack_user", "telegram", "notify", "loma_skills", "grain", "agreement_review",
+    "slack_user", "telegram", "notify", "loma_skills", "grain", "agreement_review", "diagrams",
 })
 
 # Personal tools: always grantable to an active user (each tool fails closed
@@ -63,7 +63,7 @@ INTEGRATION_TOOLS = {
 
 # Credential-free utility tools (run server-side for consistency; their file
 # outputs land in backend temp paths that file delivery already serves).
-UTILITY_TOOLS = frozenset({"diagrams", "pptx_creator"})
+UTILITY_TOOLS = frozenset({"pptx_creator"})
 
 ALL_TOOLS = frozenset(PERSONAL_TOOLS) | frozenset(INTEGRATION_TOOLS) | UTILITY_TOOLS
 
@@ -237,7 +237,7 @@ class ToolInvoke:
                 from tools._auth_token import create_user_auth_token
                 identity_token = create_user_auth_token(email)
                 # argparse Google tools require the token before the subcommand.
-                if tool_name == 'agreement_review':
+                if tool_name in {'agreement_review', 'diagrams'}:
                     # This CLI declares identity arguments on its subparsers.
                     argv = [*argv, "--auth-token", identity_token, "--user-email", email]
                 else:

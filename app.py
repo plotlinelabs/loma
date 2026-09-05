@@ -116,7 +116,10 @@ async def main():
             os.environ.get("LOMA_GATEWAY_HOST", "127.0.0.1"),
             int(os.environ.get("LOMA_GATEWAY_PORT", "3101")),
         ).start()
-        logger.info("Execution broker and worker gateway running (loopback)")
+        from broker import sandbox
+        if sandbox.enabled():
+            await sandbox.serve_transports(broker_runner, gateway_runner)
+        logger.info("Execution broker and worker gateway running")
     except Exception:
         logger.exception(
             "Execution broker failed to start \u2014 worker tool/credential "
