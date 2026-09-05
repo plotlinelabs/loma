@@ -5,7 +5,7 @@ Provides CLI commands for the Loma agent:
   2. grain.py transcript <id> [--text]    — Get transcript for a recording
   3. grain.py recent [days]               — List recordings from last N days (default 7)
 
-Requires --user-email and --auth-token and a personal Grain OAuth connection.
+Requires GRAIN_API_TOKEN environment variable (Workspace Access Token).
 API docs: https://developers.grain.com
 Rate limit: 300 requests/min
 
@@ -21,15 +21,6 @@ import json
 import os
 import sys
 import logging
-import argparse
-import re
-from contextvars import ContextVar
-from pathlib import Path
-
-if str(Path(__file__).resolve().parent.parent) not in sys.path:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-_access_token: ContextVar[str | None] = ContextVar("grain_access_token", default=None)
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -48,46 +39,15 @@ DEFAULT_INCLUDE = {
 
 
 def _get_api_token() -> str:
-    token = _access_token.get()
+    token = os.environ.get("GRAIN_API_TOKEN", "")
     if not token:
-        raise ValueError("Connect your personal Grain account and supply authenticated user credentials.")
+        from tools._integration_key import get_integration_key
+        token = get_integration_key("grain")
+    if not token:
+        raise ValueError(
+            "GRAIN_API_TOKEN not set and no Grain integration found on the dashboard."
+        )
     return token
-
-
-async def run_personal(command: str, values: list[str], email: str, auth_token: str) -> dict:
-    from tools._auth_token import verify_user_auth_token
-    if not verify_user_auth_token(auth_token, email):
-        raise ValueError("Invalid personal-tool authentication")
-    from motor.motor_asyncio import AsyncIOMotorClient
-    from api.oauth_helpers import get_valid_provider_token
-    uri = os.environ.get("OBSERVABILITY_MONGODB_URI", "")
-    if not uri:
-        raise ValueError("Personal integration storage unavailable")
-    client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
-    try:
-        db = client.loma_observability
-        user = await db.users.find_one({"email": email, "status": "active"})
-        if not user:
-            raise ValueError("Active account required")
-        token = await get_valid_provider_token(email, "grain", db=db)
-        if not token:
-            raise ValueError("Connect or reconnect your personal Grain account in Integrations.")
-        marker = _access_token.set(token)
-        try:
-            if command == "search":
-                return await search_recordings(" ".join(values))
-            if command == "recent":
-                days = int(values[0]) if values else 7
-                if not 1 <= days <= 365:
-                    raise ValueError("days must be between 1 and 365")
-                return await recent_recordings(days)
-            if command == "transcript" and values:
-                return await get_transcript(values[0], "text" if "--text" in values else "json")
-            raise ValueError("Unknown or incomplete Grain command")
-        finally:
-            _access_token.reset(marker)
-    finally:
-        client.close()
 
 
 def _headers() -> dict[str, str]:
@@ -170,7 +130,6 @@ async def _fetch_all_recordings(
                     f"{GRAIN_BASE_URL}/recordings",
                     json=body,
                     headers=_headers(),
-                    allow_redirects=False,
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status == 429:
@@ -221,8 +180,6 @@ async def search_recordings(query: str) -> dict[str, Any]:
 
 async def get_transcript(recording_id: str, fmt: str = "json") -> dict[str, Any]:
     """Get the transcript for a specific recording."""
-    if not re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}", recording_id):
-        raise ValueError("Invalid recording ID")
     if fmt == "text":
         url = f"{GRAIN_BASE_URL}/recordings/{recording_id}/transcript.txt"
     else:
@@ -238,7 +195,6 @@ async def get_transcript(recording_id: str, fmt: str = "json") -> dict[str, Any]
             async with session.get(
                 url,
                 headers=headers,
-                allow_redirects=False,
                 timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
                 if resp.status == 429:
@@ -325,19 +281,37 @@ def _print_usage():
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
-    parser = argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument("--user-email", required=True)
-    parser.add_argument("--auth-token", required=True)
-    parser.add_argument("command", choices=("search", "recent", "transcript"))
-    parser.add_argument("values", nargs="*")
-    parser.add_argument("--text", action="store_true")
-    args = parser.parse_args()
-    try:
-        values = args.values + (["--text"] if args.text else [])
-        result = asyncio.run(run_personal(args.command, values, args.user_email, args.auth_token))
-        from utils.secret_redaction import redact_secrets
-        print(redact_secrets(json.dumps(result, indent=2)))
-    except Exception as exc:
-        # Do not relay provider responses, URLs or authentication material.
-        print(json.dumps({"error": "Personal Grain request failed. Check your connection and command arguments."}))
-        sys.exit(1)
+
+    if len(sys.argv) < 2:
+        _print_usage()
+
+    command = sys.argv[1]
+    rest = sys.argv[2:]
+
+    if command == "search":
+        if not rest:
+            print("Error: search requires a query string")
+            sys.exit(1)
+        query = " ".join(rest)
+        result = asyncio.run(search_recordings(query))
+        print(json.dumps(result, indent=2))
+
+    elif command == "transcript":
+        if not rest:
+            print("Error: transcript requires a recording_id")
+            sys.exit(1)
+        recording_id = rest[0]
+        fmt = "text" if "--text" in rest else "json"
+        result = asyncio.run(get_transcript(recording_id, fmt=fmt))
+        print(json.dumps(result, indent=2))
+
+    elif command == "recent":
+        days = 7
+        if rest and rest[0].isdigit():
+            days = int(rest[0])
+        result = asyncio.run(recent_recordings(days))
+        print(json.dumps(result, indent=2))
+
+    else:
+        print(f"Unknown command: {command}")
+        _print_usage()

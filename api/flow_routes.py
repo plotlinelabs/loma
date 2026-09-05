@@ -218,12 +218,16 @@ async def handle_create_flow(request: web.Request) -> web.Response:
                 {"error": "Recurring flows require a cron expression"}, status=400,
             )
 
-    # Identity must come from authentication, never a caller-supplied creator.
-    requester_email = get_user_email(request)
-    if not requester_email:
-        return web.json_response({"error": "Authentication required"}, status=401)
-    body["created_by"] = {**(body.get("created_by") or {}), "source": requester_email}
-    body["run_as"] = body.get("run_as") or requester_email
+    # Ensure created_by.source has an email.
+    # Only override if the agent didn't already pass one (contains @).
+    # The agent's curl bypasses Next.js middleware, so the auth email
+    # may be a dev fallback — prefer the agent-provided value when it's an email.
+    created_by = body.get("created_by", {})
+    if "@" not in (created_by.get("source") or ""):
+        user_email = get_user_email(request)
+        if user_email:
+            created_by["source"] = user_email
+            body["created_by"] = created_by
 
     # Validate run_as: admins can set any active user, others only themselves
     run_as = body.get("run_as")

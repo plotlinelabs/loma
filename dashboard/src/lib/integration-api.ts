@@ -14,7 +14,6 @@ export interface ExtraFieldDef {
 }
 
 export interface Integration {
-  scope?: "personal" | "organization";
   provider: string;
   display_name: string;
   description: string;

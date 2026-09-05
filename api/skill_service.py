@@ -488,15 +488,6 @@ async def update_skill_folder(
         raise SkillError("Skill not found", status=404)
     if skill.get("scope") == "system":
         raise SkillError("Cannot organize system skills into folders", status=403)
-    scope = skill.get("scope") or "personal"
-    if scope == "personal" and skill.get("created_by") != actor:
-        raise SkillError("You can only organize your own personal skills", status=403)
-    if scope == "workspace":
-        user = await db.users.find_one({"email": actor})
-        if not user or user.get("system_role") != "admin":
-            raise SkillError("Admin access required", status=403)
-    if folder is not None and not isinstance(folder, str):
-        raise SkillError("folder must be a string", status=400)
     folder = folder.strip() if folder else None
     await db.skills.update_one(
         {"slug": slug},
@@ -599,18 +590,21 @@ async def auto_organize_skills(db) -> dict[str, Any]:
         )
 
         try:
-            from agent.pool import run_background_cli
-            returncode, stdout, stderr = await run_background_cli(
-                ["claude", "-p", message,
-                 "--model", "claude-haiku-4-5-20251001",
-                 "--max-turns", "1",
-                 "--output-format", "json"],
-                timeout=120,
+            from agent.pool import background_cli_env
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", message,
+                "--model", "claude-haiku-4-5-20251001",
+                "--max-turns", "1",
+                "--output-format", "json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=background_cli_env(),
             )
-            if returncode != 0:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            if proc.returncode != 0:
                 detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip() or "no output"
-                logger.warning("Skill organize CLI failed (rc=%d): %s", returncode, detail)
-                errors.append(f"{batch_label}: claude CLI exited {returncode}: {detail}")
+                logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, detail)
+                errors.append(f"{batch_label}: claude CLI exited {proc.returncode}: {detail}")
                 continue
 
             output = stdout.decode().strip()

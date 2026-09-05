@@ -125,12 +125,12 @@ def _add_job_for_flow(flow: dict):
                 timezone=flow.get("timezone", "UTC"),
             )
         else:
-            minute, hour, day, month, day_of_week = _fix_crontab_dow(flow["cron"]).split()
-            trigger = CronTrigger(
-                minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week,
+            trigger = CronTrigger.from_crontab(
+                _fix_crontab_dow(flow["cron"]),
                 timezone=flow.get("timezone", "UTC"),
-                start_date=flow.get("start_time"), end_date=flow.get("end_time"),
             )
+            if flow.get("end_time"):
+                trigger.end_date = flow["end_time"]
 
         _scheduler.add_job(
             execute_flow,

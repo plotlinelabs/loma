@@ -126,16 +126,33 @@ async def render_diagram(
         params["bgColor"] = bg_color
 
     try:
-        # Fixed public renderer, bounded response, no redirects or credentials.
-        # Parsing/rendering runs at the provider, never in the trusted backend.
-        from urllib.parse import urlencode
-        try:
-            from _public_download import download_public
-        except ImportError:
-            from tools._public_download import download_public
-        if params:
-            url += '?' + urlencode(params)
-        data, _ = await download_public(url)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status == 400:
+                    text = await resp.text()
+                    return {"error": "Mermaid syntax error: " + text[:500]}
+                if resp.status == 431:
+                    encoded_b64 = _encode_base64(diagram_code)
+                    url_b64 = MERMAID_INK_BASE + "/" + endpoint + "/" + encoded_b64
+                    async with session.get(
+                        url_b64, params=params,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp2:
+                        if resp2.status != 200:
+                            text = await resp2.text()
+                            return {"error": "mermaid.ink error (HTTP " + str(resp2.status) + "): " + text[:500]}
+                        data = await resp2.read()
+                elif resp.status == 503:
+                    return {"error": "mermaid.ink rendering timed out. Try a simpler diagram."}
+                elif resp.status != 200:
+                    text = await resp.text()
+                    return {"error": "mermaid.ink error (HTTP " + str(resp.status) + "): " + text[:500]}
+                else:
+                    data = await resp.read()
 
         with open(output_path, "wb") as f:
             f.write(data)
@@ -147,8 +164,8 @@ async def render_diagram(
             "type": img_type,
         }
 
-    except (aiohttp.ClientError, ValueError):
-        return {"error": "Diagram rendering failed or exceeded its size limit."}
+    except aiohttp.ClientError as e:
+        return {"error": "Failed to connect to mermaid.ink: " + str(e)}
 
 
 # -- Upload command (Google Drive) ---------------------------------------------

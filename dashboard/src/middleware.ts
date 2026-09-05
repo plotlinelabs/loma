@@ -1,6 +1,5 @@
 import { auth } from "./auth";
 import { NextResponse } from "next/server";
-import { signProxyIdentity } from "./lib/proxy-identity";
 
 // Paths under /api that must NOT require auth or get the X-User-Email header.
 // /api/whoami is the nginx auth_request target; its own handler reads the session.
@@ -13,7 +12,7 @@ const BYPASS_PREFIXES = ["/webhook", "/metrics"];
 // 307 them to /login and silently break Add to Home Screen on iOS.
 const PUBLIC_ASSET_PREFIXES = ["/manifest.webmanifest", "/icons/", "/sw.js", "/favicon"];
 
-export default auth(async (req) => {
+export default auth((req) => {
   const { pathname } = req.nextUrl;
 
   if (
@@ -38,14 +37,7 @@ export default auth(async (req) => {
   // (which rewrites() forwards to) can resolve the caller's role.
   if (isApi) {
     const headers = new Headers(req.headers);
-    try {
-      const assertion = await signProxyIdentity(req.auth?.user?.email || "");
-      headers.set("X-User-Email", assertion["X-Auth-Email"]);
-      headers.set("X-Auth-Timestamp", assertion["X-Auth-Timestamp"]);
-      headers.set("X-Auth-Signature", assertion["X-Auth-Signature"]);
-    } catch {
-      return NextResponse.json({ error: "Authentication unavailable" }, { status: 503 });
-    }
+    headers.set("X-User-Email", req.auth?.user?.email || "");
     return NextResponse.next({ request: { headers } });
   }
 

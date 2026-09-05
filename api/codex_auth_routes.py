@@ -86,10 +86,19 @@ async def handle_codex_terminal_token(request: web.Request) -> web.Response:
     if not user_email:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
-    from api.terminal_routes import register_login_terminal
-    token = register_login_terminal(user_email, "codex", _get_codex_users_dir() / user_email)
-    return web.json_response({"token": token})
+    config_dir = _get_codex_users_dir() / user_email
+    config_dir.mkdir(parents=True, exist_ok=True)
 
+    now = time.time()
+    expired = [t for t, v in _codex_terminal_tokens.items() if v["expiry"] < now]
+    for t in expired:
+        _codex_terminal_tokens.pop(t, None)
+
+    token = secrets.token_urlsafe(32)
+    auto_command = f"CODEX_HOME={config_dir} codex login {_codex_login_args()}".rstrip()
+    _codex_terminal_tokens[token] = {"expiry": now + TOKEN_TTL, "auto_command": auto_command}
+
+    return web.json_response({"token": token, "autoCommand": auto_command})
 
 
 async def handle_codex_disconnect(request: web.Request) -> web.Response:
