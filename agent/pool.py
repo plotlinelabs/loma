@@ -21,7 +21,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil as _shutil
 import signal
 import subprocess
 import time
@@ -30,54 +29,8 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 from agent.prompt import build_pooled_system_prompt
-from broker import worker as worker_mod
 
 logger = logging.getLogger(__name__)
-
-# Env vars the Claude Agent SDK itself sets on the CLI subprocess; the
-# launcher forwards ONLY these through the env scrub (never secret names).
-_SDK_PASSTHROUGH_VARS = (
-    "CLAUDE_CONFIG_DIR",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
-)
-
-# Additional passthrough in subscription-proxy mode: the gateway base URL
-# and the revocable proxy token (worker-scoped, never the real credential).
-_SUBSCRIPTION_PASSTHROUGH_VARS = (
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_AUTH_TOKEN",
-)
-
-def _prepare_worker_claude_config(account: dict, workspace) -> str:
-    """Create fresh runtime state; never copy account sessions or settings."""
-    from pathlib import Path
-    dest = Path(workspace) / "claude-config"
-    dest.mkdir(mode=0o700)
-    worker_mod.grant_worker_access(dest, workspace=workspace)
-    return str(dest)
-
-
-def _prepare_worker_subscription_env(account: dict, workspace) -> tuple[dict[str, str], list[str]]:
-    """Require a live authenticated run. There is no credential-file fallback."""
-    from broker.gateway import gateway_base_url
-    from broker.controller import current_run, get_subscription_registry, ExecutionUnavailable
-    ctx = current_run.get()
-    capability = getattr(ctx, "capability", None)
-    if workspace is None or not capability:
-        raise ExecutionUnavailable("Subscription execution requires an authenticated run")
-    registry = get_subscription_registry()
-    from broker.credential_files import protect_account_directory
-    protect_account_directory(account["config_dir"])
-    config_copy = _prepare_worker_claude_config(account, workspace)
-    token = registry.register("claude", os.path.join(account["config_dir"], ".credentials.json"),
-                              capability=capability)
-    ctx.sub_proxy_tokens.append(token)
-    return {
-        "CLAUDE_CONFIG_DIR": config_copy,
-        "ANTHROPIC_BASE_URL": f"{gateway_base_url()}/sub/{token}",
-        "ANTHROPIC_AUTH_TOKEN": token,
-    }, [token]
 
 # Module-level pool singleton
 _pool: "ClientPool | None" = None
@@ -166,36 +119,22 @@ async def shutdown_pool():
         _pool = None
 
 
-async def run_background_cli(argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
-    """Run a background utility with the current run's brokered subscription.
+def background_cli_env() -> dict[str, str]:
+    """Env for background `claude -p` utility calls (titles, topics, organize).
 
-    No authenticated run means no credential access. Existing callers use their
-    deterministic fallback rather than borrowing ambient pooled credentials.
+    The server process has no Claude credentials of its own — bare `claude`
+    subprocesses exit 1. Borrow an authenticated pool account's
+    CLAUDE_CONFIG_DIR (round-robin, cooldown-aware) so the CLI can run.
+    Falls back to the plain server env if the pool is empty or uninitialized.
     """
-    from broker.controller import current_run, get_subscription_registry
-    from broker.operations import _collect_tool_output
-    ctx = current_run.get()
-    if not getattr(ctx, 'capability', None):
-        return 1, b'', b'Authenticated run required for background inference'
-    workspace = worker_mod.create_workspace(prefix="bgcli")
-    tokens = []
-    process = None
+    env = dict(os.environ)
     try:
         account = get_pool()._next_account()
-        if not account:
-            return 1, b'', b'No subscription account available'
-        extra, tokens = _prepare_worker_subscription_env(account, workspace)
-        env = worker_mod.build_worker_env(workspace, extra=extra)
-        process = await worker_mod.spawn_worker(argv, workspace=workspace, env=env)
-        stdout, stderr = await asyncio.wait_for(_collect_tool_output(process), timeout=timeout)
-        return process.returncode, stdout, stderr
-    finally:
-        if process is not None and process.returncode is None:
-            worker_mod.terminate_worker(process)
-            await process.wait()
-        for token in tokens:
-            get_subscription_registry().revoke(token)
-        worker_mod.cleanup_workspace(workspace)
+        if account:
+            env["CLAUDE_CONFIG_DIR"] = account["config_dir"]
+    except RuntimeError:
+        pass
+    return env
 
 
 class ClientPool:
@@ -398,85 +337,71 @@ class ClientPool:
     # ── Pool warmup ───────────────────────────────────────────────────
 
     async def warmup(self):
-        """No anonymous workers: clients are created within authenticated runs."""
-        return
+        """Pre-warm the pool with clients (run as background task)."""
+        disabled = await self._get_disabled_emails()
+        self._scan_accounts(disabled_emails=disabled)
+        if not self._accounts:
+            logger.info("No accounts connected — pool will be empty until users log in")
+            return
+
+        target = min(self._pool_size, len(self._accounts) * 3)  # cap at 3 per account
+        logger.info("Starting pool warmup (%d clients across %d accounts)...",
+                     target, len(self._accounts))
+        tasks = []
+        for _ in range(target):
+            account = self._next_account()
+            if account is None:
+                break
+            tasks.append(self._create_client(account))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        success = 0
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error("Failed to warm client: %s", result)
+            else:
+                await self._available.put(result)
+                success += 1
+
+        logger.info(
+            "Pool warmup complete: %d/%d clients ready", success, len(tasks)
+        )
+
+        # Retry any failures
+        failures = len(tasks) - success
+        if failures > 0:
+            logger.info("Retrying %d failed warmups...", failures)
+            for _ in range(failures):
+                asyncio.create_task(self._warm_one())
 
     @staticmethod
     def default_model() -> str:
         return os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")
 
-    def _build_options(
-        self,
-        model_override: str | None = None,
-        user_mcp_overrides: dict | None = None,
-        excluded_servers: set[str] | None = None,
-    ) -> ClaudeAgentOptions:
-        """Build ClaudeAgentOptions for an ISOLATED per-run worker.
-
-        The Claude CLI subprocess (one conversation per client — clients are
-        never reused) runs inside a fresh private workspace with a scrubbed
-        environment. MCP servers are rewritten to go through the credential
-        gateway; servers the gateway cannot mediate (stdio servers whose env
-        would carry credentials into the worker) are disabled — fail closed.
-        """
+    def _build_options(self, model_override: str | None = None) -> ClaudeAgentOptions:
+        """Build ClaudeAgentOptions from the stored config."""
         system_prompt = build_pooled_system_prompt()
         model = model_override or self.default_model()
         max_turns = int(os.environ.get("AGENT_MAX_TURNS", "500"))
-        mcp_servers = dict(self._config.get("mcp_servers", {}))
-        if user_mcp_overrides:
-            mcp_servers.update(user_mcp_overrides)
-        for server_name in excluded_servers or ():
-            mcp_servers.pop(server_name, None)
-
-        # Isolation boundary: private workspace + broker-backed tool shims.
-        from broker.controller import (
-            ExecutionUnavailable,
-            proxy_mcp_servers_for_worker,
-            run_worker_env_extra,
-        )
-        from broker.operations import ALL_TOOLS
-
-        workspace = worker_mod.create_workspace(prefix="claude")
-        worker_mod.populate_tool_shims(workspace, sorted(ALL_TOOLS))
-        try:
-            proxied_servers, proxy_tokens, disabled = proxy_mcp_servers_for_worker(mcp_servers)
-        except ExecutionUnavailable:
-            # No gateway -> no MCP credentials can be mediated: disable all.
-            proxied_servers, proxy_tokens, disabled = {}, [], sorted(mcp_servers)
-            logger.error(
-                "Execution gateway unavailable — all MCP servers disabled for "
-                "this worker (fail closed): %s", disabled,
-            )
-        worker_env = worker_mod.build_worker_env(workspace, extra=run_worker_env_extra())
-        real_cli = _shutil.which("claude") or "claude"
-        launcher = worker_mod.write_cli_launcher(
-            workspace, real_cli, worker_env,
-            passthrough=_SDK_PASSTHROUGH_VARS + _SUBSCRIPTION_PASSTHROUGH_VARS,
-        )
+        mcp_servers = self._config.get("mcp_servers", {})
 
         allowed_tools = ["Bash", "Read", "Skill", "WebSearch", "Agent"]
-        for server_name in proxied_servers:
+        for server_name in mcp_servers:
             allowed_tools.append(f"mcp__{server_name}")
 
-        options = ClaudeAgentOptions(
+        return ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
             max_turns=max_turns,
-            mcp_servers=proxied_servers,
+            mcp_servers=mcp_servers,
             allowed_tools=allowed_tools,
             permission_mode="acceptEdits",
             setting_sources=["project"],
-            cwd=str(workspace),
-            cli_path=str(launcher),
-            env={},
+            cwd=str(Path(__file__).parent.parent),
             max_buffer_size=10 * 1024 * 1024,
             include_partial_messages=True,
         )
-        # Worker bookkeeping consumed by _create_client/safe_disconnect.
-        options._worker_workspace = workspace  # type: ignore[attr-defined]
-        options._mcp_proxy_tokens = proxy_tokens  # type: ignore[attr-defined]
-        options._disabled_mcp_servers = disabled  # type: ignore[attr-defined]
-        return options
 
     async def _create_client(self, account: dict, model_override: str | None = None) -> ClaudeSDKClient:
         """Create and connect a new ClaudeSDKClient for a specific account."""
@@ -484,19 +409,12 @@ class ClientPool:
         client = None
         try:
             options = self._build_options(model_override=model_override)
-            options.env, sub_tokens = _prepare_worker_subscription_env(
-                account, options._worker_workspace)
+            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
             client = ClaudeSDKClient(options=options)
-            client._worker_workspace = options._worker_workspace
-            client._mcp_proxy_tokens = options._mcp_proxy_tokens
-            client._sub_proxy_tokens = sub_tokens
             await asyncio.wait_for(client.connect(), timeout=_env_int("AGENT_CONNECT_TIMEOUT"))
             # Attach account info for diagnostics and rate-limit tracking
             client._pool_account = account  # type: ignore[attr-defined]
             client._pool_model = options.model  # type: ignore[attr-defined]
-            client._worker_workspace = getattr(options, "_worker_workspace", None)  # type: ignore[attr-defined]
-            client._mcp_proxy_tokens = getattr(options, "_mcp_proxy_tokens", [])  # type: ignore[attr-defined]
-            client._disabled_mcp_servers = getattr(options, "_disabled_mcp_servers", [])  # type: ignore[attr-defined]
             if model_override:
                 client._pool_ephemeral = True  # type: ignore[attr-defined]
             logger.info("New client connected (account=%s, model=%s)", account["email"], options.model)
@@ -533,10 +451,7 @@ class ClientPool:
             raise RuntimeError("No Claude accounts connected. Ask a team member to log in via Integrations.")
 
         requested_model = model or self.default_model()
-        from broker.controller import current_run
-        # A warm client was constructed without the caller's run capability.
-        # Never reuse its MCP configuration for an authenticated run.
-        if current_run.get() is not None or requested_model != self.default_model():
+        if requested_model != self.default_model():
             account = self._next_account()
             if account is None:
                 raise RuntimeError("No Claude accounts are currently available for the selected model.")
@@ -680,23 +595,51 @@ class ClientPool:
         else:
             logger.warning("Could not find subprocess PID on client — orphan processes may leak")
 
-        # Revoke this worker's gateway proxy tokens and remove its workspace.
-        for token in getattr(client, "_sub_proxy_tokens", None) or []:
-            from broker.controller import get_subscription_registry
-            get_subscription_registry().revoke(token)
-        for proxy_token in getattr(client, "_mcp_proxy_tokens", None) or []:
-            try:
-                from broker.controller import get_proxy_registry
-                get_proxy_registry().revoke(proxy_token)
-            except Exception:
-                pass
-        workspace = getattr(client, "_worker_workspace", None)
-        if workspace:
-            worker_mod.cleanup_workspace(workspace)
-
     async def _warm_one(self):
-        """No anonymous workers: clients are created within authenticated runs."""
-        return
+        """Warm a single replacement client in the background with retries."""
+        if self._closed:
+            return
+        # Double-check we still need one (another warm task may have finished first)
+        if (self._available.qsize() + self._warming) >= self._pool_size:
+            return
+        account = self._next_account()
+        if account is None:
+            logger.warning("Cannot warm replacement — no accounts available (all on cooldown or none connected)")
+            return
+        for attempt in range(1, WARM_RETRIES + 1):
+            if self._closed:
+                return
+            try:
+                client = await self._create_client(account)
+                if not self._closed:
+                    await self._available.put(client)
+                    logger.info(
+                        "Replacement client warmed (account=%s, available=%d, in_use=%d)",
+                        account["email"], self._available.qsize(), self._in_use,
+                    )
+                else:
+                    await self.safe_disconnect(client)
+                return  # success
+            except Exception as e:
+                logger.error(
+                    "Warm attempt %d/%d failed for account %s: %s",
+                    attempt, WARM_RETRIES, account["email"], e,
+                )
+                if attempt < WARM_RETRIES:
+                    await asyncio.sleep(WARM_RETRY_DELAY * attempt)
+
+        logger.error("All %d warm attempts failed for account %s — pool may be depleted",
+                      WARM_RETRIES, account["email"])
+
+        # Schedule another warm cycle if pool is still needed
+        if not self._closed and (self._available.qsize() + self._warming + self._in_use) < self._pool_size:
+            logger.info(
+                "Scheduling recovery warm in %ds (available=%d, warming=%d, in_use=%d, queue_depth=%d)",
+                WARM_RECOVERY_DELAY, self._available.qsize(), self._warming, self._in_use, self._queue_depth,
+            )
+            await asyncio.sleep(WARM_RECOVERY_DELAY)
+            if not self._closed:
+                asyncio.create_task(self._warm_one())
 
     # ── Status & lifecycle ────────────────────────────────────────────
 

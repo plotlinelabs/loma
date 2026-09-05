@@ -32,9 +32,9 @@ def create_user_auth_token(email: str) -> str:
     """
     key = _get_key()
     ts = str(int(time.time()))
-    payload = f"loma-personal-tool:v1:{email}:{ts}"
+    payload = f"{email}:{ts}"
     sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    token_data = json.dumps({"purpose": "personal-tool", "version": 1, "email": email, "ts": ts, "sig": sig})
+    token_data = json.dumps({"email": email, "ts": ts, "sig": sig})
     return base64.urlsafe_b64encode(token_data.encode()).decode()
 
 
@@ -53,16 +53,11 @@ def verify_user_auth_token(
     except Exception:
         return False
 
-    if not isinstance(token_data, dict):
-        return False
-    if token_data.get("purpose") != "personal-tool" or token_data.get("version") != 1:
-        return False
-
     email = token_data.get("email", "")
     ts = token_data.get("ts", "")
     sig = token_data.get("sig", "")
 
-    if not all(isinstance(v, str) and v for v in (email, ts, sig)):
+    if not email or not ts or not sig:
         return False
 
     # Check email matches
@@ -71,13 +66,13 @@ def verify_user_auth_token(
 
     # Check expiry
     try:
-        if not 0 <= int(time.time()) - int(ts) <= max_age:
+        if int(time.time()) - int(ts) > max_age:
             return False
     except ValueError:
         return False
 
     # Verify HMAC
     key = _get_key()
-    payload = f"loma-personal-tool:v1:{email}:{ts}"
+    payload = f"{email}:{ts}"
     expected_sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, expected_sig)

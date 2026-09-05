@@ -16,11 +16,13 @@ import {
 import {
   fetchClaudeAuthStatus,
   disconnectClaude,
+  getClaudeLoginTerminalToken,
   type ClaudeAuthStatus,
 } from "../../../lib/claude-auth-api";
 import {
   fetchCodexAuthStatus,
   disconnectCodex,
+  getCodexLoginTerminalToken,
   type CodexAuthStatus,
 } from "../../../lib/codex-auth-api";
 import {
@@ -54,7 +56,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RiCloseLine, RiFileCopyLine, RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
-import GrainWebhookPanel from "../../../components/GrainWebhookPanel";
 import ApiKeysPanel from "../../../components/ApiKeysPanel";
 
 const INTEGRATION_TABS = ["org", "system", "custom", "personal", "api-keys"] as const;
@@ -440,7 +441,7 @@ export default function IntegrationsPage() {
   const [disconnectingOrg, setDisconnectingOrg] = useState<string | null>(null);
   const [webhookUrls, setWebhookUrls] = useState<Record<string, string>>({});
 
-  const { isAdmin, user } = useUser();
+  const { isAdmin } = useUser();
 
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [customForm, setCustomForm] = useState({
@@ -460,10 +461,12 @@ export default function IntegrationsPage() {
 
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
   const [showClaudeTerminal, setShowClaudeTerminal] = useState(false);
+  const [claudeAutoCommand, setClaudeAutoCommand] = useState<string | undefined>();
   const [disconnectingClaude, setDisconnectingClaude] = useState(false);
 
   const [codexAuth, setCodexAuth] = useState<CodexAuthStatus | null>(null);
   const [showCodexTerminal, setShowCodexTerminal] = useState(false);
+  const [codexAutoCommand, setCodexAutoCommand] = useState<string | undefined>();
   const [disconnectingCodex, setDisconnectingCodex] = useState(false);
 
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
@@ -742,9 +745,15 @@ export default function IntegrationsPage() {
     }
   };
 
-  const handleConnectClaude = () => {
+  const handleConnectClaude = async () => {
     setError(null);
-    setShowClaudeTerminal(true);
+    try {
+      const { autoCommand } = await getClaudeLoginTerminalToken();
+      setClaudeAutoCommand(autoCommand);
+      setShowClaudeTerminal(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start Claude login");
+    }
   };
 
   const handleDisconnectClaude = async () => {
@@ -762,9 +771,15 @@ export default function IntegrationsPage() {
     }
   };
 
-  const handleConnectCodex = () => {
+  const handleConnectCodex = async () => {
     setError(null);
-    setShowCodexTerminal(true);
+    try {
+      const { autoCommand } = await getCodexLoginTerminalToken();
+      setCodexAutoCommand(autoCommand);
+      setShowCodexTerminal(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start Codex login");
+    }
   };
 
   const handleDisconnectCodex = async () => {
@@ -1186,9 +1201,9 @@ export default function IntegrationsPage() {
       ) : (
         <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList>
-            <TabsTrigger value="org">Organization-managed</TabsTrigger>
+            <TabsTrigger value="org">Org</TabsTrigger>
             <TabsTrigger value="system">System</TabsTrigger>
-            <TabsTrigger value="custom">Personal connectors</TabsTrigger>
+            <TabsTrigger value="custom">Custom</TabsTrigger>
             <TabsTrigger value="personal">Personal</TabsTrigger>
             <TabsTrigger value="api-keys">API Keys</TabsTrigger>
           </TabsList>
@@ -1393,7 +1408,6 @@ export default function IntegrationsPage() {
 
           {/* Custom MCP Connectors */}
           <TabsContent value="custom">
-            <p className="text-sm text-muted-foreground mb-3">These connectors belong to your account and are not shared with other users.</p>
             <div className="flex justify-end mb-2">
               <Button size="sm" onClick={() => setShowCustomModal(true)}>
                 Add custom connector
@@ -1752,7 +1766,6 @@ export default function IntegrationsPage() {
                       </Button>
                     )}
                   </div>
-                  {grainConn?.status === "connected" && <GrainWebhookPanel key={user?.email} />}
                   {grainConn?.status === "connected" && grainConn?.connected_at && (
                     <>
                       <Separator className="my-5" />
@@ -1770,7 +1783,7 @@ export default function IntegrationsPage() {
                   <DialogTitle>Login with Claude Code</DialogTitle>
                   <DialogDescription>Complete the OAuth flow in the terminal below</DialogDescription>
                 </DialogHeader>
-                <WebTerminal tokenEndpoint="/api/claude-auth/terminal-token" />
+                <WebTerminal autoCommand={claudeAutoCommand} tokenEndpoint="/api/terminal/token" />
                 <DialogFooter>
                   <Button variant="outline" onClick={handleClaudeTerminalDone}>Done</Button>
                 </DialogFooter>
@@ -1783,7 +1796,7 @@ export default function IntegrationsPage() {
                   <DialogTitle>Login with ChatGPT</DialogTitle>
                   <DialogDescription>Approve the device code at chatgpt.com, then finish below</DialogDescription>
                 </DialogHeader>
-                <WebTerminal tokenEndpoint="/api/codex-auth/terminal-token" />
+                <WebTerminal autoCommand={codexAutoCommand} tokenEndpoint="/api/terminal/token" />
                 <DialogFooter>
                   <Button variant="outline" onClick={handleCodexTerminalDone}>Done</Button>
                 </DialogFooter>

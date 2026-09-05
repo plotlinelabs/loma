@@ -17,9 +17,7 @@ DIR="${STATE_DIR}/pr-${PR}"
 export COMPOSE_PROJECT_NAME="loma-pr-${PR}"
 
 if [ -d "$DIR" ]; then
-  # --rmi local also removes the images built for this stack; without it every
-  # torn-down preview leaves its full image chain behind until the box fills up.
-  ( cd "$DIR" && docker compose down -v --remove-orphans --rmi local ) || true
+  ( cd "$DIR" && docker compose down -v --remove-orphans ) || true
 fi
 
 # Drop the isolated Mongo database (best effort).

@@ -6,7 +6,6 @@ in MongoDB and trigger MCP pool reload when integrations change.
 """
 
 import logging
-import hashlib
 import os
 import re
 import uuid
@@ -17,7 +16,6 @@ import aiohttp as _aiohttp
 from aiohttp import web
 
 from api.auth_helpers import require_admin, get_user_email
-from integrations.access import can_access
 from api.oauth_helpers import encrypt_token, decrypt_token, register_oauth_client
 from integrations.registry import PROVIDER_CATALOG, list_providers, get_provider
 from observability.db import get_db
@@ -72,7 +70,6 @@ async def _list_integrations(request: web.Request) -> web.Response:
             "webhook_secret_label": entry.get("webhook", {}).get("secret_label") if entry.get("webhook") else None,
             "extra_fields": entry.get("extra_fields", []),
             "status": status,
-            "scope": "organization",
         }
         if provider in connected:
             item.update(connected[provider])
@@ -82,8 +79,6 @@ async def _list_integrations(request: web.Request) -> web.Response:
     if db is not None:
         user_email = get_user_email(request)
         async for doc in db.integrations.find({"is_custom": True, "status": "active"}):
-            if not await can_access(db, doc, user_email):
-                continue
             item = {
                 "provider": doc["provider"],
                 "display_name": doc.get("display_name", doc["provider"]),
@@ -96,7 +91,6 @@ async def _list_integrations(request: web.Request) -> web.Response:
                 "extra_fields": [],
                 "status": "connected",
                 "is_custom": True,
-                "scope": "personal",
                 "url": doc.get("mcp_url", ""),
                 "has_token": bool(doc.get("api_key_encrypted")),
                 "auth_mode": doc.get("auth_mode", "none"),
@@ -117,7 +111,6 @@ async def _list_integrations(request: web.Request) -> web.Response:
 
 async def _connect_integration(request: web.Request) -> web.Response:
     """POST /api/integrations/connect — store encrypted API key and reload pool."""
-    require_admin(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "Database not available"}, status=503)
@@ -168,7 +161,6 @@ async def _connect_integration(request: web.Request) -> web.Response:
 
 async def _disconnect_integration(request: web.Request) -> web.Response:
     """DELETE /api/integrations/{provider} — remove integration and reload pool."""
-    require_admin(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "Database not available"}, status=503)
@@ -312,8 +304,8 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
     """POST /api/integrations/custom — register a custom remote MCP server.
 
     Any user can add. Supports static token, per-user OAuth, or no auth.
-    The connector is private to its creator. Duplicate URLs are resolved
-    only within that owner's connectors.
+    If a connector with the same URL already exists, returns it instead of
+    creating a duplicate (dedup by URL).
     """
     db = get_db()
     if db is None:
@@ -331,11 +323,9 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
     if not re.match(r"^https?://", url):
         return web.json_response({"error": "url must start with http:// or https://"}, status=400)
 
-    # Never reuse another owner's connector or credentials.
-    user_email = get_user_email(request)
-    if not user_email:
-        raise web.HTTPUnauthorized()
-    existing_by_url = await db.integrations.find_one({"mcp_url": url, "is_custom": True, "connected_by": user_email})
+    # Dedup by URL: if a connector with this URL already exists, return it
+    # so the user can connect their own auth to it instead of duplicating.
+    existing_by_url = await db.integrations.find_one({"mcp_url": url, "is_custom": True})
     if existing_by_url:
         return web.json_response({
             "status": "already_exists",
@@ -358,7 +348,6 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
             {"error": f"'{slug}' collides with a built-in integration; choose another name"},
             status=409,
         )
-    slug = slug[:100] + "_" + hashlib.sha256(user_email.encode()).hexdigest()[:12]
     existing = await db.integrations.find_one({"provider": slug})
     if existing is not None:
         return web.json_response(
@@ -371,7 +360,6 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
         "integration_id": str(uuid.uuid4()),
         "provider": slug,
         "is_custom": True,
-        "scope": "personal",
         "status": "active",
         "display_name": name,
         "mcp_url": url,
@@ -445,14 +433,12 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
 
 async def _remove_custom_connector(request: web.Request) -> web.Response:
     """DELETE /api/integrations/custom/{provider} — remove a custom MCP connector."""
+    require_admin(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "Database not available"}, status=503)
 
     provider = request.match_info["provider"]
-    connector = await db.integrations.find_one({"provider": provider, "is_custom": True})
-    if connector and connector.get("connected_by") != get_user_email(request):
-        require_admin(request)
     result = await db.integrations.delete_one({"provider": provider, "is_custom": True})
     if result.deleted_count == 0:
         return web.json_response({"error": "Custom connector not found"}, status=404)

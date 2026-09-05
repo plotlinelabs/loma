@@ -1,6 +1,5 @@
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 from aiohttp.test_utils import make_mocked_request
@@ -10,10 +9,7 @@ from api.oauth_helpers import SLACK_USER_SCOPES
 
 
 def test_slack_authorize_uses_configured_redirect_uri(monkeypatch):
-    db = MagicMock()
-    db.oauth_states.create_index = AsyncMock()
-    db.oauth_states.insert_one = AsyncMock()
-    monkeypatch.setattr("api.oauth_routes.get_db", lambda: db)
+    monkeypatch.setattr("api.oauth_routes.get_db", lambda: object())
     monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", "test-key")
     monkeypatch.setenv("SLACK_OAUTH_CLIENT_ID", "slack-client")
     monkeypatch.setenv(
@@ -41,10 +37,7 @@ def test_slack_authorize_uses_configured_redirect_uri(monkeypatch):
 
 
 def test_slack_authorize_derives_redirect_uri_from_public_base_url(monkeypatch):
-    db = MagicMock()
-    db.oauth_states.create_index = AsyncMock()
-    db.oauth_states.insert_one = AsyncMock()
-    monkeypatch.setattr("api.oauth_routes.get_db", lambda: db)
+    monkeypatch.setattr("api.oauth_routes.get_db", lambda: object())
     monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", "test-key")
     monkeypatch.setenv("SLACK_OAUTH_CLIENT_ID", "slack-client")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.lomahq.com/")

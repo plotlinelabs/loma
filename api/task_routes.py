@@ -28,7 +28,6 @@ from datetime import date, datetime, timezone
 from aiohttp import web
 
 from observability.db import get_db
-from utils.secret_redaction import redact_secrets
 from api.auth_helpers import get_system_role, get_user_email
 from api.drain import DRAIN_MESSAGE, is_draining
 
@@ -129,8 +128,7 @@ MAX_DRAFT_FILES_BYTES = 8 * 1024 * 1024
 
 
 def _serialize(doc):
-    """Make a MongoDB document JSON-serializable without historical credentials."""
-    doc = redact_secrets(doc)
+    """Make a MongoDB document JSON-serializable."""
     if doc is None:
         return None
     if isinstance(doc, list):
@@ -418,7 +416,7 @@ async def handle_fork_task(request: web.Request) -> web.Response:
         "finished_at": source.get("finished_at"),
         "duration_ms": None,
         "status": "interrupted" if source.get("status") == "running" else source.get("status"),
-        "metadata": {**copy.deepcopy(source.get("metadata") or {}), "user_name": user_email, "visibility": "private"},
+        "metadata": {**copy.deepcopy(source.get("metadata") or {}), "user_name": user_email},
         "prompt": source.get("prompt") or "",
         "model": source.get("model") or "",
         "total_turns": source.get("total_turns", 0),

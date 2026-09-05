@@ -49,8 +49,6 @@ def _serialize(doc):
     if isinstance(doc, dict):
         result = {}
         for k, v in doc.items():
-            if k == "local_auth":
-                continue
             if k == "_id":
                 result[k] = str(v)
             elif isinstance(v, datetime):

@@ -17,7 +17,6 @@ from agent.opencode_runtime import get_agent_models, get_opencode_pool_status
 from agent.pool import ClientPool, get_pool
 from agent.prompt import refresh_loma_skill_index_from_db
 from observability.db import get_db
-from utils.secret_redaction import redact_secrets
 from observability.observer import ConversationObserver
 from api.auth_helpers import (
     get_system_role,
@@ -43,10 +42,7 @@ SERVED_FILES_DIR.mkdir(parents=True, exist_ok=True)
 _served_files: dict[str, dict] = {}
 
 
-def register_served_file(
-    source_path: str, original_name: str | None = None, *,
-    owner_email: str | None = None, conversation_id: str | None = None,
-) -> dict:
+def register_served_file(source_path: str, original_name: str | None = None) -> dict:
     """Copy a file to the served directory and register it for download.
 
     Returns a dict with file_id, url, name, mime_type, size.
@@ -55,7 +51,7 @@ def register_served_file(
     if not src.exists() or not src.is_file():
         raise FileNotFoundError(f"File not found: {source_path}")
 
-    file_id = uuid.uuid4().hex
+    file_id = uuid.uuid4().hex[:16]
     name = original_name or src.name
     ext = src.suffix
     dest = SERVED_FILES_DIR / f"{file_id}{ext}"
@@ -70,15 +66,7 @@ def register_served_file(
         "original_name": name,
         "mime_type": mime_type,
         "size": size,
-        "owner_email": owner_email,
-        "conversation_id": conversation_id,
     }
-    # Atomic sidecar publication survives process restarts without trusting paths
-    # supplied by download callers. Keep this directory on a persistent volume.
-    manifest = SERVED_FILES_DIR / f"{file_id}.meta.json"
-    temporary = manifest.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(entry))
-    temporary.replace(manifest)
     _served_files[file_id] = entry
 
     return {
@@ -101,43 +89,33 @@ _INLINE_MIME_TYPES = {
 async def handle_serve_file(request: web.Request) -> web.Response:
     """GET /api/files/{file_id} — serve a registered file for download or inline preview."""
     file_id = request.match_info["file_id"]
-    if not re.fullmatch(r"[0-9a-f]{32}", file_id):
-        return web.json_response({"error": "File not found"}, status=404)
     entry = _served_files.get(file_id)
-    if entry is None:
-        try:
-            entry = json.loads((SERVED_FILES_DIR / f"{file_id}.meta.json").read_text())
-        except (OSError, ValueError):
-            return web.json_response({"error": "File not found"}, status=404)
 
-    user_email = get_user_email(request)
-    if not user_email:
-        return web.json_response({"error": "Authentication required"}, status=401)
-    cid = entry.get("conversation_id")
-    if cid:
-        db = get_db()
-        if db is None:
-            return web.json_response({"error": "Authorization unavailable"}, status=503)
-        conversation = await db.conversations.find_one({
-            "conversation_id": cid, "deleted": {"$ne": True},
-        })
-        allowed = conversation and _check_conversation_access(
-            conversation, user_email, get_system_role(request),
-        )
-    else:
-        allowed = entry.get("owner_email") == user_email
-    if not allowed:
+    # Fallback: try decoding file_id as a base64-encoded file path
+    # (backward compat for any persisted file artifact URLs)
+    if not entry:
+        import base64
+        try:
+            # Re-add padding stripped during encoding
+            padded = file_id + "=" * (-len(file_id) % 4)
+            decoded_path = base64.urlsafe_b64decode(padded).decode()
+            if os.path.isfile(decoded_path):
+                # Register the file so subsequent requests use the fast path
+                file_info = register_served_file(decoded_path)
+                entry = _served_files.get(file_info["file_id"])
+        except Exception:
+            pass
+
+    if not entry:
         return web.json_response({"error": "File not found"}, status=404)
 
     file_path = Path(entry["path"])
-    if file_path.is_symlink() or file_path.resolve().parent != SERVED_FILES_DIR.resolve():
-        return web.json_response({"error": "File not found"}, status=404)
-    if not file_path.is_file():
-        _served_files.pop(file_id, None)
+    if not file_path.exists():
+        del _served_files[file_id]
         return web.json_response({"error": "File expired"}, status=410)
 
     mime_type = entry["mime_type"]
-    filename = re.sub(r'[\x00-\x1f\x7f"\\]', "_", entry["original_name"])
+    filename = entry["original_name"]
 
     # Use inline disposition for previewable types (PDF, images)
     # so they can be rendered in iframes; attachment for everything else
@@ -151,9 +129,7 @@ async def handle_serve_file(request: web.Request) -> web.Response:
         headers={
             "Content-Disposition": disposition,
             "Content-Type": mime_type,
-            "Cache-Control": "private, no-store",
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+            "Access-Control-Allow-Origin": "*",
         },
     )
 
@@ -250,8 +226,7 @@ _search_index_ensured = False
 
 
 def _serialize(doc):
-    """Make a MongoDB document JSON-serializable without historical credentials."""
-    doc = redact_secrets(doc)
+    """Make a MongoDB document JSON-serializable."""
     if doc is None:
         return None
     if isinstance(doc, list):
@@ -329,18 +304,21 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
-        from agent.pool import run_background_cli
-        returncode, stdout, stderr = await run_background_cli(
-            ["claude", "-p", message,
-             "--model", "claude-haiku-4-5-20251001",
-             "--max-turns", "1",
-             "--output-format", "json"],
-            timeout=15,
+        from agent.pool import background_cli_env
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "-p", message,
+            "--model", "claude-haiku-4-5-20251001",
+            "--max-turns", "1",
+            "--output-format", "json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
-        if returncode != 0:
+        if proc.returncode != 0:
             detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
-            logger.warning("Title generation CLI failed (rc=%d): %s", returncode, detail)
+            logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, detail)
             return _fallback_title(prompt)
 
         output = stdout.decode().strip()
@@ -383,18 +361,21 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
-        from agent.pool import run_background_cli
-        returncode, stdout, stderr = await run_background_cli(
-            ["claude", "-p", message,
-             "--model", "claude-haiku-4-5-20251001",
-             "--max-turns", "1",
-             "--output-format", "json"],
-            timeout=15,
+        from agent.pool import background_cli_env
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "-p", message,
+            "--model", "claude-haiku-4-5-20251001",
+            "--max-turns", "1",
+            "--output-format", "json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=background_cli_env(),
         )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
 
-        if returncode != 0:
+        if proc.returncode != 0:
             detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
-            logger.warning("Topic classification CLI failed (rc=%d): %s", returncode, detail)
+            logger.warning("Topic classification CLI failed (rc=%d): %s", proc.returncode, detail)
             return "other"
 
         output = stdout.decode().strip()
@@ -851,20 +832,16 @@ async def handle_inject_message(request: web.Request) -> web.Response:
     if not stream:
         return web.json_response({"error": "No active stream for this conversation"}, status=404)
 
-    db = get_db()
-    if db is None:
-        return web.json_response({"error": "Observability unavailable"}, status=503)
     try:
         await stream.client.query(message)
-    except Exception:
-        logger.exception("Failed to inject message into conversation %s", cid)
-        return web.json_response({"error": "Message injection failed"}, status=500)
-    observer = ConversationObserver(db, {}, conversation_id=cid)
-    try:
+        db = request.app["db"]
+        from observability.observer import ConversationObserver
+        observer = ConversationObserver(db, {}, conversation_id=cid)
         await observer.record_injected_message(message)
-    except Exception:
-        logger.exception("Failed to record injected message in %s", cid)
-    return web.json_response({"injected": True, "conversation_id": cid})
+        return web.json_response({"injected": True, "conversation_id": cid})
+    except Exception as e:
+        logger.exception("Failed to inject message into conversation %s", cid)
+        return web.json_response({"error": str(e)}, status=500)
 
 
 async def handle_interrupt_agent(request: web.Request) -> web.Response:
@@ -962,7 +939,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                 {"conversation_id": existing_conversation_id},
                 {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1},
             )
-            if existing and not _check_conversation_manage_access(
+            if existing and not _check_conversation_access(
                 existing, user_email, get_system_role(request)
             ):
                 return web.json_response({"error": "Not found"}, status=404)
@@ -1113,9 +1090,9 @@ async def handle_chat(request: web.Request) -> web.Response:
 
             try:
                 if isinstance(event, dict):
-                    data = json.dumps(redact_secrets(event))
+                    data = json.dumps(event)
                 else:
-                    data = json.dumps({"type": "text", "text": redact_secrets(event)})
+                    data = json.dumps({"type": "text", "text": event})
                 await response.write(f"data: {data}\n\n".encode())
                 await response.drain()
             except (ConnectionResetError, ConnectionError, Exception) as write_err:
@@ -1198,12 +1175,9 @@ async def handle_agent_models(request: web.Request) -> web.Response:
     except RuntimeError:
         pass
 
-    from agent.subscription_providers import model_catalog as personal_subscription_models
-    personal_models = personal_subscription_models(get_user_email(request))
-
     try:
         catalog = await get_agent_models()
-        filtered_models = list(claude_models) + list(codex_models) + personal_models
+        filtered_models = list(claude_models) + list(codex_models)
         for model in catalog.get("models", []):
             model_id = model.get("model_id") or ""
             provider_id = model.get("provider_id") or ""
@@ -1228,20 +1202,18 @@ async def handle_agent_models(request: web.Request) -> web.Response:
         logger.exception("Failed to load OpenCode model catalog")
         return web.json_response({
             "default_model": default_agent_model,
-            "models": _order_agent_models(_ensure_favorite_models(claude_models + codex_models + personal_models)),
+            "models": _order_agent_models(_ensure_favorite_models(claude_models + codex_models)),
             "warning": str(e),
         })
 
 
 async def handle_list_skills(request: web.Request) -> web.Response:
     """GET /api/skills — list DB-native agent skills."""
+    require_analyst_or_above(request)
     db = get_db()
     if db is None:
         return web.json_response({"error": "MongoDB is not configured"}, status=503)
     skills = await skill_service.list_skills(db)
-    email = get_user_email(request)
-    skills = [skill for skill in skills if skill.get("scope") in ("system", "workspace")
-              or skill.get("created_by") == email]
     return web.json_response({"skills": skills})
 
 
