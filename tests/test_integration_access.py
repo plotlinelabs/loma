@@ -165,3 +165,21 @@ async def test_anonymous_mcp_configs_disabled(monkeypatch):
         assert configs == {} and tokens == [] and disabled == ['example']
     finally:
         controller.current_run.reset(marker)
+
+
+@pytest.mark.asyncio
+async def test_claude_run_does_not_reuse_unbound_warm_client(monkeypatch):
+    from agent.pool import ClientPool
+    from broker import controller
+    pool = ClientPool.__new__(ClientPool)
+    pool._closed = False
+    pool._accounts = [{'email': EMAIL}]
+    pool._in_use = 0
+    pool._next_account = lambda: pool._accounts[0]
+    pool._create_client = AsyncMock(return_value='fresh-bound-client')
+    marker = controller.current_run.set(SimpleNamespace(capability='synthetic'))
+    try:
+        assert await pool.acquire() == 'fresh-bound-client'
+        pool._create_client.assert_awaited_once()
+    finally:
+        controller.current_run.reset(marker)

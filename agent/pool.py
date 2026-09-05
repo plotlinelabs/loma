@@ -533,7 +533,10 @@ class ClientPool:
             raise RuntimeError("No Claude accounts connected. Ask a team member to log in via Integrations.")
 
         requested_model = model or self.default_model()
-        if requested_model != self.default_model():
+        from broker.controller import current_run
+        # A warm client was constructed without the caller's run capability.
+        # Never reuse its MCP configuration for an authenticated run.
+        if current_run.get() is not None or requested_model != self.default_model():
             account = self._next_account()
             if account is None:
                 raise RuntimeError("No Claude accounts are currently available for the selected model.")
