@@ -241,3 +241,28 @@ async def test_mcp_proxy_rechecks_authorization_outage_before_upstream():
         assert seen == []
     finally:
         await upstream.close()
+
+
+@pytest.mark.parametrize('url', [None, 42, 'http://localhost.example.test/mcp',
+    'http://127.0.0.1.example.test/mcp', 'http://localhost@example.test/mcp',
+    'https://user:password@example.test/mcp', 'https://example.test/mcp#fragment',
+    'https://example.test:invalid/mcp', 'https://example.test/space here'])
+def test_mcp_registry_uses_parsed_authority_not_string_prefix(url):
+    with pytest.raises(Denied):
+        McpProxyRegistry().register('sample', url, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method,suffix', [('POST', '/extra'), ('GET', '?override=1'), ('PUT', ''), ('PATCH', '')])
+async def test_mcp_endpoint_scope_cannot_expand(method, suffix):
+    seen = []
+    upstream = await make_upstream(seen)
+    try:
+        registry = McpProxyRegistry()
+        token = registry.register('sample', str(upstream.make_url('/mcp')), {}, capability=CAPABILITY)
+        async with TestClient(TestServer(create_gateway_app(FakeBroker(), registry))) as client:
+            response = await client.request(method, f'/mcp/{token}{suffix}')
+            assert response.status == 403
+        assert not seen
+    finally:
+        await upstream.close()

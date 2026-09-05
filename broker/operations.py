@@ -13,10 +13,12 @@ import asyncio
 import logging
 import os
 import sys
+import signal
 import tempfile
 from pathlib import Path
 
 from broker.service import Denied
+from broker.tool_policy import prepare_argv
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,41 @@ _MAX_OUTPUT_BYTES = 1_000_000
 _TOOL_TIMEOUT_SECONDS = 180
 
 
+class ToolOutputLimit(RuntimeError):
+    pass
+
+
+async def _collect_tool_output(process):
+    async def bounded_read(stream):
+        data = bytearray()
+        while chunk := await stream.read(65536):
+            data.extend(chunk)
+            if len(data) > _MAX_OUTPUT_BYTES:
+                raise ToolOutputLimit()
+        return bytes(data)
+
+    tasks = [asyncio.create_task(bounded_read(process.stdout)),
+             asyncio.create_task(bounded_read(process.stderr)),
+             asyncio.create_task(process.wait())]
+    try:
+        stdout, stderr, _ = await asyncio.gather(*tasks)
+        return stdout, stderr
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _terminate_tool(process):
+    # Each tool is a session leader. Stop descendants as well as the CLI.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await process.wait()
+
+
 def _strip_identity_flags(argv: list[str]) -> list[str]:
     """Remove any worker-supplied --user-email/--auth-token pairs."""
     cleaned: list[str] = []
@@ -101,8 +138,8 @@ class ToolInvoke:
     def _validate_params(params) -> tuple[list[str], dict[str, str]]:
         if not isinstance(params, dict) or set(params) - {"argv", "files"}:
             raise Denied()
-        argv = params.get("argv") or []
-        files = params.get("files") or {}
+        argv = params.get("argv", [])
+        files = params.get("files", {})
         if (not isinstance(argv, list) or len(argv) > _MAX_ARGV_ITEMS
                 or not all(isinstance(a, str) and len(a) <= _MAX_ARG_CHARS for a in argv)
                 or sum(len(a) for a in argv) > _MAX_ARGV_CHARS):
@@ -122,60 +159,70 @@ class ToolInvoke:
         argv, files = self._validate_params(params)
         argv = _strip_identity_flags(argv)
 
+        # Validate before touching disk or invoking privileged backend tools.
+        argv = prepare_argv(tool_name, argv, {key: key for key in files})
+
         script = PROJECT_ROOT / "tools" / f"{tool_name}.py"
         if not script.is_file():
             return {"exit_code": 1, "stdout": "",
                     "stderr": f"Tool {tool_name} is not available on this deployment."}
 
-        # Materialize worker-uploaded file contents into a private temp dir and
-        # rewrite matching argv entries to the server-side copies.
         tmp_dir = None
-        if files:
-            tmp_dir = tempfile.mkdtemp(prefix="loma-broker-files-")
-            os.chmod(tmp_dir, 0o700)
-            mapping: dict[str, str] = {}
-            for index, (worker_path, content) in enumerate(files.items()):
-                name = os.path.basename(worker_path)[-128:] or f"file{index}"
-                local = os.path.join(tmp_dir, f"{index}-{name}")
-                with open(local, "w", encoding="utf-8") as fh:
-                    fh.write(content)
-                mapping[worker_path] = local
-            argv = [mapping.get(a, a) for a in argv]
-
-        if tool_name in AUTH_TOOLS:
-            # Server-minted, short-lived identity token consumed by the tool's
-            # existing verification path. Never returned to the worker.
-            from tools._auth_token import create_user_auth_token
-            argv = [*argv, "--user-email", email, "--auth-token", create_user_auth_token(email)]
-
+        identity_token = None
         try:
+            # Only request-owned uploads may become local CLI inputs.
+            if files:
+                tmp_dir = tempfile.mkdtemp(prefix="loma-broker-files-")
+                os.chmod(tmp_dir, 0o700)
+                mapping: dict[str, str] = {}
+                for index, (worker_path, content) in enumerate(files.items()):
+                    suffix = Path(worker_path).suffix
+                    if not suffix.isascii() or not suffix[1:].isalnum() or len(suffix) > 12:
+                        suffix = ""
+                    local = os.path.join(tmp_dir, f"input-{index}{suffix}")
+                    with open(local, "w", encoding="utf-8") as fh:
+                        fh.write(content)
+                    mapping[worker_path] = local
+                argv = prepare_argv(tool_name, argv, mapping)
+
+            if tool_name in AUTH_TOOLS or tool_name in INTEGRATION_TOOLS:
+                from tools._auth_token import create_user_auth_token
+                identity_token = create_user_auth_token(email)
+                # argparse Google tools require the token before the subcommand.
+                argv = ["--auth-token", identity_token, *argv, "--user-email", email]
+
             process = await asyncio.create_subprocess_exec(
                 sys.executable, str(script), *argv,
-                cwd=str(PROJECT_ROOT),
+                cwd=str(PROJECT_ROOT), start_new_session=True,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=_TOOL_TIMEOUT_SECONDS,
+                    _collect_tool_output(process), timeout=_TOOL_TIMEOUT_SECONDS,
                 )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                return {"exit_code": 124, "stdout": "",
-                        "stderr": f"Tool {tool_name} timed out after {_TOOL_TIMEOUT_SECONDS}s."}
+            except (asyncio.TimeoutError, ToolOutputLimit) as exc:
+                await _terminate_tool(process)
+                return {"exit_code": 124 if isinstance(exc, asyncio.TimeoutError) else 125,
+                        "stdout": "", "stderr": "Tool execution exceeded its time or output limit."}
+            except BaseException:
+                await _terminate_tool(process)
+                raise
         finally:
             if tmp_dir:
                 import shutil
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
         from utils.secret_redaction import redact_secrets
-        return {
-            "exit_code": process.returncode,
-            "stdout": redact_secrets(stdout[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")),
-            "stderr": redact_secrets(stderr[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")),
-        }
+        def clean_output(data):
+            text = data.decode("utf-8", errors="replace")
+            if identity_token:
+                text = text.replace(identity_token, "[REDACTED]")
+            return redact_secrets(text)
+        return {"exit_code": process.returncode,
+                "stdout": clean_output(stdout), "stderr": clean_output(stderr)}
+
 
 
 class ModelRequest:

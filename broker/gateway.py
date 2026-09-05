@@ -27,6 +27,7 @@ import logging
 import os
 import secrets
 import time
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -103,10 +104,20 @@ class McpProxyRegistry:
 
     def register(self, server_name: str, url: str, headers: dict | None,
                  *, ttl_seconds: int = 24 * 3600, capability: str | None = None) -> str:
-        if not isinstance(url, str) or not url.startswith("https://"):
-            # Plain-http upstreams would leak injected credentials in transit.
-            if not url.startswith("http://127.0.0.1") and not url.startswith("http://localhost"):
+        if not isinstance(url, str):
+            raise Denied()
+        try:
+            parsed = urlsplit(url)
+            if (not parsed.hostname or parsed.username is not None or parsed.password is not None
+                    or parsed.fragment or any(c.isspace() for c in url)):
                 raise Denied()
+            if parsed.scheme != "https" and not (
+                parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+            ):
+                raise Denied()
+            parsed.port  # Validate a supplied port before issuing a capability.
+        except ValueError as exc:
+            raise Denied() from exc
         token = "loma_mcpproxy_" + secrets.token_urlsafe(24)
         self._entries[token] = {
             "name": server_name,
@@ -170,10 +181,12 @@ def create_gateway_app(broker, registry: McpProxyRegistry) -> web.Application:
             return web.json_response({"error": "Access denied"}, status=403)
         except Exception:
             return web.json_response({"error": "Authorization unavailable"}, status=503)
-        tail = request.match_info.get("tail", "")
-        upstream_url = entry["url"] + (f"/{tail}" if tail else "")
-        if request.query_string:
-            upstream_url += f"?{request.query_string}"
+        # A transport grant is for one endpoint, not an authenticated proxy
+        # for every route on that host. Static configured queries are kept;
+        # callers cannot append a route, query, or arbitrary HTTP operation.
+        if request.match_info.get("tail") or request.query_string or request.method not in {"GET", "POST", "DELETE"}:
+            return web.json_response({"error": "Unsupported MCP transport request"}, status=403)
+        upstream_url = entry["url"]
         try:
             return await _forward(request, upstream_url, entry["headers"])
         except Exception:

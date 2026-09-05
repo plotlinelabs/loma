@@ -25,6 +25,11 @@ class FakeProcess:
     def __init__(self, argv):
         self.argv = argv
         self.returncode = 0
+        self.stdout = asyncio.StreamReader()
+        self.stdout.feed_data(json.dumps({"argv": self.argv}).encode())
+        self.stdout.feed_eof()
+        self.stderr = asyncio.StreamReader()
+        self.stderr.feed_eof()
 
     async def communicate(self):
         return json.dumps({"argv": self.argv}).encode(), b""
@@ -82,12 +87,13 @@ async def test_tool_invoke_injects_server_minted_identity(captured_exec, monkeyp
     # Worker-supplied identity was stripped; the broker's identity appended.
     assert "victim@example.test" not in argv
     assert "forged" not in argv
-    assert argv[-4:] == ["--user-email", EMAIL, "--auth-token", f"minted-for-{EMAIL}"]
+    assert argv[2:4] == ["--auth-token", f"minted-for-{EMAIL}"]
+    assert argv[-2:] == ["--user-email", EMAIL]
     assert argv[1].endswith("tools/notify.py")
 
 
 @pytest.mark.asyncio
-async def test_tool_invoke_no_identity_flags_for_integration_tools(captured_exec, monkeypatch):
+async def test_tool_invoke_injects_identity_for_integration_cli_guard(captured_exec, monkeypatch):
     monkeypatch.setattr(
         "tools._auth_token.create_user_auth_token", lambda email: "minted",
     )
@@ -95,7 +101,8 @@ async def test_tool_invoke_no_identity_flags_for_integration_tools(captured_exec
     db = SimpleNamespace(integrations=SimpleNamespace(find_one=AsyncMock(return_value={"status": "active"})))
     await op.execute(db, EMAIL, "posthog", {"argv": ["query", "--sql", "select 1"], "files": {}})
     argv = captured_exec[0]["argv"]
-    assert "--auth-token" not in argv and "--user-email" not in argv
+    assert argv[2:4] == ["--auth-token", "minted"]
+    assert argv[-2:] == ["--user-email", EMAIL]
     assert "posthog" not in AUTH_TOOLS
 
 

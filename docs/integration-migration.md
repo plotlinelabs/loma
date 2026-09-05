@@ -6,8 +6,15 @@
 - Custom connectors are owner-scoped, including legacy records. URL deduplication
   is per owner; new provider IDs are owner-namespaced. They no longer enter the
   shared runtime configuration. Custom OAuth authorization requires ownership.
-- CLI broker calls and MCP gateway calls recheck authorization. Lookup errors
-  deny access. Unconfigured integrations receive no tool grants.
+- CLI broker calls, direct organization CLI entrypoints and MCP gateway calls
+  recheck authorization. Lookup errors deny access, including when credentials
+  are supplied through environment variables. Direct CLI invocations now require
+  `--user-email` and `--auth-token`. Unconfigured integrations receive no grants.
+- Broker CLI commands have explicit command/flag contracts and request-scoped
+  upload validation. Unreviewed commands are disabled; see the compatibility
+  list in `execution-security.md`. Full adapter coverage is not complete.
+- Skill CLI reads and writes enforce active-user identity and personal ownership;
+  root/subcommand argument placement preserves the supplied identity.
 - MCP proxies require a live run capability. Codex and OpenCode resolve caller
   configuration and sharing exclusions, as does Claude. Personal initialization
   errors do not start a shared fallback client.
@@ -24,7 +31,7 @@
 
 | Integration family | Current access path | Next action |
 | --- | --- | --- |
-| Google, Slack personal | Personal OAuth CLI | Replace general CLI broker invocation with operation-specific adapters |
+| Google, Slack personal | Personal OAuth CLI | Reviewed CLI command schemas implemented; complete typed provider adapters and binary artifact transfer |
 | Grain | Personal OAuth CLI; personal MCP when configured | Validate consent/refresh in browser; introduce owner-bound webhook subscriptions |
 | HubSpot, Notion | Personal OAuth MCP overrides | Validate provider scopes, refresh, reconnect and runtime compatibility |
 | Custom remote MCP | Owner-only configuration, optional personal OAuth | Validate destinations and MCP transport/session behavior in deployment |
@@ -40,8 +47,8 @@ organization sharing rules remain visible through the existing sharing dialog.
 ## Release gates still open
 
 - Per-worker isolation, restricted network egress and server-side subscription auth.
-- Operation-specific validation replacing general privileged CLI execution.
-- Review authorization for direct CLI paths outside the broker.
+- Complete reviewed adapter coverage for disabled commands and replace the
+  remaining trusted CLI bridge with typed provider adapters where appropriate.
 - Validate simultaneous runs, cancellation, resume, artifacts and provider refresh
   in the deployed topology, not only mocked tests.
 - Repair preview capacity without deleting other users' data. Local disk capacity

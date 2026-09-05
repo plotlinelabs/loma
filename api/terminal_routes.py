@@ -59,6 +59,9 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
 
     workspace = worker_mod.create_workspace(prefix="terminal")
     env = worker_mod.build_worker_env(workspace)
+    command = ["/bin/bash", "--noprofile", "--norc", "-i"]
+    if worker_mod.bwrap_available():
+        command = worker_mod.build_bwrap_argv(command, workspace)
     child_setup = worker_mod.worker_preexec_fn(setsid=False)
     pid, fd = pty.fork()
 
@@ -68,7 +71,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
         try:
             child_setup()
             os.chdir(str(workspace))
-            os.execvpe("/bin/bash", ["/bin/bash", "--noprofile", "--norc", "-i"], env)
+            os.execvpe(command[0], command, env)
         except Exception:
             pass
         os._exit(1)

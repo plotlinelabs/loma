@@ -6,7 +6,7 @@
 The current implementation provides environment filtering, per-run capabilities,
 private workspaces and broker admission, but it is not sufficient to contain
 arbitrary agent code. Production worker separation, credential-free subscription
-runtimes, operation-specific broker adapters and deployed adversarial validation
+runtimes, complete adapter coverage and deployed adversarial validation
 remain release blockers. Unit tests do not establish isolation between workers.
 
 ## Architecture
@@ -47,19 +47,30 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
   process count, no core dumps (`RLIMIT_*`), own session/process group,
   wall-clock watchdog, umask 077. Optional bubblewrap wrapping
   (`LOMA_WORKER_BWRAP=1`) adds mount/pid/ipc/uts namespace isolation where
-  bubblewrap is installed.
+  bubblewrap is installed. Explicitly requesting bubblewrap now fails closed
+  if it is unavailable; both SDK launchers and terminals apply the same wrapper.
+  The blanket `/opt` mount is removed. A configured privilege drop cannot silently
+  revert to the backend identity.
 - Runs are revoked and workers/workspaces torn down at run end; pool clients
   and Codex workers are single-use (one conversation per process).
 
 ### Broker (implemented)
 
-- `tool.invoke` — first-party CLI tools (Gmail/Drive/Calendar/Sheets/
-  Slides/Docs/Apps Script/Slack/Telegram/notify/loma_skills + integration
-  tools) now execute **server-side**. Workers hold shims that forward argv
-  (plus small workspace file uploads) to the broker; worker-supplied
-  `--user-email`/`--auth-token` are stripped and replaced with server-minted
-  identity for the run owner. OAuth tokens, integration keys, the encryption
-  key and the DB URI never enter a worker.
+- `tool.invoke` accepts only commands and exact flags enumerated in
+  `broker/tool_policy.py`. Registration or an integration grant alone does not
+  authorize an arbitrary command. Unknown commands/flags, duplicate flags, local
+  directory imports and unreviewed renderer utilities fail closed before I/O.
+  File arguments must refer to inline uploads from the same request, never an
+  existing backend path. Scalar text is not rewritten as a file. CLI output is
+  bounded while reading, and cancellation/timeouts terminate the tool process
+  group and remove its uploaded inputs. Identity tokens are explicitly redacted.
+- Direct organization-integration CLI entrypoints require authenticated user
+  credentials and independently check active status, ownership and team/user
+  sharing before dispatch, even when an environment API key exists. No cache is
+  used for this authorization. The broker injects its authenticated owner's
+  identity for these commands as well as personal tools.
+- Skill CLI reads now require an active authenticated user and hide other users'
+  personal skills; direct reads and writes enforce personal ownership.
 - `model.request` — admission for the model gateway. Providers configured
   with server-side keys (Anthropic/OpenAI/OpenRouter/OpenCode Zen) are
   reached via `/model/<provider>/…` on the gateway; the worker authenticates
@@ -67,6 +78,9 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 - `grain.transcript` — unchanged personal-OAuth read-only adapter.
 - `mcp.request` binds each proxy to a run capability and rechecks account status,
   integration ownership/sharing and personal connection availability per call.
+- MCP grants are pinned to the exact registered endpoint and supported transport
+  methods. Worker-controlled suffixes and queries are denied. URL validation uses
+  the parsed authority rather than a string-prefix check.
 - MCP: HTTP MCP servers are re-pointed at `/mcp/<proxy-token>` on the
   gateway; real upstream URLs and auth headers stay in backend memory,
   proxy tokens are revoked with the owning client/run. **Stdio MCP servers
@@ -81,6 +95,20 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 - Capabilities: opaque, stored as SHA-256 digests, ≤2h TTL (default 1h),
   bounded call budget, atomic admission, active-account recheck per call,
   revoked at run end. Broker + gateway bind to loopback only.
+
+## Command compatibility
+
+The command schemas currently cover Gmail, Google Drive/Calendar/Sheets/Slides/
+Docs/Apps Script, personal Slack, Grain search/recent/transcript, notifications,
+skill reads and single-file writes, and PostHog `query --sql`.
+Other organization CLI commands, Telegram and backend renderer utilities remain
+**disabled through the broker** pending reviewed adapters. This is a deliberate
+compatibility restriction, not completed feature parity. These integrations may
+still be available through independently authorized MCP paths. Directory-based
+skill import is never enabled through the worker broker.
+
+Uploads currently support bounded inline UTF-8 text, not binary artifact transfer.
+Do not treat this bridge as a completed artifact/storage migration.
 
 ## Deployment requirements (NOT provided by this repo)
 

@@ -105,10 +105,8 @@ def _worker_uid_gid() -> tuple[int | None, int | None]:
     if uid <= 0:
         return None, None
     if os.geteuid() != 0:
-        logger.warning(
-            "LOMA_WORKER_UID configured but backend is not root; "
-            "workers will run as the backend user"
-        )
+        if os.geteuid() != uid or os.getegid() != (gid if gid > 0 else uid):
+            raise WorkerIsolationError("Cannot enforce the configured worker identity")
         return None, None
     return uid, (gid if gid > 0 else uid)
 
@@ -305,10 +303,10 @@ def worker_preexec_fn(setsid: bool = True):
 # ── Optional bubblewrap wrapping ─────────────────────────────────────────
 
 def bwrap_available() -> bool:
-    return (
-        os.environ.get("LOMA_WORKER_BWRAP", "").lower() in {"1", "true", "yes"}
-        and shutil.which("bwrap") is not None
-    )
+    requested = os.environ.get("LOMA_WORKER_BWRAP", "").lower() in {"1", "true", "yes"}
+    if requested and shutil.which("bwrap") is None:
+        raise WorkerIsolationError("Requested worker isolation is unavailable: bubblewrap is missing")
+    return requested
 
 
 def build_bwrap_argv(argv: list[str], workspace: Path | str) -> list[str]:
@@ -329,7 +327,7 @@ def build_bwrap_argv(argv: list[str], workspace: Path | str) -> list[str]:
     ]
     for ro in ("/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc/ssl",
                "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf",
-               "/etc/ca-certificates", "/opt"):
+               "/etc/ca-certificates"):
         if os.path.exists(ro):
             wrapper += ["--ro-bind", ro, ro]
     wrapper += ["--bind", workspace, workspace, "--chdir", workspace, "--"]
@@ -430,7 +428,9 @@ def write_cli_launcher(
     # SDK-spawned workers never run as root.
     uid, gid = _worker_uid_gid()
     drop = ""
-    if uid is not None and shutil.which("setpriv"):
+    if uid is not None:
+        if not shutil.which("setpriv"):
+            raise WorkerIsolationError("Cannot enforce SDK worker identity: setpriv is missing")
         drop = f"setpriv --reuid {uid} --regid {gid} --clear-groups "
 
     lines = [
@@ -446,7 +446,8 @@ def write_cli_launcher(
     for name in passthrough:
         # Forward the SDK-set value if present (never a backend secret name).
         lines.append(f"  {name}=\"${{{name}}}\" \\")
-    lines.append(f"  {drop}{_sh_quote(real_cli)} \"$@\"")
+    command = build_bwrap_argv([real_cli], workspace) if bwrap_available() else [real_cli]
+    lines.append(f"  {drop}{' '.join(_sh_quote(arg) for arg in command)} \"$@\"")
 
     launcher = workspace / "loma-cli-launcher.sh"
     launcher.write_text("\n".join(lines) + "\n")
@@ -475,6 +476,8 @@ MAX_UPLOAD_BYTES = 1024 * 1024
 
 def _capability(argv):
     for i, arg in enumerate(argv):
+        if arg.startswith("--auth-token="):
+            return arg.split("=", 1)[1]
         if arg == "--auth-token" and i + 1 < len(argv):
             return argv[i + 1]
     return os.environ.get("LOMA_RUN_CAPABILITY", "")
@@ -492,14 +495,28 @@ def main():
     files = {{}}
     total = 0
     workspace = os.environ.get("HOME", "")
-    for arg in argv:
+    input_flags = {{"--attachments", "--file", "--file-path", "--content-file",
+                   "--skill-md", "--html-body-file", "--files-json-file", "--code-file"}}
+    candidates = []
+    for index, arg in enumerate(argv):
+        flag, sep, value = arg.partition("=")
+        if flag not in input_flags:
+            continue
+        if not sep:
+            value = argv[index + 1] if index + 1 < len(argv) else ""
+        candidates.extend(value.split(",") if flag == "--attachments" else [value])
+    for arg in candidates:
+        arg = arg.strip()
         try:
-            if (workspace and os.path.isfile(arg)
-                    and os.path.realpath(arg).startswith(os.path.realpath(workspace))
-                    and os.path.getsize(arg) <= MAX_UPLOAD_BYTES and total < 4 * MAX_UPLOAD_BYTES):
+            if (workspace and arg and os.path.isfile(arg)
+                    and os.path.commonpath([os.path.realpath(arg), os.path.realpath(workspace)]) == os.path.realpath(workspace)
+                    and len(files) < 8):
                 with open(arg, "r", encoding="utf-8") as fh:
-                    files[arg] = fh.read()
-                total += os.path.getsize(arg)
+                    content = fh.read(MAX_UPLOAD_BYTES + 1)
+                size = len(content.encode("utf-8"))
+                if size <= MAX_UPLOAD_BYTES and total + size <= MAX_UPLOAD_BYTES:
+                    files[arg] = content
+                    total += size
         except (OSError, UnicodeDecodeError, ValueError):
             continue
 

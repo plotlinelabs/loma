@@ -253,6 +253,8 @@ def _parse_flag(args: list, flag: str, default: str = "") -> str:
 
 
 if __name__ == "__main__":
+    from _integration_access import authorize_cli
+    authorize_cli('stitch')
     from dotenv import load_dotenv
     load_dotenv()
 
