@@ -1,5 +1,6 @@
 """Regression coverage for API authorization and durable artifact delivery."""
 import json
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,13 +13,21 @@ from api import auth_middleware as auth, flow_routes, routes, task_routes, termi
 from scheduler import engine
 
 
+@pytest.fixture(autouse=True)
+def proxy_secret(monkeypatch):
+    monkeypatch.setenv('BACKEND_PROXY_SECRET', 'synthetic-proxy-test-key-32-characters')
+
+
 class Request(dict):
     def __init__(self, body=None, *, user='caller@example.com', role='operator', file_id='invalid'):
         super().__init__(user_email=user, system_role=role)
         self.body = body or {}
         self.path = '/api/chat'
         self.method = 'POST'
-        self.headers = {'X-User-Email': user}
+        from api.proxy_identity import sign_identity
+        timestamp = str(int(time.time()))
+        self.headers = {'X-User-Email': user, 'X-Auth-Timestamp': timestamp,
+                        'X-Auth-Signature': sign_identity(user, timestamp)}
         self.match_info = {'file_id': file_id, 'conversation_id': 'conv'}
         self.query = {}
         self.app = {}

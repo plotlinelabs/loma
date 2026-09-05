@@ -6,7 +6,7 @@ import re
 REDACTED = "[REDACTED]"
 _SECRET_KEYS = {
     "auth_token", "access_token", "refresh_token", "id_token", "client_secret",
-    "api_key", "password", "password_hash", "local_auth", "authorization",
+    "x_auth_signature", "auth_signature", "api_key", "password", "password_hash", "local_auth", "authorization",
 }
 _BASE64 = re.compile(r"[A-Za-z0-9_-]{40,}={0,2}")
 _ASSIGNMENT = re.compile(

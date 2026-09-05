@@ -86,7 +86,8 @@ Every runtime subprocess and terminal is spawned through `broker/worker.py`:
 - `model.request` — admission for the model gateway. Providers configured
   with server-side keys (Anthropic/OpenAI/OpenRouter/OpenCode Zen) are
   reached via `/model/<provider>/…` on the gateway; the worker authenticates
-  with its run capability and the real key is injected server-side.
+  with its run capability and the real key is injected server-side. Model routes
+  allow only inference and model catalog operations, not arbitrary provider APIs.
 - `grain.transcript` — unchanged personal-OAuth read-only adapter.
 - `mcp.request` binds each proxy to a run capability and rechecks account status,
   integration ownership/sharing and personal connection availability per call.
@@ -193,3 +194,41 @@ binary input validation and per-server OpenCode authentication. They deliberatel
 make no calls using real provider credentials. The local environment rejects
 namespace creation (`unshare: Operation not permitted`) and has no container
 runtime; it cannot supply the production isolation release evidence.
+
+## Trusted proxy identity and account setup
+
+The backend now requires a short-lived HMAC identity assertion from the dashboard
+or task-MCP sidecar in addition to `X-User-Email`. Nginx forwards the assertion
+from its authenticated whoami subrequest and overwrites client-supplied headers.
+The signature is purpose-bound; active-account and role checks still run after
+verification. Unsigned internal requests fail before database lookup.
+
+Compose supplies `BACKEND_PROXY_SECRET` to the dashboard and task-MCP sidecar,
+falling back to the existing `OAUTH_ENCRYPTION_KEY`. The backend uses the same
+selection. Non-Compose deployments must explicitly configure the matching key
+in all three services. Assertions expire after 60 seconds and require synchronized
+clocks. This control does not replace worker network isolation.
+
+Account setup terminals now execute only `claude auth login` or
+`codex login --device-auth`, with a one-use owner-bound grant and minimal
+environment. They run as trusted credential setup utilities, never as an arbitrary
+backend shell or model invocation. The UI no longer sends a shell command to a
+generic terminal. Interactive agent terminals remain isolated workers.
+
+The backend tightens the mounted dotenv file to 0600 before starting runtimes;
+environment edits preserve that mode. Preview-generated secrets are also private.
+Read-only secret mounts and all other backend files still require the production
+sandbox boundary described above.
+
+### Remaining merge gates after the current changes
+
+- Production per-worker hardened sandbox and egress policy are not implemented or
+  deployed by this branch. The local host cannot run namespace/container tests.
+- Vendor subscription end-to-end validation and automatic backend token refresh
+  are unfinished. OpenCode subscription-only plugins still need adapters.
+- Broker schemas remain missing for Apollo, Dataroom, CDN, Stitch, agreement
+  operations and renderer utilities. These remain denied, not silently restored.
+- Deployed browser/OAuth and signed-proxy validation require a working preview.
+  The current preview host reports 2,023,676 KiB free, below the 4 GiB build gate.
+
+Passing local tests/CI does not close these gates. Keep the PR draft.

@@ -307,6 +307,18 @@ def create_gateway_app(broker, registry: McpProxyRegistry,
             return web.json_response({"error": "Broker unavailable"}, status=503)
 
         tail = request.match_info.get("tail", "")
+        inference_paths = {
+            "anthropic": {"v1/messages", "v1/messages/count_tokens"},
+            "openai": {"v1/responses", "v1/responses/compact", "v1/chat/completions"},
+            "openrouter": {"v1/chat/completions", "v1/responses"},
+            "opencode": {"chat/completions", "responses", "messages", "messages/count_tokens"},
+        }
+        model_path = "models" if provider == "opencode" else "v1/models"
+        allowed = ((request.method == "POST" and tail in inference_paths[provider])
+                   or (request.method == "GET" and tail == model_path))
+        allowed_query = {"beta"} if provider == "anthropic" else set()
+        if not allowed or set(request.query) - allowed_query:
+            return web.json_response({"error": "Unsupported model operation"}, status=403)
         upstream_url = conf["upstream"].rstrip("/") + (f"/{tail}" if tail else "")
         if request.query_string:
             upstream_url += f"?{request.query_string}"

@@ -80,6 +80,11 @@ async def log_404_middleware(request, handler):
 
 
 async def main():
+    # The mounted dotenv must not be readable by untrusted runtime uids.
+    # Refuse startup on permission errors instead of launching exposed workers.
+    from api.env_routes import DOTENV_PATH
+    if os.path.exists(DOTENV_PATH):
+        os.chmod(DOTENV_PATH, 0o600)
     # Initialize observability MongoDB
     await init_observability()
     # Ensure skill indexes exist (idempotent, covers new indexes on upgrades).

@@ -16,13 +16,11 @@ import {
 import {
   fetchClaudeAuthStatus,
   disconnectClaude,
-  getClaudeLoginTerminalToken,
   type ClaudeAuthStatus,
 } from "../../../lib/claude-auth-api";
 import {
   fetchCodexAuthStatus,
   disconnectCodex,
-  getCodexLoginTerminalToken,
   type CodexAuthStatus,
 } from "../../../lib/codex-auth-api";
 import {
@@ -461,12 +459,10 @@ export default function IntegrationsPage() {
 
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
   const [showClaudeTerminal, setShowClaudeTerminal] = useState(false);
-  const [claudeAutoCommand, setClaudeAutoCommand] = useState<string | undefined>();
   const [disconnectingClaude, setDisconnectingClaude] = useState(false);
 
   const [codexAuth, setCodexAuth] = useState<CodexAuthStatus | null>(null);
   const [showCodexTerminal, setShowCodexTerminal] = useState(false);
-  const [codexAutoCommand, setCodexAutoCommand] = useState<string | undefined>();
   const [disconnectingCodex, setDisconnectingCodex] = useState(false);
 
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
@@ -745,15 +741,9 @@ export default function IntegrationsPage() {
     }
   };
 
-  const handleConnectClaude = async () => {
+  const handleConnectClaude = () => {
     setError(null);
-    try {
-      const { autoCommand } = await getClaudeLoginTerminalToken();
-      setClaudeAutoCommand(autoCommand);
-      setShowClaudeTerminal(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start Claude login");
-    }
+    setShowClaudeTerminal(true);
   };
 
   const handleDisconnectClaude = async () => {
@@ -771,15 +761,9 @@ export default function IntegrationsPage() {
     }
   };
 
-  const handleConnectCodex = async () => {
+  const handleConnectCodex = () => {
     setError(null);
-    try {
-      const { autoCommand } = await getCodexLoginTerminalToken();
-      setCodexAutoCommand(autoCommand);
-      setShowCodexTerminal(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start Codex login");
-    }
+    setShowCodexTerminal(true);
   };
 
   const handleDisconnectCodex = async () => {
@@ -1784,7 +1768,7 @@ export default function IntegrationsPage() {
                   <DialogTitle>Login with Claude Code</DialogTitle>
                   <DialogDescription>Complete the OAuth flow in the terminal below</DialogDescription>
                 </DialogHeader>
-                <WebTerminal autoCommand={claudeAutoCommand} tokenEndpoint="/api/terminal/token" />
+                <WebTerminal tokenEndpoint="/api/claude-auth/terminal-token" />
                 <DialogFooter>
                   <Button variant="outline" onClick={handleClaudeTerminalDone}>Done</Button>
                 </DialogFooter>
@@ -1797,7 +1781,7 @@ export default function IntegrationsPage() {
                   <DialogTitle>Login with ChatGPT</DialogTitle>
                   <DialogDescription>Approve the device code at chatgpt.com, then finish below</DialogDescription>
                 </DialogHeader>
-                <WebTerminal autoCommand={codexAutoCommand} tokenEndpoint="/api/terminal/token" />
+                <WebTerminal tokenEndpoint="/api/codex-auth/terminal-token" />
                 <DialogFooter>
                   <Button variant="outline" onClick={handleCodexTerminalDone}>Done</Button>
                 </DialogFooter>

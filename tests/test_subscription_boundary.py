@@ -266,3 +266,16 @@ async def test_opencode_teardown_revokes_managed_password(monkeypatch, tmp_path)
         host='127.0.0.1', port=19001, process=None)
     await server.terminate()
     assert oc._managed_server_passwords == {}
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('method,path', [('get', 'v1/files'), ('post', 'v1/fine_tuning/jobs'),
+    ('delete', 'v1/models/synthetic'), ('post', 'v1/responses?redirect=1')])
+async def test_model_grant_is_not_general_provider_account_access(monkeypatch, method, path):
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic')
+    broker = SimpleNamespace(execute=AsyncMock(return_value={}))
+    app = create_gateway_app(broker, McpProxyRegistry())
+    async with TestClient(TestServer(app)) as client:
+        response = await getattr(client, method)('/model/openai/' + path,
+            headers={'Authorization': 'Bearer sample'})
+        assert response.status == 403
+        assert (await response.json()) == {'error': 'Unsupported model operation'}

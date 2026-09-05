@@ -10,6 +10,7 @@ import os
 from aiohttp import web
 
 from api.auth_helpers import ROLE_HIERARCHY
+from api.proxy_identity import verify_identity
 from observability.db import get_db
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,16 @@ async def auth_middleware(request, handler):
                 return web.json_response(
                     {"error": "Authentication required"}, status=401,
                 )
+
+        if not using_preview_fallback:
+            try:
+                valid_proxy = verify_identity(
+                    user_email, request.headers.get("X-Auth-Timestamp", ""),
+                    request.headers.get("X-Auth-Signature", ""))
+            except RuntimeError:
+                return web.json_response({"error": "Authentication unavailable"}, status=503)
+            if not valid_proxy:
+                return web.json_response({"error": "Authentication required"}, status=401)
 
         # Attach user email to request for downstream handlers
         request["user_email"] = user_email

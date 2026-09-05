@@ -20,7 +20,7 @@ export async function fetchClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
   return res.json();
 }
 
-export async function getClaudeLoginTerminalToken(): Promise<{ token: string; autoCommand: string }> {
+export async function getClaudeLoginTerminalToken(): Promise<{ token: string }> {
   const res = await fetch(`${API_BASE}/api/claude-auth/terminal-token`, { method: "POST" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Unknown error" }));

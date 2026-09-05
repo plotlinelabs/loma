@@ -12,6 +12,7 @@
 # Safety: previews run with the scheduler and Slack Socket Mode OFF so they never
 # double-fire scheduled flows or double-consume the production Slack app's events.
 set -euo pipefail
+umask 077
 
 PR="${1:?usage: preview_up.sh <PR_NUMBER>}"
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "PR number must be numeric: $PR" >&2; exit 2; }
@@ -75,6 +76,8 @@ OBSERVABILITY_MONGODB_URI=${MONGO_URI}
 OBSERVABILITY_DB_NAME=loma_pr_${PR}
 LOMA_SETUP_TOKEN=${setup_value}
 EOF
+
+chmod 600 .env dashboard/.env "$SECRET_CACHE"
 
 echo "[preview] up ${COMPOSE_PROJECT_NAME} (backend=${BACKEND_HOST_PORT} dashboard=${DASHBOARD_HOST_PORT} nginx=${NGINX_HOST_PORT})"
 

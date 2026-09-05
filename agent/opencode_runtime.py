@@ -575,7 +575,7 @@ def _provider_gateway_overrides(run_capability: str | None) -> dict:
     Providers whose API keys live in the backend env are configured with a
     gateway baseURL and the run capability as the apiKey; the gateway admits
     the call via the broker and injects the real key server-side. Providers
-    without a server-side key fall back to OpenCode's own auth file copy.
+    without a configured gateway credential are unavailable, never loaded from a worker auth file.
     """
     if not run_capability:
         return {}
