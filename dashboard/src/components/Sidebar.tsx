@@ -526,6 +526,7 @@ export default function Sidebar({
                       href={`/conversations?project=${p.project_id}`}
                       prefetch
                       onClick={onClose}
+                      title={p.name}
                       className="group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
                     >
                       <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
