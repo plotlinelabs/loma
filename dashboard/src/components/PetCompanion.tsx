@@ -52,7 +52,7 @@ export function PetSprite({ petId, size = 40, state = "idle", animated = false }
   const colors: Record<string, string> = { o: "#332f37", a: pet.coat, b: pet.patch, m: pet.id === "black-cat" ? "#626778" : "#f5e9cf", e: "#24232c", n: "#bb7681", p: "#dfa4a0" };
   return (
     <span aria-hidden="true" data-pet={pet.id} data-state={state} className="pet-sprite inline-flex shrink-0" data-animated={animated} style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" focusable="false">
+      <svg className="size-full" width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" focusable="false">
         {pixels.flatMap((row, y) => [...row].map((pixel, x) => {
           if (pixel === ".") return null;
           // Coat markings distinguish the cats without recoloring their eyes.

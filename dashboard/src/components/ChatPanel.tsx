@@ -1381,7 +1381,7 @@ export default function ChatPanel({
         </div>
       )}
 
-      <div className="flex justify-center"><PetCompanion size={isEmptyState ? 56 : 28} state={isStreaming ? "working" : "idle"} /></div>
+      {isStreaming && <div className="flex justify-center"><PetCompanion size={28} state="working" /></div>}
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -1400,6 +1400,7 @@ export default function ChatPanel({
         /* Empty state */
         <div className="flex flex-col items-center justify-center h-full px-4 md:px-6 animate-fade-in-up">
           <div className="mb-8 text-center">
+            <PetCompanion size={56} />
             <h2 className="text-xl md:text-3xl font-heading font-normal text-foreground tracking-tight">
               What do you need to get done?
             </h2>
