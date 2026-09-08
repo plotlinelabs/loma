@@ -86,3 +86,56 @@ async def test_start_still_requires_prompt(monkeypatch):
 
     assert response.status == 400
     conversations.insert_one.assert_not_called()
+
+
+# ── Board context (global default + personal) ──────────────────────────────
+
+def test_render_board_default_context_fills_placeholders():
+    doc = {"email": "adarsh@example.com", "name": "Adarsh"}
+    out = task_routes.render_board_default_context(
+        "Assistant for {{user_name}}. Use --user-email {{ user_email }}.", doc, "adarsh@example.com")
+    assert out == "Assistant for Adarsh. Use --user-email adarsh@example.com."
+
+
+def test_render_board_default_context_falls_back_to_email_local_part():
+    out = task_routes.render_board_default_context(
+        "Hi {{user_name}} <{{user_email}}>", None, "jane.doe@example.com")
+    assert out == "Hi jane.doe <jane.doe@example.com>"
+
+
+def test_merge_board_context_default_then_personal():
+    out = task_routes.merge_board_context("DEFAULT", "PERSONAL")
+    assert out.startswith(task_routes.BOARD_CONTEXT_HEADING)
+    assert out.index("DEFAULT") < out.index(task_routes.BOARD_PERSONAL_HEADING) < out.index("PERSONAL")
+
+
+def test_merge_board_context_personal_only_keeps_legacy_shape():
+    assert task_routes.merge_board_context("", " PERSONAL ") == (
+        f"{task_routes.BOARD_CONTEXT_HEADING}\nPERSONAL")
+    assert task_routes.merge_board_context("", "") == ""
+
+
+@pytest.mark.asyncio
+async def test_build_board_context_uses_default_setting_and_owner_doc(monkeypatch):
+    from agent.prompt import set_prompt_settings_cache
+
+    set_prompt_settings_cache({
+        "task_board_default_context": "Global rules for {{user_name}} ({{user_email}}).",
+    })
+    users = SimpleNamespace(find_one=AsyncMock(return_value={
+        "email": "owner@example.com", "name": "Owner",
+        "task_board": {"prompt": "My personal notes"},
+    }))
+    try:
+        out = await task_routes.build_board_context(SimpleNamespace(users=users), "owner@example.com")
+    finally:
+        set_prompt_settings_cache({})
+
+    assert out == (
+        f"{task_routes.BOARD_CONTEXT_HEADING}\n"
+        "Global rules for Owner (owner@example.com).\n"
+        f"\n{task_routes.BOARD_PERSONAL_HEADING}\n"
+        "My personal notes"
+    )
+    users.find_one.assert_awaited_once_with(
+        {"email": "owner@example.com"}, {"task_board": 1, "name": 1, "email": 1})

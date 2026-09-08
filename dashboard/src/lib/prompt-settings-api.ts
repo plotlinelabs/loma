@@ -3,7 +3,8 @@ const API_BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
 export type PromptSettingKey =
   | "identity_guidelines"
   | "company_information"
-  | "dictation_vocabulary";
+  | "dictation_vocabulary"
+  | "task_board_default_context";
 
 export interface PromptSetting {
   setting_key: PromptSettingKey;

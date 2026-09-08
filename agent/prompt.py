@@ -4,15 +4,23 @@ from config.app_config import APP_NAME
 
 logger = logging.getLogger(__name__)
 
-PROMPT_SETTING_KEYS = ("identity_guidelines", "company_information", "dictation_vocabulary")
+PROMPT_SETTING_KEYS = (
+    "identity_guidelines",
+    "company_information",
+    "dictation_vocabulary",
+    "task_board_default_context",
+)
 PROMPT_SETTING_TITLES = {
     "identity_guidelines": "Identity & Guidelines",
     "company_information": "Company Information",
     "dictation_vocabulary": "Dictation Vocabulary",
+    "task_board_default_context": "Task Board Default Context",
 }
 
 # Settings injected into the agent system prompt. dictation_vocabulary is
-# admin-edited through the same UI but only feeds the /api/transcribe hint.
+# admin-edited through the same UI but only feeds the /api/transcribe hint;
+# task_board_default_context is injected per task on the tasks board only
+# (see api.task_routes.build_board_context).
 RULEBOOK_KEYS = ("identity_guidelines", "company_information")
 
 _prompt_settings_cache: dict[str, str] = {}

@@ -1009,16 +1009,14 @@ async def handle_chat(request: web.Request) -> web.Response:
                 {"$set": {"tool_config": tool_config}},
             )
 
-        # Board tasks carry the owner's personal working context on every turn.
+        # Board tasks carry the global default context plus the owner's
+        # personal working context on every turn.
         if existing and existing.get("task_status"):
+            from api.task_routes import build_board_context
+
             owner = (existing.get("metadata") or {}).get("user_name") or user_email
-            owner_doc = await db.users.find_one({"email": owner}, {"task_board": 1})
-            board_prompt = ((owner_doc or {}).get("task_board") or {}).get("prompt", "").strip()
-            if board_prompt:
-                context_block = (
-                    "## User's role & working context (apply to this task)\n"
-                    f"{board_prompt}"
-                )
+            context_block = await build_board_context(db, owner)
+            if context_block:
                 conversation_context = (
                     f"{context_block}\n\n{conversation_context}"
                     if conversation_context else context_block

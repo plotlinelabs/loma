@@ -1125,6 +1125,8 @@ export interface TasksBoardResponse {
 export interface BoardSettings {
   prompt: string;
   lanes: BoardLane[];
+  /** Global default context (Admin > Settings), resolved for the caller. Read-only. */
+  default_context?: string;
 }
 
 export async function fetchTasksBoard(query = ""): Promise<TasksBoardResponse> {
