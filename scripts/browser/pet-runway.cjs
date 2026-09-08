@@ -52,7 +52,6 @@ const assert = require('node:assert/strict');
   const input = page.locator('[role=dialog] textarea');
   const box = await input.boundingBox();
   assert.ok(b.y + b.height <= box.y, 'pet is above the input');
-  assert.equal(await lane.evaluate(el => getComputedStyle(el).pointerEvents), 'none');
   await input.fill('A follow-up draft while my pet runs');
   assert.equal(await input.inputValue(), 'A follow-up draft while my pet runs');
   // Sample both ends of the path and its return without waiting a full cycle.

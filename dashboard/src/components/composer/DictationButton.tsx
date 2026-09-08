@@ -55,6 +55,8 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
 
   if (state === "recording") {
     return (
+      <>
+      <PetCompanion size={24} state="listening" />
       <Button
         ref={buttonRef}
         type="button"
@@ -76,9 +78,9 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
         <span className="text-xs tabular-nums">
           {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
         </span>
-        <PetCompanion size={24} state="listening" />
         <RiStopFill size={16} />
       </Button>
+      </>
     );
   }
 

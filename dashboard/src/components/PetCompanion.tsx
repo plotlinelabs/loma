@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useUser } from "@/lib/UserContext";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { RiSettings3Line } from "@remixicon/react";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+
 
 // Original, code-native pixel sprites. Shared silhouettes keep every size crisp.
 const silhouettes = {
@@ -75,36 +75,53 @@ export function PetSprite({ petId, size = 40, state = "idle", animated = false }
   );
 }
 
-export default function PetCompanion({ size = 32, state = "idle", fallback = null }: {
-  size?: number; state?: PetState; fallback?: React.ReactNode;
+export default function PetCompanion({ size = 32, state = "idle", fallback = null, onOpen }: {
+  size?: number; state?: PetState; fallback?: React.ReactNode; onOpen?: () => void;
 }) {
   const { user } = useUser();
   const preference = user?.pet_preference ?? DEFAULT_PET;
   if (!user || !preference.visible) return <>{fallback}</>;
-  return <PetSprite petId={preference.pet_id} size={size} state={state} animated={preference.animated} />;
+  return <PetSettingsButton onOpen={onOpen}><PetSprite petId={preference.pet_id} size={size} state={state} animated={preference.animated} /></PetSettingsButton>;
 }
 
-/** A decorative lane in the composer, never over the messages or input controls. */
+const PetSettingsContext = createContext({ open: false, openSettings: () => {} });
+export const usePetSettings = () => useContext(PetSettingsContext).openSettings;
+export const usePetSettingsOpen = () => useContext(PetSettingsContext).open;
+
+function PetSettingsButton({ children, onOpen }: { children: React.ReactNode; onOpen?: () => void }) {
+  const openSettings = usePetSettings();
+  return (
+    <button type="button" aria-label="Pet settings" title="Pet settings" aria-haspopup="dialog"
+      className="inline-flex shrink-0 cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
+      onClick={(event) => { event.stopPropagation(); openSettings(); onOpen?.(); }}>
+      {children}
+    </button>
+  );
+}
+
+/** A separate lane above the composer; hover pauses motion to make the pet easy to catch. */
 export function PetRunway({ running }: { running: boolean }) {
   const { user } = useUser();
   const preference = user?.pet_preference ?? DEFAULT_PET;
   if (!user || !preference.visible) return null;
   return (
-    <div aria-hidden="true" className="pet-runway" data-running={running && preference.animated}>
+    <div className="pet-runway" data-running={running && preference.animated}>
       <div className="pet-track">
         <div className="pet-runner">
           <div className="pet-facing">
-            <PetSprite petId={preference.pet_id} size={32} state={running ? "working" : "attention"} animated={preference.animated} />
+            <PetCompanion size={32} state={running ? "working" : "attention"} />
           </div>
         </div>
       </div>
       <style jsx>{`
-        .pet-runway { height: 38px; overflow: hidden; pointer-events: none; user-select: none; }
+        .pet-runway { height: 38px; overflow: hidden; user-select: none; }
         .pet-track { width: calc(100% - 32px); padding-top: 4px; }
         .pet-runner { width: 100%; }
-        .pet-facing { width: 32px; height: 32px; }
+        .pet-facing { width: 32px; height: 32px; pointer-events: auto; }
         .pet-runway[data-running="true"] .pet-runner { animation: pet-run 8s linear infinite; }
         .pet-runway[data-running="true"] .pet-facing { animation: pet-turn 8s steps(1) infinite; }
+        .pet-runway:hover .pet-runner, .pet-runway:hover .pet-facing,
+        .pet-runway:focus-within .pet-runner, .pet-runway:focus-within .pet-facing { animation-play-state: paused; }
         @keyframes pet-run { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(100%); } }
         @keyframes pet-turn { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(-1); } }
         @media (prefers-reduced-motion: reduce) {
@@ -115,22 +132,31 @@ export function PetRunway({ running }: { running: boolean }) {
   );
 }
 
-export function PetSettings({ collapsed, onOpen }: { collapsed: boolean; onOpen: () => void }) {
+export function PetSettingsProvider({ children }: { children: React.ReactNode }) {
   const { user, refresh } = useUser();
   const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLElement | null>(null);
   return (
-    <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (next) onOpen(); }}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" aria-label="Pet settings" className="w-full justify-start gap-2" disabled={!user}>
-          <RiSettings3Line size={16} />{!collapsed && "Pet settings"}
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="z-[60] max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-        <DialogTitle>Your pet companion</DialogTitle>
-        <DialogDescription>One little friend, everywhere in Loma. Saved just for you.</DialogDescription>
-        {user && <PetPicker key={user.email} initial={user.pet_preference ?? DEFAULT_PET} onSaved={() => { refresh(); setOpen(false); }} />}
-      </DialogContent>
-    </Dialog>
+    <PetSettingsContext.Provider value={{ open, openSettings: () => {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      if (opener.current?.getAttribute("role") === "menuitem") {
+        opener.current = document.querySelector<HTMLElement>('[data-slot="dropdown-menu-trigger"][data-state="open"]');
+      }
+      setOpen(true);
+    } }}>
+      {children}
+      <Dialog open={open && !!user} onOpenChange={setOpen}>
+        <DialogContent data-pet-settings="true" className="z-[60] max-h-[85dvh] overflow-y-auto sm:max-w-lg"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (opener.current?.isConnected) opener.current.focus();
+          }}>
+          <DialogTitle>Your pet companion</DialogTitle>
+          <DialogDescription>One little friend, everywhere in Loma. Saved just for you.</DialogDescription>
+          {user && <PetPicker key={user.email} initial={user.pet_preference ?? DEFAULT_PET} onSaved={() => { refresh(); setOpen(false); }} />}
+        </DialogContent>
+      </Dialog>
+    </PetSettingsContext.Provider>
   );
 }
 

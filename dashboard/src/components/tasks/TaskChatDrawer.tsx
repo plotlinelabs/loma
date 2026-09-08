@@ -6,6 +6,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { usePetSettingsOpen } from "@/components/PetCompanion";
 import ChatWithArtifacts from "@/components/ChatWithArtifacts";
 import { rebuildItemsFromConversation, type ChatItem } from "@/components/ChatPanel";
 import type { Artifact } from "@/components/ArtifactViewer";
@@ -154,10 +155,17 @@ export function TaskChatDrawer({
     }, 4000);
   }, []);
 
+  const petSettingsOpen = usePetSettingsOpen();
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
+        onInteractOutside={(event) => {
+          // A closing picker can dispatch its outside event after open becomes false.
+          if (petSettingsOpen || (event.target instanceof Element && event.target.closest("[data-pet-settings]"))) event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => { if (petSettingsOpen) event.preventDefault(); }}
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(1100px,92vw)]"
       >
         <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
