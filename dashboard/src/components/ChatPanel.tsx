@@ -17,7 +17,7 @@ import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, Persisted
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import type { Artifact } from "./ArtifactViewer";
-import PetCompanion from "./PetCompanion";
+import PetCompanion, { PetRunway } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -1381,7 +1381,6 @@ export default function ChatPanel({
         </div>
       )}
 
-      {isStreaming && <div className="flex justify-center"><PetCompanion size={28} state="working" /></div>}
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -1735,6 +1734,7 @@ export default function ChatPanel({
               }}
               className="max-w-3xl mx-auto"
             >
+              {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
               <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">

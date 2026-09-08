@@ -84,6 +84,37 @@ export default function PetCompanion({ size = 32, state = "idle", fallback = nul
   return <PetSprite petId={preference.pet_id} size={size} state={state} animated={preference.animated} />;
 }
 
+/** A decorative lane in the composer, never over the messages or input controls. */
+export function PetRunway({ running }: { running: boolean }) {
+  const { user } = useUser();
+  const preference = user?.pet_preference ?? DEFAULT_PET;
+  if (!user || !preference.visible) return null;
+  return (
+    <div aria-hidden="true" className="pet-runway" data-running={running && preference.animated}>
+      <div className="pet-track">
+        <div className="pet-runner">
+          <div className="pet-facing">
+            <PetSprite petId={preference.pet_id} size={32} state={running ? "working" : "attention"} animated={preference.animated} />
+          </div>
+        </div>
+      </div>
+      <style jsx>{`
+        .pet-runway { height: 38px; overflow: hidden; pointer-events: none; user-select: none; }
+        .pet-track { width: calc(100% - 32px); padding-top: 4px; }
+        .pet-runner { width: 100%; }
+        .pet-facing { width: 32px; height: 32px; }
+        .pet-runway[data-running="true"] .pet-runner { animation: pet-run 8s linear infinite; }
+        .pet-runway[data-running="true"] .pet-facing { animation: pet-turn 8s steps(1) infinite; }
+        @keyframes pet-run { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(100%); } }
+        @keyframes pet-turn { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(-1); } }
+        @media (prefers-reduced-motion: reduce) {
+          .pet-runner, .pet-facing { animation: none !important; transform: none !important; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 export function PetSettings({ collapsed, onOpen }: { collapsed: boolean; onOpen: () => void }) {
   const { user, refresh } = useUser();
   const [open, setOpen] = useState(false);
