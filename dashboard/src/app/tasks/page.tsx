@@ -1,5 +1,6 @@
 "use client";
 
+import PetCompanion from "@/components/PetCompanion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -50,6 +51,18 @@ export default function TasksPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
   const [board, setBoard] = useState<TasksBoardResponse | null>(null);
+  const previousColumns = useRef<Map<string, string> | null>(null);
+  const [petCompleted, setPetCompleted] = useState(false);
+  useEffect(() => {
+    if (!board) return;
+    const previous = previousColumns.current;
+    const justCompleted = board.tasks.some((task) => task.column === "done" && previous?.has(task.conversation_id) && previous.get(task.conversation_id) !== "done");
+    previousColumns.current = new Map(board.tasks.map((task) => [task.conversation_id, task.column]));
+    if (!justCompleted) return;
+    setPetCompleted(true);
+    const timer = setTimeout(() => setPetCompleted(false), 800);
+    return () => { clearTimeout(timer); setPetCompleted(false); };
+  }, [board]);
   const [error, setError] = useState<string | null>(null);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -193,7 +206,10 @@ export default function TasksPage() {
   return (
     <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
       <div className="pwa-header-offset flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Tasks</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold">Tasks</h1>
+          <PetCompanion state={board?.tasks.some((task) => task.column === "needs_input") ? "attention" : petCompleted ? "completed" : board?.tasks.some((task) => task.column === "working") ? "working" : "idle"} />
+        </div>
         <div className="flex items-center gap-1">
           {board && board.tags.length > 0 && (
             <DropdownMenu>

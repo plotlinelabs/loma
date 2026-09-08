@@ -10,6 +10,7 @@ import { useUser } from "../lib/UserContext";
 import { useTaskAttention } from "../lib/TaskAttentionContext";
 import { useNotifications } from "../lib/NotificationsContext";
 import type { SystemRole } from "../lib/governance-api";
+import PetCompanion, { usePetSettings } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import ChatContextMenu from "./ChatContextMenu";
 import { useTheme } from "../lib/ThemeContext";
@@ -426,18 +427,20 @@ export default function Sidebar({
     return () => clearInterval(interval);
   }, []);
 
+  const openPetSettings = usePetSettings();
+
   const sidebarContent = (
     <>
       {/* Logo + collapse toggle + close button */}
       <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-3 pt-3 pb-2")}>
-        <Link href="/tasks" prefetch onClick={onClose} className={cn("flex items-center gap-2", collapsed && "justify-center")}>
-          <CrosscutIcon size={collapsed ? 22 : 20} />
+        <div className={cn("flex items-center gap-2", collapsed && "justify-center")}>
+          <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 20} /></Link>} />
           {!collapsed && (
-            <span className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
+            <Link href="/tasks" prefetch onClick={onClose} className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
               Loma
-            </span>
+            </Link>
           )}
-        </Link>
+        </div>
         <div className="flex items-center gap-0.5">
           <Button
             variant="ghost"
@@ -719,7 +722,7 @@ export default function Sidebar({
                 <div className={cn("px-2.5 py-2", collapsed && "flex justify-center")}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button className={cn(
+                      <button aria-label="Account menu" className={cn(
                         "flex items-center w-full rounded-lg transition-colors hover:bg-muted",
                         collapsed ? "justify-center p-1" : "gap-2 px-1 py-1"
                       )}>
@@ -744,6 +747,9 @@ export default function Sidebar({
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent side="top" align="start" className="w-[180px]">
+                      <DropdownMenuItem onSelect={() => { openPetSettings(); onClose(); }}>
+                        <RiSettings3Line size={16} />Pet settings
+                      </DropdownMenuItem>
                       {userMenuNav.filter((item) => !item.minRole || hasRole(item.minRole)).map((item) => (
                         <DropdownMenuItem key={item.href} asChild>
                           <Link href={item.href} onClick={onClose} className="flex items-center gap-2 text-[13px]">

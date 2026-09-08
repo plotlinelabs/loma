@@ -17,6 +17,7 @@ import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, Persisted
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import type { Artifact } from "./ArtifactViewer";
+import PetCompanion, { PetRunway } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -1398,6 +1399,7 @@ export default function ChatPanel({
         /* Empty state */
         <div className="flex flex-col items-center justify-center h-full px-4 md:px-6 animate-fade-in-up">
           <div className="mb-8 text-center">
+            <PetCompanion size={56} />
             <h2 className="text-xl md:text-3xl font-heading font-normal text-foreground tracking-tight">
               What do you need to get done?
             </h2>
@@ -1522,7 +1524,7 @@ export default function ChatPanel({
                 if (item.role === "clarify") {
                   return (
                     <div key={i} className="flex justify-start items-start animate-message-in gap-2">
-                      <CrosscutIcon size={16} className="shrink-0 mt-px" />
+                      <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
                       <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words">
                         {item.content && (
                           <div className="mb-3 [&>*:first-child]:mt-0">
@@ -1646,7 +1648,7 @@ export default function ChatPanel({
                 // Assistant message — editorial style, no bubble
                 return (
                   <div key={i} className="flex justify-start items-start animate-message-in gap-2">
-                    <CrosscutIcon size={16} className="shrink-0 mt-px" />
+                    <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
                     <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
                       {item.content ? (
                         <MarkdownContent content={item.content} />
@@ -1732,6 +1734,7 @@ export default function ChatPanel({
               }}
               className="max-w-3xl mx-auto"
             >
+              {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
               <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">

@@ -140,6 +140,36 @@ async def handle_update_my_theme(request: web.Request) -> web.Response:
     return web.json_response({"theme_preference": theme})
 
 
+VALID_PETS = ("tabby", "tuxedo", "black-cat", "calico", "corgi", "golden", "dachshund", "rabbit", "hamster", "parrot")
+
+
+async def handle_update_my_pet(request: web.Request) -> web.Response:
+    """PATCH /api/governance/me/pet: preferences for the authenticated user only."""
+    email = get_user_email(request)
+    if not email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(body, dict) or set(body) != {"pet_id", "visible", "animated"}:
+        return web.json_response({"error": "Expected pet_id, visible and animated"}, status=400)
+    if not isinstance(body["pet_id"], str) or body["pet_id"] not in VALID_PETS:
+        return web.json_response({"error": "Unknown pet"}, status=400)
+    if type(body["visible"]) is not bool or type(body["animated"]) is not bool:
+        return web.json_response({"error": "visible and animated must be booleans"}, status=400)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+    result = await db.users.update_one(
+        {"email": email},
+        {"$set": {"pet_preference": body, "updated_at": datetime.now(timezone.utc)}},
+    )
+    if not result.matched_count:
+        return web.json_response({"error": "User not found"}, status=404)
+    return web.json_response(body)
+
+
 # ── Users CRUD (admin only) ───────────────────────────────────────────────
 
 
@@ -492,6 +522,7 @@ def setup_governance_routes(app: web.Application):
     app.router.add_get("/api/governance/me", handle_get_me)
 
     app.router.add_patch("/api/governance/me/theme", handle_update_my_theme)
+    app.router.add_patch("/api/governance/me/pet", handle_update_my_pet)
 
     # Users (admin only)
     app.router.add_get("/api/governance/users", handle_list_users)

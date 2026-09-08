@@ -7,6 +7,8 @@ import { TaskAttentionProvider } from "../lib/TaskAttentionContext";
 import { NotificationsProvider } from "../lib/NotificationsContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
+import { PetSettingsProvider } from "./PetCompanion";
+
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
     <SessionProvider>
@@ -15,7 +17,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           <NotificationsProvider>
           <ThemeProvider>
             <TooltipProvider delayDuration={300}>
-              {children}
+              <PetSettingsProvider>{children}</PetSettingsProvider>
             </TooltipProvider>
           </ThemeProvider>
           </NotificationsProvider>

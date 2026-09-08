@@ -15,6 +15,7 @@ export interface User {
   system_role: SystemRole;
   status?: "active" | "pending" | "rejected";
   tool_assignments: Record<string, ToolAssignment>;
+  pet_preference?: { pet_id: string; visible: boolean; animated: boolean };
   theme_preference?: "light" | "dark" | "system";
   pinned_conversations?: Array<{ conversation_id: string; pinned_at: string }>;
   claude_connected?: boolean;

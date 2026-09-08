@@ -1,5 +1,6 @@
 "use client";
 
+import PetCompanion from "../PetCompanion";
 import { useEffect, useRef } from "react";
 import { RiLoader4Line, RiMicLine, RiStopFill } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,8 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
 
   if (state === "recording") {
     return (
+      <>
+      <PetCompanion size={24} state="listening" />
       <Button
         ref={buttonRef}
         type="button"
@@ -77,10 +80,13 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
         </span>
         <RiStopFill size={16} />
       </Button>
+      </>
     );
   }
 
   return (
+    <>
+    {state === "transcribing" && <PetCompanion size={24} state="working" />}
     <Button
       ref={buttonRef}
       type="button"
@@ -102,5 +108,6 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
         ? <RiLoader4Line size={16} className="animate-spin" />
         : <RiMicLine size={16} />}
     </Button>
+    </>
   );
 }
