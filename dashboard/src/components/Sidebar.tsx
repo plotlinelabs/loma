@@ -10,6 +10,7 @@ import { useUser } from "../lib/UserContext";
 import { useTaskAttention } from "../lib/TaskAttentionContext";
 import { useNotifications } from "../lib/NotificationsContext";
 import type { SystemRole } from "../lib/governance-api";
+import PetCompanion, { PetSettings } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import ChatContextMenu from "./ChatContextMenu";
 import { useTheme } from "../lib/ThemeContext";
@@ -431,7 +432,7 @@ export default function Sidebar({
       {/* Logo + collapse toggle + close button */}
       <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-3 pt-3 pb-2")}>
         <Link href="/tasks" prefetch onClick={onClose} className={cn("flex items-center gap-2", collapsed && "justify-center")}>
-          <CrosscutIcon size={collapsed ? 22 : 20} />
+          <PetCompanion size={32} fallback={<CrosscutIcon size={collapsed ? 22 : 20} />} />
           {!collapsed && (
             <span className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
               Loma
@@ -656,6 +657,7 @@ export default function Sidebar({
             {/* Pool status — expandable */}
             {poolStatus && <PoolStatusWidget poolStatus={poolStatus} collapsed={collapsed} />}
 
+            <div className="px-2"><PetSettings collapsed={collapsed} onOpen={onClose} /></div>
             {/* Theme toggle */}
             <div className="px-2.5 py-1">
               {collapsed ? (

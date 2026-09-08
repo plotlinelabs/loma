@@ -17,6 +17,7 @@ import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, Persisted
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import type { Artifact } from "./ArtifactViewer";
+import PetCompanion from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -1380,6 +1381,7 @@ export default function ChatPanel({
         </div>
       )}
 
+      <div className="flex justify-center"><PetCompanion size={isEmptyState ? 56 : 28} state={isStreaming ? "working" : "idle"} /></div>
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -1522,7 +1524,7 @@ export default function ChatPanel({
                 if (item.role === "clarify") {
                   return (
                     <div key={i} className="flex justify-start items-start animate-message-in gap-2">
-                      <CrosscutIcon size={16} className="shrink-0 mt-px" />
+                      <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
                       <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words">
                         {item.content && (
                           <div className="mb-3 [&>*:first-child]:mt-0">
@@ -1646,7 +1648,7 @@ export default function ChatPanel({
                 // Assistant message — editorial style, no bubble
                 return (
                   <div key={i} className="flex justify-start items-start animate-message-in gap-2">
-                    <CrosscutIcon size={16} className="shrink-0 mt-px" />
+                    <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
                     <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
                       {item.content ? (
                         <MarkdownContent content={item.content} />
