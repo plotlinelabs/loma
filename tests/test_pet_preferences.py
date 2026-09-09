@@ -79,3 +79,17 @@ def test_frontend_pet_catalog_matches_api():
 
     source = (Path(__file__).parents[1] / "dashboard/src/components/PetCompanion.tsx").read_text()
     assert set(re.findall(r'\{ id: "([a-z-]+)", name:', source)) == set(VALID_PETS)
+
+
+def test_axolotl_sprite_has_complete_palette_and_rectangular_grid():
+    from pathlib import Path
+    import re
+
+    source = (Path(__file__).parents[1] / "dashboard/src/components/PetCompanion.tsx").read_text()
+    assert "axolotl" in VALID_PETS
+    art = re.search(r'axolotl: \{\s+colors: \{(.*?)\},\s+rows: \[(.*?)\]', source, re.S)
+    assert art is not None
+    colors = set(re.findall(r'(\w): "#[0-9a-fA-F]{6}"', art[1]))
+    rows = re.findall(r'"([.a-z]+)"', art[2])
+    assert rows and len({len(row) for row in rows}) == 1
+    assert set("".join(rows)) - {"."} <= colors
