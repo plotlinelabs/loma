@@ -6,6 +6,13 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
+  /* Typography weights — Halyard ships Regular (400) and Medium (500) only.
+     Product default is Regular; emphasis steps up to the real Medium cut
+     (never a synthesized semibold/bold, which breaks kerning). */
+  --font-weight-medium: 400;
+  --font-weight-semibold: 500;
+  --font-weight-bold: 500;
+
   /* Gray: warm neutrals.
      50 secondary surface · 100 canvas · 200 subtle hover · 300 hairline
      400 tertiary text · 500 secondary text · 900 primary ink */
@@ -190,12 +197,19 @@
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* Never synthesize missing weights — faux bold wrecks Halyard's kerning.
+       Requests above 500 fall back to the real Medium cut. */
+    font-synthesis-weight: none;
     letter-spacing: -0.01em;
     transition: background-color 0.2s ease-out, color 0.2s ease-out;
     @apply bg-background text-foreground;
   }
   * {
     @apply border-border outline-ring/50;
+  }
+  strong, b {
+    /* Emphasis (e.g. "Stopped by user.") uses the real Medium cut. */
+    font-weight: 500;
   }
   button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;

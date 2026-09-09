@@ -276,6 +276,7 @@ function ChatPageContent() {
                 <h1
                   className={cn(
                     "text-[15px] font-semibold text-foreground truncate",
+                    headerTitle === "New Chat" && "editorial-heading text-[19px]",
                     activeConversationId && user?.email === conversationOwner && "cursor-pointer hover:text-brand-600 transition-colors"
                   )}
                   onClick={() => {
