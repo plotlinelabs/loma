@@ -587,7 +587,6 @@
 }
 
 :root {
-  --font-logo: var(--font-body);
   --background: #F7F4EF;
   --foreground: #061B20;
   --card: #FFFFFF;
@@ -726,8 +725,6 @@
   --ring: var(--sidebar-ring);
   color: var(--sidebar-foreground);
 }
-.loma-sidebar .loma-mark { color: var(--sidebar-primary); }
-.loma-mark { color: var(--primary); }
 
 ::selection { background: #C8E98F; color: #061B20; }
 @media (prefers-reduced-motion: reduce) {

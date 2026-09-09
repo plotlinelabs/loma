@@ -434,10 +434,10 @@ export default function Sidebar({
       {/* Logo + collapse toggle + close button */}
       <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-5 pt-6 pb-5")}>
         <div className={cn("flex items-center gap-2", collapsed && "justify-center")}>
-          <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 27} /></Link>} />
+          <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 20} /></Link>} />
           {!collapsed && (
-            <Link href="/tasks" prefetch onClick={onClose} className="font-sans text-[29px] font-medium tracking-[-0.04em] text-foreground">
-              loma
+            <Link href="/tasks" prefetch onClick={onClose} className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
+              Loma
             </Link>
           )}
         </div>
