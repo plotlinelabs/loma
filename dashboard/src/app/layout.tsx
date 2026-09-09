@@ -1,24 +1,40 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, DM_Sans, Instrument_Serif, Red_Hat_Display } from "next/font/google";
+import { JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import Providers from "../components/Providers";
 import LayoutShell from "../components/LayoutShell";
 import ServiceWorkerRegistrar from "../components/ServiceWorkerRegistrar";
 import { cn } from "@/lib/utils";
 
-const instrumentSerifHeading = Instrument_Serif({subsets:['latin'],weight:['400'],variable:'--font-display'});
+// Brand serif — Feature Deck (headings / display).
+const featureDeck = localFont({
+  src: [
+    { path: "./fonts/FeatureDeck-Light.woff2", weight: "300", style: "normal" },
+    { path: "./fonts/FeatureDeck-LightItalic.woff2", weight: "300", style: "italic" },
+    { path: "./fonts/FeatureDeck-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/FeatureDeck-RegularItalic.woff2", weight: "400", style: "italic" },
+    { path: "./fonts/FeatureDeck-Medium.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/FeatureDeck-MediumItalic.woff2", weight: "500", style: "italic" },
+    { path: "./fonts/FeatureDeck-Bold.woff2", weight: "700", style: "normal" },
+    { path: "./fonts/FeatureDeck-BoldItalic.woff2", weight: "700", style: "italic" },
+  ],
+  variable: "--font-display",
+});
 
-const dmSans = DM_Sans({subsets:['latin'],variable:'--font-body'});
+// Brand sans — Halyard Display (body / UI; also drives --font-logo via globals.css).
+const halyard = localFont({
+  src: [
+    { path: "./fonts/HalyardDisplay-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/HalyardDisplay-Italic.woff2", weight: "400", style: "italic" },
+    { path: "./fonts/HalyardDisplay-Medium.woff2", weight: "500", style: "normal" },
+  ],
+  variable: "--font-body",
+});
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains",
   subsets: ["latin"],
-});
-
-const redHatDisplay = Red_Hat_Display({
-  variable: "--font-logo",
-  subsets: ["latin"],
-  weight: ["700", "800", "900"],
 });
 
 export const metadata: Metadata = {
@@ -57,7 +73,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className={cn("font-sans", dmSans.variable, instrumentSerifHeading.variable, jetbrainsMono.variable, redHatDisplay.variable)}>
+    <html lang="en" suppressHydrationWarning className={cn("font-sans", halyard.variable, featureDeck.variable, jetbrainsMono.variable)}>
       <head>
         <script
           dangerouslySetInnerHTML={{
