@@ -7,79 +7,79 @@
 
 @theme {
   /* Gray: warm neutrals */
-  --color-gray-50: #FDFBF7;
+  --color-gray-50: #FBF9F5;
   --color-gray-100: #F7F4EF;
-  --color-gray-200: #E8E4DD;
-  --color-gray-300: #D4CFC7;
-  --color-gray-400: #B8B1A8;
-  --color-gray-500: #8C857D;
-  --color-gray-600: #5C5650;
-  --color-gray-700: #1F1D1A;
-  --color-gray-800: #0A0A0A;
-  --color-gray-900: #0A0A0A;
+  --color-gray-200: #EEE8E0;
+  --color-gray-300: #D8D2C9;
+  --color-gray-400: #918A81;
+  --color-gray-500: #706B65;
+  --color-gray-600: #565D57;
+  --color-gray-700: #263D3B;
+  --color-gray-800: #12312F;
+  --color-gray-900: #061B20;
 
-  /* Brand: warm neutral for active/selected states */
-  --color-brand-50: #FDFBF7;
-  --color-brand-100: #F7F4EF;
-  --color-brand-200: #E8E4DD;
-  --color-brand-300: #D4CFC7;
-  --color-brand-400: #B8B1A8;
-  --color-brand-500: #8C857D;
-  --color-brand-600: #5C5650;
-  --color-brand-700: #1F1D1A;
-  --color-brand-800: #0A0A0A;
-  --color-brand-900: #0A0A0A;
+  /* Botanical brand: evergreen actions and moss selections */
+  --color-brand-50: #F0F5EC;
+  --color-brand-100: #E5EFDA;
+  --color-brand-200: #C8E0B5;
+  --color-brand-300: #A6C99A;
+  --color-brand-400: #79A780;
+  --color-brand-500: #4A8065;
+  --color-brand-600: #226750;
+  --color-brand-700: #055147;
+  --color-brand-800: #073B35;
+  --color-brand-900: #061B20;
 
-  /* Accent: yellow-green for primary actions */
-  --color-accent-50: #fdfff0;
-  --color-accent-100: #f5ffd6;
-  --color-accent-200: #E8FF5A;
-  --color-accent-300: #F0FF85;
-  --color-accent-400: #c5e04a;
-  --color-accent-500: #8FB800;
-  --color-accent-600: #7A8F00;
+  /* Leaf highlight: selected navigation and composer actions */
+  --color-accent-50: #F5F9EF;
+  --color-accent-100: #E7F2D6;
+  --color-accent-200: #C8E98F;
+  --color-accent-300: #B5D77A;
+  --color-accent-400: #9BBF63;
+  --color-accent-500: #567C38;
+  --color-accent-600: #3F612A;
 
   /* Surface: cards, panels, modals (white in light, warm dark in dark) */
   --color-surface: #FFFFFF;
 
   /* Text on accent backgrounds — always dark regardless of theme */
-  --color-accent-on: #1F1D1A;
+  --color-accent-on: #061B20;
 }
 
 /* ── Dark mode palette inversion ─────────────────────────────────────────── */
 
 [data-theme="dark"] {
-  --color-gray-50: #0A0A0A;
-  --color-gray-100: #141311;
-  --color-gray-200: #2A2723;
-  --color-gray-300: #3A3632;
-  --color-gray-400: #8C857D;
-  --color-gray-500: #B8B1A8;
-  --color-gray-600: #D4CFC7;
-  --color-gray-700: #E8E4DD;
-  --color-gray-800: #F7F4EF;
-  --color-gray-900: #FDFBF7;
+  --color-gray-50: #091D21;
+  --color-gray-100: #10282B;
+  --color-gray-200: #284143;
+  --color-gray-300: #3C5353;
+  --color-gray-400: #91A49C;
+  --color-gray-500: #A8B9AF;
+  --color-gray-600: #C1CEC3;
+  --color-gray-700: #DDE4D9;
+  --color-gray-800: #EDF0E7;
+  --color-gray-900: #F7F4EF;
 
-  --color-brand-50: #0A0A0A;
-  --color-brand-100: #141311;
-  --color-brand-200: #2A2723;
-  --color-brand-300: #3A3632;
-  --color-brand-400: #8C857D;
-  --color-brand-500: #B8B1A8;
-  --color-brand-600: #D4CFC7;
-  --color-brand-700: #E8E4DD;
-  --color-brand-800: #F7F4EF;
-  --color-brand-900: #FDFBF7;
+  --color-brand-50: #10282B;
+  --color-brand-100: #193A34;
+  --color-brand-200: #2C5546;
+  --color-brand-300: #45705B;
+  --color-brand-400: #7CA286;
+  --color-brand-500: #91B89A;
+  --color-brand-600: #ACCDAA;
+  --color-brand-700: #C8E0B5;
+  --color-brand-800: #E0EBCF;
+  --color-brand-900: #F0F5EC;
 
-  --color-accent-50: #0d0f00;
-  --color-accent-100: #1a1f00;
-  --color-accent-200: #E8FF5A;
-  --color-accent-300: #c5e04a;
-  --color-accent-400: #F0FF85;
-  --color-accent-500: #8FB800;
-  --color-accent-600: #7A8F00;
+  --color-accent-50: #132A25;
+  --color-accent-100: #253F2F;
+  --color-accent-200: #C8E98F;
+  --color-accent-300: #B5D77A;
+  --color-accent-400: #D7EFAE;
+  --color-accent-500: #A6C97D;
+  --color-accent-600: #C8E98F;
 
-  --color-surface: #1C1A17;
+  --color-surface: #122D30;
 
   /* Semantic color badge overrides: flip light bg/border to dark equivalents.
      -50 (badge bg) → very dark tint | -100 → slightly brighter | -200 (border) → muted dark
@@ -428,10 +428,9 @@
 }
 
 @media (max-width: 767px) {
-  /* The floating menu button replaces the top bar — page headers shift right
-     so their first row clears it. */
+  /* LayoutShell now reserves a mobile menu row for every route. */
   .pwa-header-offset {
-    padding-left: 2.75rem;
+    padding-left: 0;
   }
 
   /* Chat reads small on a phone — bump message text. */
@@ -443,10 +442,10 @@
 
 /* ── Agent Graph ───────────────────────────────────────────────────── */
 
-/* Loma breathing glow — yellow energy */
+/* Loma breathing glow: leaf highlight */
 @keyframes centerGlow {
-  0%, 100% { box-shadow: 0 0 20px rgba(232, 255, 90, 0.3), 0 0 50px rgba(232, 255, 90, 0.1); }
-  50% { box-shadow: 0 0 35px rgba(232, 255, 90, 0.5), 0 0 80px rgba(232, 255, 90, 0.2); }
+  0%, 100% { box-shadow: 0 0 20px rgba(200, 233, 143, 0.3), 0 0 50px rgba(200, 233, 143, 0.1); }
+  50% { box-shadow: 0 0 35px rgba(200, 233, 143, 0.5), 0 0 80px rgba(200, 233, 143, 0.2); }
 }
 
 .center-node {
@@ -588,43 +587,43 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.147 0.004 49.25);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.147 0.004 49.25);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.147 0.004 49.25);
-  --primary: oklch(0.216 0.006 56.043);
-  --primary-foreground: oklch(0.985 0.001 106.423);
-  --secondary: oklch(0.97 0.001 106.424);
-  --secondary-foreground: oklch(0.216 0.006 56.043);
-  --muted: oklch(0.97 0.001 106.424);
-  --muted-foreground: oklch(0.553 0.013 58.071);
-  --accent: oklch(0.97 0.001 106.424);
-  --accent-foreground: oklch(0.216 0.006 56.043);
+  --background: #F7F4EF;
+  --foreground: #061B20;
+  --card: #FFFFFF;
+  --card-foreground: #061B20;
+  --popover: #FFFFFF;
+  --popover-foreground: #061B20;
+  --primary: #055147;
+  --primary-foreground: #FFFFFF;
+  --secondary: #EEE8E0;
+  --secondary-foreground: #263D3B;
+  --muted: #EEE8E0;
+  --muted-foreground: #706B65;
+  --accent: #E7F2D6;
+  --accent-foreground: #073B35;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.923 0.003 48.717);
-  --input: oklch(0.923 0.003 48.717);
-  --ring: oklch(0.709 0.01 56.259);
-  --chart-1: oklch(0.869 0.005 56.366);
-  --chart-2: oklch(0.553 0.013 58.071);
-  --chart-3: oklch(0.444 0.011 73.639);
-  --chart-4: oklch(0.374 0.01 67.558);
-  --chart-5: oklch(0.268 0.007 34.298);
+  --border: #E7E1D9;
+  --input: #D8D2C9;
+  --ring: #226750;
+  --chart-1: #055147;
+  --chart-2: #79A780;
+  --chart-3: #567C38;
+  --chart-4: #A18A5B;
+  --chart-5: #647D8A;
   --radius: 0.45rem;
-  --sidebar: oklch(0.985 0.001 106.423);
-  --sidebar-foreground: oklch(0.147 0.004 49.25);
-  --sidebar-primary: oklch(0.216 0.006 56.043);
-  --sidebar-primary-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-accent: oklch(0.97 0.001 106.424);
-  --sidebar-accent-foreground: oklch(0.216 0.006 56.043);
-  --sidebar-border: oklch(0.923 0.003 48.717);
-  --sidebar-ring: oklch(0.709 0.01 56.259);
+  --sidebar: #061B20;
+  --sidebar-foreground: #BECBC7;
+  --sidebar-primary: #C8E98F;
+  --sidebar-primary-foreground: #061B20;
+  --sidebar-accent: #193036;
+  --sidebar-accent-foreground: #F7F4EF;
+  --sidebar-border: #284143;
+  --sidebar-ring: #C8E98F;
 }
 
 @theme inline {
-  --font-sans: var(--font-sans);
-  --font-heading: var(--font-heading);
+  --font-sans: var(--font-body);
+  --font-heading: var(--font-display);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -666,35 +665,73 @@
 }
 
 [data-theme="dark"] {
-  --background: oklch(0.147 0.004 49.25);
-  --foreground: oklch(0.985 0.001 106.423);
-  --card: oklch(0.216 0.006 56.043);
-  --card-foreground: oklch(0.985 0.001 106.423);
-  --popover: oklch(0.216 0.006 56.043);
-  --popover-foreground: oklch(0.985 0.001 106.423);
-  --primary: oklch(0.923 0.003 48.717);
-  --primary-foreground: oklch(0.216 0.006 56.043);
-  --secondary: oklch(0.268 0.007 34.298);
-  --secondary-foreground: oklch(0.985 0.001 106.423);
-  --muted: oklch(0.268 0.007 34.298);
-  --muted-foreground: oklch(0.709 0.01 56.259);
-  --accent: oklch(0.268 0.007 34.298);
-  --accent-foreground: oklch(0.985 0.001 106.423);
+  --background: #091D21;
+  --foreground: #F7F4EF;
+  --card: #122D30;
+  --card-foreground: #F7F4EF;
+  --popover: #163237;
+  --popover-foreground: #F7F4EF;
+  --primary: #C8E98F;
+  --primary-foreground: #061B20;
+  --secondary: #213B3C;
+  --secondary-foreground: #DDE4D9;
+  --muted: #1A3437;
+  --muted-foreground: #A8B9AF;
+  --accent: #294638;
+  --accent-foreground: #E7F2D6;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.553 0.013 58.071);
-  --chart-1: oklch(0.869 0.005 56.366);
-  --chart-2: oklch(0.553 0.013 58.071);
-  --chart-3: oklch(0.444 0.011 73.639);
-  --chart-4: oklch(0.374 0.01 67.558);
-  --chart-5: oklch(0.268 0.007 34.298);
-  --sidebar: oklch(0.216 0.006 56.043);
-  --sidebar-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-accent: oklch(0.268 0.007 34.298);
-  --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.553 0.013 58.071);
+  --border: #284143;
+  --input: #3C5353;
+  --ring: #A6C97D;
+  --chart-1: #C8E98F;
+  --chart-2: #91B89A;
+  --chart-3: #76B5A5;
+  --chart-4: #CAB47F;
+  --chart-5: #98B7C6;
+  --sidebar: #061B20;
+  --sidebar-foreground: #BECBC7;
+  --sidebar-primary: #C8E98F;
+  --sidebar-primary-foreground: #061B20;
+  --sidebar-accent: #193036;
+  --sidebar-accent-foreground: #F7F4EF;
+  --sidebar-border: #284143;
+  --sidebar-ring: #C8E98F;
+}
+
+/* Shared editorial hierarchy, including routes that predate font-heading.
+   User-authored markdown and compact conversation titles retain their own scale. */
+.loma-dashboard h1:not(:where(.prose h1, .break-words h1, .chat-text h1)) {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(1.75rem, 2.6vw, 2.5rem);
+  line-height: 1.15;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+.loma-dashboard h1.truncate { font-size: 1.5rem; }
+.loma-dashboard h2.font-heading {
+  font-family: var(--font-body), sans-serif;
+}
+
+/* Sidebar-scoped tokens also theme nested controls, without affecting portaled
+   menus/dialogs, which retain the page's light/dark surface tokens. */
+.loma-sidebar {
+  --background: var(--sidebar);
+  --foreground: var(--sidebar-accent-foreground);
+  --muted: var(--sidebar-accent);
+  --muted-foreground: var(--sidebar-foreground);
+  --accent: var(--sidebar-accent);
+  --accent-foreground: var(--sidebar-accent-foreground);
+  --border: var(--sidebar-border);
+  --ring: var(--sidebar-ring);
+  color: var(--sidebar-foreground);
+}
+
+::selection { background: #C8E98F; color: #061B20; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

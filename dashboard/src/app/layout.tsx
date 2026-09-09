@@ -1,14 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Red_Hat_Display, Roboto, Instrument_Serif } from "next/font/google";
+import { JetBrains_Mono, DM_Sans, Instrument_Serif, Red_Hat_Display } from "next/font/google";
 import "./globals.css";
 import Providers from "../components/Providers";
 import LayoutShell from "../components/LayoutShell";
 import ServiceWorkerRegistrar from "../components/ServiceWorkerRegistrar";
 import { cn } from "@/lib/utils";
 
-const instrumentSerifHeading = Instrument_Serif({subsets:['latin'],weight:['400'],variable:'--font-heading'});
+const instrumentSerifHeading = Instrument_Serif({subsets:['latin'],weight:['400'],variable:'--font-display'});
 
-const roboto = Roboto({subsets:['latin'],variable:'--font-sans'});
+const dmSans = DM_Sans({subsets:['latin'],variable:'--font-body'});
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains",
@@ -46,8 +46,8 @@ export const viewport: Viewport = {
   // opens (ViewportHeightSync's --app-h covers browsers that ignore this).
   interactiveWidget: "resizes-content",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F5F5F4" },
-    { media: "(prefers-color-scheme: dark)", color: "#292524" },
+    { media: "(prefers-color-scheme: light)", color: "#F7F4EF" },
+    { media: "(prefers-color-scheme: dark)", color: "#061B20" },
   ],
 };
 
@@ -57,7 +57,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className={cn("font-sans", roboto.variable, instrumentSerifHeading.variable, jetbrainsMono.variable, redHatDisplay.variable)}>
+    <html lang="en" suppressHydrationWarning className={cn("font-sans", dmSans.variable, instrumentSerifHeading.variable, jetbrainsMono.variable, redHatDisplay.variable)}>
       <head>
         <script
           dangerouslySetInnerHTML={{

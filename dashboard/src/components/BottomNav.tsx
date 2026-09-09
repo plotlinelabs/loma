@@ -40,15 +40,16 @@ export default function BottomNav() {
   ];
 
   return (
-    <nav className="md:hidden shrink-0 grid grid-cols-3 border-t border-border bg-background pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+    <nav className="md:hidden shrink-0 grid grid-cols-3 border-t border-sidebar-border bg-sidebar pb-[max(0.25rem,env(safe-area-inset-bottom))]">
       {tabs.map((tab) => (
         <Link
           key={tab.name}
           href={tab.href}
           prefetch
+          aria-current={tab.active ? "page" : undefined}
           className={cn(
             "flex flex-col items-center gap-0.5 pt-2 pb-1 press-scale",
-            tab.active ? "text-foreground" : "text-muted-foreground",
+            tab.active ? "text-sidebar-primary" : "text-sidebar-foreground",
           )}
         >
           <span className="relative">

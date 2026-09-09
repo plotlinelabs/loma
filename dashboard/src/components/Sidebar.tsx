@@ -432,7 +432,7 @@ export default function Sidebar({
   const sidebarContent = (
     <>
       {/* Logo + collapse toggle + close button */}
-      <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-3 pt-3 pb-2")}>
+      <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-5 pt-6 pb-5")}>
         <div className={cn("flex items-center gap-2", collapsed && "justify-center")}>
           <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 20} /></Link>} />
           {!collapsed && (
@@ -481,18 +481,19 @@ export default function Sidebar({
                   onClick={onClose}
                   className={cn(
                     // Roomier on phones (Claude-app scale), compact on desktop
-                    "flex items-center rounded-lg text-xs font-medium transition-all duration-150",
+                    "flex items-center rounded-lg text-[13px] font-medium transition-colors duration-150",
                     "max-md:text-[16px] max-md:[&_svg]:h-5 max-md:[&_svg]:w-5",
                     collapsed
                       ? "justify-center px-0 py-1.5 mx-auto w-10"
-                      : "px-2 py-1 gap-2 max-md:px-3 max-md:py-2.5 max-md:gap-3",
+                      : "px-3 py-2 gap-2.5 max-md:py-2.5 max-md:gap-3",
                     isActive
-                      ? "bg-brand-100/80 text-brand-700"
-                      : "text-muted-foreground hover:bg-accent-200/15 hover:text-foreground hover:translate-x-0.5"
+                      ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   )}
+                  aria-current={isActive ? "page" : undefined}
                   title={collapsed ? item.name : undefined}
                 >
-                  <span className={cn("relative transition-colors flex-shrink-0", isActive ? "text-brand-600" : "text-muted-foreground")}>
+                  <span className={cn("relative transition-colors flex-shrink-0", isActive ? "text-sidebar-primary-foreground" : "text-sidebar-foreground")}>
                     {item.icon}
                     {collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 && (
                       <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500" />
@@ -500,11 +501,11 @@ export default function Sidebar({
                   </span>
                   {!collapsed && <span>{item.name}</span>}
                   {!collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 ? (
-                    <span className="ml-auto min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-md bg-brand-50 text-brand-600 text-[10px] font-semibold ring-1 ring-brand-200/60">
+                    <span className="ml-auto min-w-[20px] h-5 px-1 shrink-0 whitespace-nowrap flex items-center justify-center rounded bg-current/10 text-[11px] font-semibold tabular-nums">
                       {badgeCounts[item.badgeKey]}
                     </span>
                   ) : !collapsed && isActive ? (
-                    <span className="ml-auto w-0.5 h-4 bg-brand-500 rounded-full" />
+                    <span className="ml-auto w-0.5 h-4 bg-sidebar-primary-foreground rounded-full" />
                   ) : null}
                 </Link>
               );
@@ -530,7 +531,7 @@ export default function Sidebar({
                       prefetch
                       onClick={onClose}
                       title={p.name}
-                      className="group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
+                      className="group flex items-center gap-1 px-2 py-1 text-[13px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
                     >
                       <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
                       <span className="truncate flex-1 min-w-0">{p.name}</span>
@@ -558,7 +559,7 @@ export default function Sidebar({
                       <div
                         key={c.conversation_id}
                         className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
+                          "group flex items-center gap-1 px-2 py-1 text-[13px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
                             ? "text-brand-700 bg-brand-100/80 font-medium"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -614,7 +615,7 @@ export default function Sidebar({
                       <div
                         key={c.conversation_id}
                         className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-xs max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
+                          "group flex items-center gap-1 px-2 py-1 text-[13px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
                             ? "text-brand-700 bg-brand-100/80 font-medium"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -787,7 +788,7 @@ export default function Sidebar({
 
       <aside
         className={cn(
-          "fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] flex flex-col z-50 transition-all duration-200 ease-out bg-muted",
+          "loma-sidebar fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] flex flex-col z-50 transition-all duration-200 ease-out bg-sidebar",
           isOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
           collapsed ? "w-[56px]" : "w-[300px] md:w-[220px]"

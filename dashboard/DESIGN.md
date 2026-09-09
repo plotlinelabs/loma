@@ -12,6 +12,12 @@ Every element on screen must earn its place. If removing something doesn't hurt 
 
 ---
 
+## Preserve Loma identity
+
+- Theme refreshes must retain the existing `CrosscutIcon` logo and Red Hat Display `Loma` wordmark unless a logo change is explicitly requested.
+- Keep pet companions, the composer runway, and pet settings intact. Respect each user's visibility and animation preferences.
+- Verify and screenshot the default pet-enabled experience on desktop, mobile, and dark mode, as well as the original logo fallback with pets hidden. Do not hide pets just to match a design reference.
+
 ## Rules
 
 ### 1. Every word earns its place

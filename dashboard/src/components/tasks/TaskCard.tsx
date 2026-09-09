@@ -64,22 +64,23 @@ export function TaskCard({
         setMenuOpen(true);
       }}
       className={cn(
-        "group rounded-md border bg-card px-3 py-2 cursor-pointer",
-        "hover:bg-muted/50 touch-none select-none",
+        "group relative rounded-lg border bg-card px-3 py-3 shadow-[0_1px_2px_#061b2005] cursor-pointer",
+        "hover:border-input hover:shadow-sm touch-none select-none",
+        task.column === "needs_input" && "border-amber-300",
         isDragging && "opacity-40",
       )}
     >
       <div className="flex items-start gap-2">
         {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-words text-[13px]">
+          <div className="line-clamp-2 break-words text-[15px] leading-5">
             {task.title || task.prompt || "New task"}
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
             <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
           </div>
-          <div className="mt-1 flex items-center gap-1 overflow-hidden">
+          <div className="mt-1 flex items-center gap-1 overflow-hidden pr-12">
             <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
             <TaskDeadlineBadge task={task} />
             {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag.name}</span>)}
@@ -89,7 +90,7 @@ export function TaskCard({
         <div
           // Hover-revealed on pointer devices; always visible on touch
           // (hover never fires there) and while focused via keyboard.
-          className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
+          className="absolute bottom-2 right-2 flex shrink-0 items-center gap-0.5 rounded bg-card opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
