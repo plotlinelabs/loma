@@ -57,18 +57,8 @@ const statusLabels: Record<string, string> = {
   error: "Error",
 };
 
-const topicStyles: Record<string, string> = {
-  debugging: "bg-red-50 text-red-700",
-  integration: "bg-blue-50 text-blue-700",
-  billing: "bg-green-50 text-green-700",
-  "feature-request": "bg-purple-50 text-purple-700",
-  campaign: "bg-orange-50 text-orange-700",
-  sdk: "bg-cyan-50 text-cyan-700",
-  data: "bg-teal-50 text-teal-700",
-  security: "bg-rose-50 text-rose-700",
-  documentation: "bg-yellow-50 text-yellow-700",
-  other: "bg-gray-50 text-gray-600",
-};
+/* New palette: topic tags share one neutral style (cream fill, warm dark text). */
+const topicTagClass = "bg-[#F5F1ED] text-[#322C26]";
 
 const topicLabels: Record<string, string> = {
   debugging: "Debugging",
@@ -433,7 +423,7 @@ export default function ConversationsPage() {
                     {/* Topic */}
                     <TableCell>
                       {c.topic ? (
-                        <Badge variant="secondary" className={cn("text-xs", topicStyles[c.topic] || "bg-gray-100 text-gray-600")}>
+                        <Badge variant="secondary" className={cn("text-xs", topicTagClass)}>
                           {topicLabels[c.topic] || c.topic}
                         </Badge>
                       ) : <span className="text-xs text-muted-foreground/40">&mdash;</span>}
@@ -557,7 +547,7 @@ export default function ConversationsPage() {
                           <span className="tabular-nums">${c.cost.total_cost_usd.toFixed(2)}</span>
                         )}
                         {c.topic && (
-                          <Badge variant="secondary" className={cn("text-[10px] py-0 px-1.5", topicStyles[c.topic] || "bg-gray-100 text-gray-600")}>
+                          <Badge variant="secondary" className={cn("text-[10px] py-0 px-1.5", topicTagClass)}>
                             {topicLabels[c.topic] || c.topic}
                           </Badge>
                         )}
