@@ -118,7 +118,7 @@ function StatusBadge({ status }: { status: string }) {
     );
   if (status === "system_managed")
     return (
-      <Badge className="bg-blue-50 text-blue-600 border-transparent">
+      <Badge variant="secondary">
         System-managed
       </Badge>
     );
@@ -288,7 +288,7 @@ function ConnectModal({
                 href={integration.auth_help_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-blue-600 hover:text-blue-800 mt-1 inline-block"
+                className="text-xs text-primary hover:underline mt-1 inline-block"
               >
                 Where do I find this?
               </a>
@@ -1268,11 +1268,11 @@ export default function IntegrationsPage() {
                             )}
 
                             <div className="flex flex-wrap gap-2">
-                              <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
+                              <Badge variant="secondary">
                                 MCP tools active
                               </Badge>
                               {integ.has_webhook && integ.has_webhook_secret && (
-                                <Badge className="bg-emerald-50 text-emerald-600 border-emerald-100">
+                                <Badge variant="secondary">
                                   Webhooks configured
                                 </Badge>
                               )}
@@ -1282,7 +1282,7 @@ export default function IntegrationsPage() {
                                 </Badge>
                               )}
                               {integ.shared_with?.mode === "specific" ? (
-                                <Badge className="bg-blue-50 text-blue-600 border-blue-100 cursor-pointer" onClick={() => isAdmin && setSharingTarget(integ)}>
+                                <Badge variant="secondary" className="cursor-pointer" onClick={() => isAdmin && setSharingTarget(integ)}>
                                   Shared with {(integ.shared_with.users?.length || 0) + (integ.shared_with.teams?.length || 0)}
                                 </Badge>
                               ) : (
@@ -1291,7 +1291,7 @@ export default function IntegrationsPage() {
                                 </Badge>
                               )}
                               {["hubspot", "notion", "grain"].includes(integ.provider) && (
-                                <Badge className="bg-violet-50 text-violet-600 border-violet-100">
+                                <Badge variant="secondary">
                                   Personal auth available
                                 </Badge>
                               )}
@@ -1332,7 +1332,7 @@ export default function IntegrationsPage() {
                             {["MCP tools", integ.has_webhook ? "Event ingestion" : null, "Agent skills"].filter(Boolean).map((cap) => (
                               <Badge
                                 key={cap}
-                                className="bg-indigo-50 text-indigo-600 border-transparent"
+                                variant="secondary"
                               >
                                 {cap}
                               </Badge>
@@ -1383,10 +1383,10 @@ export default function IntegrationsPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 mt-2">
-                        <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100">
+                        <Badge variant="outline" className="text-[10px]">
                           MCP tools
                         </Badge>
-                        <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-600 border-blue-100">
+                        <Badge variant="outline" className="text-[10px]">
                           Server configured
                         </Badge>
                       </div>
@@ -1465,7 +1465,7 @@ export default function IntegrationsPage() {
                       </div>
                       <Separator className="my-5" />
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100">
+                        <Badge variant="outline" className="text-[10px]">
                           MCP tools
                         </Badge>
                         {integ.auth_mode === "oauth" ? (
@@ -1597,7 +1597,7 @@ export default function IntegrationsPage() {
                     <p className="text-xs text-amber-600 mt-2">Telegram bot not configured on this deployment</p>
                   )}
                   {!telegramStatus?.linked && telegramLink && (
-                    <p className="text-xs text-sky-600 mt-2">
+                    <p className="text-xs text-muted-foreground mt-2">
                       <a href={telegramLink.deep_link} target="_blank" rel="noopener noreferrer" className="underline">
                         Open @{telegramLink.bot_username}
                       </a>{" "}and tap Start
@@ -1625,7 +1625,7 @@ export default function IntegrationsPage() {
                         {disconnectingClaude ? "..." : "Disconnect"}
                       </Button>
                     ) : (
-                      <Button size="xs" className="bg-amber-600 text-white hover:bg-amber-700" onClick={handleConnectClaude} disabled={showClaudeTerminal}>
+                      <Button size="xs" onClick={handleConnectClaude} disabled={showClaudeTerminal}>
                         {showClaudeTerminal ? "..." : "Login"}
                       </Button>
                     )}
@@ -1660,7 +1660,7 @@ export default function IntegrationsPage() {
                         {disconnectingCodex ? "..." : "Disconnect"}
                       </Button>
                     ) : (
-                      <Button size="xs" className="bg-emerald-700 text-white hover:bg-emerald-800" onClick={handleConnectCodex} disabled={showCodexTerminal}>
+                      <Button size="xs" onClick={handleConnectCodex} disabled={showCodexTerminal}>
                         {showCodexTerminal ? "..." : "Login"}
                       </Button>
                     )}
