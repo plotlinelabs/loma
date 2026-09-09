@@ -62,7 +62,7 @@ export const viewport: Viewport = {
   // opens (ViewportHeightSync's --app-h covers browsers that ignore this).
   interactiveWidget: "resizes-content",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F7F4EF" },
+    { media: "(prefers-color-scheme: light)", color: "#F5F1ED" },
     { media: "(prefers-color-scheme: dark)", color: "#061B20" },
   ],
 };

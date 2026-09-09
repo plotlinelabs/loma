@@ -63,7 +63,7 @@ export function MobileTaskCard({
   return (
     <div
       onClick={() => onOpen(task)}
-      className="group rounded-md border bg-card px-3 py-2.5 cursor-pointer active:bg-muted/50"
+      className="group rounded-xl border border-border bg-card px-3 py-2.5 cursor-pointer active:bg-muted/50"
     >
       <div className="flex items-start gap-2">
         {dot && <span className={cn("mt-2 h-2 w-2 shrink-0 rounded-full", dot)} />}

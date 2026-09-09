@@ -482,7 +482,7 @@ function FlowTabButton({
         marginBottom: "-1px",
         fontFamily: "var(--font-sans), system-ui, sans-serif",
         fontSize: 14,
-        fontWeight: active ? 600 : 500,
+        fontWeight: 500,
       }}
     >
       <span>{label}</span>
@@ -494,7 +494,7 @@ function FlowTabButton({
           fontFamily: "var(--font-jetbrains), ui-monospace, monospace",
           fontSize: 10,
           color: "#5C5650",
-          fontWeight: 600,
+          fontWeight: 500,
         }}
       >
         {count}

@@ -1398,14 +1398,14 @@ export default function ChatPanel({
       {isEmptyState ? (
         /* Empty state */
         <div className="flex flex-col items-center justify-center h-full px-4 md:px-6 animate-fade-in-up">
-          <div className="mb-8 text-center">
+          <div className="mb-8 flex flex-col items-center gap-4 text-center">
             <PetCompanion size={56} />
-            <h2 className="text-xl md:text-3xl font-heading font-normal text-foreground tracking-tight">
+            <h2 className="editorial-heading text-[26px] md:text-[34px] text-foreground">
               What do you need to get done?
             </h2>
           </div>
 
-          <div className="w-full max-w-full md:max-w-[680px]">
+          <div className="w-full max-w-full md:max-w-[720px]">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1414,7 +1414,7 @@ export default function ChatPanel({
             >
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
-              <div className="relative flex flex-col bg-card border border-border rounded-2xl shadow-sm focus-within:border-gray-300 transition-colors">
+              <div className="relative flex flex-col bg-card border border-border rounded-2xl composer-shadow focus-within:border-input transition-colors">
                 <Textarea
                   ref={inputRef}
                   value={input}
@@ -1456,7 +1456,7 @@ export default function ChatPanel({
                       type="submit"
                       disabled={!input.trim() && pendingFiles.length === 0}
                       className={cn(
-                        "bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                        "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
                         !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
                       )}
                       size="icon-sm"
@@ -1477,7 +1477,7 @@ export default function ChatPanel({
             <div className="px-3 md:px-6 pt-5">
               <div className="max-w-3xl mx-auto">
                 <div className="inline-flex items-center gap-2 text-[11px] text-muted-foreground/70">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-brand-400/80" />
                   <span>
                     {accountInfo.runtime === "opencode" ? (
                       <>
@@ -1511,7 +1511,7 @@ export default function ChatPanel({
           )}
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-3 py-4" onScroll={handleMessagesScroll}>
-            <div className="space-y-3 max-w-3xl mx-auto">
+            <div className="space-y-2 max-w-3xl mx-auto">
               {items.map((item, i) => {
                 if (item.role === "steps") {
                   return <StepsGroup key={i} steps={item.steps || []} />;
@@ -1523,7 +1523,7 @@ export default function ChatPanel({
 
                 if (item.role === "clarify") {
                   return (
-                    <div key={i} className="flex justify-start items-start animate-message-in gap-2">
+                    <div key={i} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
                       <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
                       <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words">
                         {item.content && (
@@ -1546,7 +1546,7 @@ export default function ChatPanel({
 
                 if (item.role === "user") {
                   return (
-                    <div key={i} className="flex justify-end animate-message-in group/msg">
+                    <div key={i} className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
                       {item.queued && editingQueuedIndex !== i && (
                         <div className="flex items-center gap-0.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
                           <button
@@ -1568,8 +1568,10 @@ export default function ChatPanel({
                         </div>
                       )}
                       <div className={cn(
-                        "chat-text rounded-xl px-3 py-2 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
-                        item.queued ? "bg-muted/60 border border-dashed border-border" : "bg-muted"
+                        "chat-text rounded-xl px-3.5 py-2.5 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
+                        item.queued
+                          ? "bg-card/60 border border-dashed border-border"
+                          : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
                       )}>
                         {editingQueuedIndex === i ? (
                           <div className="flex flex-col gap-1.5">
@@ -1647,7 +1649,7 @@ export default function ChatPanel({
 
                 // Assistant message — editorial style, no bubble
                 return (
-                  <div key={i} className="flex justify-start items-start animate-message-in gap-2">
+                  <div key={i} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
                     <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
                     <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
                       {item.content ? (
@@ -1737,7 +1739,7 @@ export default function ChatPanel({
               {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
-              <div className="flex flex-col bg-card border border-input rounded-xl shadow-sm focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/20 transition-colors">
+              <div className="flex flex-col bg-card border border-border rounded-2xl composer-shadow focus-within:border-input transition-colors">
                 <Textarea
                   ref={inputRef}
                   value={input}
@@ -1792,7 +1794,7 @@ export default function ChatPanel({
                       size="icon-sm"
                       disabled={!input.trim() && pendingFiles.length === 0}
                       className={cn(
-                        "bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                        "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
                         !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
                       )}
                     >
@@ -2075,7 +2077,7 @@ function ClarifyingQuestions({
           type="button"
           disabled={!hasAnySelection}
           onClick={handleSubmit}
-          className="bg-accent-200 hover:bg-accent-300 disabled:opacity-40 disabled:hover:bg-accent-200 text-accent-on text-xs font-medium rounded-lg press-scale"
+          className="bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground text-xs font-medium rounded-lg press-scale"
           size="sm"
         >
           <RiSendPlaneLine size={14} />
@@ -2107,7 +2109,7 @@ function StatusLine({ message, elapsedSeconds }: { message: string; elapsedSecon
 function StepIcon({ status }: { status: Step["status"] }) {
   if (status === "running") return <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />;
   if (status === "error") return <RiCloseLine size={10} className="text-red-500 flex-shrink-0" />;
-  return <RiCheckLine size={10} className="text-green-500/70 flex-shrink-0" />;
+  return <RiCheckLine size={10} className="text-muted-foreground/50 flex-shrink-0" />;
 }
 
 function StepsGroup({ steps }: { steps: Step[] }) {
