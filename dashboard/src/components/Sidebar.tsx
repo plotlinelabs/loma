@@ -493,10 +493,7 @@ export default function Sidebar({
                   aria-current={isActive ? "page" : undefined}
                   title={collapsed ? item.name : undefined}
                 >
-                  {isActive && (
-                    <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" aria-hidden="true" />
-                  )}
-                  <span className="relative flex-shrink-0 transition-colors text-current">
+                  <span className={cn("relative flex-shrink-0 transition-colors", isActive ? "text-sidebar-primary" : "text-current")}>
                     {item.icon}
                     {collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 && (
                       <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500" />
