@@ -49,7 +49,7 @@
 /* ── Dark mode palette inversion ─────────────────────────────────────────── */
 
 [data-theme="dark"] {
-  --color-gray-50: #091D21;
+  --color-gray-50: #061B20;
   --color-gray-100: #10282B;
   --color-gray-200: #284143;
   --color-gray-300: #3C5353;
@@ -665,7 +665,7 @@
 }
 
 [data-theme="dark"] {
-  --background: #091D21;
+  --background: #061B20;
   --foreground: #F7F4EF;
   --card: #122D30;
   --card-foreground: #F7F4EF;
