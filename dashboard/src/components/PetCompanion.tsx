@@ -306,14 +306,122 @@ const spriteArt: Record<string, { colors: Record<string, string>; rows: string[]
       ".........bbbccccccbbbbbbbbb.....................",
     ],
   },
+  doggo: {
+    colors: { a: "#dc9b40", b: "#c67c36", c: "#f5ca7c", d: "#fffefb", o: "#2e2e2a" },
+    rows: [
+      "..........oooooooooooo..........",
+      "...oooooooaaaaaaaaaaaaooooooo...",
+      "...oooooooaaaaaaaaaaaaooooooo...",
+      "..obbbbbbaaaaaaaaaaaaaaabbbbboo.",
+      "oobbbbbooaaaaaaaaaaaaaaaobbbbbbo",
+      "oobbbbbooaaaaaaaaaaaaaaaobbbbbbo",
+      "oobbbbbooaaaaaaaaaaaaaaaobbbbbbo",
+      "oobbbboaaaaaaaaaaaaaaaaaaoobbbbo",
+      "oobbbboaaaaaaaaaaaaaaaaaaoobbbbo",
+      "oooooooaaaooaaaaaaaaooaaaooooooo",
+      "oooooooaaaooaaaaaaaaooaaaooooooo",
+      "......oaaaooaaccccaaooaaaoo.....",
+      "......oaaaaaccooooccaaaaaoo.....",
+      "...oooooaaaaccooooccaaaaaoooo...",
+      "...oooooaacccccoocccccaaaoooo...",
+      "...oodddoacccccoocccccaoodddo...",
+      "...oodddoaccccooooccccadddddo...",
+      "...ooddddoooooooooooooodddddo...",
+      ".....oddddddddddddddddddddoo....",
+      "...oooddddddddddddddddddddooo...",
+      "...ooddddoooooooooooooodddddo...",
+      "...oodddoaaaccccccccaaaoodddo...",
+      "...oodddoaaaccccccccaaaoodddo...",
+      "...oooooaaaaccccccccaaaaaooooooo",
+      "......ooaaaaaacccccaaaaaaoobbbbo",
+      "......ooaaaaaacccccaaaaaaoobbbbo",
+      "......ooaaaaaaoccooaaaaaaoobbbbo",
+      "......ooaooaaaoccooaaaoaaoobbooo",
+      "......ooaooaaaoccooaaaoaaoobbooo",
+      ".....obbaoocccoaaoocccoaabbooo..",
+      ".....obbaoocccoaaoocccoaabboo...",
+      ".....obbaoocccoaaoocccoaabbo....",
+      ".....oooboocccooooocccobbooo....",
+      ".....oooboocccooooocccobbooo....",
+      "......ooooooooooooooooooooo.....",
+      "......ooooooooooooooooooooo.....",
+    ],
+  },
+  corgi: {
+    colors: { a: "#fb7508", b: "#fd9002", c: "#f3dbab", d: "#000000", e: "#49110c", o: "#2e2e2a" },
+    rows: [
+      "....................oooo......oooo......",
+      "....................oooo......oooo......",
+      "....................ooaaoo....ooaaoo....",
+      "....................ooaaoo....ooaaoo....",
+      "..................ooaaaaooooooaaaaoo....",
+      "..................ooaaaaooooooaaaaoo....",
+      "..................ooaaaaooooooaaaaoo....",
+      "..................ooaaaabbbbbbbbaaoo....",
+      "..................ooaaaabbbbbbbbaaoo....",
+      "................ooaabbbbbbbbbbbbbbbbcc..",
+      "................ooaabbbbbbbbbbbbbbbbcc..",
+      "..oooo..........ooaabbbbddbbbbbbddbbcc..",
+      "..oooo..........ooaabbbbddbbbbbbddbbcc..",
+      "ooccccoo......ooaabbbbbbbbbbccccccccbboo",
+      "ooccccoo......ooaabbbbbbbbbbccccccccbboo",
+      "oocccccc......ooaabbbbbbeecccccceeccbboo",
+      "ooccccccoo....ooaabbbbbbeecccccceeccbboo",
+      "ooccccccoo....ooaabbbbbbeecccccceeccbboo",
+      "ooccccaaaaooooooaabbbbcccceeeeeeccccbboo",
+      "ooccccaaaaooooooaabbbbcccceeeeeeccccbboo",
+      "..ooaaaabbbbbbbbbbaabbccccccccccccccoo..",
+      "..ooaaaabbbbbbbbbbaabbccccccccccccccoo..",
+      "....ooaabbbbbbbbbbbbbbbbccccccccccoo....",
+      "....ooaabbbbbbbbbbbbbbbbccccccccccoo....",
+      "....ooaabbbbbbbbbbbbbbbbccccccccccoo....",
+      "....ooaabbbbbbbbbbbbbbbbccccccccccoo....",
+      "....ooaabbbbbbbbbbbbbbbbccccccccccoo....",
+      "....ooaabbbbbbbbbbbbbbbbbbccccccbboo....",
+      "....ooaabbbbbbbbbbbbbbbbbbccccccbboo....",
+      "....ooaabbbbaaaaaaaabbbbbbbbccaabboo....",
+      "....ooaabbbbaaaaaaaabbbbbbbbccaabboo....",
+      "....oobbbbbbooaaooooaabbbboooobbbboo....",
+      "....oobbbbbbooaaooooaabbbboooobbbboo....",
+      "....oobbbbooaaaaoo..ooaabb..ooaabboo....",
+      "....oobbbbooaaaaoo..ooaabb..ooaabboo....",
+      "....oobboo..ooaaoo....oobb..ooaaoo......",
+      "....oobboo..ooaaoo....oobb..ooaaoo......",
+      "....oobboo..ooaaoo....oobb..ooaaoo......",
+      "....oooooo..oooo......oooo....oooo......",
+      "....oooooo..oooo......oooo....oooo......",
+    ],
+  },
+  cat: {
+    colors: { a: "#f7a4bd", b: "#d56518", c: "#fbb738", d: "#f9f1c8", o: "#2e2e2a" },
+    rows: [
+      "..oo.......oo....",
+      "..oao.....oao....",
+      "..oabooooobao....",
+      "..obccbcbccbo....",
+      "oooccdbcbdccooo..",
+      ".obcoocdcoocbo...",
+      "ooccccdodccccoo..",
+      ".obcccccccccbo...",
+      "obbbcdcccdcbbbo..",
+      "obccbcdddcbccbo..",
+      "obbcccbdbcccbboo.",
+      "obcbcccbcccbcbobo",
+      "obbcbccbccbcbobbo",
+      ".obbcccbcccbobcco",
+      "..oobddoddbobcco.",
+      "....ooo.ooo.ooo..",
+    ],
+  },
 };
 
 
 export const PETS = [
   { id: "tabby", name: "Tabby cat", kind: "cat", coat: "#d98c45", patch: "#98562e" },
   { id: "tuxedo", name: "Tuxedo cat", kind: "cat", coat: "#454754", patch: "#f2ebda" },
-  { id: "calico", name: "Calico cat", kind: "cat", coat: "#eee4d0", patch: "#c07a42" },
-  { id: "corgi", name: "Corgi", kind: "dog", coat: "#c7803d", patch: "#eeb76f" },
+  { id: "cat", name: "Cat", kind: "cat", coat: "#fbb738", patch: "#d56518" },
+  { id: "doggo", name: "Doggo", kind: "doggo", coat: "#dc9b40", patch: "#c67c36" },
+  { id: "corgi", name: "Corgi", kind: "corgi", coat: "#fd9002", patch: "#f3dbab" },
   { id: "golden", name: "Golden retriever", kind: "dog", coat: "#c68c40", patch: "#efc36c" },
   { id: "dachshund", name: "Dachshund", kind: "dog", coat: "#654331", patch: "#a66738" },
   { id: "rabbit", name: "Rabbit", kind: "rabbit", coat: "#d8cbbf", patch: "#b4a59c" },
@@ -338,11 +446,6 @@ export function PetSprite({ petId, size = 40, state = "idle", animated = false }
   const pet = PETS.find((p) => p.id === petId) ?? PETS[0];
   const art = spriteArt[pet.id];
   const pixels: string[] = art ? art.rows : [...silhouettes[pet.kind as keyof typeof silhouettes]];
-  if (pet.id === "corgi") {
-    pixels[1] = "...oo......oo...";
-    pixels[2] = "...oao....oao...";
-    pixels[3] = "...oaaooooaao...";
-  }
   if (pet.id === "dachshund") {
     pixels[9] = "....obbbbbbbooo.";
     pixels[10] = "....obbbbbbbbbo.";
@@ -373,8 +476,7 @@ export function PetSprite({ petId, size = 40, state = "idle", animated = false }
           if (pixel === ".") return null;
           // Coat markings distinguish the cats without recoloring their eyes.
           const marking = pet.id === "tabby" && pixel === "a" && y < 6 && x % 3 === 0;
-          const calico = pet.id === "calico" && pixel === "a" && ((x < 7 && y < 7) || (x > 9 && y > 10));
-          return <rect key={`${x}-${y}`} x={x} y={y} width="1" height="1" fill={marking || calico ? pet.patch : colors[pixel]} />;
+          return <rect key={`${x}-${y}`} x={x} y={y} width="1" height="1" fill={marking ? pet.patch : colors[pixel]} />;
         }))}
       </svg>
       <style jsx>{`
