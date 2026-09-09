@@ -119,6 +119,7 @@ const spriteArt: Record<string, { colors: Record<string, string>; rows: string[]
       "obaaoooooaabobo",
       "obaaaaaaaaabobo",
       ".obbbbbbbbboobo",
+      "..ooooooooo..o.",
     ],
   },
   dino: {
@@ -311,7 +312,6 @@ const spriteArt: Record<string, { colors: Record<string, string>; rows: string[]
 export const PETS = [
   { id: "tabby", name: "Tabby cat", kind: "cat", coat: "#d98c45", patch: "#98562e" },
   { id: "tuxedo", name: "Tuxedo cat", kind: "cat", coat: "#454754", patch: "#f2ebda" },
-  { id: "black-cat", name: "Black cat", kind: "cat", coat: "#454754", patch: "#626778" },
   { id: "calico", name: "Calico cat", kind: "cat", coat: "#eee4d0", patch: "#c07a42" },
   { id: "corgi", name: "Corgi", kind: "dog", coat: "#c7803d", patch: "#eeb76f" },
   { id: "golden", name: "Golden retriever", kind: "dog", coat: "#c68c40", patch: "#efc36c" },
@@ -351,7 +351,7 @@ export function PetSprite({ petId, size = 40, state = "idle", animated = false }
     pixels[13] = "...oboooooobbo..";
     pixels[14] = "....oo.....oo...";
   }
-  const colors: Record<string, string> = art ? art.colors : { o: "#332f37", a: pet.coat, b: pet.patch, m: pet.id === "black-cat" ? "#626778" : "#f5e9cf", e: "#24232c", n: "#bb7681", p: "#dfa4a0" };
+  const colors: Record<string, string> = art ? art.colors : { o: "#332f37", a: pet.coat, b: pet.patch, m: "#f5e9cf", e: "#24232c", n: "#bb7681", p: "#dfa4a0" };
   return (
     <span aria-hidden="true" data-pet={pet.id} data-state={state} className="pet-sprite inline-flex shrink-0" data-animated={animated} style={{ width: size, height: size }}>
       <svg className="size-full" width={size} height={size} viewBox={`0 0 ${pixels[0].length} ${pixels.length}`} shapeRendering="crispEdges" focusable="false">
