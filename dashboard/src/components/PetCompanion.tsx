@@ -15,8 +15,35 @@ const silhouettes = {
   parrot: ["................", "......ooo.......", ".....oaaao......", "....oaaaaao.....", "....oaaeeao.....", "....oaammmmo....", "....oaammo......", "...oaaaaao......", "..oabbaaaao.....", "..oabbbaaao.....", "..oabbbaaao.....", "...obbaaao......", "....oaaaao......", "....omoomoo.....", "...oooooooooo...", "................"],
 };
 
-// Pixel art imported from the Paper pet designs (one palette per pet).
+// Pixel art with one palette per pet; includes imported Paper designs and original sprites.
 const spriteArt: Record<string, { colors: Record<string, string>; rows: string[] }> = {
+  axolotl: {
+    colors: { o: "#513541", a: "#f6b6cc", b: "#ffdae5", p: "#dd6a99", e: "#302c39" },
+    rows: [
+      "........................",
+      "..p...p..........p...p..",
+      "..pp..p..........p..pp..",
+      "...pp.pp........pp.pp...",
+      ".pp.pppooooooooooppp.pp.",
+      "..ppppoaabbaaaabbaopppp.",
+      "...ppoaabbaaaaabbaopp...",
+      ".ppppoaabbaaaaabbaopppp.",
+      "..pppoaaeaaaaaaeaaoppp..",
+      "...ppoaapaaaaaapaaopp...",
+      ".....oaaaaaooaaaaao.....",
+      "......oaaaaaaaaaao......",
+      ".......ooaaaaaaoo.......",
+      "........oabbbaao........",
+      ".....oo.oabbbaao.oo.....",
+      "....oaaaoabbbaaoaaao....",
+      ".....oooaaaaaaaaooo.....",
+      ".......oaaaaaaaao..oo...",
+      ".......oaaaaaaaaoooapo..",
+      "......oaaooooaaaappo....",
+      "......ooo....oooooo.....",
+      "........................",
+    ],
+  },
   croc: {
     colors: { o: "#181818", a: "#70bd41", b: "#3ba471", c: "#f9f1c8", d: "#ffffff", e: "#b5222a", f: "#b8af8d" },
     rows: [
@@ -435,6 +462,7 @@ export const PETS = [
   { id: "dragon", name: "Dragon", kind: "dragon", coat: "#3ba471", patch: "#d0511f" },
   { id: "llama", name: "Llama", kind: "llama", coat: "#c18048", patch: "#895128" },
   { id: "koala", name: "Koala", kind: "koala", coat: "#8f8e8e", patch: "#6f462b" },
+  { id: "axolotl", name: "Axolotl", kind: "axolotl", coat: "#f6b6cc", patch: "#dd6a99" },
 ] as const;
 
 const DEFAULT_PET = { pet_id: "tabby", visible: true, animated: true };

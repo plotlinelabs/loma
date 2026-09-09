@@ -141,7 +141,7 @@ async def handle_update_my_theme(request: web.Request) -> web.Response:
 
 
 VALID_PETS = ("tabby", "tuxedo", "cat", "doggo", "corgi", "golden", "dachshund", "rabbit", "hamster", "parrot",
-              "croc", "lion", "duck", "snake", "dino", "dragon", "llama", "koala")
+              "croc", "lion", "duck", "snake", "dino", "dragon", "llama", "koala", "axolotl")
 
 
 async def handle_update_my_pet(request: web.Request) -> web.Response:
