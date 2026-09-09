@@ -140,7 +140,7 @@ async def handle_update_my_theme(request: web.Request) -> web.Response:
     return web.json_response({"theme_preference": theme})
 
 
-VALID_PETS = ("tabby", "tuxedo", "calico", "corgi", "golden", "dachshund", "rabbit", "hamster", "parrot",
+VALID_PETS = ("tabby", "tuxedo", "cat", "doggo", "corgi", "golden", "dachshund", "rabbit", "hamster", "parrot",
               "croc", "lion", "duck", "snake", "dino", "dragon", "llama", "koala")
 
 
