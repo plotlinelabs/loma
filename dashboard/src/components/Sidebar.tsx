@@ -481,20 +481,20 @@ export default function Sidebar({
                   onClick={onClose}
                   className={cn(
                     // Roomier on phones (Claude-app scale), compact on desktop
-                    "relative flex items-center rounded-lg text-[13px] font-medium transition-colors duration-150",
+                    "relative flex items-center text-[13px] font-medium transition-colors duration-150",
                     "max-md:text-[16px] max-md:[&_svg]:h-5 max-md:[&_svg]:w-5",
                     collapsed
-                      ? "justify-center px-0 py-1.5 mx-auto w-10"
+                      ? "justify-center px-0 py-1.5 mx-auto w-10 rounded-lg"
                       : "px-3 py-2 gap-2.5 max-md:py-2.5 max-md:gap-3",
                     isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                      ? "bg-sidebar-accent/25 text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent/20 hover:text-sidebar-accent-foreground"
                   )}
                   aria-current={isActive ? "page" : undefined}
                   title={collapsed ? item.name : undefined}
                 >
                   {isActive && (
-                    <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" aria-hidden="true" />
+                    <span className="absolute left-0 top-1/2 h-4 w-[4px] -translate-y-1/2 rounded-full bg-sidebar-primary" aria-hidden="true" />
                   )}
                   <span className="relative flex-shrink-0 transition-colors text-current">
                     {item.icon}
@@ -504,7 +504,7 @@ export default function Sidebar({
                   </span>
                   {!collapsed && <span>{item.name}</span>}
                   {!collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 ? (
-                    <span className="ml-auto min-w-[20px] h-5 px-1 shrink-0 whitespace-nowrap flex items-center justify-center rounded bg-current/10 text-[11px] font-semibold tabular-nums">
+                    <span className="ml-auto shrink-0 whitespace-nowrap text-[11px] font-medium tabular-nums text-current/60">
                       {badgeCounts[item.badgeKey]}
                     </span>
                   ) : null}
@@ -562,8 +562,8 @@ export default function Sidebar({
                         className={cn(
                           "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/60"
+                            ? "bg-sidebar-accent/25 text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/20"
                         )}
                       >
                         <Link
@@ -618,8 +618,8 @@ export default function Sidebar({
                         className={cn(
                           "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/60"
+                            ? "bg-sidebar-accent/25 text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/20"
                         )}
                       >
                         <Link
@@ -686,13 +686,13 @@ export default function Sidebar({
                   onValueChange={(value) => {
                     if (value) setTheme(value as "light" | "system" | "dark");
                   }}
-                  className="w-full bg-muted/50 rounded-lg p-0.5"
+                  className="w-full p-0.5"
                   size="sm"
                 >
                   <ToggleGroupItem
                     value="light"
                     aria-label="Light mode"
-                    className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+                    className="flex-1 flex items-center justify-center gap-1 rounded-md text-[11px] font-medium data-[state=on]:bg-sidebar-accent/50 data-[state=on]:text-sidebar-accent-foreground"
                   >
                     <RiSunLine size={14} />
                     <span className="hidden sm:inline">Light</span>
@@ -700,7 +700,7 @@ export default function Sidebar({
                   <ToggleGroupItem
                     value="system"
                     aria-label="System mode"
-                    className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+                    className="flex-1 flex items-center justify-center gap-1 rounded-md text-[11px] font-medium data-[state=on]:bg-sidebar-accent/50 data-[state=on]:text-sidebar-accent-foreground"
                   >
                     <RiComputerLine size={14} />
                     <span className="hidden sm:inline">System</span>
@@ -708,7 +708,7 @@ export default function Sidebar({
                   <ToggleGroupItem
                     value="dark"
                     aria-label="Dark mode"
-                    className="flex-1 flex items-center justify-center gap-1 text-[11px] font-medium data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+                    className="flex-1 flex items-center justify-center gap-1 rounded-md text-[11px] font-medium data-[state=on]:bg-sidebar-accent/50 data-[state=on]:text-sidebar-accent-foreground"
                   >
                     <RiMoonLine size={14} />
                     <span className="hidden sm:inline">Dark</span>

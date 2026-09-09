@@ -110,28 +110,33 @@ function formatScope(scope: string): string {
 /* -- Components ------------------------------------------------------------- */
 
 function StatusBadge({ status }: { status: string }) {
+  const base = "inline-flex items-center gap-1.5 text-xs text-muted-foreground";
   if (status === "connected")
     return (
-      <Badge className="bg-emerald-50 text-emerald-600 border-transparent">
+      <span className={base}>
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
         Connected
-      </Badge>
+      </span>
     );
   if (status === "system_managed")
     return (
-      <Badge variant="secondary">
+      <span className={base}>
+        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
         System-managed
-      </Badge>
+      </span>
     );
   if (status === "expired")
     return (
-      <Badge className="bg-amber-50 text-amber-600 border-transparent">
+      <span className="inline-flex items-center gap-1.5 text-xs text-amber-600">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
         Expired
-      </Badge>
+      </span>
     );
   return (
-    <Badge variant="secondary">
+    <span className={base}>
+      <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/25" />
       Not connected
-    </Badge>
+    </span>
   );
 }
 
@@ -1303,7 +1308,7 @@ export default function IntegrationsPage() {
                                   Webhook URL
                                 </p>
                                 <div className="flex items-center gap-2">
-                                  <code className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded-lg border border-border flex-1 truncate">
+                                  <code className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded-md flex-1 truncate">
                                     {webhookUrls[integ.provider]}
                                   </code>
                                   <Button
@@ -1328,16 +1333,9 @@ export default function IntegrationsPage() {
                             Connect your {integ.display_name} account to enable MCP tools
                             {integ.has_webhook ? ", webhook event ingestion, and agent capabilities" : " and agent capabilities"}.
                           </p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {["MCP tools", integ.has_webhook ? "Event ingestion" : null, "Agent skills"].filter(Boolean).map((cap) => (
-                              <Badge
-                                key={cap}
-                                variant="secondary"
-                              >
-                                {cap}
-                              </Badge>
-                            ))}
-                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {["MCP tools", integ.has_webhook ? "Event ingestion" : null, "Agent skills"].filter(Boolean).join(" · ")}
+                          </p>
                         </>
                       )}
                     </CardContent>
@@ -1346,13 +1344,9 @@ export default function IntegrationsPage() {
               })}
               </div>
             ) : (
-              <Card className="border-dashed">
-                <CardContent className="p-3 text-center">
-                  <p className="text-[13px] text-muted-foreground">
-                    No org integrations available.
-                  </p>
-                </CardContent>
-              </Card>
+              <p className="text-[13px] text-muted-foreground text-center py-8">
+                No org integrations available.
+              </p>
             )}
           </TabsContent>
 
@@ -1382,27 +1376,18 @@ export default function IntegrationsPage() {
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 mt-2">
-                        <Badge variant="outline" className="text-[10px]">
-                          MCP tools
-                        </Badge>
-                        <Badge variant="outline" className="text-[10px]">
-                          Server configured
-                        </Badge>
-                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        MCP tools · Server configured
+                      </p>
                     </CardContent>
                   </Card>
                 );
               })}
               </div>
             ) : (
-              <Card className="border-dashed">
-                <CardContent className="p-3 text-center">
-                  <p className="text-[13px] text-muted-foreground">
-                    No system-managed integrations configured.
-                  </p>
-                </CardContent>
-              </Card>
+              <p className="text-[13px] text-muted-foreground text-center py-8">
+                No system-managed integrations configured.
+              </p>
             )}
           </TabsContent>
 
@@ -1415,13 +1400,9 @@ export default function IntegrationsPage() {
             </div>
 
             {customConnectors.length === 0 ? (
-              <Card className="border-dashed">
-                <CardContent className="p-3 text-center">
-                  <p className="text-[13px] text-muted-foreground">
-                    No custom connectors yet. Add a remote MCP server to extend the agent.
-                  </p>
-                </CardContent>
-              </Card>
+              <p className="text-[13px] text-muted-foreground text-center py-8">
+                No custom connectors yet. Add a remote MCP server to extend the agent.
+              </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
                 {customConnectors.map((integ) => (
@@ -1464,24 +1445,17 @@ export default function IntegrationsPage() {
                         </div>
                       </div>
                       <Separator className="my-5" />
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline" className="text-[10px]">
-                          MCP tools
-                        </Badge>
+                      <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                        <span>MCP tools</span>
+                        <span aria-hidden>·</span>
                         {integ.auth_mode === "oauth" ? (
                           integ.user_oauth_status === "connected" ? (
-                            <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-100">
-                              Authenticated
-                            </Badge>
+                            <span className="text-emerald-600">Authenticated</span>
                           ) : (
-                            <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-600 border-amber-100">
-                              Login required
-                            </Badge>
+                            <span className="text-amber-600">Login required</span>
                           )
                         ) : (
-                          <Badge variant="outline" className="text-[10px]">
-                            {integ.has_token ? "Token auth" : "No auth"}
-                          </Badge>
+                          <span>{integ.has_token ? "Token auth" : "No auth"}</span>
                         )}
                       </div>
                     </CardContent>
@@ -1811,9 +1785,8 @@ export default function IntegrationsPage() {
         </Tabs>
       )}
 
-      {/* Info section */}
-      <Card className="bg-muted/50">
-        <CardContent>
+      {/* Info section — divider + text, not a tinted rectangle */}
+      <div className="mt-6 border-t border-border/60 pt-4">
           <h3 className="text-[13px] font-medium text-foreground mb-2">How it works</h3>
           <ul className="text-[13px] text-muted-foreground space-y-1.5">
             <li>Org integrations are shared across the team — connect with an API key</li>
@@ -1823,8 +1796,7 @@ export default function IntegrationsPage() {
             <li>All tokens and keys are encrypted at rest</li>
             <li>You can disconnect at any time to revoke access</li>
           </ul>
-        </CardContent>
-      </Card>
+      </div>
     </div>
   );
 }

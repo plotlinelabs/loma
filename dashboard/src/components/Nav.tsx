@@ -14,7 +14,7 @@ export default function Nav() {
             <span className="text-lg font-semibold text-foreground">
               Loma
             </span>
-            <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full">
+            <span className="text-xs text-muted-foreground">
               Dashboard
             </span>
           </a>

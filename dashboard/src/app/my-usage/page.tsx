@@ -8,10 +8,8 @@ import {
 import {
   RiChat1Line,
   RiDownloadLine,
-  RiMoneyDollarCircleLine,
   RiUploadLine,
 } from "@remixicon/react";
-import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ClientTimestamp from "@/components/ClientTimestamp";
@@ -22,26 +20,6 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
-}
-
-function StatCard({ icon, label, value, sub }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <Card className="p-3">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-1 text-lg font-heading font-semibold tabular-nums">
-        {value}
-        {sub && <span className="ml-1.5 text-xs font-normal text-muted-foreground">{sub}</span>}
-      </div>
-    </Card>
-  );
 }
 
 type Range = "today" | "7" | "30" | "90";
@@ -93,47 +71,46 @@ export default function MyUsagePage() {
       {error && <p className="mt-4 text-[13px] text-destructive">{error}</p>}
 
       {!data && !error && (
-        <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[74px] rounded-xl" />)}
+        <div className="mt-6">
+          <Skeleton className="h-3 w-14" />
+          <Skeleton className="mt-2 h-11 w-44" />
+          <Skeleton className="mt-4 h-3 w-72" />
         </div>
       )}
 
       {data && (
         <>
-          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <StatCard
-              icon={<RiMoneyDollarCircleLine size={14} />}
-              label="Spent"
-              value={formatUsd(data.totals.total_cost_usd)}
-            />
-            <StatCard
-              icon={<RiChat1Line size={14} />}
-              label="Chats"
-              value={String(data.totals.conversations)}
-            />
-            <StatCard
-              icon={<RiUploadLine size={14} />}
-              label="Tokens in"
-              value={formatTokens(data.totals.input_tokens)}
-              // Cache reads/writes are billed too — the $ figure doesn't add
-              // up from fresh tokens alone on long agentic runs.
-              sub={
-                data.totals.cache_read_tokens + data.totals.cache_creation_tokens > 0
-                  ? `+${formatTokens(data.totals.cache_read_tokens + data.totals.cache_creation_tokens)} cached`
-                  : undefined
-              }
-            />
-            <StatCard
-              icon={<RiDownloadLine size={14} />}
-              label="Tokens out"
-              value={formatTokens(data.totals.output_tokens)}
-            />
+          {/* Impact comes from scale + whitespace, not a surfaced card */}
+          <div className="mt-6">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">Spent</div>
+            <div className="mt-1 font-heading font-semibold tabular-nums leading-none text-foreground text-[40px] md:text-[46px]">
+              {formatUsd(data.totals.total_cost_usd)}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-[13px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <RiChat1Line size={14} />
+                {data.totals.conversations} chats
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <RiUploadLine size={14} />
+                {formatTokens(data.totals.input_tokens)} in
+                {data.totals.cache_read_tokens + data.totals.cache_creation_tokens > 0 && (
+                  <span className="text-muted-foreground/70">
+                    {" "}+{formatTokens(data.totals.cache_read_tokens + data.totals.cache_creation_tokens)} cached
+                  </span>
+                )}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <RiDownloadLine size={14} />
+                {formatTokens(data.totals.output_tokens)} out
+              </span>
+            </div>
           </div>
 
           {/* A one-bar chart says nothing — Today skips it */}
           {data.daily.length > 1 && (
-            <Card className="mt-3 p-3">
-              <div className="mb-2 text-xs text-muted-foreground">Daily spend</div>
+            <div className="mt-6 border-t border-border/60 pt-4">
+              <div className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">Daily spend</div>
               <div className="h-40">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={data.daily} margin={{ top: 4, right: 4, bottom: 0, left: -18 }}>
@@ -157,20 +134,20 @@ export default function MyUsagePage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </Card>
+            </div>
           )}
 
-          <Card className="mt-3 mb-4 p-0 overflow-hidden">
-            <div className="px-3 pt-3 pb-2 text-xs text-muted-foreground">Costliest chats</div>
+          <div className="mt-6 mb-4 border-t border-border/60 pt-4">
+            <div className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">Costliest chats</div>
             {data.top_chats.length === 0 ? (
-              <p className="px-3 pb-3 text-[13px] text-muted-foreground">Nothing yet in this window.</p>
+              <p className="text-[13px] text-muted-foreground">Nothing yet in this window.</p>
             ) : (
-              <ul className="divide-y divide-border">
+              <ul className="divide-y divide-border/60">
                 {data.top_chats.map((chat) => (
                   <li key={chat.conversation_id}>
                     <Link
                       href={`/chat?continue=${chat.conversation_id}`}
-                      className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50"
+                      className="flex items-center gap-3 rounded-lg px-1 py-2.5 hover:bg-muted/50"
                     >
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[13px]">{chat.title || chat.prompt || "Untitled"}</div>
@@ -187,7 +164,7 @@ export default function MyUsagePage() {
                 ))}
               </ul>
             )}
-          </Card>
+          </div>
         </>
       )}
     </div>

@@ -315,7 +315,7 @@ function ChatPageContent() {
           {activeConversationId && (
             <div className="flex items-center gap-1 flex-shrink-0">
               {/* Live chat cost */}
-              <CostChip conversationId={activeConversationId} className="h-8 mr-1" />
+              <CostChip conversationId={activeConversationId} className="h-8 mr-1 px-1.5 rounded-md border-0 bg-transparent backdrop-blur-none hover:text-foreground" />
               {/* Pin / Unpin */}
               <Tooltip>
                 <TooltipTrigger asChild>

@@ -513,9 +513,9 @@ function FileAttachmentCard({ file }: { file: FileAttachment }) {
       download={file.name}
       target="_blank"
       rel="noopener noreferrer"
-      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all group ${bg}`}
+      className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border hover:border-input transition-colors group ${bg}`}
     >
-      <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg flex-shrink-0 ${bg}`}>
+      <div className="w-10 h-10 rounded-lg flex items-center justify-center text-lg flex-shrink-0">
         {isImage && file.size < 5 * 1024 * 1024 ? (
           <img
             src={downloadUrl}
@@ -1571,7 +1571,7 @@ export default function ChatPanel({
                         "chat-text rounded-xl px-3.5 py-2.5 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
                         item.queued
                           ? "bg-card/60 border border-dashed border-border"
-                          : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
+                          : "bg-card border border-border"
                       )}>
                         {editingQueuedIndex === i ? (
                           <div className="flex flex-col gap-1.5">

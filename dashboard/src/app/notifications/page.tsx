@@ -11,7 +11,6 @@ import {
   RiNotification3Line,
   RiRefreshLine,
 } from "@remixicon/react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -176,8 +175,8 @@ export default function NotificationsPage() {
         </div>
       </div>
 
-      {/* List */}
-      <div className="space-y-2">
+      {/* List — rows sit on the page canvas, separated by thin dividers */}
+      <div className="divide-y divide-border/60">
         {loading ? (
           <>
             <Skeleton className="h-16 w-full" />
@@ -195,17 +194,13 @@ export default function NotificationsPage() {
             const expanded = expandedId === n.notification_id;
             const hasActions = Boolean(n.conversation_id || n.link);
             return (
-              <Card
+              <div
                 key={n.notification_id}
-                className={cn(
-                  "p-3 active:bg-muted/50 transition-colors animate-fade-in-up cursor-pointer",
-                  !n.read && "bg-brand-50/40",
-                )}
+                className="px-1 py-3 active:bg-muted/40 transition-colors animate-fade-in-up cursor-pointer"
                 style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
                 onClick={() => handleToggle(n)}
                 aria-expanded={expanded}
               >
-                <CardContent className="p-0">
                   <div className="flex items-start gap-2.5">
                     <div
                       className={cn(
@@ -291,8 +286,7 @@ export default function NotificationsPage() {
                       </Tooltip>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+              </div>
             );
           })
         )}
