@@ -6,16 +6,25 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
-  /* Gray: warm neutrals */
-  --color-gray-50: #F8F6F2;
-  --color-gray-100: #F3F0EA;
+  /* Typography weights — Halyard ships Regular (400) and Medium (500) only.
+     Product default is Regular; emphasis steps up to the real Medium cut
+     (never a synthesized semibold/bold, which breaks kerning). */
+  --font-weight-medium: 400;
+  --font-weight-semibold: 500;
+  --font-weight-bold: 500;
+
+  /* Gray: warm neutrals.
+     50 secondary surface · 100 canvas · 200 subtle hover · 300 hairline
+     400 tertiary text · 500 secondary text · 900 primary ink */
+  --color-gray-50: #F9F7F3;
+  --color-gray-100: #F5F1ED;
   --color-gray-200: #EEEAE4;
   --color-gray-300: #DDD9D2;
-  --color-gray-400: #8B908D;
-  --color-gray-500: #606764;
-  --color-gray-600: #4A524E;
-  --color-gray-700: #35403D;
-  --color-gray-800: #14262A;
+  --color-gray-400: #8A8F8D;
+  --color-gray-500: #59615F;
+  --color-gray-600: #45514D;
+  --color-gray-700: #263D3B;
+  --color-gray-800: #12312F;
   --color-gray-900: #061B20;
 
   /* Botanical brand: evergreen actions and moss selections */
@@ -25,27 +34,27 @@
   --color-brand-300: #A6C99A;
   --color-brand-400: #79A780;
   --color-brand-500: #4A8065;
-  --color-brand-600: #0A6257;
+  --color-brand-600: #226750;
   --color-brand-700: #055147;
   --color-brand-800: #073B35;
   --color-brand-900: #061B20;
 
-  /* Primary action ramp: accent-200/300 are the filled CTA + hover pair.
-     Light mode: deep evergreen (lime is never a light-mode button fill).
-     Dark mode overrides these to the lime highlight. */
-  --color-accent-50: #F3F8E4;
-  --color-accent-100: #E9F3CF;
-  --color-accent-200: #055147;
-  --color-accent-300: #0A6257;
-  --color-accent-400: #8FAE56;
-  --color-accent-500: #567C38;
-  --color-accent-600: #3F612A;
+  /* Lime highlighter: tiny moments of emphasis, never a background system.
+     200 is the brand accent #DDF7A8; 500/600 are restrained functional greens
+     for text/status where lime would be too loud. */
+  --color-accent-50: #F4FAE3;
+  --color-accent-100: #EBF7CC;
+  --color-accent-200: #DDF7A8;
+  --color-accent-300: #D0EE93;
+  --color-accent-400: #B9DB7B;
+  --color-accent-500: #576F20;
+  --color-accent-600: #47591C;
 
   /* Surface: cards, panels, modals (white in light, warm dark in dark) */
   --color-surface: #FFFFFF;
 
-  /* Text on accent-200/300 fills — white on evergreen in light, ink on lime in dark */
-  --color-accent-on: #FFFFFF;
+  /* Text on accent backgrounds — always dark regardless of theme */
+  --color-accent-on: #061B20;
 
   /* ── Semantic + categorical palette remap ─────────────────────────────────
      90% of the UI is neutral. Only success (green), warning (amber) and
@@ -191,40 +200,40 @@
 /* ── Dark mode palette inversion ─────────────────────────────────────────── */
 
 [data-theme="dark"] {
+  /* Near-black green shell → subtly lighter work surfaces → warm off-white type.
+     50 canvas · 100 elevated surface · 200 secondary surface · 300 hover
+     400 tertiary text · 500 secondary text · 900 primary text */
   --color-gray-50: #061B20;
-  --color-gray-100: #0D2528;
-  --color-gray-200: #17363A;
-  --color-gray-300: #244549;
-  --color-gray-400: #81908B;
-  --color-gray-500: #93A09B;
-  --color-gray-600: #B8C0BC;
-  --color-gray-700: #D3D9D5;
-  --color-gray-800: #E6E7E2;
+  --color-gray-100: #102A2C;
+  --color-gray-200: #163335;
+  --color-gray-300: #1D3B3C;
+  --color-gray-400: #7F918B;
+  --color-gray-500: #B9C1BD;
+  --color-gray-600: #CBD1CB;
+  --color-gray-700: #E3E4DD;
+  --color-gray-800: #EDEBE4;
   --color-gray-900: #F5F1ED;
 
-  --color-brand-50: #0D2528;
-  --color-brand-100: #123034;
-  --color-brand-200: #2C5546;
-  --color-brand-300: #45705B;
-  --color-brand-400: #7CA286;
-  --color-brand-500: #91B89A;
-  --color-brand-600: #ACCDAA;
-  --color-brand-700: #C8E0B5;
-  --color-brand-800: #E0EBCF;
+  --color-brand-50: #102A2C;
+  --color-brand-100: #163335;
+  --color-brand-200: #1F4A40;
+  --color-brand-300: #2E5F50;
+  --color-brand-400: #6FA089;
+  --color-brand-500: #8FB89E;
+  --color-brand-600: #A9CCAC;
+  --color-brand-700: #C6DEB9;
+  --color-brand-800: #DFEBD0;
   --color-brand-900: #F0F5EC;
 
-  /* Primary action ramp flips to the lime highlight on dark ink */
-  --color-accent-50: #16342F;
-  --color-accent-100: #1D4038;
+  --color-accent-50: #14261A;
+  --color-accent-100: #1C3320;
   --color-accent-200: #DDF7A8;
-  --color-accent-300: #D2EF97;
-  --color-accent-400: #C6E387;
-  --color-accent-500: #B7D877;
+  --color-accent-300: #E6FAC0;
+  --color-accent-400: #CFEA8F;
+  --color-accent-500: #A8C46F;
   --color-accent-600: #DDF7A8;
 
-  --color-surface: #0D2528;
-
-  --color-accent-on: #061B20;
+  --color-surface: #102A2C;
 
   /* ── Dark semantic + categorical remap ──────────────────────────────────
      Status colors are transparent tints + soft text; categorical families
@@ -370,12 +379,19 @@
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* Never synthesize missing weights — faux bold wrecks Halyard's kerning.
+       Requests above 500 fall back to the real Medium cut. */
+    font-synthesis-weight: none;
     letter-spacing: -0.01em;
     transition: background-color 0.2s ease-out, color 0.2s ease-out;
     @apply bg-background text-foreground;
   }
   * {
     @apply border-border outline-ring/50;
+  }
+  strong, b {
+    /* Emphasis (e.g. "Stopped by user.") uses the real Medium cut. */
+    font-weight: 500;
   }
   button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;
@@ -405,11 +421,11 @@
 }
 
 [data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: #2C4649;
+  background: #1D3B3C;
 }
 
 [data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: #3A565A;
+  background: #2A4A4B;
 }
 
 /* ── Animation Keyframes ───────────────────────────────────────────────────── */
@@ -421,14 +437,14 @@
 }
 
 .skeleton {
-  background: linear-gradient(90deg, #F3F0EA 25%, #E9E5DE 50%, #F3F0EA 75%);
+  background: linear-gradient(90deg, #F7F4EF 25%, #E8E4DD 50%, #F7F4EF 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
   border-radius: 6px;
 }
 
 [data-theme="dark"] .skeleton {
-  background: linear-gradient(90deg, #0D2528 25%, #123034 50%, #0D2528 75%);
+  background: linear-gradient(90deg, #102A2C 25%, #163335 50%, #102A2C 75%);
   background-size: 200% 100%;
 }
 
@@ -774,6 +790,8 @@
 }
 
 :root {
+  /* Warm canvas → white working surfaces → dark ink → green actions →
+     lime only for moments of emphasis. */
   --background: #F5F1ED;
   --foreground: #061B20;
   --card: #FFFFFF;
@@ -783,29 +801,31 @@
   --primary: #055147;
   --primary-hover: #0A6257;
   --primary-foreground: #FFFFFF;
-  --secondary: #EEEAE4;
-  --secondary-foreground: #35403D;
-  --muted: #F3F0EA;
-  --muted-foreground: #606764;
+  --secondary: #F9F7F3;
+  --secondary-foreground: #263D3B;
+  --muted: #EEEAE4;
+  --muted-foreground: #59615F;
   --accent: #EEEAE4;
-  --accent-foreground: #14262A;
+  --accent-foreground: #061B20;
   --destructive: #9A443C;
   --border: #DDD9D2;
-  --input: #C9C5BE;
-  --ring: #0A6257;
+  --input: #C8C4BD;
+  --ring: #055147;
   --chart-1: #055147;
   --chart-2: #79A780;
   --chart-3: #567C38;
   --chart-4: #A18A5B;
   --chart-5: #647D8A;
-  --radius: 0.45rem;
+  --radius: 0.5rem;
+  /* The sidebar stays a dark green shell in light mode; active rows use a
+     subtly lighter surface plus a narrow lime indicator — never a lime fill. */
   --sidebar: #061B20;
-  --sidebar-foreground: #BECBC7;
+  --sidebar-foreground: #B9C1BD;
   --sidebar-primary: #DDF7A8;
   --sidebar-primary-foreground: #061B20;
-  --sidebar-accent: #123034;
+  --sidebar-accent: #10302F;
   --sidebar-accent-foreground: #F5F1ED;
-  --sidebar-border: rgba(245, 241, 237, 0.12);
+  --sidebar-border: rgba(245, 241, 237, 0.10);
   --sidebar-ring: #DDF7A8;
 }
 
@@ -857,50 +877,67 @@
 [data-theme="dark"] {
   --background: #061B20;
   --foreground: #F5F1ED;
-  --card: #0D2528;
+  --card: #102A2C;
   --card-foreground: #F5F1ED;
-  --popover: #123034;
+  --popover: #163335;
   --popover-foreground: #F5F1ED;
   --primary: #DDF7A8;
   --primary-hover: #D2EF97;
   --primary-foreground: #061B20;
-  --secondary: rgba(245, 241, 237, 0.08);
-  --secondary-foreground: #C6CECA;
-  --muted: rgba(245, 241, 237, 0.06);
-  --muted-foreground: #B8C0BC;
-  --accent: #183A3D;
+  --secondary: #163335;
+  --secondary-foreground: #E3E4DD;
+  --muted: #163335;
+  --muted-foreground: #B9C1BD;
+  --accent: #1D3B3C;
   --accent-foreground: #F5F1ED;
   --destructive: #DFA49C;
   --border: rgba(245, 241, 237, 0.10);
-  --input: rgba(245, 241, 237, 0.16);
-  --ring: #DDF7A8;
+  --input: rgba(245, 241, 237, 0.18);
+  --ring: #A8C46F;
   --chart-1: #DDF7A8;
   --chart-2: #91B89A;
   --chart-3: #76B5A5;
   --chart-4: #CAB47F;
   --chart-5: #98B7C6;
-  --sidebar: #061B20;
-  --sidebar-foreground: #B8C0BC;
+  --sidebar: #04171B;
+  --sidebar-foreground: #B9C1BD;
   --sidebar-primary: #DDF7A8;
   --sidebar-primary-foreground: #061B20;
-  --sidebar-accent: #123034;
+  --sidebar-accent: #0D2528;
   --sidebar-accent-foreground: #F5F1ED;
-  --sidebar-border: rgba(245, 241, 237, 0.12);
+  --sidebar-border: rgba(245, 241, 237, 0.08);
   --sidebar-ring: #DDF7A8;
 }
 
-/* Shared editorial hierarchy, including routes that predate font-heading.
-   User-authored markdown and compact conversation titles retain their own scale. */
-.loma-dashboard h1:not(:where(.prose h1, .break-words h1, .chat-text h1)) {
+/* Shared editorial hierarchy. Feature Deck is reserved for deliberate
+   moments — page titles and editorial headings. Functional text (long
+   generated conversation titles, markdown, chat) stays in Halyard. */
+.loma-dashboard h1:not(:where(.prose h1, .break-words h1, .chat-text h1, .truncate)) {
   font-family: var(--font-display), Georgia, serif;
-  font-size: clamp(1.75rem, 2.6vw, 2.5rem);
-  line-height: 1.15;
+  font-size: clamp(1.5rem, 2vw, 1.9rem);
+  line-height: 1.2;
   font-weight: 400;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
 }
-.loma-dashboard h1.truncate { font-size: 1.5rem; }
 .loma-dashboard h2.font-heading {
   font-family: var(--font-body), sans-serif;
+}
+
+/* Editorial serif heading for empty states / special moments. */
+.editorial-heading {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 400;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+}
+
+/* Composer elevation: soft and shadow-led in light, surface-led in dark —
+   no glowing outline. */
+.composer-shadow {
+  box-shadow: 0 1px 2px rgba(6, 27, 32, 0.03), 0 12px 32px -18px rgba(6, 27, 32, 0.12);
+}
+[data-theme="dark"] .composer-shadow {
+  box-shadow: 0 1px 0 rgba(245, 241, 237, 0.02) inset, 0 16px 40px -20px rgba(0, 0, 0, 0.55);
 }
 
 /* Sidebar-scoped tokens also theme nested controls, without affecting portaled

@@ -188,7 +188,7 @@ function GraphNode({
       {/* Title text */}
       <foreignObject x={12} y={4} width={NODE_WIDTH - (hasChildren ? 48 : 20)} height={20}>
         <div
-          style={{ color: isSelected ? colors.text : "#1F2937", fontSize: "12px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          style={{ color: isSelected ? colors.text : "#1F2937", fontSize: "12px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
           title={node.title}
         >
           {node.title}
@@ -218,7 +218,7 @@ function GraphNode({
             y={14}
             textAnchor="middle"
             fontSize={14}
-            fontWeight={700}
+            fontWeight={500}
             fill={colors.fill}
           >
             {isExpanded ? "−" : "+"}

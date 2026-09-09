@@ -25,11 +25,11 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: 
 
   return (
     <div className="flex min-w-[200px] flex-1 basis-0 flex-col">
-      <div className="mb-2 flex items-baseline gap-2 px-1">
-        <span className="text-[13px] font-medium text-foreground">
+      <div className="mb-2.5 flex items-baseline gap-2 px-2">
+        <span className="text-[13px] font-semibold text-foreground">
           {name}
         </span>
-        <span className="rounded bg-muted px-1.5 text-[11px] tabular-nums text-muted-foreground">{tasks.length}</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground/80">{tasks.length}</span>
       </div>
       <SortableContext
         items={tasks.map((t) => t.conversation_id)}
@@ -38,8 +38,8 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: 
         <div
           ref={setNodeRef}
           className={cn(
-            "flex min-h-24 flex-1 flex-col gap-1.5 rounded-lg p-1 transition-colors",
-            isOver && droppable !== false && "bg-muted/60",
+            "flex min-h-24 flex-1 flex-col gap-2 rounded-xl p-1.5 bg-foreground/[0.025] transition-colors",
+            isOver && droppable !== false && "bg-foreground/[0.05]",
             droppable === false && "opacity-40",
           )}
         >

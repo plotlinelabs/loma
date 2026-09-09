@@ -185,8 +185,8 @@ function ChatPageContent() {
   if (loading) {
     return (
       <div className="flex-1 min-h-0 flex flex-col -mb-3">
-        <div className="px-3 lg:px-4 py-4 border-b border-border bg-card">
-          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
+        <div className="flex min-h-14 flex-col justify-center px-3 lg:px-4 py-2 border-b border-border">
+          <h1 className="truncate text-[15px] font-semibold text-foreground">{flowId ? "Edit Flow" : taskId ? "Edit Task" : "Continue Chat"}</h1>
           <p className="text-[13px] text-muted-foreground">{flowId ? "Loading flow..." : taskId ? "Loading task..." : "Loading conversation..."}</p>
         </div>
         <div className="flex-1 flex items-center justify-center bg-muted/30">
@@ -243,8 +243,8 @@ function ChatPageContent() {
       )}
 
       {/* Header with title and action buttons — desktop only; hidden for auto-sent prompts until conversation starts */}
-      {showHeader && <div className="hidden md:block px-3 lg:px-4 py-3 border-b border-border bg-card flex-shrink-0">
-        <div className="flex items-center gap-2">
+      {showHeader && <div className="hidden md:flex min-h-14 items-center px-3 lg:px-4 border-b border-border flex-shrink-0">
+        <div className="flex w-full items-center gap-2">
           {/* Title area */}
           <div className="min-w-0 flex-1">
             {activeConversationId && editingTitle ? (
@@ -275,7 +275,8 @@ function ChatPageContent() {
               <div className="flex items-center gap-2 min-w-0">
                 <h1
                   className={cn(
-                    "text-base font-heading font-semibold text-foreground truncate",
+                    "text-[15px] font-semibold text-foreground truncate",
+                    headerTitle === "New Chat" && "editorial-heading text-[19px]",
                     activeConversationId && user?.email === conversationOwner && "cursor-pointer hover:text-brand-600 transition-colors"
                   )}
                   onClick={() => {
@@ -450,8 +451,8 @@ export default function ChatPage() {
     <Suspense
       fallback={
         <div className="flex-1 min-h-0 flex flex-col -mb-3">
-          <div className="px-3 lg:px-4 py-4 border-b border-border bg-card">
-            <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Chat</h1>
+          <div className="flex min-h-14 items-center px-3 lg:px-4 border-b border-border">
+            <h1 className="truncate text-[15px] font-semibold text-foreground">Chat</h1>
           </div>
           <div className="flex-1 bg-muted/30 flex items-center justify-center">
             <RiLoader4Line size={32} className="animate-spin text-muted-foreground" />
