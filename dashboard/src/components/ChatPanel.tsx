@@ -1431,13 +1431,13 @@ export default function ChatPanel({
                   className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
                 />
-                <div className="flex items-center justify-between gap-2 px-3 pb-3">
-                  <div className="flex min-w-0 items-center gap-0.5">
+                <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:flex-wrap">
+                  <div className="flex min-w-0 items-center gap-0.5 max-md:w-full max-md:flex-wrap">
                     <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                     <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} />
                   </div>
-                  <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
+                  <div className="ml-auto flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
                       mobileProminent
@@ -1737,7 +1737,7 @@ export default function ChatPanel({
               {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
-              <div className="flex flex-col bg-muted border border-border rounded-2xl focus-within:border-gray-300 transition-colors">
+              <div className="flex flex-col bg-card border border-input rounded-xl shadow-sm focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/20 transition-colors">
                 <Textarea
                   ref={inputRef}
                   value={input}
@@ -1754,13 +1754,13 @@ export default function ChatPanel({
                   className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "160px" }}
                 />
-                <div className="flex items-center justify-between gap-2 px-2 pb-2">
-                  <div className="flex min-w-0 items-center gap-0.5">
+                <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:flex-wrap">
+                  <div className="flex min-w-0 items-center gap-0.5 max-md:w-full max-md:flex-wrap">
                     <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
                     <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
                     <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} disabled={isStreaming} isAlwaysEnabled={isAlwaysEnabled} />
                   </div>
-                  <div className="flex items-center gap-1 max-md:gap-2 shrink-0">
+                  <div className="ml-auto flex items-center gap-1 max-md:gap-2 shrink-0">
                     <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
                       mobileProminent

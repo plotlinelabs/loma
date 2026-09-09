@@ -77,9 +77,8 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         />
       </Suspense>
 
-      {/* Mobile: no dedicated top bar — a floating menu button keeps every
-          vertical pixel for content. Page headers make room for it via
-          .pwa-header-offset (globals.css). */}
+      {/* Mobile: reserve a short menu row so every route, including pages
+          without a pwa-header-offset, clears the floating menu button. */}
       {standalone && <ViewportHeightSync />}
       <Button
         variant="ghost"
@@ -95,13 +94,13 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         // dvh (not vh) so the iOS Safari URL bar doesn't cause overflow; in
         // the installed PWA, --app-h tracks the visual viewport so the layout
         // shrinks above the on-screen keyboard (dvh ignores it on iOS).
-        "ml-0 flex flex-col transition-all duration-200 pt-[env(safe-area-inset-top)] md:pt-0 bg-background",
+        "loma-dashboard ml-0 min-w-0 flex flex-col transition-all duration-200 pt-[calc(env(safe-area-inset-top)+2.75rem)] md:pt-0 bg-background",
         standalone ? "h-[var(--app-h,100dvh)]" : "h-dvh",
         sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
         <div className={cn(
           "flex-1 w-full flex flex-col min-h-0",
-          pathname.startsWith("/skills") ? "overflow-hidden" : "px-3 md:px-3 lg:px-4 py-3"
+          pathname.startsWith("/skills") ? "overflow-hidden" : "px-3 md:px-6 lg:px-8 py-4 md:py-6"
         )}>{children}</div>
         <BottomNav />
       </main>

@@ -24,12 +24,12 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: 
   });
 
   return (
-    <div className="flex w-64 shrink-0 flex-col">
+    <div className="flex min-w-[200px] flex-1 basis-0 flex-col">
       <div className="mb-2 flex items-baseline gap-2 px-1">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span className="text-[13px] font-medium text-foreground">
           {name}
         </span>
-        <span className="text-xs text-muted-foreground/70">{tasks.length}</span>
+        <span className="rounded bg-muted px-1.5 text-[11px] tabular-nums text-muted-foreground">{tasks.length}</span>
       </div>
       <SortableContext
         items={tasks.map((t) => t.conversation_id)}
