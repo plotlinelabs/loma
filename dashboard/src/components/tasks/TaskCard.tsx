@@ -64,16 +64,15 @@ export function TaskCard({
         setMenuOpen(true);
       }}
       className={cn(
-        "group relative rounded-lg border bg-card px-3 py-3 shadow-[0_1px_2px_#061b2005] cursor-pointer",
-        "hover:border-input hover:shadow-sm touch-none select-none",
-        task.column === "needs_input" && "border-amber-300",
+        "group relative rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer",
+        "hover:border-input transition-colors touch-none select-none",
         isDragging && "opacity-40",
       )}
     >
       <div className="flex items-start gap-2">
         {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-words text-[15px] leading-5">
+          <div className="line-clamp-2 break-words text-[14px] font-medium leading-5">
             {task.title || task.prompt || "New task"}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">

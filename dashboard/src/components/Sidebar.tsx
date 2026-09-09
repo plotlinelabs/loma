@@ -174,14 +174,14 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
     : (codex.queue_depth || 0) > 0
       ? "bg-red-500"
       : (codex.available || 0) > 0
-        ? "bg-emerald-500"
+        ? "bg-brand-400/80"
         : (codex.warming || 0) > 0
           ? "bg-amber-400 animate-pulse"
           : "bg-red-500";
   const opencodeColor = !opencode?.enabled
     ? "bg-gray-300"
     : opencode.total_available > 0
-      ? "bg-emerald-500"
+      ? "bg-brand-400/80"
       : opencode.total_warming > 0
         ? "bg-amber-400 animate-pulse"
         : "bg-red-500";
@@ -189,35 +189,35 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
   const statusColor = poolStatus.queue_depth > 0
     ? "bg-red-500"
     : poolStatus.available > 0
-      ? "bg-emerald-500"
+      ? "bg-brand-400/80"
       : poolStatus.warming > 0
         ? "bg-amber-400 animate-pulse"
         : "bg-red-500";
 
   if (collapsed) {
     return (
-      <div className="px-2.5 py-1 flex flex-col items-center gap-1">
-        <span className={cn("w-2 h-2 rounded-full flex-shrink-0", statusColor)} />
+      <div className="px-2.5 py-1 flex flex-col items-center gap-1 opacity-70">
+        <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", statusColor)} />
         {opencode && (
-          <span className={cn("w-2 h-2 rounded-full flex-shrink-0", opencodeColor)} />
+          <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", opencodeColor)} />
         )}
         {codex?.enabled && (
-          <span className={cn("w-2 h-2 rounded-full flex-shrink-0", codexColor)} />
+          <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", codexColor)} />
         )}
       </div>
     );
   }
 
   return (
-    <div className="px-2.5 py-1 overflow-hidden">
+    <div className="px-3 py-1 overflow-hidden opacity-75 transition-opacity hover:opacity-100">
       <Button
         variant="ghost"
         onClick={() => setExpanded(!expanded)}
         className="w-full text-left group flex-col items-stretch gap-1.5 h-auto px-0 rounded-none overflow-hidden"
       >
         <div className="flex items-center gap-2">
-          <span className={cn("w-2 h-2 rounded-full flex-shrink-0", statusColor)} />
-          <span className="text-[11px] text-muted-foreground flex-1 truncate">
+          <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", statusColor)} />
+          <span className="text-[10px] text-sidebar-foreground/70 flex-1 truncate">
             {accountCount === 0
               ? "Claude · no accounts"
               : poolStatus.queue_depth > 0
@@ -234,8 +234,8 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
         </div>
         {opencode && (
           <div className="flex items-center gap-2">
-            <span className={cn("w-2 h-2 rounded-full flex-shrink-0", opencodeColor)} />
-            <span className="text-[11px] text-muted-foreground flex-1 truncate">
+            <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", opencodeColor)} />
+            <span className="text-[10px] text-sidebar-foreground/70 flex-1 truncate">
               {opencode.enabled
                 ? `OpenCode · ${opencode.total_available}/${opencode.pool_size} warm${opencode.total_warming ? ` · ${opencode.total_warming} warming` : ""}`
                 : "OpenCode · warm pool off"}
@@ -244,8 +244,8 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
         )}
         {codex?.enabled && (
           <div className="flex items-center gap-2">
-            <span className={cn("w-2 h-2 rounded-full flex-shrink-0", codexColor)} />
-            <span className="text-[11px] text-muted-foreground flex-1 truncate">
+            <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", codexColor)} />
+            <span className="text-[10px] text-sidebar-foreground/70 flex-1 truncate">
               {codexAccountCount === 0
                 ? "Codex · no accounts"
                 : (codex.queue_depth || 0) > 0
@@ -468,7 +468,7 @@ export default function Sidebar({
       ) : (
         <>
           {/* Navigation */}
-          <nav className="px-3 space-y-0.5 shrink-0">
+          <nav className="px-3 space-y-0.5 shrink-0 pb-1">
             {visibleNav.map((item) => {
               const isActive = item.href === "/"
                 ? pathname === "/" || pathname === ""
@@ -481,19 +481,22 @@ export default function Sidebar({
                   onClick={onClose}
                   className={cn(
                     // Roomier on phones (Claude-app scale), compact on desktop
-                    "flex items-center rounded-lg text-[13px] font-medium transition-colors duration-150",
+                    "relative flex items-center rounded-lg text-[13px] font-medium transition-colors duration-150",
                     "max-md:text-[16px] max-md:[&_svg]:h-5 max-md:[&_svg]:w-5",
                     collapsed
                       ? "justify-center px-0 py-1.5 mx-auto w-10"
                       : "px-3 py-2 gap-2.5 max-md:py-2.5 max-md:gap-3",
                     isActive
-                      ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
                   )}
                   aria-current={isActive ? "page" : undefined}
                   title={collapsed ? item.name : undefined}
                 >
-                  <span className={cn("relative transition-colors flex-shrink-0", isActive ? "text-sidebar-primary-foreground" : "text-sidebar-foreground")}>
+                  {isActive && (
+                    <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" aria-hidden="true" />
+                  )}
+                  <span className="relative flex-shrink-0 transition-colors text-current">
                     {item.icon}
                     {collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 && (
                       <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500" />
@@ -504,8 +507,6 @@ export default function Sidebar({
                     <span className="ml-auto min-w-[20px] h-5 px-1 shrink-0 whitespace-nowrap flex items-center justify-center rounded bg-current/10 text-[11px] font-semibold tabular-nums">
                       {badgeCounts[item.badgeKey]}
                     </span>
-                  ) : !collapsed && isActive ? (
-                    <span className="ml-auto w-0.5 h-4 bg-sidebar-primary-foreground rounded-full" />
                   ) : null}
                 </Link>
               );
@@ -517,9 +518,9 @@ export default function Sidebar({
           <ScrollArea className="flex-1 min-h-0">
             {/* Projects */}
             {!collapsed && projects.length > 0 && (
-              <div className="mt-2 flex flex-col">
-                <div className="px-2.5 pb-1">
-                  <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              <div className="mt-6 flex flex-col">
+                <div className="px-3 pb-1.5">
+                  <span className="text-[10px] max-md:text-xs font-medium text-sidebar-foreground/60 uppercase tracking-[0.14em]">
                     Projects
                   </span>
                 </div>
@@ -544,25 +545,25 @@ export default function Sidebar({
 
             {/* Pinned */}
             {!collapsed && pinnedConversations.length > 0 && (
-              <div className="mt-2 flex flex-col">
-                <div className="px-2.5 pb-1">
-                  <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              <div className="mt-6 flex flex-col">
+                <div className="px-3 pb-1.5">
+                  <span className="text-[10px] max-md:text-xs font-medium text-sidebar-foreground/60 uppercase tracking-[0.14em]">
                     Pinned
                   </span>
                 </div>
                 <div className="px-2 space-y-px">
                   {pinnedConversations.map((c) => {
                     const title = c.title || c.prompt?.slice(0, 50) || "Untitled";
-                    const displayTitle = title.length > 32 ? title.slice(0, 32) + "..." : title;
+                    const displayTitle = title;
                     const isConvoActive = activeContinueId === c.conversation_id;
                     return (
                       <div
                         key={c.conversation_id}
                         className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-[13px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
+                          "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
-                            ? "text-brand-700 bg-brand-100/80 font-medium"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/60"
                         )}
                       >
                         <Link
@@ -600,25 +601,25 @@ export default function Sidebar({
 
             {/* Recents (excluding pinned) */}
             {!collapsed && myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
-              <div className="mt-2 flex flex-col">
-                <div className="px-2.5 pb-1">
-                  <span className="text-[11px] max-md:text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              <div className="mt-6 flex flex-col">
+                <div className="px-3 pb-1.5">
+                  <span className="text-[10px] max-md:text-xs font-medium text-sidebar-foreground/60 uppercase tracking-[0.14em]">
                     Recents
                   </span>
                 </div>
                 <div className="px-2 space-y-px">
                   {myConversations.filter((c) => !isPinned(c.conversation_id)).map((c) => {
                     const title = c.title || c.prompt?.slice(0, 50) || "Untitled";
-                    const displayTitle = title.length > 36 ? title.slice(0, 36) + "..." : title;
+                    const displayTitle = title;
                     const isConvoActive = activeContinueId === c.conversation_id;
                     return (
                       <div
                         key={c.conversation_id}
                         className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-[13px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
+                          "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
-                            ? "text-brand-700 bg-brand-100/80 font-medium"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/60"
                         )}
                       >
                         <Link
@@ -728,7 +729,7 @@ export default function Sidebar({
                         collapsed ? "justify-center p-1" : "gap-2 px-1 py-1"
                       )}>
                         <Avatar size="sm" className="w-7 h-7 shrink-0">
-                          <AvatarFallback className="bg-brand-100 text-brand-700 text-xs font-medium">
+                          <AvatarFallback className="bg-sidebar-primary/90 text-sidebar-primary-foreground text-xs font-medium">
                             {session.user.email?.charAt(0).toUpperCase() || "U"}
                           </AvatarFallback>
                         </Avatar>

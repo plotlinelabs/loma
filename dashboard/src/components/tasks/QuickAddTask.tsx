@@ -94,7 +94,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
       <div className="mx-auto w-full max-w-3xl">
       {error && <p className="mb-1 text-xs text-destructive">{error}</p>}
       <PendingFilesStrip files={files} onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))} />
-      <div className="flex flex-col bg-card border border-input rounded-xl shadow-sm focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/20 transition-colors">
+      <div className="flex flex-col bg-card border border-border rounded-xl focus-within:border-input transition-colors">
         <Textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -148,7 +148,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               disabled={(!value.trim() && files.length === 0) || busy}
               aria-label="Add task"
               className={cn(
-                "bg-accent-200 hover:bg-accent-300 disabled:opacity-30 disabled:hover:bg-accent-200 text-accent-on rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
                 !value.trim() && files.length === 0 && "max-md:hidden",
               )}
             >

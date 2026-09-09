@@ -185,12 +185,12 @@ function PetPicker({ initial, onSaved }: { initial: typeof DEFAULT_PET; onSaved:
         {PETS.map((pet) => (
           <button type="button" key={pet.id} disabled={saving} aria-pressed={draft.pet_id === pet.id}
             onClick={() => setDraft({ ...draft, pet_id: pet.id })}
-            className="flex flex-col items-center gap-1 rounded-lg border border-border p-2 text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-pressed:border-primary aria-pressed:bg-accent disabled:opacity-50">
+            className="flex flex-col items-center gap-1 rounded-xl border border-transparent p-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-pressed:border-brand-700 aria-pressed:bg-accent-200/25 aria-pressed:text-foreground disabled:opacity-50">
             <PetSprite petId={pet.id} size={48} />{pet.name}
           </button>
         ))}
       </div>
-      <div className="flex items-center gap-3 rounded-lg bg-muted p-3">
+      <div className="flex items-center gap-3 rounded-xl bg-muted p-3">
         <PetSprite petId={draft.pet_id} size={48} state="working" animated={draft.animated} />
         <div className="text-sm"><p className="font-medium">Your new sidekick</p><p className="text-xs text-muted-foreground">A quiet companion while you work.</p></div>
       </div>
