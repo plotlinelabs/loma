@@ -64,7 +64,7 @@ export function TaskCard({
         setMenuOpen(true);
       }}
       className={cn(
-        "group relative rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer",
+        "group relative rounded-lg border border-border bg-card px-3.5 py-3 cursor-pointer",
         "hover:border-input transition-colors touch-none select-none",
         isDragging && "opacity-40",
       )}
@@ -82,7 +82,7 @@ export function TaskCard({
           <div className="mt-1 flex items-center gap-1 overflow-hidden pr-12">
             <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
             <TaskDeadlineBadge task={task} />
-            {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag.name}</span>)}
+            {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="text-[10px] text-muted-foreground">{tag.name}</span>)}
             {assignedTags.length > 2 && <span className="text-[10px] text-muted-foreground">+{assignedTags.length - 2}</span>}
           </div>
         </div>

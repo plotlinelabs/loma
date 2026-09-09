@@ -49,8 +49,8 @@ export function TaskDeadlineBadge({ task, className }: { task: Task; className?:
     <span
       title={`Deadline: ${display.fullDate}`}
       className={cn(
-        "flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground",
-        display.urgent && "bg-destructive/10 text-destructive",
+        "flex shrink-0 items-center gap-1 text-[10px] leading-4 text-muted-foreground",
+        display.urgent && "text-destructive",
         className,
       )}
     >

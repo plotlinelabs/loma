@@ -15,8 +15,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -56,9 +54,6 @@ const statusLabels: Record<string, string> = {
   completed: "Completed",
   error: "Error",
 };
-
-/* New palette: topic tags share one neutral style (cream fill, warm dark text). */
-const topicTagClass = "bg-[#F5F1ED] text-[#322C26]";
 
 const topicLabels: Record<string, string> = {
   debugging: "Debugging",
@@ -105,8 +100,8 @@ function SkeletonRow() {
 
 function MobileSkeletonCard() {
   return (
-    <Card className="p-3">
-      <CardContent className="p-0">
+    <div className="px-1 py-2">
+      <div>
         <div className="flex items-start gap-2">
           <Skeleton className="h-2 w-2 rounded-full mt-1.5" />
           <div className="flex-1">
@@ -117,8 +112,8 @@ function MobileSkeletonCard() {
             </div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -338,8 +333,8 @@ export default function ConversationsPage() {
           </div>
         </div>
 
-        {/* Desktop table */}
-        <div className="desktop-table bg-card rounded-xl overflow-hidden">
+        {/* Desktop table — sits directly on the page canvas, no wrapper card */}
+        <div className="desktop-table">
           <Table>
             <TableHeader>
               <TableRow className="text-left">
@@ -423,9 +418,9 @@ export default function ConversationsPage() {
                     {/* Topic */}
                     <TableCell>
                       {c.topic ? (
-                        <Badge variant="secondary" className={cn("text-xs", topicTagClass)}>
+                        <span className="text-xs text-muted-foreground">
                           {topicLabels[c.topic] || c.topic}
-                        </Badge>
+                        </span>
                       ) : <span className="text-xs text-muted-foreground/40">&mdash;</span>}
                     </TableCell>
 
@@ -518,9 +513,9 @@ export default function ConversationsPage() {
             )
           ) : (
             conversations.map((c, idx) => (
-              <Card
+              <div
                 key={c.conversation_id}
-                className="p-3 active:bg-muted/50 transition-colors animate-fade-in-up cursor-pointer"
+                className="px-1 py-2 rounded-lg active:bg-muted/50 transition-colors animate-fade-in-up cursor-pointer"
                 style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}
                 onClick={(e) => {
                   const url = `/conversations/${c.conversation_id}`;
@@ -531,7 +526,7 @@ export default function ConversationsPage() {
                   }
                 }}
               >
-                <CardContent className="p-0">
+                <div>
                   <div className="flex items-start gap-2.5">
                     <div className={cn("h-2 w-2 rounded-full mt-1.5 shrink-0", statusDotStyles[c.status] || "bg-gray-400")} />
                     <div className="flex-1 min-w-0">
@@ -547,9 +542,9 @@ export default function ConversationsPage() {
                           <span className="tabular-nums">${c.cost.total_cost_usd.toFixed(2)}</span>
                         )}
                         {c.topic && (
-                          <Badge variant="secondary" className={cn("text-[10px] py-0 px-1.5", topicTagClass)}>
+                          <span className="text-[10px] text-muted-foreground">
                             {topicLabels[c.topic] || c.topic}
-                          </Badge>
+                          </span>
                         )}
                       </div>
                     </div>
@@ -570,8 +565,8 @@ export default function ConversationsPage() {
                       />
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             ))
           )}
         </div>

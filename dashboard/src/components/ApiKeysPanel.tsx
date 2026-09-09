@@ -147,7 +147,7 @@ export default function ApiKeysPanel() {
         </CardContent>
       </Card>
 
-      <div className="space-y-2">
+      <div className="divide-y divide-border/60">
         {keys === null ? (
           <>
             <Skeleton className="h-14 w-full" />
@@ -161,8 +161,7 @@ export default function ApiKeysPanel() {
           />
         ) : (
           keys.map((k) => (
-            <Card key={k.key_id}>
-              <CardContent className="flex items-center gap-3">
+            <div key={k.key_id} className="flex items-center gap-3 py-3">
                 <RiKey2Line size={16} className="text-muted-foreground shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-semibold text-foreground truncate">{k.name}</div>
@@ -183,8 +182,7 @@ export default function ApiKeysPanel() {
                 >
                   <RiDeleteBinLine size={15} />
                 </Button>
-              </CardContent>
-            </Card>
+            </div>
           ))
         )}
       </div>
