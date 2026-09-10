@@ -438,12 +438,15 @@ export const PETS = [
 ] as const;
 
 const DEFAULT_PET = { pet_id: "tabby", visible: true, animated: true };
+// Retired pets map to their closest successor so a saved preference never silently reverts to the default.
+const LEGACY_PETS: Record<string, string> = { "black-cat": "tuxedo", calico: "cat" };
+const resolvePetId = (petId: string) => LEGACY_PETS[petId] ?? petId;
 type PetState = "idle" | "working" | "listening" | "completed" | "attention";
 
 export function PetSprite({ petId, size = 40, state = "idle", animated = false }: {
   petId: string; size?: number; state?: PetState; animated?: boolean;
 }) {
-  const pet = PETS.find((p) => p.id === petId) ?? PETS[0];
+  const pet = PETS.find((p) => p.id === resolvePetId(petId)) ?? PETS[0];
   const art = spriteArt[pet.id];
   const pixels: string[] = art ? art.rows : [...silhouettes[pet.kind as keyof typeof silhouettes]];
   if (pet.id === "dachshund") {
@@ -579,7 +582,7 @@ export function PetSettingsProvider({ children }: { children: React.ReactNode })
 }
 
 function PetPicker({ initial, onSaved }: { initial: typeof DEFAULT_PET; onSaved: () => void }) {
-  const [draft, setDraft] = useState(initial);
+  const [draft, setDraft] = useState({ ...initial, pet_id: resolvePetId(initial.pet_id) });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Ignore a response if the dialog closed or the authenticated account changed.

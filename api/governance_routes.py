@@ -103,6 +103,17 @@ async def handle_get_me(request: web.Request) -> web.Response:
             email, user["system_role"], user["status"],
         )
 
+    # Migrate retired pet ids to their successor so the saved companion still renders
+    # as the pet the user actually chose (e.g. "calico" was replaced by "cat").
+    pet_pref = user.get("pet_preference")
+    if isinstance(pet_pref, dict) and pet_pref.get("pet_id") in LEGACY_PET_MAP:
+        pet_pref = {**pet_pref, "pet_id": LEGACY_PET_MAP[pet_pref["pet_id"]]}
+        user["pet_preference"] = pet_pref
+        await db.users.update_one(
+            {"email": email},
+            {"$set": {"pet_preference": pet_pref, "updated_at": datetime.now(timezone.utc)}},
+        )
+
     serialized_user = _serialize(user)
     # Legacy users created before the approval flow are treated as active.
     serialized_user.setdefault("status", "active")
@@ -142,6 +153,10 @@ async def handle_update_my_theme(request: web.Request) -> web.Response:
 
 VALID_PETS = ("tabby", "tuxedo", "cat", "doggo", "corgi", "golden", "dachshund", "rabbit", "hamster", "parrot",
               "croc", "lion", "duck", "snake", "dino", "dragon", "llama", "koala")
+
+# Pets removed from the catalog map to their closest successor so a user who picked
+# one keeps seeing their actual pet instead of silently reverting to the default.
+LEGACY_PET_MAP = {"black-cat": "tuxedo", "calico": "cat"}
 
 
 async def handle_update_my_pet(request: web.Request) -> web.Response:
