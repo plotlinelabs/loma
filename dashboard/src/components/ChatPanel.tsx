@@ -7,10 +7,11 @@ import { useAgentModels } from "@/hooks/useAgentModels";
 import { useAgentIdentities } from "@/hooks/useAgentIdentities";
 import { AgentPicker } from "@/components/composer/AgentPicker";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
-import { filesToChatFiles } from "@/lib/chatFiles";
+import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
 import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
+import { useFileDrop } from "./composer/useFileDrop";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
 import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
@@ -601,7 +602,6 @@ export default function ChatPanel({
   const [streamElapsedSeconds, setStreamElapsedSeconds] = useState(0);
   const [isRecovering, setIsRecovering] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<ChatFile[]>(initialFiles || []);
-  const [isDragOver, setIsDragOver] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [accountInfo, setAccountInfo] = useState<{
     account_type?: "round_robin";
@@ -1312,59 +1312,23 @@ export default function ChatPanel({
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      const imageFiles: File[] = [];
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.kind === "file" && item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) {
-            const ext = file.type.split("/")[1] || "png";
-            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-            const named = new File([file], `clipboard-${timestamp}.${ext}`, {
-              type: file.type,
-            });
-            imageFiles.push(named);
-          }
-        }
-      }
-
-      if (imageFiles.length > 0) {
+      const pasted = filesFromClipboard(e.clipboardData);
+      if (pasted.length > 0) {
         e.preventDefault();
-        addFiles(imageFiles);
+        addFiles(pasted);
       }
     },
     [addFiles],
   );
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    if (e.dataTransfer.files.length > 0) {
-      addFiles(e.dataTransfer.files);
-    }
-  };
+  const { isDragOver, dropHandlers } = useFileDrop(addFiles);
 
   const isEmptyState = items.length === 0 && !isStreaming;
 
   return (
     <div
       className="flex flex-col h-full"
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      {...dropHandlers}
     >
       {/* Lightbox overlay */}
       {expandedImage && (

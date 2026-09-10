@@ -11,47 +11,50 @@ const TEXT_EXTENSIONS = new Set([
   "txt", "csv", "json", "py", "md", "js", "ts", "tsx", "jsx", "yml", "yaml",
   "xml", "html", "css", "log", "sh", "sql", "env", "cfg", "ini", "toml",
 ]);
-const BINARY_EXTENSIONS = new Set([
-  "xlsx", "xlsm", "xls", "pdf", "docx", "pptx",
-  "zip", "tar", "gz", "7z", "rar", "tgz",       // archives
-]);
 
-/** Read a File into a ChatFile object */
+/** Base64-encode a File's raw bytes. */
+async function fileToBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  return btoa(
+    new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+  );
+}
+
+/**
+ * Read a File into a ChatFile object.
+ *
+ * Any file extension is accepted — images and known text formats get their
+ * dedicated handling, and everything else (documents, archives, or any
+ * unrecognized extension) is attached as a binary blob. The backend writes
+ * binary attachments to a temp file with their original extension, so the
+ * agent can work with arbitrary file types.
+ */
 export async function readFileAsChatFile(file: File): Promise<ChatFile | null> {
   if (file.size > MAX_FILE_SIZE) return null;
 
   const ext = file.name.split(".").pop()?.toLowerCase() || "";
   const isImage = IMAGE_TYPES.has(file.type);
   const isText = TEXT_EXTENSIONS.has(ext) || file.type.startsWith("text/");
-  const isBinary = BINARY_EXTENSIONS.has(ext);
-
-  if (!isImage && !isText && !isBinary) {
-    console.warn(`Unsupported file type: ${file.name} (${file.type})`);
-    return null;
-  }
 
   if (isImage) {
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-    );
-    return { name: file.name, mimetype: file.type, type: "image", data: base64 };
+    return { name: file.name, mimetype: file.type, type: "image", data: await fileToBase64(file) };
   }
 
-  if (isBinary) {
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-    );
-    return { name: file.name, mimetype: file.type || "application/octet-stream", type: "binary", data: base64 };
+  if (isText) {
+    let text = await file.text();
+    if (text.length > MAX_TEXT_SIZE) {
+      text = text.slice(0, MAX_TEXT_SIZE) + `\n\n... [truncated, file was ${(file.size / 1024).toFixed(0)} KB]`;
+    }
+    return { name: file.name, mimetype: file.type || "text/plain", type: "text", data: text };
   }
 
-  // Text file
-  let text = await file.text();
-  if (text.length > MAX_TEXT_SIZE) {
-    text = text.slice(0, MAX_TEXT_SIZE) + `\n\n... [truncated, file was ${(file.size / 1024).toFixed(0)} KB]`;
-  }
-  return { name: file.name, mimetype: file.type || "text/plain", type: "text", data: text };
+  // Any other file type — attach as a binary blob (no allow-list gate).
+  return {
+    name: file.name,
+    mimetype: file.type || "application/octet-stream",
+    type: "binary",
+    data: await fileToBase64(file),
+  };
 }
 
 /** Convert a FileList/array into ChatFiles, reporting rejects by name. */
@@ -70,4 +73,29 @@ export async function filesToChatFiles(
     else rejected.push(f.name);
   }
   return { files, rejected };
+}
+
+/**
+ * Extract every file from a clipboard paste (any type, not just images).
+ * Clipboard files that arrive without a usable name (e.g. screenshots) are
+ * given a timestamped name so they are distinguishable. Non-file clipboard
+ * items (plain text, html) are ignored, so normal text paste is untouched.
+ */
+export function filesFromClipboard(clipboardData: DataTransfer | null): File[] {
+  const items = clipboardData?.items;
+  if (!items) return [];
+  const out: File[] = [];
+  for (const item of Array.from(items)) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+    if (!file.name || file.name.toLowerCase() === "image.png" || file.name.toLowerCase() === "blob") {
+      const ext = (file.type.split("/")[1] || "bin").split("+")[0];
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      out.push(new File([file], `clipboard-${timestamp}.${ext}`, { type: file.type }));
+    } else {
+      out.push(file);
+    }
+  }
+  return out;
 }

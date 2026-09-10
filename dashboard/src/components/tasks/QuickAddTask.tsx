@@ -1,17 +1,18 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { RiSendPlaneLine, RiLoader4Line, RiAttachmentLine } from "@remixicon/react";
+import { RiSendPlaneLine, RiLoader4Line, RiAttachmentLine, RiUploadLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { createTask, type ChatFile } from "@/lib/api";
-import { filesToChatFiles } from "@/lib/chatFiles";
+import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { ModelPicker } from "@/components/composer/ModelPicker";
 import { ToolsPicker } from "@/components/composer/ToolsPicker";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
+import { useFileDrop } from "@/components/composer/useFileDrop";
 import { cn } from "@/lib/utils";
 
 interface QuickAddTaskProps {
@@ -51,6 +52,8 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
     if (rejected.length) console.warn("Unsupported files skipped:", rejected);
   };
 
+  const { isDragOver, dropHandlers } = useFileDrop((f) => void addFiles(f));
+
   const submit = async () => {
     const prompt = value.trim();
     if ((!prompt && files.length === 0) || busy) return;
@@ -76,7 +79,18 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
   };
 
   return (
-    <div className="shrink-0 border-t border-border bg-background px-3 pt-2 pb-2">
+    <div
+      className="relative shrink-0 border-t border-border bg-background px-3 pt-2 pb-2"
+      {...dropHandlers}
+    >
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-brand-400 bg-brand-50/80">
+          <div className="flex items-center gap-2 text-[13px] font-medium text-brand-600">
+            <RiUploadLine size={20} />
+            Drop files here
+          </div>
+        </div>
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -105,7 +119,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
             }
           }}
           onPaste={(e) => {
-            const pasted = Array.from(e.clipboardData?.files ?? []);
+            const pasted = filesFromClipboard(e.clipboardData);
             if (pasted.length) {
               e.preventDefault();
               void addFiles(pasted);
