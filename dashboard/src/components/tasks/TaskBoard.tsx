@@ -26,8 +26,8 @@ interface TaskBoardProps {
   onBoardChange: (board: TasksBoardResponse) => void;
   onRefresh: () => void;
   onEditDraft: (task: Task) => void;
-  /** Create a new task and open it in the side drawer. */
-  onAddTask: (laneId: string) => void;
+  /** Open capture in the selected list without creating a blank task. */
+  onAddTask: (laneId: string, anchor?: HTMLElement) => void;
   /** Open a non-draft task's chat in the side drawer instead of a new tab. */
   onOpenChat?: (task: Task) => void;
   onError: (message: string | null) => void;
@@ -124,7 +124,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 ? canMove(activeTask, activeTask.column, column.id, laneIds)
                 : undefined
             }
-            onAddTask={laneIds.includes(column.id) ? () => onAddTask(column.id) : undefined}
+            onAddTask={laneIds.includes(column.id) ? (anchor) => onAddTask(column.id, anchor) : undefined}
           >
             {(tasksByColumn[column.id] ?? []).map((task) => (
               <TaskCard

@@ -15,10 +15,11 @@ class FakeRequest:
 
 
 def _setup(monkeypatch):
-    conversations = SimpleNamespace(insert_one=AsyncMock())
+    conversations = SimpleNamespace(insert_one=AsyncMock(), update_one=AsyncMock())
     users = SimpleNamespace(find_one=AsyncMock(return_value={
         "task_board": {
-            "lanes": [{"id": "todo", "name": "Todo", "order": 0}],
+            "lanes": [{"id": "todo", "name": "Todo", "order": 0},
+                      {"id": "ideas", "name": "Ideas", "order": 1}],
             "tags": [],
         },
     }))
@@ -48,7 +49,7 @@ async def test_create_empty_draft_leaves_title_open_for_auto_naming(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_quick_add_with_prompt_schedules_auto_title(monkeypatch):
+async def test_scratch_task_keeps_input_name_without_running(monkeypatch):
     conversations, scheduled = _setup(monkeypatch)
 
     response = await task_routes.handle_create_task(
@@ -56,11 +57,11 @@ async def test_quick_add_with_prompt_schedules_auto_title(monkeypatch):
     inserted = conversations.insert_one.await_args.args[0]
 
     assert response.status == 201
-    assert inserted["title"] is None
+    assert inserted["title"] == "Investigate the flaky deploy"
     assert inserted["title_edited"] is False
-    assert scheduled.called
-    for call in scheduled.call_args_list:
-        call.args[0].close()  # discard un-run coroutines from the mock
+    assert inserted["started_at"] is None
+    assert inserted["messages"] == []
+    scheduled.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -139,3 +140,75 @@ async def test_build_board_context_uses_default_setting_and_owner_doc(monkeypatc
     )
     users.find_one.assert_awaited_once_with(
         {"email": "owner@example.com"}, {"task_board": 1, "name": 1, "email": 1})
+
+
+@pytest.mark.asyncio
+async def test_scratch_respects_lane_and_preserves_details_and_files(monkeypatch):
+    conversations, scheduled = _setup(monkeypatch)
+    prompt = "Check loading times " * 20
+    files = [{"name": "notes.txt", "data": "dGVzdA==", "type": "text/plain"}]
+    response = await task_routes.handle_create_task(FakeRequest({
+        "prompt": prompt, "lane": "ideas", "start": False, "files": files,
+        "tool_config": {"enabled_tools": []},
+    }))
+    doc = conversations.insert_one.await_args.args[0]
+    assert response.status == 201
+    assert doc["task_lane"] == "ideas"
+    assert doc["task_status"] == "todo"
+    assert doc["prompt"] == prompt.strip()
+    assert len(doc["title"]) <= 80
+    assert doc["draft_files"] == files
+    assert doc["tool_config"] == {"enabled_tools": []}
+    scheduled.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_and_start_has_immediate_name_and_schedules_both_jobs(monkeypatch):
+    conversations, scheduled = _setup(monkeypatch)
+    response = await task_routes.handle_create_task(FakeRequest({
+        "prompt": "Investigate\n  slow dashboard", "lane": "ideas", "start": True,
+    }))
+    doc = conversations.insert_one.await_args.args[0]
+    assert response.status == 201
+    assert doc["title"] == "Investigate slow dashboard"
+    assert doc["title_edited"] is False
+    assert doc["started_at"] is not None
+    assert doc["task_status"] == "active"
+    assert doc["task_lane"] == "ideas"
+    assert scheduled.call_count == 2
+    jobs = [call.args[0] for call in scheduled.call_args_list]
+    assert {job.cr_code.co_name for job in jobs} == {"_auto_title_task", "_run_task_headless"}
+    for job in jobs:
+        job.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_lane_does_not_create_task(monkeypatch):
+    conversations, scheduled = _setup(monkeypatch)
+    response = await task_routes.handle_create_task(FakeRequest({"prompt": "Test", "lane": "missing"}))
+    assert response.status == 400
+    conversations.insert_one.assert_not_called()
+    scheduled.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_naming_is_atomic_and_protects_manual_and_enriched_titles(monkeypatch):
+    from api import routes
+    generate = AsyncMock(return_value="Investigate slowness")
+    monkeypatch.setattr(routes, "_generate_title_llm", generate)
+    conversations = SimpleNamespace(update_one=AsyncMock())
+    await task_routes._auto_title_task(SimpleNamespace(conversations=conversations), "test-id", "Check slow dashboard")
+    conversations.update_one.assert_awaited_once_with(
+        {"conversation_id": "test-id", "title_edited": {"$ne": True},
+         "title": {"$in": [None, "Check slow dashboard"]}},
+        {"$set": {"title": "Investigate slowness"}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_naming_leaves_fallback_untouched(monkeypatch):
+    from api import routes
+    monkeypatch.setattr(routes, "_generate_title_llm", AsyncMock(side_effect=RuntimeError("offline")))
+    conversations = SimpleNamespace(update_one=AsyncMock())
+    await task_routes._auto_title_task(SimpleNamespace(conversations=conversations), "test-id", "Keep this name")
+    conversations.update_one.assert_not_called()
