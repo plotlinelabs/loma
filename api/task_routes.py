@@ -123,8 +123,14 @@ async def _run_task_headless(db, conversation_id: str, prompt: str,
         logger.warning("Headless task run failed for %s: %s", conversation_id, e)
 
 
+def _task_prompt_title(prompt: str) -> str | None:
+    """Immediate, bounded fallback while automatic naming runs."""
+    text = " ".join(prompt.split())
+    return (text[:77].rstrip() + "..." if len(text) > 80 else text) or None
+
+
 async def _auto_title_task(db, conversation_id: str, prompt: str):
-    """Generate a short LLM title for a quick-added draft (fire-and-forget).
+    """Generate a short LLM title for an immediately started task.
 
     Leaves title_edited unset so finish-time enrichment can still improve the
     title once the agent has actually run. Skips the write if the user has
@@ -135,7 +141,8 @@ async def _auto_title_task(db, conversation_id: str, prompt: str):
         title = await _generate_title_llm(prompt)
         if title and title != "Untitled conversation":
             await db.conversations.update_one(
-                {"conversation_id": conversation_id, "title": None},
+                {"conversation_id": conversation_id, "title_edited": {"$ne": True},
+                 "title": {"$in": [None, _task_prompt_title(prompt)]}},
                 {"$set": {"title": title}},
             )
     except Exception as e:
@@ -369,7 +376,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "claude_account": None,
         "error": None,
         "deleted": False,
-        "title": title,
+        "title": title or _task_prompt_title(prompt),
         # Guard user-provided titles against finish-time LLM enrichment.
         "title_edited": bool(title),
         "task_status": "active" if start else "todo",
@@ -391,9 +398,9 @@ async def handle_create_task(request: web.Request) -> web.Response:
     }
     await db.conversations.insert_one(doc)
 
-    # Quick-added tasks (no explicit title) get an LLM title from the prompt.
-    # Empty drafts skip this — enrichment titles them after the first run.
-    if not title and prompt:
+    # Started tasks get an improved title asynchronously; scratch tasks keep
+    # the input-based name until they run, without paying for an LLM call.
+    if start and not title and prompt:
         asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
 
     if start:

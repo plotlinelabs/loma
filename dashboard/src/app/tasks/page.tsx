@@ -67,6 +67,14 @@ export default function TasksPage() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerAnchor, setComposerAnchor] = useState<HTMLElement | null>(null);
+  const [creationNotice, setCreationNotice] = useState("");
+  useEffect(() => {
+    if (!creationNotice) return;
+    const timer = setTimeout(() => setCreationNotice(""), 5000);
+    return () => clearTimeout(timer);
+  }, [creationNotice]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
   // Desktop: clicking a non-draft card opens its chat in a side drawer so the
@@ -173,28 +181,11 @@ export default function TasksPage() {
     }
   };
 
-  const openNewTaskDrawer = async () => {
-    if (!board || busyRef.current) return;
-    busyRef.current = true;
-    setError(null);
-    try {
-      const todoLane = board.lanes.find(
-        (lane) => lane.id === "todo" || lane.name.trim().toLowerCase() === "todo",
-      ) || board.lanes[0];
-      // No title: the backend leaves title_edited false so the first run's
-      // enrichment can name the task. "New task" is a display-only fallback.
-      const { task } = await createTask({
-        prompt: "",
-        lane: todoLane?.id || "todo",
-      });
-      setBoard({ ...board, tasks: [task, ...board.tasks] });
-      setChatTask(task);
-      setChatDrawerOpen(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create task");
-    } finally {
-      busyRef.current = false;
-    }
+  const openNewTaskComposer = (laneId?: string, anchor?: HTMLElement) => {
+    if (!board) return;
+    setNewTaskLane((current) => laneId || (board.lanes.some((lane) => lane.id === current) ? current : board.lanes[0]?.id));
+    setComposerAnchor(anchor ?? (document.activeElement as HTMLElement));
+    setComposerOpen(true);
   };
 
   const laneCounts: Record<string, number> = {};
@@ -253,7 +244,7 @@ export default function TasksPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button size="sm" onClick={() => void openNewTaskDrawer()}>
+          <Button size="sm" onClick={(event) => openNewTaskComposer(undefined, event.currentTarget)} disabled={!board}>
             <RiAddLine className="h-4 w-4" />
             New task
           </Button>
@@ -340,7 +331,7 @@ export default function TasksPage() {
             onBoardChange={setBoard}
             onRefresh={refresh}
             onEditDraft={(task) => { setEditingTask(task); setTaskDialogOpen(true); }}
-            onAddTask={(laneId) => { setEditingTask(null); setNewTaskLane(laneId); setTaskDialogOpen(true); }}
+            onAddTask={openNewTaskComposer}
             onError={setError}
             includedTagIds={includedTagIds}
             excludedTagIds={excludedTagIds}
@@ -352,16 +343,12 @@ export default function TasksPage() {
               onBoardChange={setBoard}
               onRefresh={refresh}
               onEditDraft={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
-              onAddTask={() => void openNewTaskDrawer()}
+              onAddTask={openNewTaskComposer}
               onOpenChat={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
               onError={setError}
               includedTagIds={includedTagIds}
               excludedTagIds={excludedTagIds}
             />
-            {/* Desktop capture box — mirrors the PWA. Mobile renders its own
-                inside MobileTaskBoard, so only add it here. Fires the task
-                immediately (start: true); it lands in Working on refresh. */}
-            <QuickAddTask onAdded={refresh} />
           </>
         )
       ) : (
@@ -376,6 +363,19 @@ export default function TasksPage() {
         </div>
       )}
 
+      {creationNotice && <p role="status" className="text-xs text-muted-foreground">{creationNotice}</p>}
+      <QuickAddTask
+        open={composerOpen}
+        onOpenChange={setComposerOpen}
+        lanes={board?.lanes ?? []}
+        lane={newTaskLane ?? ""}
+        onLaneChange={setNewTaskLane}
+        anchor={composerAnchor}
+        onAdded={(started) => {
+          setCreationNotice(started ? "Task added and started" : "Task saved. Start it whenever you are ready.");
+          void refresh();
+        }}
+      />
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}

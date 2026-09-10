@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import type { Task, TasksBoardResponse } from "@/lib/api";
 import { useTaskBoardActions } from "./useTaskBoardActions";
 import { MobileTaskCard } from "./MobileTaskCard";
-import { QuickAddTask } from "./QuickAddTask";
 
 interface MobileTaskBoardProps {
   board: TasksBoardResponse;
@@ -67,12 +66,6 @@ export function MobileTaskBoard({
   const tasks = tasksByColumn[selectedId] ?? [];
   const isLane = laneIds.includes(selectedId);
 
-  // Quick-added tasks fire immediately — show them where they land.
-  const handleQuickAdded = () => {
-    setSelected("working");
-    onRefresh();
-  };
-
   return (
     <div className="flex flex-1 flex-col gap-3 min-h-0">
       {/* Column chips */}
@@ -105,6 +98,20 @@ export function MobileTaskBoard({
         })}
       </div>
 
+      <div className="flex shrink-0 items-center justify-between px-1">
+        <h2 className="text-sm font-medium">{columns.find((column) => column.id === selectedId)?.name}</h2>
+        {isLane && (
+          <button
+            onClick={() => onAddTask(selectedId)}
+            aria-label={`Add task to ${columns.find((column) => column.id === selectedId)?.name}`}
+            className="flex items-center gap-1 rounded-md px-2 py-2 text-xs text-muted-foreground/70 active:bg-muted"
+          >
+            <RiAddLine className="h-3.5 w-3.5" />
+            Add task
+          </button>
+        )}
+      </div>
+
       {/* Selected column */}
       <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto pb-4">
         {tasks.map((task) => (
@@ -127,18 +134,7 @@ export function MobileTaskBoard({
         {tasks.length === 0 && (
           <p className="py-6 text-center text-xs text-muted-foreground">Nothing here</p>
         )}
-        {isLane && (
-          <button
-            onClick={() => onAddTask(selectedId)}
-            className="flex items-center gap-1 rounded-md px-2 py-2 text-xs text-muted-foreground/70 active:bg-muted"
-          >
-            <RiAddLine className="h-3.5 w-3.5" />
-            Task
-          </button>
-        )}
       </div>
-
-      <QuickAddTask onAdded={handleQuickAdded} />
     </div>
   );
 }

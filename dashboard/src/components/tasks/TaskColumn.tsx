@@ -13,7 +13,7 @@ interface TaskColumnProps {
   /** Whether the current drag can drop here (undefined = no drag active). */
   droppable?: boolean;
   /** Staging lanes only: create a task directly in this lane. */
-  onAddTask?: () => void;
+  onAddTask?: (anchor: HTMLElement) => void;
   children: React.ReactNode;
 }
 
@@ -30,6 +30,18 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: 
           {name}
         </span>
         <span className="text-[11px] tabular-nums text-muted-foreground/80">{tasks.length}</span>
+        {onAddTask && (
+          <button
+            onClick={(event) => onAddTask(event.currentTarget)}
+            aria-label={`Add task to ${name}`}
+            className={cn(
+              "ml-auto flex items-center gap-1 rounded-md px-2 py-1.5 text-xs",
+              "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <RiAddLine className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       <SortableContext
         items={tasks.map((t) => t.conversation_id)}
@@ -44,18 +56,6 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: 
           )}
         >
           {children}
-          {onAddTask && (
-            <button
-              onClick={onAddTask}
-              className={cn(
-                "flex items-center gap-1 rounded-md px-2 py-1.5 text-xs",
-                "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
-              )}
-            >
-              <RiAddLine className="h-3.5 w-3.5" />
-              Task
-            </button>
-          )}
         </div>
       </SortableContext>
     </div>
