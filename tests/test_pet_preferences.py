@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from api.governance_routes import VALID_PETS, handle_update_my_pet
+from api.governance_routes import LEGACY_PET_MAP, VALID_PETS, handle_get_me, handle_update_my_pet
 
 
 class Request(dict):
@@ -79,3 +79,42 @@ def test_frontend_pet_catalog_matches_api():
 
     source = (Path(__file__).parents[1] / "dashboard/src/components/PetCompanion.tsx").read_text()
     assert set(re.findall(r'\{ id: "([a-z-]+)", name:', source)) == set(VALID_PETS)
+
+
+def test_legacy_pet_map_targets_current_catalog():
+    assert set(LEGACY_PET_MAP.values()) <= set(VALID_PETS)
+    assert not set(LEGACY_PET_MAP) & set(VALID_PETS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy,successor", sorted(LEGACY_PET_MAP.items()))
+async def test_me_migrates_retired_pet_to_successor(legacy, successor):
+    db = MagicMock()
+    db.users.find_one = AsyncMock(return_value={
+        "email": "alice@example.com",
+        "pet_preference": {"pet_id": legacy, "visible": True, "animated": False},
+    })
+    db.users.update_one = AsyncMock(return_value=MagicMock(matched_count=1))
+    with patch("api.governance_routes.get_db", return_value=db):
+        response = await handle_get_me(Request(None))
+    assert response.status == 200
+    body = json.loads(response.body)
+    assert body["pet_preference"] == {"pet_id": successor, "visible": True, "animated": False}
+    args = db.users.update_one.call_args.args
+    assert args[0] == {"email": "alice@example.com"}
+    assert args[1]["$set"]["pet_preference"]["pet_id"] == successor
+
+
+@pytest.mark.asyncio
+async def test_me_leaves_current_pet_untouched():
+    db = MagicMock()
+    db.users.find_one = AsyncMock(return_value={
+        "email": "alice@example.com",
+        "pet_preference": {"pet_id": "duck", "visible": True, "animated": True},
+    })
+    db.users.update_one = AsyncMock()
+    with patch("api.governance_routes.get_db", return_value=db):
+        response = await handle_get_me(Request(None))
+    assert response.status == 200
+    assert json.loads(response.body)["pet_preference"]["pet_id"] == "duck"
+    db.users.update_one.assert_not_called()
