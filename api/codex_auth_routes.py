@@ -101,38 +101,51 @@ async def handle_codex_terminal_token(request: web.Request) -> web.Response:
     return web.json_response({"token": token, "autoCommand": auto_command})
 
 
+async def remove_codex_credentials(user_email: str) -> bool:
+    """Gracefully log out and delete a user's Codex credential dir.
+
+    Shared by the disconnect route and user deletion (governance) so a removed
+    user's auth file cannot be re-discovered by the pool's disk rescan.
+    Returns True if the dir is gone (or never existed), False on removal failure.
+    """
+    config_dir = _get_codex_users_dir() / user_email
+    if not config_dir.exists():
+        return True
+
+    # Try graceful logout first (revokes the token server-side)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "codex", "logout",
+            env={**os.environ, "CODEX_HOME": str(config_dir)},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10)
+    except Exception as e:
+        logger.warning("Codex logout failed for %s: %s", user_email, e)
+
+    try:
+        shutil.rmtree(config_dir)
+        logger.info("Removed Codex config dir for %s", user_email)
+        return True
+    except OSError as e:
+        logger.error("Failed to remove Codex config dir for %s: %s", user_email, e)
+        return False
+
+
 async def handle_codex_disconnect(request: web.Request) -> web.Response:
     """POST /api/codex-auth/disconnect — remove user's Codex credentials."""
     user_email = get_user_email(request)
     if not user_email:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
-    config_dir = _get_codex_users_dir() / user_email
-
     try:
         pool = get_codex_pool()
     except RuntimeError:
         pool = None
 
-    if config_dir.exists():
-        # Try graceful logout first (revokes the token server-side)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "codex", "logout",
-                env={**os.environ, "CODEX_HOME": str(config_dir)},
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await asyncio.wait_for(proc.communicate(), timeout=10)
-        except Exception as e:
-            logger.warning("Codex logout failed for %s: %s", user_email, e)
-
-        try:
-            shutil.rmtree(config_dir)
-            logger.info("Removed Codex config dir for %s", user_email)
-        except OSError as e:
-            logger.error("Failed to remove Codex config dir for %s: %s", user_email, e)
-            return web.json_response({"error": "Failed to remove credentials"}, status=500)
+    if not await remove_codex_credentials(user_email):
+        return web.json_response({"error": "Failed to remove credentials"}, status=500)
 
     if pool is not None:
         pool.refresh_accounts()
