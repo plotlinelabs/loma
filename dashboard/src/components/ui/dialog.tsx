@@ -66,6 +66,10 @@ function DialogContent({
           // keyboard never hides fields or footer buttons (--app-h tracks the
           // visual viewport in the installed PWA).
           "max-md:top-[max(0.75rem,env(safe-area-inset-top))] max-md:translate-y-0 max-md:max-h-[calc(var(--app-h,100dvh)-max(0.75rem,env(safe-area-inset-top))-0.75rem)] max-md:overflow-y-auto max-md:overflow-x-hidden max-md:[&>*]:min-w-0",
+          // Desktop: cap height and scroll internally so tall content (e.g. a
+          // large pasted block in a textarea) can never push the dialog past
+          // the viewport and hide the footer buttons.
+          "md:max-h-[calc(100dvh-4rem)] md:overflow-y-auto md:overflow-x-hidden",
           className
         )}
         {...props}
