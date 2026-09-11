@@ -19,6 +19,7 @@ import {
   fetchTasksBoard,
   updateTask,
   type Task,
+  type TaskPriority,
   type TasksBoardResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -139,7 +140,7 @@ export default function TasksPage() {
   }, [sessionStatus, refresh]);
 
   const handleTaskSubmit = async (
-    values: { title: string; prompt: string; lane: string; model: string },
+    values: { title: string; prompt: string; lane: string; model: string; priority: TaskPriority | null },
     start: boolean,
   ) => {
     busyRef.current = true;
@@ -151,6 +152,7 @@ export default function TasksPage() {
           prompt: values.prompt,
           task_lane: values.lane,
           model: values.model,
+          task_priority: values.priority,
         });
         conversationId = editingTask.conversation_id;
       } else {
@@ -159,6 +161,7 @@ export default function TasksPage() {
           title: values.title || undefined,
           lane: values.lane,
           model: values.model || undefined,
+          task_priority: values.priority,
         });
         conversationId = task.conversation_id;
       }
