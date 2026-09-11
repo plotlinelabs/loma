@@ -31,6 +31,7 @@ import {
   RiTimeLine,
   RiBookOpenLine,
   RiDownloadLine,
+  RiBankCardLine,
   RiBarChartBoxLine,
   RiSettings3Line,
   RiShieldCheckLine,
@@ -110,6 +111,11 @@ const navigation: NavItem[] = [
     href: "/webhook-logs",
     minRole: "analyst",
     icon: <RiDownloadLine size={16} />,
+  },
+  {
+    name: "Billing Mapping",
+    href: "/billing-mapping",
+    icon: <RiBankCardLine size={16} />,
   },
 ];
 

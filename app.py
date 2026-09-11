@@ -40,6 +40,7 @@ from api.claude_auth_routes import setup_claude_auth_routes
 from api.codex_auth_routes import setup_codex_auth_routes
 from api.file_routes import setup_file_routes
 from api.integration_routes import setup_integration_routes
+from api.billing_routes import setup_billing_routes
 from api.prompt_settings_routes import setup_prompt_settings_routes
 from api.agent_identity_routes import setup_agent_identity_routes
 from api.telegram_routes import setup_telegram_routes
@@ -142,6 +143,7 @@ async def main():
     setup_codex_auth_routes(webhook_app)
     setup_file_routes(webhook_app)
     setup_integration_routes(webhook_app)
+    setup_billing_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
     setup_agent_identity_routes(webhook_app)
     setup_telegram_routes(webhook_app)
