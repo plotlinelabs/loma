@@ -126,6 +126,9 @@ async def list_files(user_email: str, query: str = "", limit: int = 10) -> dict:
         pageSize=limit,
         fields=fields,
         orderBy="modifiedTime desc",
+        corpora="allDrives",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     ).execute()
 
     files = [_format_file(f) for f in result.get("files", [])]
@@ -149,6 +152,7 @@ async def read_file(user_email: str, file_id: str) -> dict:
     meta = service.files().get(
         fileId=file_id,
         fields="id,name,mimeType,size,modifiedTime,owners,webViewLink",
+        supportsAllDrives=True,
     ).execute()
 
     mime_type = meta.get("mimeType", "")
@@ -177,7 +181,7 @@ async def read_file(user_email: str, file_id: str) -> dict:
         try:
             from googleapiclient.http import MediaIoBaseDownload
 
-            request = service.files().get_media(fileId=file_id)
+            request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
             fh = io.BytesIO()
             downloader = MediaIoBaseDownload(fh, request)
             done = False
@@ -192,7 +196,7 @@ async def read_file(user_email: str, file_id: str) -> dict:
         try:
             from googleapiclient.http import MediaIoBaseDownload
 
-            request = service.files().get_media(fileId=file_id)
+            request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
             fh = io.BytesIO()
             downloader = MediaIoBaseDownload(fh, request)
             done = False
@@ -270,6 +274,7 @@ async def upload_file(
         body=file_metadata,
         media_body=media,
         fields="id,name,mimeType,webViewLink,size",
+        supportsAllDrives=True,
     ).execute()
 
     return {
@@ -298,6 +303,7 @@ async def create_folder(
     result = service.files().create(
         body=metadata,
         fields="id,name,webViewLink",
+        supportsAllDrives=True,
     ).execute()
 
     return {
@@ -324,6 +330,7 @@ async def copy_file(
         fileId=file_id,
         body=metadata,
         fields="id,name,mimeType,webViewLink,size",
+        supportsAllDrives=True,
     ).execute()
 
     return {
