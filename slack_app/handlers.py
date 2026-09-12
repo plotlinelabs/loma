@@ -9,6 +9,7 @@ from api.dashboard_ingestion import ingest_dashboard_chat
 from api.drain import DRAIN_MESSAGE, is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
+from slack_app.brevity import maybe_compress_slack_reply
 from slack_app.channels import get_channel_config
 from slack_app.utils import (
     strip_bot_mention, truncate_for_slack, get_thread_context,
@@ -30,13 +31,15 @@ TASK_CAPTURE_EMOJI = "loma-task"
 CONVERSATION_TRACKER_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3001").rstrip("/") + "/conversations"
 
 
-async def _stream_response(client, channel, thread_ts, react_ts, agent_stream):
+async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, prompt=""):
     """
     Consume the agent stream and post only the final response.
 
     All intermediate text chunks are collected silently (the hourglass
     reaction stays on the original message as a progress indicator).
-    Only the last chunk is posted to the thread.
+    Only the last chunk is posted to the thread. Over-long replies get a soft
+    compress pass first (see slack_app.brevity); ``prompt`` lets that pass
+    honour explicit requests for detail.
     """
     last_text = ""
 
@@ -76,8 +79,8 @@ async def _stream_response(client, channel, thread_ts, react_ts, agent_stream):
         )
         return
 
-    # Post only the final response
-    final_text = truncate_for_slack(last_text)
+    # Post only the final response, compressed if it came back as a report
+    final_text = truncate_for_slack(await maybe_compress_slack_reply(last_text, prompt))
     logger.info("[SLACK] Posting final response (%d chars)", len(final_text))
     await client.chat_postMessage(
         channel=channel,
@@ -139,6 +142,7 @@ async def _handle_agent_request(
         # Set up observability — reuse existing conversation for same Slack thread
         observer = None
         existing_convo = None
+        user_email = None
         db = get_db()
         if db is not None:
             existing_convo = await db.conversations.find_one(
@@ -197,7 +201,7 @@ async def _handle_agent_request(
             observer=observer,
             user_email=user_email,
         )
-        await _stream_response(client, channel, thread_ts, event_ts, agent_stream)
+        await _stream_response(client, channel, thread_ts, event_ts, agent_stream, prompt=prompt)
         logger.info("[SLACK] All responses posted successfully")
 
         # Fire-and-forget: ingest this conversation as a change-stream event.
