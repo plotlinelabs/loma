@@ -75,7 +75,7 @@ def test_pooled_prompt_maps_every_slack_source_variant_to_slack_rules():
     assert "Do not copy their length, headers, or closing offers" in prompt
 
 
-@pytest.mark.parametrize("source", ["slack", "slack_mention", "slack_dm", "slack_flow", "slack_channel_bugs", "slack_bugs"])
+@pytest.mark.parametrize("source", ["slack_mention", "slack_dm", "slack_flow", "slack_channel_bugs", "slack_bugs"])
 def test_slack_family_sources_get_reply_format_reminder(source):
     assert is_slack_source(source)
     reminder = build_reply_format_reminder(source)
@@ -83,6 +83,15 @@ def test_slack_family_sources_get_reply_format_reminder(source):
     assert "at most 3 short lines" in reminder
     assert "Want me to...?" in reminder
     assert "follow-up" not in reminder
+
+
+def test_bare_slack_executor_tag_gets_no_reminder_but_keeps_slack_rules():
+    # Scheduled and webhook flow executors run stream_agent with source="slack"
+    # and tell the model its text is not posted anywhere. The pooled Slack rules
+    # still apply to that tag, but the per-message reminder must not be injected.
+    assert is_slack_source("slack")
+    assert build_reply_format_reminder("slack") == ""
+    assert build_reply_format_reminder("slack", has_thread_context=True) == ""
 
 
 @pytest.mark.parametrize("source", ["dashboard", "telegram", "github_webhook", "draft_with_loma", "", None])

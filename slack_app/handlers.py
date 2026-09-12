@@ -199,6 +199,7 @@ async def _handle_agent_request(
             conversation_context=context,
             files=files if files else None,
             observer=observer,
+            source=source,
             user_email=user_email,
         )
         await _stream_response(client, channel, thread_ts, event_ts, agent_stream, prompt=prompt)

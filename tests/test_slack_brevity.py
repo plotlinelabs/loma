@@ -176,8 +176,11 @@ async def test_handle_agent_request_forwards_prompt_to_stream_response():
     client.reactions_add = AsyncMock()
     with patch("slack_app.handlers.is_draining", return_value=False), \
          patch("slack_app.handlers.get_db", return_value=None), \
-         patch("slack_app.handlers.stream_agent", return_value=_events("ok")), \
+         patch("slack_app.handlers.stream_agent", return_value=_events("ok")) as agent, \
          patch("slack_app.handlers._stream_response", AsyncMock()) as stream:
         await _handle_agent_request(client, "C1", "1.0", "1.0", "explain the ask", "", [], "slack_flow", "U1")
 
     assert stream.await_args.kwargs["prompt"] == "explain the ask"
+    # The real Slack source must reach stream_agent, otherwise it falls back to
+    # the bare "slack" default and the per-message reminder is skipped.
+    assert agent.call_args.kwargs["source"] == "slack_flow"

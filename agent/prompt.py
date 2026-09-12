@@ -151,6 +151,13 @@ You are responding in Slack. Use Slack mrkdwn:
 # rather than an exact value.
 SLACK_SOURCE_PREFIX = "slack"
 
+# Bare "slack" is also stream_agent's default and the tag the scheduled and
+# webhook flow executors run under. Those runs tell the model its text output is
+# not posted anywhere, so they must not receive the per-message Slack reminder.
+# Real Slack entry points always tag a specific variant (slack_mention, slack_dm,
+# slack_flow, slack_channel_*).
+SLACK_EXECUTOR_SOURCE = "slack"
+
 _REPLY_FORMAT_REMINDER_SLACK = (
     "[Reply format: this is a Slack thread. Default to at most 3 short lines: answer, "
     "outcome, stop. No section headers, code blocks, evidence dumps, or closing offers "
@@ -176,9 +183,10 @@ def build_reply_format_reminder(source: str | None, has_thread_context: bool = F
     The pooled system prompt is large and the Slack brevity rules sit at its
     end, so they lose to nearer instructions and to long earlier replies in the
     thread context. Repeating the essentials right beside the current message
-    keeps them in force. Returns "" for non-Slack sources.
+    keeps them in force. Returns "" for non-Slack sources and for the bare
+    executor tag (see SLACK_EXECUTOR_SOURCE), whose output is never posted.
     """
-    if not is_slack_source(source):
+    if not is_slack_source(source) or source == SLACK_EXECUTOR_SOURCE:
         return ""
     reminder = _REPLY_FORMAT_REMINDER_SLACK
     if has_thread_context:
