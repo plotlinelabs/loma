@@ -270,12 +270,14 @@ def register_handlers(app):
             logger.info("[SLACK] Downloading %d file(s) (%d current, %d from thread)...", len(all_raw_files), len(raw_files), len(thread_raw_files))
             files = await download_slack_files(client.token, all_raw_files)
 
-        # Check if this is a monitored channel — prepend channel context if so
+        # Only new top-level mentions start the channel workflow. Thread replies
+        # already have context and should answer the latest request directly.
         channel_config = await get_channel_config(channel)
         if channel_config:
-            prompt = channel_config["prompt_prefix"] + user_message
+            is_followup = bool(event.get("thread_ts") and thread_ts != event_ts)
+            prompt = user_message if is_followup else channel_config["prompt_prefix"] + user_message
             source = channel_config["source"]
-            logger.info("[SLACK] Monitored channel #%s \u2014 using channel-specific prompt", channel_config["name"])
+            logger.info("[SLACK] Monitored channel #%s, follow-up=%s", channel_config["name"], is_followup)
         else:
             prompt = user_message
             source = "slack_mention"
