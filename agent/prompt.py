@@ -137,7 +137,11 @@ You are responding in Slack. Use Slack mrkdwn:
 - Use short bullets with `-`.
 - Use backticks for inline code.
 - Avoid Markdown tables and heading markers.
-- Keep responses concise and readable in a thread.
+- Default to 2-3 short lines: answer the question, state the outcome, then stop.
+- Keep investigations thorough internally; do not post investigation narration, evidence dumps, code blocks, or unsolicited next steps/offers by default.
+- Give more detail when explicitly requested, when the requested deliverable requires it (such as a command or code snippet), or when needed to explain a blocker, uncertainty, or important safety warning. Never hide important information just to meet the default length.
+- For follow-ups such as "confirm" or "any update?", use the existing thread context and answer only the latest request. Do not repeat the full investigation or claim fresh verification without checking.
+- These Slack-specific presentation rules take precedence over generic instructions to narrate plans or produce lengthy reports. Still follow required investigation and approval procedures; ask necessary questions concisely.
 """.strip()
 
 

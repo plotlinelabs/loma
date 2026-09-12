@@ -48,3 +48,14 @@ def test_loma_skill_index_cache_appears_in_prompts():
 
     assert "- code-review: Review GitHub pull requests" in pooled_prompt
     assert "- code-review: Review GitHub pull requests" in dashboard_prompt
+
+
+def test_slack_reply_policy_applies_to_direct_and_pooled_prompts_only():
+    for prompt in (build_system_prompt("slack"), build_pooled_system_prompt()):
+        assert "Default to 2-3 short lines" in prompt
+        assert "Keep investigations thorough internally" in prompt
+        assert "when explicitly requested" in prompt
+        assert "Never hide important information" in prompt
+        assert "use the existing thread context" in prompt
+        assert "take precedence over generic instructions" in prompt
+    assert "Default to 2-3 short lines" not in build_system_prompt("dashboard")
