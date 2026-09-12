@@ -2107,6 +2107,10 @@ def setup_api_routes(app: web.Application):
             "Access-Control-Allow-Headers": "Content-Type",
         })
 
+    # Recall deliberately does not reuse the dashboard conversation ACL.
+    from api.recall_routes import handle_fetch_history
+    app.router.add_post("/api/recall/fetch", handle_fetch_history)
+
     # API routes
     app.router.add_get("/api/conversations", handle_list_conversations)
     app.router.add_get("/api/conversations/pinned", handle_get_pinned_conversations)
