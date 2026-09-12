@@ -159,3 +159,50 @@ backfill and coverage, multi-worker cursor support and index/live-source revisio
 agreement. PR 3: trusted isolated issuer, all runtime adapters, execution scope
 capture, per-user controls, budgets/rate limits, audits, citations, prompt-injection
 handling and full chat/task E2E. Do not enable recall until all gates pass.
+
+## Mandatory live chat regression gate (every recall PR)
+
+Run on each PR's exact head, not only once for the series. Login and synthetic
+recall fixtures are not sufficient. A mocked responder, HTTP 200, or `[DONE]`
+without a valid answer is **not** a passing agent test.
+
+1. Follow `run-loma-local` with a fresh `loma_local_*` DB, isolated asset and
+   provider-account directories, Slack/scheduler off and offset ports. Never copy
+   other users' credentials, histories or integrations. Connect the requesting
+   user's provider in the isolated stack; empty provider pools are blockers, not
+   reasons to substitute canned replies. For this test no external tools are needed.
+2. Run the unchanged `app.py` and dashboard with recall **disabled**, as shipped.
+   Use one real-model pool worker (the zero-pool setup above is only for retrieval
+   fixtures). Set a valid model in both the backend and test environment.
+3. Install Playwright in a separate test environment if unavailable; point
+   `NODE_PATH` to that environment's `node_modules` and install its Chromium.
+4. Export the local first-admin login inputs without logging them, then run:
+
+```bash
+LOMA_CHAT_E2E=1 \
+LOMA_CHAT_BASE_URL=http://localhost:13001 \
+LOMA_CHAT_MODEL="$TEST_MODEL" \
+LOMA_EMAIL="$TEST_EMAIL" LOMA_PASSWORD="$TEST_PASSWORD" LOMA_TOKEN="$TEST_SETUP_TOKEN" \
+LOMA_CHAT_EVIDENCE=/tmp/loma-chat-evidence \
+node scripts/browser/chat-smoke.cjs
+```
+
+Optional `LOMA_CHROMIUM_PATH` selects an installed Chromium executable. The script
+rejects non-local URLs and requires explicit opt-in because it uses live inference.
+
+It verifies real UI submission, expected non-canned assistant content, successful
+SSE completion without provider errors, visible reply, persistence after reload,
+a second real response using previous context, same conversation ID and follow-up
+persistence. Evidence is a content-minimal JSON result and screenshots. Provider
+failure must fail the run even when delivered as an ordinary assistant message.
+
+Record the exact commit, model, flag state and test result in the PR. Inspect
+screenshots for credentials or private content before attaching. Do not publish
+raw request payloads, provider logs, environment files, or auth storage. Teardown
+by saved PID/cwd, remove copied credentials and drop only the throwaway DB.
+
+PR 2 and PR 3 must rerun this baseline. PR 3 additionally needs recall-enabled
+chat **and task** execution, search/fetch tool invocation, citations, isolation,
+revocation, error recovery and runtime-budget tests. Passing the baseline does
+not prove autonomous recall or cover every provider/model. Run the baseline for
+each runtime affected by a PR; explicitly mark unavailable runtimes as unverified.
