@@ -94,6 +94,7 @@ function parseStream(body) {
     const first = await send(`This is a chat smoke test. Do not use tools or external resources. Remember the test code ${nonce}. Reply with exactly ACK-${nonce}, nothing else.`, `ACK-${nonce}`);
     const firstId = first.stream.events.find(e => e.type === 'conversation_id')?.conversation_id;
     check(Boolean(firstId), 'Real conversation ID returned');
+    await page.locator('button[title="Choose model"]:not([disabled]):visible').waitFor({ timeout: 90000 });
     await page.screenshot({ path: path.join(out, 'chat-first-response.png'), fullPage: true });
     await page.reload();
     await page.getByText(`ACK-${nonce}`, { exact: true }).last().waitFor({ timeout: 30000 });
@@ -104,13 +105,15 @@ function parseStream(body) {
     await page.reload();
     await page.getByText(`REMEMBERED-${nonce}`, { exact: true }).last().waitFor({ timeout: 30000 });
     check(true, 'Follow-up response persisted after reload');
+    await page.locator('button[title="Choose model"]:not([disabled]):visible').waitFor({ timeout: 90000 });
     await page.screenshot({ path: path.join(out, 'chat-follow-up.png'), fullPage: true });
     report.passed = true;
   } catch (error) {
     report.error = error.message;
     // Do not screenshot a failed login: it can still contain credentials.
     if (!new URL(page.url()).pathname.includes('/login') && page.url() !== 'about:blank')
-      await page.screenshot({ path: path.join(out, 'chat-failure.png'), fullPage: true }).catch(() => {});
+      await page.locator('button[title="Choose model"]:not([disabled]):visible').waitFor({ timeout: 90000 });
+    await page.screenshot({ path: path.join(out, 'chat-failure.png'), fullPage: true }).catch(() => {});
     throw error;
   } finally {
     fs.writeFileSync(path.join(out, 'chat-results.json'), JSON.stringify(report, null, 2));
