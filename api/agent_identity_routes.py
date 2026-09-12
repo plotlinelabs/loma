@@ -38,6 +38,7 @@ MAX_DESCRIPTION_LEN = 200
 MAX_PROMPT_LEN = 8000
 MAX_SKILLS = 50
 MAX_TOOLS = 50
+MAX_SHARES = 100
 
 
 def _serialize(doc):
@@ -63,15 +64,22 @@ def _serialize(doc):
     return doc
 
 
-def _visible_query(user_email: str) -> dict:
-    """Agents this user can see and chat with: their own plus workspace-shared."""
-    return {
-        "deleted": {"$ne": True},
-        "$or": [
-            {"created_by": user_email},
-            {"visibility": "workspace"},
-        ],
-    }
+def _visible_query(user_email: str, team_ids: list[str]) -> dict:
+    """Agents this user can see and chat with: their own, workspace-shared,
+    shared with them directly, or shared with a team they belong to."""
+    ors: list[dict] = [
+        {"created_by": user_email},
+        {"visibility": "workspace"},
+        {"shared_with.users": user_email},
+    ]
+    if team_ids:
+        ors.append({"shared_with.teams": {"$in": team_ids}})
+    return {"deleted": {"$ne": True}, "$or": ors}
+
+
+async def _user_team_ids(db, user_email: str) -> list[str]:
+    teams = await db.teams.find({"members": user_email}, {"team_id": 1}).to_list(100)
+    return [t["team_id"] for t in teams if t.get("team_id")]
 
 
 def _can_manage(agent: dict, user_email: str, system_role: str) -> bool:
@@ -148,6 +156,34 @@ async def _validate_body(db, body: dict, *, partial: bool) -> tuple[dict, str | 
             return {}, f"visibility must be one of: {', '.join(VISIBILITIES)}"
         fields["visibility"] = visibility
 
+    if "shared_with" in body:
+        shared = body.get("shared_with") or {}
+        if not isinstance(shared, dict):
+            return {}, "shared_with must be an object with users and teams lists"
+        users = shared.get("users") or []
+        teams = shared.get("teams") or []
+        if not isinstance(users, list) or not all(isinstance(u, str) for u in users):
+            return {}, "shared_with.users must be a list of emails"
+        if not isinstance(teams, list) or not all(isinstance(t, str) for t in teams):
+            return {}, "shared_with.teams must be a list of team ids"
+        users = sorted({u.strip() for u in users if u.strip()})[:MAX_SHARES]
+        teams = sorted({t.strip() for t in teams if t.strip()})[:MAX_SHARES]
+        if users:
+            known = await db.users.find(
+                {"email": {"$in": users}}, {"email": 1},
+            ).to_list(MAX_SHARES)
+            unknown = set(users) - {doc["email"] for doc in known}
+            if unknown:
+                return {}, f"Unknown users: {', '.join(sorted(unknown)[:5])}"
+        if teams:
+            known = await db.teams.find(
+                {"team_id": {"$in": teams}}, {"team_id": 1},
+            ).to_list(MAX_SHARES)
+            unknown = set(teams) - {doc["team_id"] for doc in known}
+            if unknown:
+                return {}, f"Unknown teams: {', '.join(sorted(unknown)[:5])}"
+        fields["shared_with"] = {"users": users, "teams": teams}
+
     if "auth_mode" in body:
         auth_mode = body.get("auth_mode")
         if auth_mode not in AUTH_MODES:
@@ -202,6 +238,7 @@ async def handle_create_agent(request: web.Request) -> web.Response:
         "tools": fields.get("tools", []),
         "auth_mode": fields.get("auth_mode", "requester"),
         "visibility": visibility,
+        "shared_with": fields.get("shared_with", {"users": [], "teams": []}),
         "default_model": fields.get("default_model"),
         "avatar": fields.get("avatar", _validate_avatar(None)),
         "status": "active",
@@ -224,7 +261,8 @@ async def handle_list_agents(request: web.Request) -> web.Response:
     if not user_email:
         return web.json_response({"error": "Authentication required"}, status=401)
 
-    agents = await db.agent_identities.find(_visible_query(user_email)).sort(
+    team_ids = await _user_team_ids(db, user_email)
+    agents = await db.agent_identities.find(_visible_query(user_email, team_ids)).sort(
         [("visibility", -1), ("created_at", -1)],
     ).to_list(200)
 
@@ -244,6 +282,35 @@ async def handle_list_agents(request: web.Request) -> web.Response:
     return web.json_response({"agents": serialized})
 
 
+async def handle_share_directory(request: web.Request) -> web.Response:
+    """GET /api/agent-identities/directory — people and teams available as share
+    targets. Deliberately minimal fields (no roles, no tool assignments) so it's
+    safe to expose to every authenticated user, unlike the governance lists.
+    """
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Observability not configured"}, status=503)
+
+    if not get_user_email(request):
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    users = await db.users.find(
+        {"status": {"$nin": ["rejected", "pending"]}},
+        {"email": 1, "name": 1, "avatar": 1},
+    ).sort("email", 1).to_list(300)
+    teams = await db.teams.find(
+        {}, {"team_id": 1, "name": 1, "color": 1, "bg_color": 1},
+    ).sort("name", 1).to_list(100)
+
+    return web.json_response({
+        "users": [
+            {"email": u["email"], "name": u.get("name", ""), "avatar": u.get("avatar", "")}
+            for u in users
+        ],
+        "teams": _serialize([{k: t.get(k) for k in ("team_id", "name", "color", "bg_color")} for t in teams]),
+    })
+
+
 async def handle_get_agent(request: web.Request) -> web.Response:
     """GET /api/agent-identities/{agent_id}."""
     db = get_db()
@@ -254,9 +321,10 @@ async def handle_get_agent(request: web.Request) -> web.Response:
     if not user_email:
         return web.json_response({"error": "Authentication required"}, status=401)
 
+    team_ids = await _user_team_ids(db, user_email)
     agent = await db.agent_identities.find_one({
         "agent_id": request.match_info["agent_id"],
-        **_visible_query(user_email),
+        **_visible_query(user_email, team_ids),
     })
     if not agent:
         return web.json_response({"error": "Not found"}, status=404)
@@ -351,10 +419,11 @@ async def resolve_agent_for_chat(db, agent_id: str, user_email: str) -> dict | N
     """Load an active agent the user is allowed to chat with, or None."""
     if not agent_id:
         return None
+    team_ids = await _user_team_ids(db, user_email)
     return await db.agent_identities.find_one({
         "agent_id": agent_id,
         "status": {"$ne": "disabled"},
-        **_visible_query(user_email),
+        **_visible_query(user_email, team_ids),
     })
 
 
@@ -407,6 +476,8 @@ def setup_agent_identity_routes(app: web.Application):
     """Register agent identity routes on the aiohttp app."""
     app.router.add_post("/api/agent-identities", handle_create_agent)
     app.router.add_get("/api/agent-identities", handle_list_agents)
+    # Static route must precede the {agent_id} wildcard
+    app.router.add_get("/api/agent-identities/directory", handle_share_directory)
     app.router.add_get("/api/agent-identities/{agent_id}", handle_get_agent)
     app.router.add_patch("/api/agent-identities/{agent_id}", handle_update_agent)
     app.router.add_delete("/api/agent-identities/{agent_id}", handle_delete_agent)
