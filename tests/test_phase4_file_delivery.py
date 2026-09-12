@@ -196,7 +196,7 @@ class TestFileServing:
         src.write(b"PDF content here")
         src.close()
 
-        result = register_served_file(src.name)
+        result = register_served_file(src.name, owner_email="alice@example.test")
 
         assert "file_id" in result
         assert result["url"].startswith("/api/files/")
@@ -219,7 +219,7 @@ class TestFileServing:
         src.write(b"a,b,c\n1,2,3\n")
         src.close()
 
-        result = register_served_file(src.name, original_name="my_report.csv")
+        result = register_served_file(src.name, original_name="my_report.csv", owner_email="alice@example.test")
         assert result["name"] == "my_report.csv"
         assert result["mime_type"] == "text/csv"
 
@@ -230,14 +230,14 @@ class TestFileServing:
         from api.routes import register_served_file
 
         with pytest.raises(FileNotFoundError):
-            register_served_file("/tmp/nonexistent_file_abc123.pdf")
+            register_served_file("/tmp/nonexistent_file_abc123.pdf", owner_email="alice@example.test")
 
     def test_register_served_file_for_directory(self):
         """register_served_file should raise FileNotFoundError for directories."""
         from api.routes import register_served_file
 
         with pytest.raises(FileNotFoundError):
-            register_served_file(self.test_dir)
+            register_served_file(self.test_dir, owner_email="alice@example.test")
 
     def test_registered_file_in_registry(self):
         """Registered files should be findable in the in-memory registry."""
@@ -247,7 +247,7 @@ class TestFileServing:
         src.write(b"hello")
         src.close()
 
-        result = register_served_file(src.name)
+        result = register_served_file(src.name, owner_email="alice@example.test")
         file_id = result["file_id"]
 
         assert file_id in _served_files

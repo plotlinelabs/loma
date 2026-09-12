@@ -1175,6 +1175,7 @@ async def _emit_text(
     emitted_artifact_ids: set[str],
     emitted_file_paths: set[str],
     emit_text: bool = True,
+    user_email: str | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     from agent.client import _detect_artifacts, _detect_file_paths, _get_artifact_version
 
@@ -1221,7 +1222,7 @@ async def _emit_text(
                 emitted_file_paths.add(fpath)
                 try:
                     from api.routes import register_served_file
-                    file_info = register_served_file(fpath)
+                    file_info = register_served_file(fpath, owner_email=user_email)
                     yield {
                         "type": "file",
                         "file_id": file_info["file_id"],
@@ -1424,6 +1425,7 @@ async def run_opencode_agent(
                     emitted_artifact_ids=emitted_artifact_ids,
                     emitted_file_paths=emitted_file_paths,
                     emit_text=False,
+                    user_email=user_email,
                 ):
                     yield output_event
         elif part_type == "reasoning":
