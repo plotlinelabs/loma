@@ -30,6 +30,7 @@ from claude_agent_sdk import (
 )
 
 from agent.pool import get_pool
+from agent.prompt import build_reply_format_reminder
 
 logger = logging.getLogger(__name__)
 
@@ -936,6 +937,12 @@ async def stream_agent(
                         f"`python3 -c \"import openpyxl; ...\"` for Excel files)."
                     )
                 logger.info("[AGENT] Binary file saved to temp: %s -> %s", f["name"], tmp.name)
+
+    # Slack replies: repeat the format essentials right next to the message so
+    # they are not outweighed by the long system prompt or earlier long replies.
+    reminder = build_reply_format_reminder(source, has_thread_context=bool(conversation_context))
+    if reminder:
+        text_parts.append(reminder)
 
     full_prompt = "\n\n".join(text_parts)
 
