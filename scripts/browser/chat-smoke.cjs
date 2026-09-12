@@ -44,6 +44,20 @@ function parseStream(body) {
 (async () => {
   const browser = await chromium.launch({ ...(process.env.LOMA_CHROMIUM_PATH ? { executablePath: process.env.LOMA_CHROMIUM_PATH } : {}) });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  let captureBody;
+  await page.exposeBinding('recordSmokeStream', (_, body) => captureBody?.(body));
+  // Observe a clone of the actual response in-page. CDP response.text() can
+  // lose SSE bodies when Next.js changes the conversation URL. No route mocks.
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const response = await original(...args);
+      if (new URL(response.url).pathname === '/api/chat') {
+        response.clone().text().then(body => window.recordSmokeStream(body)).catch(() => {});
+      }
+      return response;
+    };
+  });
   try {
     await page.addInitScript(model => localStorage.setItem('dashboard-chat-selected-model', model), process.env.LOMA_CHAT_MODEL);
     await page.goto(`${base}/login`, { timeout: 120000 });
@@ -58,6 +72,7 @@ function parseStream(body) {
     check(true, 'Logged-in chat composer loaded');
     async function send(message, expected) {
       await page.locator('button[title="Choose model"]:not([disabled]):visible').waitFor({ timeout: 90000 });
+      const bodyPromise = new Promise(resolve => { captureBody = resolve; });
       const responsePromise = page.waitForResponse(r => new URL(r.url()).pathname === '/api/chat' && r.request().method() === 'POST', { timeout: 180000 });
       const box = page.locator('textarea:visible').last();
       await box.fill(message);
@@ -66,7 +81,7 @@ function parseStream(body) {
       assert.equal(response.status(), 200, 'Chat request succeeded');
       const request = response.request().postDataJSON();
       assert.equal(request.model, process.env.LOMA_CHAT_MODEL, 'Requested real model selected');
-      const body = await Promise.race([response.text(), new Promise((_, reject) => {
+      const body = await Promise.race([bodyPromise, new Promise((_, reject) => {
         const timer = setTimeout(() => reject(Error('Chat completion timeout')), 180000); timer.unref();
       })]);
       const stream = parseStream(body);
