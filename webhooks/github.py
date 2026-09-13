@@ -34,6 +34,10 @@ from webhooks.github_graphql import (
     resolve_review_thread,
 )
 from observability.review_quality import process_human_review_for_quality
+from utils.pr_followup import (
+    extract_self_review_verdict,
+    post_self_review_followup,
+)
 
 load_dotenv()
 
@@ -1500,6 +1504,37 @@ async def _process_pr_review(
                 title="Review Complete" if review_succeeded else "Review Failed",
                 summary=f"Reviewed PR #{pr_number}: {pr_title}" if review_succeeded else "The review encountered an error.",
             )
+
+        # Stage-2 follow-up (self-review only): thread the review outcome back
+        # to wherever the PR was announced (Slack thread / Linear issue / Loma
+        # inbox), if the creating flow registered a notification target. This
+        # runs on BOTH success and failure — a failed self-review must be
+        # visible to the human, never a silent skip.
+        if self_review:
+            try:
+                verdict = None
+                if review_succeeded:
+                    try:
+                        reviews = await get_pr_reviews(repo_owner, repo_name, pr_number)
+                        verdict = extract_self_review_verdict(reviews, AGENT_GITHUB_LOGIN)
+                    except Exception:
+                        logger.warning(
+                            "[GITHUB-WEBHOOK] Could not extract self-review verdict on %s#%d",
+                            repo_full_name, pr_number,
+                        )
+                await post_self_review_followup(
+                    db,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    pr_url=pr_url,
+                    verdict=verdict,
+                    succeeded=review_succeeded,
+                )
+            except Exception:
+                logger.exception(
+                    "[GITHUB-WEBHOOK] Self-review follow-up failed for %s#%d",
+                    repo_full_name, pr_number,
+                )
 
 
 async def _handle_slash_command(

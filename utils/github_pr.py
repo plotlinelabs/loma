@@ -47,6 +47,7 @@ async def clone_and_run_claude(
     draft: bool = True,
     timeout: int = 600,
     append_system_prompt: str | None = None,
+    notify_target: dict | None = None,
 ) -> dict:
     """Clone a repo, run Claude CLI on it, push changes, create a draft PR.
 
@@ -61,6 +62,11 @@ async def clone_and_run_claude(
         draft: Whether to create a draft PR
         timeout: Max seconds for the Claude CLI process
         append_system_prompt: Optional system prompt to append (e.g. skill content for non-self repos)
+        notify_target: Optional notification target for the PR's self-review
+            follow-up (see utils.pr_followup.TARGET_REQUIRED_FIELDS). When set,
+            the target is registered right after PR creation so the
+            fresh-context self-review verdict is threaded back to wherever
+            this PR is announced.
 
     Returns:
         dict with keys: pr_url, pr_number, branch, files_changed
@@ -256,6 +262,30 @@ async def clone_and_run_claude(
             "branch": branch_name,
             "files_changed": files_changed,
         }
+
+        # Stage-1 registration for the two-stage self-review notification:
+        # record where this PR's self-review verdict should be threaded back.
+        # Best-effort — a registration failure must not fail the PR creation.
+        if notify_target:
+            try:
+                from observability.db import get_db
+                from utils.pr_followup import register_pr_notification_target
+
+                db = get_db()
+                if db is not None:
+                    await register_pr_notification_target(
+                        db, repo, pr_number, notify_target
+                    )
+                else:
+                    logger.warning(
+                        "[PR-UTIL] No database — self-review follow-up target not registered for %s#%d",
+                        repo, pr_number,
+                    )
+            except Exception:
+                logger.exception(
+                    "[PR-UTIL] Failed to register self-review follow-up target for %s#%d",
+                    repo, pr_number,
+                )
 
     except Exception:
         # On failure, keep work_dir for debugging (log file is at {work_dir}/claude.log)

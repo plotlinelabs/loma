@@ -260,6 +260,28 @@ If none of the above apply (e.g. a small single-file fix, copy change, or config
 
 ---
 
+## Step 6c: Register the Self-Review Follow-Up Target
+
+Every agent-created PR gets an automatic fresh-context self-review (triggered by the `pull_request` webhook). Register WHERE you are about to announce the PR so the self-review verdict is threaded back to the same place as a follow-up:
+
+```bash
+# Slack-originated request (use the channel ID and thread timestamp you will reply in):
+python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
+  --slack-channel <channel-id> --thread-ts <thread-ts>
+
+# Dashboard conversation (use the requester's email; conversation ID makes the notification deep-link back):
+python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
+  --user-email <requester-email> --conversation-id <conversation-id>
+
+# Linear webhook flow (use the Linear issue UUID, not the ENG-123 identifier):
+python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
+  --linear-issue-id <linear-issue-uuid>
+```
+
+If registration fails, continue — the PR still gets its self-review on GitHub; only the follow-up notification is skipped.
+
+---
+
 ## Step 7: Share the Result
 
 Post back in Slack:
@@ -273,10 +295,14 @@ Post back in Slack:
 • `path/to/file1.ts` — <brief description>
 • `path/to/file2.ts` — <brief description>
 
+:mag: A fresh-context *self-review* of this PR is running — the verdict will be posted in this thread shortly. Wait for it before reviewing.
+
 This is a *draft PR* — please review the changes before marking it ready for review.
 ```
 
-> **Webhook-triggered mode:** When invoked from a Linear webhook, instead of posting to Slack, comment on the Linear ticket with the PR details using `mcp__linear__create_comment`. The comment MUST start with a bot marker comment (e.g. `<!-- agent -->`) to prevent webhook loops.
+> **Two-stage notification:** The "self-review running" line is Stage 1. Stage 2 (the verdict follow-up) is posted automatically by the webhook pipeline to the target you registered in Step 6c — do NOT wait for the review to finish before posting this message.
+
+> **Webhook-triggered mode:** When invoked from a Linear webhook, instead of posting to Slack, comment on the Linear ticket with the PR details using `mcp__linear__create_comment`. The comment MUST start with a bot marker comment (e.g. `<!-- agent -->`) to prevent webhook loops, and MUST also state that a self-review is running with the verdict to follow.
 
 ---
 
