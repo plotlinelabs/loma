@@ -119,7 +119,7 @@ class TestSelfReviewRouting:
     async def test_agent_pr_label_routes_to_self_review_when_login_mismatches(self):
         # Misconfigured AGENT_GITHUB_LOGIN: author differs, but the PR carries the
         # "Agent PR" label → still self-review (and a warning is logged).
-        raw, sig = _signed(_pr_event("plotline-insights", draft=True, action="synchronize",
+        raw, sig = _signed(_pr_event("some-other-login", draft=True, action="synchronize",
                                      labels=[AGENT_PR_LABEL, "preview"]))
         request = _request(raw, sig)
         with patch("webhooks.github.GITHUB_WEBHOOK_SECRET", SECRET), \
