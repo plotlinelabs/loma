@@ -2,9 +2,8 @@
 
 Stage 1 — the flow that creates an agent PR announces it immediately
 ("PR ready — self-review running…") and registers WHERE it announced it
-(a Slack thread, a Linear issue, or a user's Loma inbox). Registration
-happens via the `tools/github_pr_notify.py` CLI (skill-driven flows) or
-the `notify_target` parameter of `utils.github_pr.clone_and_run_claude`.
+(a Slack thread, a Linear issue, or a user's Loma inbox) via the
+`tools/github_pr_notify.py` CLI.
 
 Stage 2 — when the fresh-context self-review completes (or fails),
 `webhooks/github.py` calls `post_self_review_followup()`, which looks up
@@ -12,7 +11,9 @@ the registered target and threads the review verdict back to the same
 place. This makes the self-review's pending/complete/failed state visible
 to the human instead of implicit: the initial message says the review is
 running, and the follow-up carries the verdict. If the review pipeline
-dies, the failure is posted too — never a silent skip.
+dies, the failure is posted too — never a silent skip. If self-review is
+disabled on the deploy, that is posted as well, so the Stage-1 "verdict
+coming" promise is always answered.
 
 Targets are stored in the `pr_notification_targets` collection keyed by
 (repo_full_name, pr_number). The latest registration wins.
@@ -20,11 +21,21 @@ Targets are stored in the `pr_notification_targets` collection keyed by
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
 COLLECTION = "pr_notification_targets"
+
+# The one recovery path advertised on a failed self-review. The issue_comment
+# webhook only dispatches comments that mention the agent, so a bare
+# `/rereview` is silently ignored — always tell humans the mention form.
+REREVIEW_COMMAND = "@loma-agent /rereview"
+
+# Tolerance applied to `started_at` when scoping reviews to the current run,
+# to absorb clock skew between this host and GitHub. A self-review takes
+# minutes to post, so a previous run's review is always far older than this.
+_RUN_SCOPE_SKEW = timedelta(seconds=60)
 
 # Supported target types and the fields each requires.
 TARGET_REQUIRED_FIELDS = {
@@ -96,17 +107,46 @@ async def get_pr_notification_target(
     )
 
 
-def extract_self_review_verdict(reviews: list[dict], agent_login: str) -> str | None:
-    """Pull the verdict line out of the agent's most recent self-review.
+def _parse_github_timestamp(value) -> datetime | None:
+    """Parse a GitHub ISO-8601 timestamp (`2026-01-02T03:04:05Z`) to aware UTC."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def extract_self_review_verdict(
+    reviews: list[dict],
+    agent_login: str,
+    started_at: datetime | None = None,
+) -> str | None:
+    """Pull the verdict line out of the agent's self-review for THIS run.
 
     The self-review prompt requires the review body to START with a single
     verdict line (`✅ Self-review: …` or `🔴 Self-review: …`). Reviews come
     from `webhooks.github_graphql.get_pr_reviews` in chronological order, so
     the last matching review is the freshest.
+
+    When ``started_at`` is given, only reviews created at or after that
+    instant (minus a small skew tolerance) are considered. Without this, a run
+    whose agent finished WITHOUT posting (max turns, MCP error) would report
+    the previous push's verdict as if it were fresh — on a `synchronize` that
+    is exactly the case where a stale verdict is most misleading.
     """
+    cutoff = started_at - _RUN_SCOPE_SKEW if started_at else None
     for review in reversed(reviews or []):
         if review.get("author") != agent_login:
             continue
+        if cutoff is not None:
+            created_at = _parse_github_timestamp(review.get("created_at"))
+            # Unparseable timestamp → cannot prove it belongs to this run → skip.
+            if created_at is None or created_at < cutoff:
+                continue
         body = (review.get("body") or "").strip()
         for line in body.splitlines():
             line = line.strip()
@@ -121,26 +161,59 @@ def _build_messages(
     pr_url: str,
     verdict: str | None,
     succeeded: bool,
+    disabled: bool = False,
 ) -> tuple[str, str, str]:
-    """Return (title, plain_body, slack_text) for the follow-up."""
-    if succeeded:
-        verdict_text = verdict or "review posted — see the PR for findings"
-        title = f"Self-review complete: PR #{pr_number}"
-        body = f"{verdict_text}\n\n[View PR]({pr_url})"
+    """Return (title, plain_body, slack_text) for the follow-up.
+
+    Four outcomes, so the Stage-1 "verdict will follow" promise is always
+    answered with something a human can act on:
+      - disabled: the deploy has LOMA_ENABLE_SELF_REVIEW off — no review will come
+      - succeeded + verdict: the normal case
+      - succeeded, no verdict: the agent finished but posted nothing this run
+      - failed: the review pipeline errored
+    """
+    if disabled:
+        title = f"Self-review skipped: PR #{pr_number}"
+        body = (
+            "Fresh-context self-review is **disabled** on this deployment "
+            "(`LOMA_ENABLE_SELF_REVIEW=false`), so no verdict will be posted. "
+            f"Treat the PR as **unreviewed**.\n\n[View PR]({pr_url})"
+        )
         slack_text = (
-            f"🔍 *Self-review complete* for PR #{pr_number}: {verdict_text}\n{pr_url}"
+            f"ℹ️ *Self-review skipped* for PR #{pr_number} — self-review is "
+            f"disabled on this deployment; treat the PR as unreviewed.\n{pr_url}"
+        )
+    elif succeeded and verdict:
+        title = f"Self-review complete: PR #{pr_number}"
+        body = f"{verdict}\n\n[View PR]({pr_url})"
+        slack_text = (
+            f"🔍 *Self-review complete* for PR #{pr_number}: {verdict}\n{pr_url}"
+        )
+    elif succeeded:
+        title = f"Self-review incomplete: PR #{pr_number}"
+        body = (
+            "The fresh-context self-review completed but **no review from this "
+            "run was found on the PR** — the agent finished without posting. "
+            f"Treat the PR as **unreviewed** and comment `{REREVIEW_COMMAND}` "
+            f"on it to retry.\n\n[View PR]({pr_url})"
+        )
+        slack_text = (
+            f"⚠️ *Self-review incomplete* for PR #{pr_number} — the agent "
+            f"finished but no review from this run was found on the PR. Treat "
+            f"the PR as unreviewed; comment `{REREVIEW_COMMAND}` on it to "
+            f"retry.\n{pr_url}"
         )
     else:
         title = f"Self-review FAILED: PR #{pr_number}"
         body = (
             "The fresh-context self-review did not complete — no findings were "
-            "posted. Treat the PR as **unreviewed** and comment `/rereview` on "
-            f"it to retry.\n\n[View PR]({pr_url})"
+            f"posted. Treat the PR as **unreviewed** and comment "
+            f"`{REREVIEW_COMMAND}` on it to retry.\n\n[View PR]({pr_url})"
         )
         slack_text = (
             f"⚠️ *Self-review failed* for PR #{pr_number} — no findings were "
-            f"posted. Treat the PR as unreviewed; comment `/rereview` on it to "
-            f"retry.\n{pr_url}"
+            f"posted. Treat the PR as unreviewed; comment `{REREVIEW_COMMAND}` "
+            f"on it to retry.\n{pr_url}"
         )
     return title, body, slack_text
 
@@ -192,8 +265,12 @@ async def post_self_review_followup(
     pr_url: str,
     verdict: str | None,
     succeeded: bool,
+    disabled: bool = False,
 ) -> bool:
     """Stage 2: thread the self-review outcome back to where the PR was announced.
+
+    ``disabled=True`` posts the "self-review is off on this deploy" outcome
+    instead of a verdict, so Stage 1's promise is never left dangling.
 
     Returns True if a follow-up was delivered, False if no target was
     registered or delivery failed. Never raises — this runs in the review
@@ -219,7 +296,29 @@ async def post_self_review_followup(
         return False
 
     target = record["target"]
-    title, body, slack_text = _build_messages(pr_number, pr_url, verdict, succeeded)
+
+    # "Disabled" is answered once per registration: every reviewable
+    # pull_request event (opened, each synchronize, …) re-enters this path,
+    # but the human only needs to hear "no verdict is coming" once per
+    # announcement, not once per push.
+    if disabled:
+        last_at = record.get("last_followup_at")
+        registered_at = record.get("registered_at")
+        if (
+            record.get("last_followup_disabled")
+            and last_at is not None
+            and registered_at is not None
+            and last_at >= registered_at
+        ):
+            logger.info(
+                "[PR-FOLLOWUP] Already told %s#%d's target that self-review is "
+                "disabled — skipping repeat", repo_full_name, pr_number,
+            )
+            return False
+
+    title, body, slack_text = _build_messages(
+        pr_number, pr_url, verdict, succeeded, disabled=disabled
+    )
 
     try:
         target_type = target.get("type")
@@ -248,13 +347,14 @@ async def post_self_review_followup(
                     "last_followup_at": datetime.now(timezone.utc),
                     "last_followup_succeeded": succeeded,
                     "last_followup_verdict": verdict,
+                    "last_followup_disabled": disabled,
                 }},
             )
         except Exception:
             logger.warning("[PR-FOLLOWUP] Failed to record follow-up delivery for %s#%d",
                            repo_full_name, pr_number)
         logger.info(
-            "[PR-FOLLOWUP] Delivered %s follow-up for %s#%d (succeeded=%s)",
-            target.get("type"), repo_full_name, pr_number, succeeded,
+            "[PR-FOLLOWUP] Delivered %s follow-up for %s#%d (succeeded=%s, disabled=%s)",
+            target.get("type"), repo_full_name, pr_number, succeeded, disabled,
         )
     return delivered

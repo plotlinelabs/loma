@@ -4,6 +4,10 @@ Stage 1: PR-creating flows register where the PR was announced.
 Stage 2: the self-review pipeline threads the verdict back to that target.
 """
 
+import importlib
+import importlib.util
+from argparse import Namespace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +15,8 @@ import pytest
 
 from utils.pr_followup import (
     COLLECTION,
+    REREVIEW_COMMAND,
+    _build_messages,
     extract_self_review_verdict,
     get_pr_notification_target,
     post_self_review_followup,
@@ -107,6 +113,78 @@ class TestVerdictExtraction:
         verdict = extract_self_review_verdict(reviews, "loma-insights")
         assert verdict.startswith("🔴 Self-review:")
 
+    def test_started_at_scopes_verdict_to_this_run(self):
+        # Regression: a run whose agent finished WITHOUT posting must not report
+        # the previous push's verdict as fresh.
+        started_at = datetime.now(timezone.utc)
+        old = (started_at - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        reviews = [
+            {"author": "loma-insights", "created_at": old,
+             "body": "✅ Self-review: no blocking issues found (from the PREVIOUS push)"},
+        ]
+        assert extract_self_review_verdict(reviews, "loma-insights", started_at=started_at) is None
+        # Without started_at the legacy behaviour (latest agent verdict) is kept
+        assert extract_self_review_verdict(reviews, "loma-insights") is not None
+
+    def test_started_at_accepts_review_from_this_run(self):
+        started_at = datetime.now(timezone.utc)
+        fresh = (started_at + timedelta(minutes=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        old = (started_at - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        reviews = [
+            {"author": "loma-insights", "created_at": old,
+             "body": "✅ Self-review: stale verdict"},
+            {"author": "loma-insights", "created_at": fresh,
+             "body": "🔴 Self-review: 2 blocking issue(s) found — address before human review"},
+        ]
+        verdict = extract_self_review_verdict(reviews, "loma-insights", started_at=started_at)
+        assert verdict.startswith("🔴 Self-review: 2 blocking")
+
+    def test_started_at_tolerates_small_clock_skew(self):
+        # A review stamped a few seconds BEFORE started_at (host clock ahead of
+        # GitHub) must still count as this run's review.
+        started_at = datetime.now(timezone.utc)
+        skewed = (started_at - timedelta(seconds=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        reviews = [{"author": "loma-insights", "created_at": skewed,
+                    "body": "✅ Self-review: no blocking issues found"}]
+        assert extract_self_review_verdict(reviews, "loma-insights", started_at=started_at)
+
+    def test_started_at_skips_reviews_with_unparseable_timestamp(self):
+        started_at = datetime.now(timezone.utc)
+        reviews = [{"author": "loma-insights", "created_at": "garbage",
+                    "body": "✅ Self-review: no blocking issues found"}]
+        assert extract_self_review_verdict(reviews, "loma-insights", started_at=started_at) is None
+
+
+class TestMessageOutcomes:
+    def test_retry_instruction_uses_mention_form(self):
+        # A bare `/rereview` is ignored by the issue_comment webhook (it only
+        # dispatches comments mentioning the agent) — the copy must not send
+        # humans down a dead recovery path.
+        assert REREVIEW_COMMAND == "@loma-agent /rereview"
+        for succeeded in (True, False):
+            _, body, slack = _build_messages(42, PR_URL, None, succeeded)
+            assert REREVIEW_COMMAND in body and REREVIEW_COMMAND in slack
+            assert " `/rereview`" not in body and " `/rereview`" not in slack
+
+    def test_success_without_verdict_is_reported_as_incomplete(self):
+        title, body, slack = _build_messages(42, PR_URL, None, True)
+        assert "incomplete" in title.lower()
+        assert "no review from this run was found" in body
+        assert "unreviewed" in slack
+        # The old copy claimed a review was posted — it must be gone.
+        assert "review posted" not in body and "review posted" not in slack
+
+    def test_success_with_verdict(self):
+        title, body, slack = _build_messages(42, PR_URL, "✅ Self-review: ok", True)
+        assert "complete" in title.lower()
+        assert "✅ Self-review: ok" in body and "✅ Self-review: ok" in slack
+
+    def test_disabled_outcome(self):
+        title, body, slack = _build_messages(42, PR_URL, None, False, disabled=True)
+        assert "skipped" in title.lower()
+        assert "LOMA_ENABLE_SELF_REVIEW" in body
+        assert "disabled" in slack and "unreviewed" in slack
+
 
 class TestFollowupDispatch:
     @pytest.mark.asyncio
@@ -200,7 +278,52 @@ class TestFollowupDispatch:
         assert delivered is True
         text = fake_client.chat_postMessage.call_args.kwargs["text"]
         assert "Self-review failed" in text
-        assert "/rereview" in text
+        assert "@loma-agent /rereview" in text
+
+    @pytest.mark.asyncio
+    async def test_disabled_followup_posts_once_per_registration(self):
+        registered_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        base = {
+            "repo_full_name": REPO, "pr_number": 42,
+            "target": {"type": "slack", "channel": "C123", "thread_ts": "1.2"},
+            "registered_at": registered_at,
+        }
+        fake_client = MagicMock()
+        fake_client.chat_postMessage = AsyncMock()
+        env = patch.dict("os.environ", {"SLACK_BOT_TOKEN": "xoxb-test"})
+        client_patch = patch("slack_sdk.web.async_client.AsyncWebClient", return_value=fake_client)
+
+        # First time: delivered, and recorded as a disabled follow-up
+        db, collection = _fake_db(existing_record=dict(base))
+        with env, client_patch:
+            assert await post_self_review_followup(
+                db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+                verdict=None, succeeded=False, disabled=True,
+            ) is True
+        assert "Self-review skipped" in fake_client.chat_postMessage.call_args.kwargs["text"]
+        recorded = collection.update_one.call_args.args[1]["$set"]
+        assert recorded["last_followup_disabled"] is True
+
+        # Same registration, later synchronize: already told → no repeat post
+        told = dict(base, last_followup_disabled=True,
+                    last_followup_at=registered_at + timedelta(minutes=1))
+        db, _ = _fake_db(existing_record=told)
+        fake_client.chat_postMessage.reset_mock()
+        with env, client_patch:
+            assert await post_self_review_followup(
+                db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+                verdict=None, succeeded=False, disabled=True,
+            ) is False
+        fake_client.chat_postMessage.assert_not_awaited()
+
+        # Re-registered after the last follow-up (new announcement) → post again
+        retold = dict(told, registered_at=registered_at + timedelta(hours=1))
+        db, _ = _fake_db(existing_record=retold)
+        with env, client_patch:
+            assert await post_self_review_followup(
+                db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+                verdict=None, succeeded=False, disabled=True,
+            ) is True
 
     @pytest.mark.asyncio
     async def test_delivery_error_never_raises(self):
@@ -240,11 +363,12 @@ class TestPipelineWiring:
         self.linear_source = Path("webhooks/linear.py").read_text()
         self.pr_util_source = Path("utils/github_pr.py").read_text()
         self.skill_source = Path("seed/skills/implement-ticket/SKILL.md").read_text()
+        self.db_source = Path("observability/db.py").read_text()
 
     def test_review_pipeline_dispatches_followup_on_self_review(self):
         assert "if self_review:" in self.github_source
         assert "post_self_review_followup(" in self.github_source
-        assert "extract_self_review_verdict(reviews, AGENT_GITHUB_LOGIN)" in self.github_source
+        assert "started_at=started_at" in self.github_source
 
     def test_followup_runs_on_success_and_failure(self):
         # The dispatch must sit in the finally-block region and pass the
@@ -256,11 +380,88 @@ class TestPipelineWiring:
         assert self.linear_source.count("--linear-issue-id {issue_id}") == 2
         assert "self-review" in self.linear_source.lower()
 
-    def test_pr_util_accepts_notify_target(self):
-        assert "notify_target: dict | None = None" in self.pr_util_source
-        assert "register_pr_notification_target(" in self.pr_util_source
+    def test_pr_util_has_no_dead_notify_target_parameter(self):
+        # Registration happens through the CLI only; clone_and_run_claude has no
+        # caller that could pass a target, so the parameter was removed.
+        assert "notify_target" not in self.pr_util_source
 
     def test_seed_skill_has_two_stage_steps(self):
         assert "Step 6c: Register the Self-Review Follow-Up Target" in self.skill_source
         assert "tools/github_pr_notify.py register" in self.skill_source
         assert "self-review* of this PR is running" in self.skill_source
+        # Dashboard registrations must carry the requester's auth token
+        assert "--user-email <requester-email> --auth-token <personal-auth-token>" in self.skill_source
+
+    def test_notification_targets_have_unique_compound_index(self):
+        assert "pr_notification_targets.create_index(" in self.db_source
+        idx = self.db_source.index("pr_notification_targets.create_index(")
+        assert 'unique=True' in self.db_source[idx: idx + 200]
+
+
+class TestSelfReviewFlag:
+    def test_flag_uses_shared_env_flag_parser(self):
+        import config.app_config as app_config
+
+        for falsy in ("false", "0", "no", "off", "FALSE"):
+            with patch.dict("os.environ", {"LOMA_ENABLE_SELF_REVIEW": falsy}):
+                importlib.reload(app_config)
+                assert app_config.LOMA_ENABLE_SELF_REVIEW is False, falsy
+        with patch.dict("os.environ", {"LOMA_ENABLE_SELF_REVIEW": "true"}):
+            importlib.reload(app_config)
+            assert app_config.LOMA_ENABLE_SELF_REVIEW is True
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("LOMA_ENABLE_SELF_REVIEW", None)
+            importlib.reload(app_config)
+            assert app_config.LOMA_ENABLE_SELF_REVIEW is True  # default on
+
+    def test_webhook_module_reads_flag_from_app_config(self):
+        source = Path("webhooks/github.py").read_text()
+        assert "from config.app_config import LOMA_ENABLE_SELF_REVIEW" in source
+        assert "SELF_REVIEW_ENABLED = LOMA_ENABLE_SELF_REVIEW" in source
+        assert 'os.environ.get("LOMA_ENABLE_SELF_REVIEW"' not in source
+
+    def test_env_example_documents_flag(self):
+        assert "LOMA_ENABLE_SELF_REVIEW=" in Path(".env.example").read_text()
+
+
+def _load_notify_cli():
+    spec = importlib.util.spec_from_file_location(
+        "github_pr_notify", Path("tools/github_pr_notify.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestNotifyCliAuth:
+    def _args(self, **overrides):
+        base = dict(slack_channel=None, thread_ts=None, linear_issue_id=None,
+                    user_email=None, auth_token=None, conversation_id=None)
+        base.update(overrides)
+        return Namespace(**base)
+
+    def test_loma_target_requires_auth_token(self):
+        cli = _load_notify_cli()
+        with pytest.raises(ValueError, match="--auth-token"):
+            cli._build_target(self._args(user_email="a@b.co"))
+
+    def test_loma_target_rejects_bad_token(self):
+        cli = _load_notify_cli()
+        with patch.object(cli, "_verify_auth", return_value=False):
+            with pytest.raises(ValueError, match="Authentication failed"):
+                cli._build_target(self._args(user_email="a@b.co", auth_token="nope"))
+
+    def test_loma_target_accepts_verified_token(self):
+        cli = _load_notify_cli()
+        with patch.object(cli, "_verify_auth", return_value=True) as verify:
+            target = cli._build_target(
+                self._args(user_email="a@b.co", auth_token="tok", conversation_id="c1")
+            )
+        verify.assert_called_once_with("tok", "a@b.co")
+        assert target == {"type": "loma", "user_email": "a@b.co", "conversation_id": "c1"}
+
+    def test_slack_and_linear_targets_do_not_need_token(self):
+        cli = _load_notify_cli()
+        assert cli._build_target(self._args(slack_channel="C1", thread_ts="1.2"))["type"] == "slack"
+        assert cli._build_target(self._args(linear_issue_id="u1"))["type"] == "linear"

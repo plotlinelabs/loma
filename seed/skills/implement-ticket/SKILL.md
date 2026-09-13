@@ -269,9 +269,11 @@ Every agent-created PR gets an automatic fresh-context self-review (triggered by
 python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
   --slack-channel <channel-id> --thread-ts <thread-ts>
 
-# Dashboard conversation (use the requester's email; conversation ID makes the notification deep-link back):
+# Dashboard conversation (use the requester's email AND their personal auth token from the
+# message context — the tool HMAC-verifies it, same as tools/notify.py; conversation ID makes
+# the notification deep-link back):
 python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
-  --user-email <requester-email> --conversation-id <conversation-id>
+  --user-email <requester-email> --auth-token <personal-auth-token> --conversation-id <conversation-id>
 
 # Linear webhook flow (use the Linear issue UUID, not the ENG-123 identifier):
 python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
@@ -279,6 +281,8 @@ python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number
 ```
 
 If registration fails, continue — the PR still gets its self-review on GitHub; only the follow-up notification is skipped.
+
+> **If self-review is disabled on the deployment** (`LOMA_ENABLE_SELF_REVIEW=false`), the webhook pipeline posts a "self-review skipped" follow-up to the registered target instead of a verdict, so the Stage-1 line below is still safe to send.
 
 ---
 

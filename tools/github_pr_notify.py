@@ -16,9 +16,11 @@ Exactly one target type must be provided per registration:
   python3 tools/github_pr_notify.py register --repo <owner>/<name> --pr <num> \
       --linear-issue-id <linear-issue-uuid>
 
-  # Loma inbox (dashboard conversations)
+  # Loma inbox (dashboard conversations) — requires the requester's personal
+  # auth token, same HMAC check as tools/notify.py, so an agent run cannot
+  # push a notification into an arbitrary user's inbox.
   python3 tools/github_pr_notify.py register --repo <owner>/<name> --pr <num> \
-      --user-email person@example.com [--conversation-id <uuid>]
+      --user-email person@example.com --auth-token <token> [--conversation-id <uuid>]
 
   # Inspect the current registration
   python3 tools/github_pr_notify.py show --repo <owner>/<name> --pr <num>
@@ -46,6 +48,16 @@ from utils.pr_followup import (  # noqa: E402
     get_pr_notification_target,
     register_pr_notification_target,
 )
+
+
+def _verify_auth(auth_token: str, user_email: str) -> bool:
+    """Verify the HMAC auth token matches the user email (mirrors tools/notify.py)."""
+    tools_dir = os.path.dirname(os.path.abspath(__file__))
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    from _auth_token import verify_user_auth_token
+
+    return verify_user_auth_token(auth_token, user_email)
 
 
 def _get_db():
@@ -81,6 +93,15 @@ def _build_target(args: argparse.Namespace) -> dict:
         return {"type": "slack", "channel": args.slack_channel, "thread_ts": args.thread_ts}
     if target_type == "linear":
         return {"type": "linear", "issue_id": args.linear_issue_id}
+    # Loma inbox targets write into a specific user's inbox — gate them behind
+    # the same per-user HMAC token that tools/notify.py requires.
+    if not args.auth_token:
+        raise ValueError("--user-email targets require --auth-token for the same user")
+    if not _verify_auth(args.auth_token, args.user_email):
+        raise ValueError(
+            "Authentication failed. The auth token is invalid, expired, or "
+            "doesn't match --user-email"
+        )
     target: dict = {"type": "loma", "user_email": args.user_email}
     if args.conversation_id:
         target["conversation_id"] = args.conversation_id
@@ -127,7 +148,8 @@ def main() -> int:
     reg.add_argument("--slack-channel", help="Slack channel ID (with --thread-ts)")
     reg.add_argument("--thread-ts", help="Slack thread timestamp (with --slack-channel)")
     reg.add_argument("--linear-issue-id", help="Linear issue UUID")
-    reg.add_argument("--user-email", help="Loma inbox target: user email")
+    reg.add_argument("--user-email", help="Loma inbox target: user email (requires --auth-token)")
+    reg.add_argument("--auth-token", help="Personal auth token for --user-email (HMAC-verified)")
     reg.add_argument("--conversation-id", help="Optional Loma conversation to deep-link")
 
     show = sub.add_parser("show", help="Show the registered target for a PR")
