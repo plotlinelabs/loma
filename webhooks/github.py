@@ -49,6 +49,13 @@ GITHUB_API_KEY = os.environ.get("GITHUB_API_KEY", "")
 # it here and allow override per-deploy via AGENT_GITHUB_LOGIN.
 AGENT_GITHUB_LOGIN = os.environ.get("AGENT_GITHUB_LOGIN", "loma-insights")
 
+# Fresh-context self-review: draft PRs authored by the agent itself (implement-ticket
+# conversations, Linear webhook flows, utils/github_pr.py — they all fire this same
+# pull_request webhook) are routed into a clean-context review agent instead of being
+# skipped. The reviewer has no memory of writing the code, so findings land on the PR
+# before a human reads it. Opt out per-deploy with LOMA_ENABLE_SELF_REVIEW=false.
+SELF_REVIEW_ENABLED = os.environ.get("LOMA_ENABLE_SELF_REVIEW", "true").strip().lower() != "false"
+
 # Regex to match Linear ticket references (ISSUE-1234)
 # Case-insensitive to support lowercase branch names
 LINEAR_TICKET_PATTERN = re.compile(r'\b(ISSUE-\d+)\b', re.IGNORECASE)
@@ -663,16 +670,32 @@ async def handle_github_webhook(request: web.Request) -> web.Response:
             )
             return web.json_response({"status": "ignored", "reason": "action_not_reviewable"})
 
-        # Skip draft PRs (unless they become ready_for_review)
-        if pr.get("draft", False) and action != "ready_for_review":
-            logger.info("[GITHUB-WEBHOOK] Ignoring draft PR")
-            return web.json_response({"status": "ignored", "reason": "draft_pr"})
-
-        # Skip PRs created by bots (including ourselves)
+        # Fresh-context self-review routing: PRs authored by the agent itself are
+        # NOT skipped — every PR-producing flow (implement-ticket conversations,
+        # Linear webhook flows, utils/github_pr.py) fires this same webhook, so this
+        # is the single architectural hook that guarantees a clean-context review of
+        # agent-written code before a human reads it. Agent PRs are draft-by-policy,
+        # so the draft skip must not apply to them.
         pr_author = pr.get("user", {}).get("login", "")
-        if pr_author.endswith("[bot]") or pr_author == AGENT_GITHUB_LOGIN:
-            logger.info("[GITHUB-WEBHOOK] Ignoring bot-created PR by %s", pr_author)
-            return web.json_response({"status": "ignored", "reason": "bot_pr"})
+        is_agent_pr = pr_author == AGENT_GITHUB_LOGIN
+
+        if is_agent_pr:
+            if not SELF_REVIEW_ENABLED:
+                logger.info(
+                    "[GITHUB-WEBHOOK] Self-review disabled — ignoring agent PR by %s",
+                    pr_author,
+                )
+                return web.json_response({"status": "ignored", "reason": "self_review_disabled"})
+        else:
+            # Skip draft PRs (unless they become ready_for_review)
+            if pr.get("draft", False) and action != "ready_for_review":
+                logger.info("[GITHUB-WEBHOOK] Ignoring draft PR")
+                return web.json_response({"status": "ignored", "reason": "draft_pr"})
+
+            # Skip PRs created by other bots (e.g. dependabot)
+            if pr_author.endswith("[bot]"):
+                logger.info("[GITHUB-WEBHOOK] Ignoring bot-created PR by %s", pr_author)
+                return web.json_response({"status": "ignored", "reason": "bot_pr"})
 
         pr_number = pr.get("number")
         pr_title = pr.get("title", "")
@@ -706,12 +729,14 @@ async def handle_github_webhook(request: web.Request) -> web.Response:
                 action=action,
                 pr_author=pr_author,
                 conversation_id=conversation_id,
+                self_review=is_agent_pr,
             )
         )
 
         return web.json_response({
             "status": "accepted",
             "trigger": f"pull_request_{action}",
+            "mode": "self_review" if is_agent_pr else "review",
             "pr_number": pr_number,
             "conversation_id": conversation_id,
         })
@@ -1089,8 +1114,17 @@ async def _process_pr_review(
     conversation_id: str,
     force_review: bool = False,
     pr_stats: dict | None = None,
+    self_review: bool = False,
 ):
-    """Run the agent to review a pull request and post review comments."""
+    """Run the agent to review a pull request and post review comments.
+
+    When ``self_review`` is True, the PR was authored by the agent itself in a
+    separate conversation. This run is a fresh-context reviewer: it has no memory
+    of writing the code and must review it adversarially. The review is posted
+    with event=COMMENT (GitHub rejects APPROVE/REQUEST_CHANGES from the PR
+    author's own token) and leads with an explicit verdict line so humans see
+    the findings before spending time on the draft.
+    """
     logger.info(
         "[GITHUB-WEBHOOK] Processing PR review: %s#%d — %s (force=%s)",
         repo_full_name, pr_number, pr_title, force_review,
@@ -1181,7 +1215,7 @@ async def _process_pr_review(
     # Create a GitHub Check Run to show progress in PR UI
     check_run_id = await _create_check_run(
         repo_owner, repo_name, head_sha,
-        name="Review Agent",
+        name="Self-Review Agent" if self_review else "Review Agent",
         status="in_progress",
     )
 
@@ -1195,6 +1229,17 @@ async def _process_pr_review(
         if is_reevaluation
         else "## Mode: INITIAL REVIEW\n\nThis is the first review of this PR.\n"
     )
+
+    if self_review:
+        mode_header = (
+            "## Mode: SELF-REVIEW (fresh context)\n\n"
+            "This draft PR was written by the agent in a *separate* conversation. "
+            "You are a fresh-context reviewer: you have NO memory of writing this "
+            "code and MUST NOT assume it is correct because 'the agent wrote it'. "
+            "Review the diff adversarially, exactly as you would review a human's "
+            "PR. Your findings must be on the PR before a human reviewer opens it.\n\n"
+            + mode_header
+        )
 
     prompt_parts = [
         f"Review PR #{pr_number} on {repo_full_name}.",
@@ -1244,6 +1289,34 @@ async def _process_pr_review(
             "",
         ])
 
+    if self_review:
+        review_event_lines = [
+            "   - event: `COMMENT` — ALWAYS. This is a self-review: the reviewing "
+            "token authored this PR, and GitHub rejects APPROVE/REQUEST_CHANGES "
+            "on your own pull request (422). Never attempt any other event.",
+            "   - body: START with a single verdict line, then the severity-grouped "
+            "findings:",
+            "       - `✅ Self-review: no blocking issues found — ready for human review`, or",
+            "       - `🔴 Self-review: <N> blocking issue(s) found — address before human review`.",
+            "   - comments: Inline comments on specific lines. Do NOT duplicate "
+            "STILL_BROKEN prior threads — only NEW issues go here.",
+        ]
+    else:
+        review_event_lines = [
+            "   - event:",
+            "       - `APPROVE` if **no** 🔴 BLOCKING issues remain (counting prior "
+            "STILL_BROKEN threads plus any new blocking issues you found). On a "
+            "re-evaluation run where every prior blocking thread is now FIXED and "
+            "no new blocking issues exist, you **should** APPROVE.",
+            "       - `REQUEST_CHANGES` if any 🔴 BLOCKING issues remain.",
+            "       - `COMMENT` if no 🔴 but you still have 🟡/🟢 to surface.",
+            "   - body: Review summary with severity-grouped findings. On re-evaluation, "
+            "include a short 'Re-evaluation summary' section listing resolved vs "
+            "still-open prior threads so the author can see what moved.",
+            "   - comments: Inline comments on specific lines. Do NOT duplicate "
+            "STILL_BROKEN prior threads — only NEW issues go here.",
+        ]
+
     prompt_parts.extend([
         "## Review Workflow",
         "",
@@ -1292,18 +1365,7 @@ async def _process_pr_review(
         f"   - owner: `{repo_owner}`",
         f"   - repo: `{repo_name}`",
         f"   - pull_number: {pr_number}",
-        "   - event:",
-        "       - `APPROVE` if **no** 🔴 BLOCKING issues remain (counting prior "
-        "STILL_BROKEN threads plus any new blocking issues you found). On a "
-        "re-evaluation run where every prior blocking thread is now FIXED and "
-        "no new blocking issues exist, you **should** APPROVE.",
-        "       - `REQUEST_CHANGES` if any 🔴 BLOCKING issues remain.",
-        "       - `COMMENT` if no 🔴 but you still have 🟡/🟢 to surface.",
-        "   - body: Review summary with severity-grouped findings. On re-evaluation, "
-        "include a short 'Re-evaluation summary' section listing resolved vs "
-        "still-open prior threads so the author can see what moved.",
-        "   - comments: Inline comments on specific lines. Do NOT duplicate "
-        "STILL_BROKEN prior threads — only NEW issues go here.",
+        *review_event_lines,
         "",
         "## Review Priorities (most important first)",
         "",
@@ -1371,7 +1433,7 @@ async def _process_pr_review(
             "github_head_sha": head_sha,
             "github_action": action,
             "linear_ticket_id": ticket_id,
-            "trigger_type": "pr_review",
+            "trigger_type": "pr_self_review" if self_review else "pr_review",
         }, conversation_id=conversation_id)
         await observer.start()
 
@@ -1488,6 +1550,9 @@ async def _handle_slash_command(
                 pr_author=pr_details.get("user", {}).get("login", ""),
                 conversation_id=conversation_id,
                 force_review=True,
+                # /rereview on an agent-authored PR must stay in self-review mode,
+                # otherwise the reviewer tries APPROVE/REQUEST_CHANGES on its own PR (422).
+                self_review=pr_details.get("user", {}).get("login", "") == AGENT_GITHUB_LOGIN,
             )
         else:
             # Failed to fetch PR details - post error comment
@@ -1833,6 +1898,8 @@ async def _process_pr_conversation_comment(
             conversation_id=conversation_id,
             pr_stats=pr_stats,
             force_review=True,  # Skip deduplication for explicit re-review requests
+            # Keep self-review mode for agent-authored PRs (COMMENT-only reviews).
+            self_review=pr_details.get("user", {}).get("login", "") == AGENT_GITHUB_LOGIN,
         )
         return
 
