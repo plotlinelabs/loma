@@ -1,8 +1,9 @@
 # Optional Google Docs-linked skills
 
 Regular skills retain the existing local storage and edit paths. This integration is
-opt-in per new skill and disabled by default behind
-`LOMA_GOOGLE_DOCS_SKILLS_ENABLED=true`. No migration of existing skills is required.
+opt-in per new skill and available by default. Set
+`LOMA_GOOGLE_DOCS_SKILLS_ENABLED=false` to disable the integration as an emergency
+off switch. No migration of existing skills is required.
 
 ## Behaviour
 
@@ -123,6 +124,9 @@ offset ports and disabled Slack/scheduler. An in-memory Google upstream exercise
 import, preview, save, pause/manual sync, history and regular-skill regression through
 the actual Loma API; the live CLI separately validates Google's write semantics.
 
-Roll out to internal testers first. Monitor `source.status`, `source.next_check`,
-`source.failures`, pending operations and `runtime_refresh_pending`; do not enable
-workspace-wide until concurrency, access and recovery tests pass in the deployment.
+The feature is available by default after deployment, while linking remains an
+explicit per-skill action. Monitor `source.status`, `source.next_check`,
+`source.failures`, pending operations and `runtime_refresh_pending`. Existing
+deployments with an explicit false override remain disabled until that override is
+removed. Retain the emergency off switch and verify concurrency, access and recovery
+before merging.

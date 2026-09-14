@@ -2,7 +2,11 @@
 
 Verified on 2026-09-14.
 
-- Python suite: **573 passed**, 14 warnings.
+- Python suite: **583 passed**, 16 warnings.
+- Added default-on coverage: unset/true/false/invalid configuration, linked import/save/disconnect
+  without an environment override, due-skill dispatcher and emergency shutdown.
+- Browser stack started with `LOMA_GOOGLE_DOCS_SKILLS_ENABLED` absent from both
+  process environment and `.env`, proving default availability without opt-in config.
 - Dashboard TypeScript: `tsc --noEmit` passed.
 - Live Google API: rich formatting, Unicode, whitespace, selected-tab isolation,
   no-op round-trip, stale revision rejection, and terminal paragraph edits passed.

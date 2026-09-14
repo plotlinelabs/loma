@@ -76,6 +76,27 @@ async def imported(db, scope="personal"):
         slug="test", name="Test", description="Testing instructions", scope=scope, confirm_workspace=scope == "workspace", preview_hash=preview["hash"])
 
 
+@pytest.mark.parametrize("value,expected", [(None, True), ("true", True), ("TRUE", True), ("false", False), ("FALSE", False), ("", False), ("invalid", False)])
+def test_feature_availability_defaults_on_with_explicit_off_switch(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", value)
+    assert sync.enabled() is expected
+
+
+@pytest.mark.asyncio
+async def test_linked_lifecycle_without_feature_flag(env, monkeypatch):
+    db, fake = env
+    monkeypatch.delenv("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", raising=False)
+    linked = await imported(db)
+    await sync.write_instructions(db, "test", linked["content"].replace("Hello", "Updated"),
+                                  "owner@example.com", linked["source"]["hash"])
+    assert fake.writes
+    await sync.configure(db, "test", "owner@example.com", "disconnect")
+    assert not (await skills.get_skill(db, "test")).get("source")
+
+
 def test_url_validation():
     assert parse_url("https://docs.google.com/document/d/a-1/edit?tab=t1") == "a-1"
     for url in ("http://docs.google.com/document/d/x", "https://evil.test/document/d/x", "https://docs.google.com.evil.test/document/d/x"):
@@ -321,3 +342,30 @@ async def test_folder_list_preserves_unique_names(env):
          "access_controlled": True, "scope": "personal", "created_by": "other@example.com"},
     ])
     assert await skills.list_folders(db) == ["Support"]
+
+
+@pytest.mark.asyncio
+async def test_default_on_dispatcher_syncs_due_linked_only(env, monkeypatch):
+    from scheduler import skill_sync as worker
+    db, fake = env
+    monkeypatch.delenv("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", raising=False)
+    monkeypatch.setattr(worker, "get_db", lambda: db)
+    await imported(db)
+    await db.skills.update_one({"slug": "test"}, {"$set": {"source.next_check": skills.now_utc()}})
+    await db.skills.insert_one({"slug": "regular", "enabled": True})
+    fake.doc = document("Human update\n")
+    await worker.sync_due_skills()
+    assert "Human update" in (await skills.get_skill(db, "test"))["content"]
+    assert not (await db.skills.find_one({"slug": "regular"})).get("source")
+    assert not fake.writes
+
+
+@pytest.mark.asyncio
+async def test_emergency_off_switch_stops_dispatch_before_db_access(monkeypatch):
+    from scheduler import skill_sync as worker
+    from unittest.mock import Mock
+    monkeypatch.setenv("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", "false")
+    get_db = Mock(side_effect=AssertionError("Disabled dispatcher must not access DB"))
+    monkeypatch.setattr(worker, "get_db", get_db)
+    await worker.sync_due_skills()
+    get_db.assert_not_called()

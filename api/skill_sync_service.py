@@ -23,7 +23,7 @@ from integrations.google_docs_skill_source import GoogleDocsSource, SourceError,
 
 
 def enabled():
-    return os.environ.get("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", "false").lower() == "true"
+    return os.environ.get("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", "true").lower() == "true"
 
 
 def require_enabled():
