@@ -2072,6 +2072,8 @@ def setup_api_routes(app: web.Application):
         })
 
     # Recall deliberately does not reuse the dashboard conversation ACL.
+    from api.recall_search import handle_search_history
+    app.router.add_post("/api/recall/search", handle_search_history)
     from api.recall_routes import handle_fetch_history
     app.router.add_post("/api/recall/fetch", handle_fetch_history)
 

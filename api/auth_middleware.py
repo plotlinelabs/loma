@@ -49,7 +49,7 @@ async def auth_middleware(request, handler):
 
     # Recall has its own signed-capability boundary; never use forwarded or
     # preview identities for it. Only the exact registered POST is exempt.
-    if request.path == "/api/recall/fetch" and request.method == "POST":
+    if request.path in ("/api/recall/fetch", "/api/recall/search") and request.method == "POST":
         return await handler(request)
 
     # CORS preflight requests don't carry auth headers

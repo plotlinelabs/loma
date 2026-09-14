@@ -61,7 +61,7 @@ def _read_cursor(token, binding):
         raise RecallError('cursor_expired') from None
 
 
-async def _fetch(request):
+async def authenticate(request):
     if os.environ.get('LOMA_RECALL_ENABLED', '').lower() != 'true':
         raise RecallError('recall_disabled', 403)
     auth = request.headers.get('Authorization', '')
@@ -83,6 +83,10 @@ async def _fetch(request):
                   'recall_excluded': {'$ne': True}, 'deleted': {'$ne': True}}
     if not await db.users.find_one(user_query, {'_id': 1}):
         raise RecallError('unauthorized', 401)
+    return db, identity, user_query
+
+
+async def read_body(request):
     if request.content_length is not None and request.content_length > 8192:
         raise RecallError('invalid_argument')
     # Bound chunked bodies too; request.json() alone would use the larger app cap.
@@ -95,6 +99,28 @@ async def _fetch(request):
         body = json.loads(raw)
     except (ValueError, UnicodeError):
         raise RecallError('invalid_argument') from None
+    return body
+
+
+def source_query(identity):
+    query = {
+        'metadata.user_name': identity.email,
+        'source': {'$in': ['dashboard', 'task']},
+        'deleted': {'$ne': True}, 'recall_excluded': {'$ne': True},
+        'metadata.recall_excluded': {'$ne': True},
+        '$nor': [{'task_status': 'todo', 'status': None}],
+        '$expr': {'$lte': [{'$bsonSize': '$$ROOT'}, 2 * 1024 * 1024]},
+    }
+    if identity.project_id is not None:
+        query['project_id'] = identity.project_id
+    if identity.agent_id is not None:
+        query['metadata.agent_id'] = identity.agent_id
+    return query
+
+
+async def _fetch(request):
+    db, identity, user_query = await authenticate(request)
+    body = await read_body(request)
     if not isinstance(body, dict) or set(body) - {'conversation_id', 'anchor_message_id', 'before', 'after', 'max_chars', 'cursor'}:
         raise RecallError('invalid_argument')
     cid = body.get('conversation_id')
@@ -105,19 +131,7 @@ async def _fetch(request):
     before = _integer(body, 'before', 2, 0, 20)
     after = _integer(body, 'after', 3, 0, 20)
     budget = _integer(body, 'max_chars', 16000, 256, 40000)
-    query = {
-        'conversation_id': cid, 'metadata.user_name': identity.email,
-        'source': {'$in': ['dashboard', 'task']},
-        'deleted': {'$ne': True}, 'recall_excluded': {'$ne': True},
-        'metadata.recall_excluded': {'$ne': True},
-        '$nor': [{'task_status': 'todo', 'status': None}],
-        # Bound DB reads and sanitizer CPU even on very large legacy documents.
-        '$expr': {'$lte': [{'$bsonSize': '$$ROOT'}, 2 * 1024 * 1024]},
-    }
-    if identity.project_id is not None:
-        query['project_id'] = identity.project_id
-    if identity.agent_id is not None:
-        query['metadata.agent_id'] = identity.agent_id
+    query = {**source_query(identity), 'conversation_id': cid}
     doc = await db.conversations.find_one(query, _PROJECTION)
     if not doc:
         raise RecallError('not_found', 404)

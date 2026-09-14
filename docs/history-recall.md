@@ -218,3 +218,52 @@ later with a workflow update.
 The default-model test assumes `AGENT_DEFAULT_MODEL` is unset, as on GitHub
 Actions. When running from a deployed Loma environment, use
 `env -u AGENT_DEFAULT_MODEL .venv/bin/python -m pytest -q` for CI parity.
+
+## Search/indexing batch (same PR, September 14)
+
+`POST /api/recall/search` now shares fetch's signed identity and source policy.
+Input: `query` (1..1000 characters), `match_mode` (`keywords`, `phrase`, `literal`),
+`limit` (1..20, default 8), `cursor`, optional `filters` (`project_id`, `agent_id`,
+`after`, `before`, `kind=any|chat|task`). Caller filters can narrow but never widen
+signed scope. Dates require explicit timezones; `before` is exclusive. Legacy
+naive stored Mongo dates are interpreted as UTC. Drafts remain excluded.
+
+Keyword ranking weights message matches over title matches, then uses stable
+conversation/message order. Phrase mode normalizes whitespace and case; literal
+mode preserves both punctuation and case. Regex metacharacters are escaped.
+Search returns 600-character excerpts and revision-compatible fetch anchors.
+URLs remain redacted, so exact URL recall is intentionally not supported yet.
+
+The separate `recall_index` contains sanitized text only. No source writes occur
+on search. Every candidate is checked against its live owner/scope/revision;
+selected sources and the user are checked again before returning. Stale candidates
+are omitted and labelled `index_delayed`, not presented as current evidence.
+Search caps at 50 candidate conversations and 8 MiB source JSON, with explicit
+`processing_limit_reached`. Ranking is only within that candidate window, not a
+claim of global relevance. Processing and Mongo query timeouts return 503.
+
+### Offline indexing / reconciliation
+
+Run the worker outside the agent runtime, one worker per owner at a time:
+
+```bash
+python -m scripts.recall_backfill --user-id USER_OBJECT_ID --confirm-db DATABASE_NAME
+# Resume the returned next_cursor with --after; repeat until null.
+```
+
+A full pass rebuilds eligible messages and purges deleted, excluded, moved-owner
+or oversized entries. Start a new full pass to reconcile edits. Each batch reads
+at most 100 IDs and one size-guarded source at a time. Retries are idempotent.
+Do not run overlapping passes for one owner: projection writes are last-writer-wins,
+not source-ordered. Live revision checks protect reads if an old writer wins.
+Coverage reports the last completed pass, not real-time freshness or completeness.
+Scheduling the worker and event-driven updates are NOT wired yet. No production
+backfill has been run. Index retention/deletion SLO must be set before enablement.
+
+### Remaining release gates
+
+This is a bounded lexical baseline, not all of planned PR 2: distributed cursors,
+automatic indexing, exhaustive pagination beyond the candidate cap, immutable
+legacy ownership migration and production performance evaluation remain pending.
+Process-local cursors still expire on a different worker or restart. These limits
+must be resolved before claiming the full approved plan is complete.
