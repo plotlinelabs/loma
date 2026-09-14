@@ -159,7 +159,7 @@ function FlowModelSelector({
 
       <Select
         value={effectiveModel}
-        disabled={loading || saving || models.length === 0}
+        disabled={loading || saving || !flow.can_manage || models.length === 0}
         onValueChange={onChange}
       >
         <SelectTrigger className="w-full">
@@ -349,13 +349,16 @@ export default function FlowDetailPage() {
   const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
   const [orgUsers, setOrgUsers] = useState<User[]>([]);
   const [runAsSaving, setRunAsSaving] = useState(false);
-  const { user, isAdmin } = useUser();
+  const [runAsDraft, setRunAsDraft] = useState<string | null>(null);
+  const [runAsMessage, setRunAsMessage] = useState("");
+  const [runAsError, setRunAsError] = useState("");
+  const { isAdmin } = useUser();
 
   useEffect(() => {
     loadData();
     loadAgentModels();
     if (isAdmin) {
-      fetchUsers().then(setOrgUsers).catch(() => {});
+      fetchUsers().then(setOrgUsers).catch(() => setRunAsError("Could not load accounts. Reload the page to try again."));
     }
   }, [flowId, isAdmin]);
 
@@ -375,6 +378,9 @@ export default function FlowDetailPage() {
   }
 
   async function loadData() {
+    setRunAsDraft(null);
+    setRunAsMessage("");
+    setRunAsError("");
     setLoading(true);
     try {
       const [flowData, runsData] = await Promise.all([
@@ -493,17 +499,18 @@ export default function FlowDetailPage() {
     }
   }
 
-  async function handleRunAsChange(email: string) {
-    if (!flow || runAsSaving || email === (flow.run_as || "")) return;
+  async function handleRunAsChange() {
+    if (!flow || runAsSaving || !runAsDraft) return;
     setRunAsSaving(true);
-    const previous = flow;
-    setFlow({ ...flow, run_as: email });
+    setRunAsError("");
+    setRunAsMessage("");
     try {
-      const result = await updateFlow(flow.flow_id, { run_as: email });
+      const result = await updateFlow(flow.flow_id, { run_as: runAsDraft });
       setFlow(result.flow);
+      setRunAsDraft(null);
+      setRunAsMessage("Account saved. Future runs will use this account.");
     } catch (e) {
-      console.error("Failed to update run_as:", e);
-      setFlow(previous);
+      setRunAsError(e instanceof Error ? e.message : "Account was not saved. Try again.");
     } finally {
       setRunAsSaving(false);
     }
@@ -595,7 +602,7 @@ export default function FlowDetailPage() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        {flow.can_manage && <div className="flex flex-wrap items-center gap-2">
           <LabelSelector
             flowLabels={flow.labels || []}
             allLabels={allLabels}
@@ -646,7 +653,7 @@ export default function FlowDetailPage() {
           >
             Delete
           </Button>
-        </div>
+        </div>}
       </div>
 
       {/* Webhook URL */}
@@ -693,36 +700,41 @@ export default function FlowDetailPage() {
         onChange={handleModelChange}
       />
 
-      {/* Run As */}
-      <div className="bg-card rounded-xl border border-border p-3 space-y-2">
-        <h2 className="text-[13px] font-heading font-semibold text-foreground">Run As</h2>
-        {isAdmin ? (
-          <Select
-            value={flow.run_as || flow.created_by?.source || ""}
-            disabled={runAsSaving || orgUsers.length === 0}
-            onValueChange={handleRunAsChange}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select user..." />
-            </SelectTrigger>
-            <SelectContent>
-              {orgUsers.filter((u) => u.status === "active").map((u) => (
-                <SelectItem key={u.email} value={u.email}>
-                  {u.name || u.email}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <div className="text-[13px] text-foreground">
-            {flow.run_as || flow.created_by?.source || user?.email || "—"}
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground">
-          This flow runs with this user&apos;s personal tools and permissions
-          {runAsSaving && <span className="text-brand-600 ml-1">Saving...</span>}
+      {/* Execution authority is separate from shared visibility. */}
+      <section aria-labelledby="execution-account-heading" className="bg-card rounded-xl border border-border p-3 space-y-2">
+        <h2 id="execution-account-heading" className="text-[13px] font-heading font-semibold text-foreground">Execution account</h2>
+        <p className="text-[13px] break-all text-foreground">
+          {flow.run_as ? `Current account: ${flow.run_as}` : "No account selected. Runs are blocked until an admin saves an account."}
         </p>
-      </div>
+        <p className="text-xs text-muted-foreground">Scheduled and webhook runs use this account&apos;s connected tools. Sharing a flow does not share permission to edit or run it.</p>
+        {isAdmin && (
+          <>
+            <Select value={runAsDraft ?? flow.run_as ?? ""} disabled={runAsSaving || orgUsers.length === 0}
+              onValueChange={(email) => { setRunAsDraft(email); setRunAsError(""); setRunAsMessage(""); }}>
+              <SelectTrigger aria-label="Execution account" className="w-full min-w-0">
+                <SelectValue placeholder="Choose an active account" />
+              </SelectTrigger>
+              <SelectContent>
+                {orgUsers.filter((u) => u.status === "active").map((u) => (
+                  <SelectItem key={u.email} value={u.email}>{u.email}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {runAsDraft !== null && runAsDraft !== flow.run_as && (
+              <div className="space-y-2">
+                <p className="text-xs break-words text-muted-foreground">Not saved yet. Future runs will act as <strong>{runAsDraft}</strong>. Already running work is unchanged.</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={handleRunAsChange} disabled={runAsSaving}>{runAsSaving ? "Saving..." : "Save account"}</Button>
+                  <Button variant="outline" disabled={runAsSaving} onClick={() => { setRunAsDraft(null); setRunAsError(""); }}>Cancel</Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+        {runAsError && <p role="alert" className="text-xs text-red-600">{runAsError}</p>}
+        {runAsMessage && <p role="status" className="text-xs text-muted-foreground">{runAsMessage}</p>}
+        {!flow.can_manage && <p className="text-xs text-muted-foreground">View only. Ask the owner or an admin to make changes.</p>}
+      </section>
 
       {/* Flow info grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">

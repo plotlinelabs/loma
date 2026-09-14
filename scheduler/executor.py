@@ -6,6 +6,7 @@ from agent.pool import ClientPool
 from api.drain import is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
+from scheduler.run_identity import require_execution_account
 from scheduler.engine import get_next_run_time, remove_flow_from_scheduler
 
 logger = logging.getLogger(__name__)
@@ -67,18 +68,12 @@ async def execute_flow(flow_id: str):
         flow.get("created_by", {}).get("source", "")
         or flow.get("created_by", {}).get("user_name", "")
     )
-    run_as_email = flow.get("run_as") or creator_email
-
-    # Only pass user email for personal tool auth if the account is still active.
-    # Prevents orphaned flows from using deactivated users' OAuth tokens.
-    effective_user_email = None
-    if run_as_email and "@" in run_as_email:
-        run_as_user = await db.users.find_one({"email": run_as_email}, {"status": 1})
-        if run_as_user and run_as_user.get("status", "active") == "active":
-            effective_user_email = run_as_email
-        else:
-            logger.warning("[SCHEDULER] Flow %s run_as user %s is inactive; running without personal tools",
-                           flow_id, run_as_email)
+    try:
+        effective_user_email = await require_execution_account(db, flow)
+    except ValueError as exc:
+        await db.flows.update_one({"flow_id": flow_id}, {"$set": {"last_error": str(exc)}})
+        logger.warning("[SCHEDULER] Flow %s: %s", flow_id, exc)
+        return
 
     selected_model = _flow_model(flow)
 
@@ -89,6 +84,7 @@ async def execute_flow(flow_id: str):
         "flow_id": flow_id,
         "flow_name": flow["name"],
         "visibility": visibility,
+        "run_as": effective_user_email,
     }
     if visibility == "private" and creator_email:
         metadata["user_name"] = creator_email

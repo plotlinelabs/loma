@@ -70,10 +70,7 @@ async def create_flow(db, data: dict) -> dict:
 
         # Metadata
         "created_by": data.get("created_by", {}),
-        "run_as": data.get("run_as") or (
-            data.get("created_by", {}).get("source", "")
-            or data.get("created_by", {}).get("user_name", "")
-        ),
+        "run_as": data.get("run_as"),
         "created_at": now,
         "updated_at": now,
 

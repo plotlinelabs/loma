@@ -98,6 +98,36 @@ def _check_flow_access(flow: dict, request) -> bool:
     return _is_flow_creator(flow, get_user_email(request))
 
 
+def _can_manage_flow(flow: dict, request) -> bool:
+    """Shared visibility grants reading, never use of someone else's account."""
+    email = get_user_email(request).strip().lower()
+    return get_system_role(request) == "admin" or (
+        get_system_role(request) in ("operator", "maintainer")
+        and _is_flow_creator(flow, email)
+        and (flow.get("run_as") or "").lower() == email
+    )
+
+
+def _require_flow_manager(flow: dict, request):
+    if not _can_manage_flow(flow, request):
+        raise web.HTTPForbidden(
+            text='{"error": "Only the owner running as themselves or an admin can manage this flow"}',
+            content_type="application/json",
+        )
+
+
+async def _validate_run_as(db, value, request):
+    if not isinstance(value, str) or not value.strip() or "@" not in value:
+        raise web.HTTPBadRequest(text='{"error": "Select an active execution account"}', content_type="application/json")
+    email = value.strip().lower()
+    if get_system_role(request) != "admin" and email != get_user_email(request).strip().lower():
+        raise web.HTTPForbidden(text='{"error": "Only admins can set run_as to another user"}', content_type="application/json")
+    target = await db.users.find_one({"email": email})
+    if not target or target.get("status") != "active":
+        raise web.HTTPBadRequest(text='{"error": "Execution account is missing or inactive"}', content_type="application/json")
+    return email
+
+
 def _normalize_flow_model(value) -> str | None:
     """Validate and normalize a flow model id.
 
@@ -156,7 +186,7 @@ async def handle_get_flow(request: web.Request) -> web.Response:
     if flow is None or not _check_flow_access(flow, request):
         return web.json_response({"error": "Flow not found"}, status=404)
 
-    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
+    return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})})
 
 
 async def _slack_channel_taken(db, channel_id: str, exclude_flow_id: str | None = None) -> bool:
@@ -218,31 +248,12 @@ async def handle_create_flow(request: web.Request) -> web.Response:
                 {"error": "Recurring flows require a cron expression"}, status=400,
             )
 
-    # Ensure created_by.source has an email.
-    # Only override if the agent didn't already pass one (contains @).
-    # The agent's curl bypasses Next.js middleware, so the auth email
-    # may be a dev fallback — prefer the agent-provided value when it's an email.
-    created_by = body.get("created_by", {})
-    if "@" not in (created_by.get("source") or ""):
-        user_email = get_user_email(request)
-        if user_email:
-            created_by["source"] = user_email
-            body["created_by"] = created_by
-
-    # Validate run_as: admins can set any active user, others only themselves
-    run_as = body.get("run_as")
-    if run_as:
-        requester_email = get_user_email(request)
-        requester_role = get_system_role(request)
-        if requester_role != "admin" and run_as != requester_email:
-            return web.json_response(
-                {"error": "Only admins can set run_as to another user"}, status=403,
-            )
-        target = await db.users.find_one({"email": run_as})
-        if not target or target.get("status") != "active":
-            return web.json_response(
-                {"error": f"run_as user '{run_as}' not found or not active"}, status=400,
-            )
+    # Identity always comes from the authenticated request, never JSON metadata.
+    requester = get_user_email(request).strip().lower()
+    if not requester:
+        raise web.HTTPUnauthorized()
+    body["created_by"] = {"source": requester, "user_name": requester}
+    body["run_as"] = await _validate_run_as(db, body.get("run_as", requester), request)
 
     # Parse datetime fields
     body["start_time"] = _parse_datetime(body.get("start_time"))
@@ -264,7 +275,7 @@ async def handle_create_flow(request: web.Request) -> web.Response:
             )
             flow["next_run_at"] = next_run
 
-    return web.json_response({"flow": _serialize(_sanitize_flow(flow))}, status=201)
+    return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})}, status=201)
 
 
 async def handle_update_flow(request: web.Request) -> web.Response:
@@ -284,10 +295,11 @@ async def handle_update_flow(request: web.Request) -> web.Response:
     existing = await get_flow(db, flow_id)
     if existing is None or not _check_flow_access(existing, request):
         return web.json_response({"error": "Flow not found"}, status=404)
+    _require_flow_manager(existing, request)
 
     # Don't allow updating internal fields
     for field in ("flow_id", "created_at", "run_count", "last_run_at",
-                  "last_run_conversation_id", "last_error"):
+                  "last_run_conversation_id", "last_error", "created_by"):
         body.pop(field, None)
 
     # Validate visibility value if present
@@ -311,20 +323,8 @@ async def handle_update_flow(request: web.Request) -> web.Response:
                 status=409,
             )
 
-    # Validate run_as if being updated
     if "run_as" in body:
-        run_as = body["run_as"]
-        requester_email = get_user_email(request)
-        requester_role = get_system_role(request)
-        if requester_role != "admin" and run_as != requester_email:
-            return web.json_response(
-                {"error": "Only admins can set run_as to another user"}, status=403,
-            )
-        target = await db.users.find_one({"email": run_as})
-        if not target or target.get("status") != "active":
-            return web.json_response(
-                {"error": f"run_as user '{run_as}' not found or not active"}, status=400,
-            )
+        body["run_as"] = await _validate_run_as(db, body["run_as"], request)
 
     # Parse datetime fields if present
     if "start_time" in body:
@@ -351,7 +351,7 @@ async def handle_update_flow(request: web.Request) -> web.Response:
                     )
                     flow["next_run_at"] = next_run
 
-    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
+    return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})})
 
 
 async def handle_delete_flow(request: web.Request) -> web.Response:
@@ -365,6 +365,7 @@ async def handle_delete_flow(request: web.Request) -> web.Response:
     flow = await get_flow(db, flow_id)
     if flow is None or not _check_flow_access(flow, request):
         return web.json_response({"error": "Flow not found"}, status=404)
+    _require_flow_manager(flow, request)
 
     await remove_flow_from_scheduler(flow_id)
     await delete_flow(db, flow_id)
@@ -382,10 +383,11 @@ async def handle_pause_flow(request: web.Request) -> web.Response:
     existing = await get_flow(db, flow_id)
     if existing is None or not _check_flow_access(existing, request):
         return web.json_response({"error": "Flow not found"}, status=404)
+    _require_flow_manager(existing, request)
 
     flow = await update_flow(db, flow_id, {"status": "paused"})
     await remove_flow_from_scheduler(flow_id)
-    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
+    return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})})
 
 
 async def handle_resume_flow(request: web.Request) -> web.Response:
@@ -399,6 +401,7 @@ async def handle_resume_flow(request: web.Request) -> web.Response:
     existing = await get_flow(db, flow_id)
     if existing is None or not _check_flow_access(existing, request):
         return web.json_response({"error": "Flow not found"}, status=404)
+    _require_flow_manager(existing, request)
 
     # A Slack flow can't be resumed if another active flow took its channel while paused.
     if existing.get("trigger_type") == "slack" and await _slack_channel_taken(
@@ -422,7 +425,7 @@ async def handle_resume_flow(request: web.Request) -> web.Response:
             )
             flow["next_run_at"] = next_run
 
-    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
+    return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})})
 
 
 async def handle_run_now(request: web.Request) -> web.Response:
@@ -436,6 +439,7 @@ async def handle_run_now(request: web.Request) -> web.Response:
     flow = await get_flow(db, flow_id)
     if flow is None or not _check_flow_access(flow, request):
         return web.json_response({"error": "Flow not found"}, status=404)
+    _require_flow_manager(flow, request)
 
     if flow.get("trigger_type") == "webhook":
         return web.json_response(
@@ -487,6 +491,7 @@ async def handle_update_flow_labels(request: web.Request) -> web.Response:
     existing = await get_flow(db, flow_id)
     if existing is None or not _check_flow_access(existing, request):
         return web.json_response({"error": "Flow not found"}, status=404)
+    _require_flow_manager(existing, request)
 
     try:
         body = await request.json()
@@ -507,7 +512,7 @@ async def handle_update_flow_labels(request: web.Request) -> web.Response:
     if flow is None:
         return web.json_response({"error": "Flow not found"}, status=404)
 
-    return web.json_response({"flow": _serialize(_sanitize_flow(flow))})
+    return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})})
 
 
 async def handle_list_labels(request: web.Request) -> web.Response:
