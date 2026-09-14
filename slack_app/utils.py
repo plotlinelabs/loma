@@ -40,6 +40,28 @@ BOT_MENTION_RE = re.compile(r"<@[\w]+>\s*")
 # We use a slightly lower limit to leave room for the truncation notice.
 SLACK_MAX_LENGTH = 40000
 
+# Earlier bot replies are fed back as thread context, where the model treats them
+# as examples of the expected length and format. Keep the most recent reply whole
+# (follow-ups like "confirm" depend on it) and trim older ones to this many chars.
+ASSISTANT_CONTEXT_MAX_CHARS = 1200
+ASSISTANT_CONTEXT_LABEL = "**Assistant (earlier reply; do not copy its length or format)**"
+
+
+def format_assistant_context(text: str, keep_full: bool = False) -> str:
+    """Label an earlier bot reply for the thread context, trimming older ones."""
+    text = text or ""
+    if not keep_full and len(text) > ASSISTANT_CONTEXT_MAX_CHARS:
+        omitted = len(text) - ASSISTANT_CONTEXT_MAX_CHARS
+        text = f"{text[:ASSISTANT_CONTEXT_MAX_CHARS].rstrip()} ... _(trimmed {omitted} chars)_"
+    return f"{ASSISTANT_CONTEXT_LABEL}: {text}"
+
+
+def _last_bot_index(messages: list) -> int:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("bot_id"):
+            return index
+    return -1
+
 
 def strip_bot_mention(text: str) -> str:
     """Remove the @bot mention from the beginning of a message."""
@@ -96,7 +118,8 @@ async def get_thread_context(
 
     context_parts = []
     thread_files = []
-    for msg in context_messages:
+    last_bot_index = _last_bot_index(context_messages)
+    for index, msg in enumerate(context_messages):
         user = msg.get("user", "bot")
         text = msg.get("text", "")
         files = msg.get("files", [])
@@ -117,7 +140,7 @@ async def get_thread_context(
             )
 
         if msg.get("bot_id"):
-            context_parts.append(f"**Assistant**: {text}")
+            context_parts.append(format_assistant_context(text, keep_full=index == last_bot_index))
         else:
             context_parts.append(f"**User ({user})**: {text}")
             if files:
@@ -160,13 +183,14 @@ async def get_dm_context(
 
     context_parts = []
     thread_files = []
-    for msg in context_messages:
+    last_bot_index = _last_bot_index(context_messages)
+    for index, msg in enumerate(context_messages):
         user = msg.get("user", "bot")
         text = msg.get("text", "")
         files = msg.get("files", [])
 
         if msg.get("bot_id"):
-            context_parts.append(f"**Assistant**: {text}")
+            context_parts.append(format_assistant_context(text, keep_full=index == last_bot_index))
         else:
             context_parts.append(f"**User ({user})**: {text}")
             if files:
