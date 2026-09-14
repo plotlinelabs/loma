@@ -170,3 +170,30 @@ async def test_excluded_envelope_never_indexed(search_rig):
     await refresh_owner(db, claims['sub'])
     assert 'ONLY_HIDDEN_CANARY' not in str(await db.recall_index.find_one({}))
     assert (await (await search()).json())['coverage']['status'] == 'partial'
+
+
+@pytest.mark.asyncio
+async def test_processing_cap_is_explicit(search_rig, monkeypatch):
+    _, search, *_ = search_rig
+    monkeypatch.setattr(recall_search, 'MAX_MATCHES', 1)
+    data = await (await search()).json()
+    assert len(data['results']) == 1
+    assert data['coverage']['processing_limit_reached']
+    assert data['coverage']['status'] == 'partial'
+
+
+@pytest.mark.asyncio
+async def test_delete_during_release_never_returns_snippets(search_rig):
+    db, search, *_ = search_rig
+    original = db.conversations.find_one.side_effect
+    calls = 0
+    async def racing(query, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            await db.conversations.delete_many({})
+        return await original(query, *args, **kwargs)
+    db.conversations.find_one.side_effect = racing
+    response = await search()
+    assert response.status == 409
+    assert await response.json() == {'error': 'revision_changed'}

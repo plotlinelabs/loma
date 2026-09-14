@@ -15,6 +15,7 @@ from api.recall_routes import (RecallError, _PROJECTION, _cursor, _integer,
     _read_cursor, authenticate, read_body, source_query)
 
 MAX_CANDIDATES = 50
+MAX_MATCHES = 2000
 
 
 def matcher(query, mode):
@@ -127,6 +128,9 @@ async def _search(request):
                 continue
             start = max(0, pos - 160)
             excerpt = message['content'][start:start + 600]
+            if len(results) >= MAX_MATCHES:
+                bounded = True
+                break
             results.append({
                 'conversation_id': cid, 'message_id': message['message_id'], 'title': title,
                 'message_at': message['message_at'], 'role': message['role'], 'excerpt': excerpt,

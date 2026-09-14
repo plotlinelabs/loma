@@ -267,3 +267,42 @@ automatic indexing, exhaustive pagination beyond the candidate cap, immutable
 legacy ownership migration and production performance evaluation remain pending.
 Process-local cursors still expire on a different worker or restart. These limits
 must be resolved before claiming the full approved plan is complete.
+
+## Execution-local MCP adapter batch
+
+`mcp-servers/loma-recall/server.py` exposes `search_history` and `fetch_history`
+over stdio using the MCP Python SDK 2.x. The launcher supplies
+`LOMA_RECALL_BACKEND_URL` and `LOMA_RECALL_CAPABILITY` in the process environment;
+these are not model-callable arguments. The adapter has no signing key, no Mongo
+connection and no credential-issuing endpoint. Plain HTTP is restricted to loopback
+or the internal `loma-backend` host; redirects are never followed with credentials.
+Errors are allowlisted, response size is bounded, and each adapter process allows
+at most eight calls and 24,000 serialized response characters. That is a character
+budget, not an exact tokenizer count, and is not a distributed abuse limit.
+
+Tool instructions label history as untrusted reference data, require source links,
+and forbid treating old approvals as new authorization. Actual stdio tests perform
+initialize, list_tools, search, anchored fetch and budget exhaustion through the
+real HTTP handlers against mock storage. Separate opt-in tests cover real Mongo.
+
+**Not registered in live chats/tasks yet.** Code inspection found blockers to
+safe per-execution credential delivery:
+
+- OpenCode `_write_managed_opencode_config` caches by override **names**, not full
+  credentials, so differently scoped credentials under one connector name can
+  reuse a cached configuration.
+- Codex writes managed MCP configuration into the account's shared CODEX_HOME.
+- The trusted issuer/session gateway is still absent; agent-readable signing keys
+  or forwarded email headers would violate this feature's approved security model.
+
+Do not add this adapter to global config or a shared account pool. Integration
+requires an isolated execution launcher, verified session/task identity, capability
+renewal and destruction of execution-local configuration. The adapter is usable in
+an isolated test process now, but does not complete PR 3. No live agent recall or
+latest-head ordinary provider-chat test is claimed.
+
+Reusable browser proxy smoke: `scripts/browser/recall-smoke.cjs`. It requires an
+isolated stack, a local JSON state file (`email`, `password`, `setup`, optional
+`capability`), and `LOMA_RECALL_SCREENSHOT`. Never commit the state file or a real
+credential. Screenshot output is explicitly labelled as an API response, not an
+AI reply. Existing `chat-smoke.cjs` remains the separate live-model merge gate.
