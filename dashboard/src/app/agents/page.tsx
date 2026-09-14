@@ -39,19 +39,10 @@ import {
   RiRobot2Line,
 } from "@remixicon/react";
 
-const MOTIFS: AgentMotif[] = ["round", "square", "halo", "antenna"];
+import { SelectionTree } from "./SelectionTree";
+import { skillOptions, toolOptions } from "./selection-options";
 
-// Personal CLI tools every deployment ships with (tools/*.py); org integrations
-// are appended from the connected-integrations list at runtime.
-const PERSONAL_TOOLS = [
-  "gmail",
-  "google-drive",
-  "google-calendar",
-  "google-docs",
-  "google-sheets",
-  "slack",
-  "telegram",
-];
+const MOTIFS: AgentMotif[] = ["round", "square", "halo", "antenna"];
 
 interface EditorState {
   agent: AgentIdentity | null; // null = creating
@@ -121,6 +112,8 @@ export default function AgentsPage() {
   const { user, hasRole } = useUser();
   const [agents, setAgents] = useState<AgentIdentity[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [skillsError, setSkillsError] = useState<string>();
+  const [toolsError, setToolsError] = useState<string>();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -145,16 +138,14 @@ export default function AgentsPage() {
     loadAgents();
     fetchSkills()
       .then((data) => setSkills(data.skills || []))
-      .catch(() => setSkills([]));
+      .catch(() => setSkillsError("Could not load skills. Saved selections are preserved."));
     fetchIntegrations()
       .then((list) => setIntegrations(list.filter((i) => i.status === "connected")))
-      .catch(() => setIntegrations([]));
+      .catch(() => setToolsError("Could not load organisation tools. Saved selections are preserved."));
   }, [loadAgents]);
 
-  const toolOptions = useMemo(() => {
-    const fromIntegrations = integrations.map((i) => i.display_name || i.provider);
-    return [...new Set([...fromIntegrations, ...PERSONAL_TOOLS])];
-  }, [integrations]);
+  const skillChoices = useMemo(() => skillOptions(skills), [skills]);
+  const toolChoices = useMemo(() => toolOptions(integrations), [integrations]);
 
   const canManage = useCallback(
     (agent: AgentIdentity) =>
@@ -386,63 +377,20 @@ export default function AgentsPage() {
                 />
               </div>
 
-              {skills.length > 0 && (
-                <div className="grid gap-1.5">
-                  <Label>Skills</Label>
-                  <p className="text-xs text-muted-foreground -mt-1">
-                    Leave empty for all skills; pick some to focus the agent.
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {skills.map((skill) => {
-                      const slug = skill.slug || skill.name;
-                      const active = editor.input.skills.includes(slug);
-                      return (
-                        <ChipToggle
-                          key={slug}
-                          label={skill.name}
-                          title={skill.description}
-                          active={active}
-                          onToggle={() =>
-                            updateInput({
-                              skills: active
-                                ? editor.input.skills.filter((s) => s !== slug)
-                                : [...editor.input.skills, slug],
-                            })
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {toolOptions.length > 0 && (
-                <div className="grid gap-1.5">
-                  <Label>Tools</Label>
-                  <p className="text-xs text-muted-foreground -mt-1">
-                    Leave empty for all tools; pick some to scope what the agent may use.
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {toolOptions.map((tool) => {
-                      const active = editor.input.tools.includes(tool);
-                      return (
-                        <ChipToggle
-                          key={tool}
-                          label={tool}
-                          active={active}
-                          onToggle={() =>
-                            updateInput({
-                              tools: active
-                                ? editor.input.tools.filter((t) => t !== tool)
-                                : [...editor.input.tools, tool],
-                            })
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+              <SelectionTree
+                label="Skills"
+                options={skillChoices}
+                selected={editor.input.skills}
+                onChange={(skills) => updateInput({ skills })}
+                error={skillsError}
+              />
+              <SelectionTree
+                label="Tools"
+                options={toolChoices}
+                selected={editor.input.tools}
+                onChange={(tools) => updateInput({ tools })}
+                error={toolsError}
+              />
 
               <div className="grid gap-1.5">
                 <Label>Sharing</Label>
