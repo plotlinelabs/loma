@@ -29,29 +29,34 @@ const fs = require("node:fs");
       "Long list",
     ]);
   for (const [slug, name, scope, folder] of fixtures)
-    await db
-      .collection("skills")
-      .updateOne(
-        { slug },
-        {
-          $set: {
-            name,
-            scope,
-            folder,
-            description: "Local QA fixture",
-            tags: ["fixture"],
-            enabled: true,
-            created_by: process.env.USER_NAME,
-          },
+    await db.collection("skills").updateOne(
+      { slug },
+      {
+        $set: {
+          name,
+          scope,
+          folder,
+          description: "Local QA fixture",
+          tags: ["fixture"],
+          enabled: true,
+          created_by: process.env.USER_NAME,
         },
-        { upsert: true },
-      );
+      },
+      { upsert: true },
+    );
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({
       viewport: { width: 1440, height: 1000 },
     });
     page.setDefaultTimeout(20000);
+    const screenshot = async (options) => {
+      // Keep Next's dev badge from obscuring the picker footer in evidence.
+      await page.addStyleTag({
+        content: "nextjs-portal { display: none !important; }",
+      });
+      await page.screenshot(options);
+    };
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto(`${origin}/login`, { timeout: 90000 });
@@ -89,6 +94,17 @@ const fs = require("node:fs");
         .getAttribute("aria-checked"),
       "mixed",
     );
+    // Undo restores null/all-mode, not an explicit snapshot of the catalog.
+    await panel.getByRole("button", { name: "Undo", exact: true }).click();
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Skills: All", exact: true })
+        .count(),
+      1,
+    );
+    await panel
+      .getByRole("checkbox", { name: "Select Support", exact: true })
+      .uncheck();
     await panel.getByRole("button", { name: /^Support/ }).click();
     assert.equal(
       await panel
@@ -105,12 +121,38 @@ const fs = require("node:fs");
         .getAttribute("aria-checked"),
       "mixed",
     );
+    // Individual edits invalidate Undo; descriptions are exposed on keyboard focus.
+    assert.equal(
+      await panel.getByRole("button", { name: "Undo", exact: true }).count(),
+      0,
+    );
+    const focusedAlpha = panel.getByRole("checkbox", {
+      name: "Alpha support",
+      exact: true,
+    });
+    await focusedAlpha.focus();
+    const descriptionId = await focusedAlpha.getAttribute("aria-describedby");
+    assert.ok(descriptionId);
+    assert.equal(
+      await page.locator(`[id="${descriptionId}"]`).innerText(),
+      "Local QA fixture",
+    );
     await panel
       .getByRole("textbox", { name: "Search skills" })
       .fill("Personal support");
     assert.equal(
       await panel.getByRole("checkbox", { name: /^Select / }).count(),
       0,
+    );
+    await panel
+      .getByRole("button", { name: "Clear results", exact: true })
+      .click();
+    await panel.getByRole("button", { name: "Undo", exact: true }).click();
+    assert.equal(
+      await panel
+        .getByRole("checkbox", { name: "Personal support", exact: true })
+        .isChecked(),
+      true,
     );
     await panel
       .getByRole("button", { name: "Clear results", exact: true })
@@ -135,7 +177,7 @@ const fs = require("node:fs");
       false,
     );
     await panel.getByRole("textbox", { name: "Search skills" }).fill("");
-    await page.screenshot({
+    await screenshot({
       path: "/tmp/composer-skills-desktop.png",
       fullPage: true,
     });
@@ -158,7 +200,26 @@ const fs = require("node:fs");
         .isChecked(),
       true,
     );
-    await page.screenshot({
+    await panel
+      .getByText("2 required · 0 optional selected", { exact: true })
+      .waitFor();
+    assert.equal(
+      await panel
+        .getByRole("checkbox", { name: "Select Built-in", exact: true })
+        .isChecked(),
+      false,
+    );
+    await panel.getByRole("button", { name: "Undo", exact: true }).click();
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Tools: All", exact: true })
+        .count(),
+      1,
+    );
+    await panel
+      .getByRole("checkbox", { name: "All available tools", exact: true })
+      .uncheck();
+    await screenshot({
       path: "/tmp/composer-tools-desktop.png",
       fullPage: true,
     });
@@ -227,8 +288,24 @@ const fs = require("node:fs");
       .getByRole("checkbox", { name: "All available skills", exact: true })
       .uncheck();
     await page.waitForTimeout(400);
-    console.log("mobile tree", await panel.getByRole("checkbox").count());
-    await page.screenshot({
+    assert.equal(await panel.getAttribute("data-side"), "bottom");
+    const bounds = await panel.boundingBox();
+    assert.ok(
+      bounds.x >= 0 && bounds.width === 390 && bounds.y + bounds.height <= 845,
+    );
+    await panel.getByRole("button", { name: "Undo", exact: true }).click();
+    await panel.getByRole("button", { name: /^Selected \(/ }).click();
+    assert.equal(
+      await panel
+        .getByRole("checkbox", { name: "Alpha support", exact: true })
+        .isChecked(),
+      true,
+    );
+    await panel.getByRole("button", { name: "All", exact: true }).click();
+    await panel
+      .getByRole("checkbox", { name: "All available skills", exact: true })
+      .uncheck();
+    await screenshot({
       path: "/tmp/composer-mobile-task.png",
       fullPage: true,
     });
@@ -237,18 +314,18 @@ const fs = require("node:fs");
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     );
-    await page.keyboard.press("Escape");
+    await panel.getByRole("button", { name: "Done", exact: true }).click();
+    await panel.waitFor({ state: "hidden" });
+    assert.equal(await dialog.isVisible(), true);
     await dialog
       .getByRole("button", { name: /^Add/, exact: false })
       .filter({ hasNotText: "start" })
       .click();
     await dialog.waitFor({ state: "hidden" });
-    let task = await db
-      .collection("conversations")
-      .findOne({
-        title: "Composer browser QA",
-        user_email: process.env.USER_NAME,
-      });
+    let task = await db.collection("conversations").findOne({
+      title: "Composer browser QA",
+      user_email: process.env.USER_NAME,
+    });
     if (!task)
       task = await db
         .collection("conversations")
@@ -296,19 +373,17 @@ const fs = require("node:fs");
       .findOne({ conversation_id: task.conversation_id });
     assert.equal(task.tool_config.enabled_skills, null);
     // Existing conversation and task drawer restore real saved configuration.
-    await db
-      .collection("conversations")
-      .updateOne(
-        { conversation_id: task.conversation_id },
-        {
-          $set: {
-            tool_config: {
-              enabled_skills: [],
-              enabled_tools: ["Bash", "Read"],
-            },
+    await db.collection("conversations").updateOne(
+      { conversation_id: task.conversation_id },
+      {
+        $set: {
+          tool_config: {
+            enabled_skills: [],
+            enabled_tools: ["Bash", "Read"],
           },
         },
-      );
+      },
+    );
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${origin}/chat?continue=${task.conversation_id}`, {
       timeout: 90000,
@@ -339,7 +414,7 @@ const fs = require("node:fs");
         .isChecked(),
       false,
     );
-    await page.screenshot({
+    await screenshot({
       path: "/tmp/composer-task-drawer.png",
       fullPage: true,
     });
@@ -369,12 +444,10 @@ const fs = require("node:fs");
     assert.deepEqual(quickPayload.tool_config.enabled_skills, []);
     assert.equal(quickPayload.start, true);
     assert.ok(
-      await db
-        .collection("conversations")
-        .findOne({
-          title: "Composer quick QA",
-          "tool_config.enabled_skills": [],
-        }),
+      await db.collection("conversations").findOne({
+        title: "Composer quick QA",
+        "tool_config.enabled_skills": [],
+      }),
     );
     // Failed catalogs retain the saved configuration and can be retried.
     let attempts = 0;
@@ -422,14 +495,68 @@ const fs = require("node:fs");
     await panel
       .getByRole("button", { name: "Clear results", exact: true })
       .click();
-    await panel
-      .getByRole("checkbox", { name: "Selected only", exact: true })
-      .check();
+    await panel.getByRole("button", { name: /^Selected \(/ }).click();
     await panel.getByText("No matches.", { exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    // Mobile Tools shares the modal sheet, traps focus, and restores trigger focus.
+    await page.goto(`${origin}/chat`, { timeout: 90000 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open("Tools");
+    panel = pick("Tools");
+    await page.waitForTimeout(250);
+    assert.equal(
+      await panel
+        .getByRole("button", { name: "Done", exact: true })
+        .evaluate((el) => el === document.activeElement),
+      true,
+    );
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(
+      await panel.evaluate((el) => el.contains(document.activeElement)),
+      true,
+    );
+    await panel
+      .getByRole("checkbox", { name: "All available tools", exact: true })
+      .uncheck();
+    await panel.getByRole("button", { name: /Built-in/ }).click();
+    await panel
+      .getByText("2 required · 0 optional selected", { exact: true })
+      .waitFor();
+    await screenshot({
+      path: "/tmp/composer-mobile-tools.png",
+      fullPage: true,
+    });
+    await panel.getByRole("button", { name: "Done", exact: true }).click();
+    const toolTrigger = page.getByRole("button", {
+      name: "Tools: Required only",
+      exact: true,
+    });
+    assert.equal(
+      await toolTrigger.evaluate((el) => el === document.activeElement),
+      true,
+    );
+    await toolTrigger.click();
+    panel = pick("Tools");
+    assert.equal(
+      await panel.getByRole("button", { name: "Undo", exact: true }).count(),
+      0,
+    );
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await panel.waitFor();
+    assert.equal(await panel.getAttribute("data-side"), "top");
+    await panel
+      .getByRole("checkbox", { name: "All available tools", exact: true })
+      .check();
+    await panel.getByRole("button", { name: "Undo", exact: true }).waitFor();
+    await page.waitForTimeout(8500);
+    assert.equal(
+      await panel.getByRole("button", { name: "Undo", exact: true }).count(),
+      0,
+    );
     await page.keyboard.press("Escape");
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: hierarchy, tri-state, required tools, filtered bulk actions, keyboard, new/reply chat payload, mobile create/edit/cancel/reset, existing chat, task drawer, quick-add payload/save, catalog retry, long-list scrolling, selected-only, no page errors.",
+      "PASS: hierarchy, tri-state, required tools, filtered bulk actions, keyboard, new/reply chat payload, mobile create/edit/cancel/reset, existing chat, task drawer, quick-add payload/save, catalog retry, long-list scrolling, selected-only, Undo (all/custom/group/results/expiry), descriptions on focus, mobile bottom sheets, Done/focus trap/return, viewport resize, no page errors.",
     );
   } finally {
     await browser.close();
