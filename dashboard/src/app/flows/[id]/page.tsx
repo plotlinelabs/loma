@@ -352,6 +352,7 @@ export default function FlowDetailPage() {
   const [runAsDraft, setRunAsDraft] = useState<string | null>(null);
   const [runAsMessage, setRunAsMessage] = useState("");
   const [runAsError, setRunAsError] = useState("");
+  const [actionError, setActionError] = useState("");
   const { isAdmin } = useUser();
 
   useEffect(() => {
@@ -453,6 +454,7 @@ export default function FlowDetailPage() {
 
   async function handlePauseResume() {
     if (!flow) return;
+    setActionError("");
     try {
       if (flow.status === "active") {
         await pauseFlow(flow.flow_id);
@@ -461,7 +463,7 @@ export default function FlowDetailPage() {
       }
       await loadData();
     } catch (e) {
-      console.error("Failed to update flow:", e);
+      setActionError(e instanceof Error ? e.message : "Could not update schedule");
     }
   }
 
@@ -552,7 +554,7 @@ export default function FlowDetailPage() {
   const webhookUrl = `${window.location.origin}/webhook?flowId=${flow.flow_id}`;
 
   return (
-    <div className="space-y-2">
+    <div className="flex-1 min-h-0 overflow-y-auto space-y-2">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbList>
@@ -608,7 +610,7 @@ export default function FlowDetailPage() {
             allLabels={allLabels}
             onUpdate={handleUpdateLabels}
           />
-          <Button
+          {!flow.agent_id && <Button
             variant="outline"
             onClick={async () => {
               const newVis = flow.visibility === "private" ? "shared" : "private";
@@ -623,14 +625,14 @@ export default function FlowDetailPage() {
           >
             <RiLockLine size={16} />
             {flow.visibility === "private" ? "Private" : "Shared"}
-          </Button>
+          </Button>}
           <Button asChild className="bg-accent-200 hover:bg-accent-300 text-accent-on">
             <a href={`${basePath}/chat?flow=${flow.flow_id}`}>
               <RiPencilLine size={16} />
               Edit in Chat
             </a>
           </Button>
-          {flow.status !== "completed" && (
+          {flow.status !== "completed" && (!flow.agent_id || flow.status === "active") && (
             <Button
               variant="outline"
               onClick={handlePauseResume}
@@ -638,7 +640,7 @@ export default function FlowDetailPage() {
               {flow.status === "active" ? "Pause" : "Resume"}
             </Button>
           )}
-          {flow.status === "active" && isScheduled && (
+          {flow.status === "active" && isScheduled && !flow.agent_id && (
             <Button
               variant="outline"
               onClick={handleRunNow}
@@ -700,14 +702,21 @@ export default function FlowDetailPage() {
         onChange={handleModelChange}
       />
 
+      {actionError && <p role="alert" className="rounded-lg border p-3 text-sm text-destructive">{actionError}</p>}
+      {flow.agent_id && <section className="rounded-xl border bg-card p-3 space-y-2" aria-label="Pinned agent">
+        <h2 className="text-sm font-semibold">Agent: {flow.agent_snapshot?.name || "Unavailable agent"}</h2>
+        <p className="text-xs text-muted-foreground">This job uses saved agent instructions. Later agent edits do not change it. Its account and results are visible only to its owner and workspace admins.</p>
+        <Button variant="outline" size="sm" asChild><a href={`${basePath}/agents?work=${encodeURIComponent(flow.agent_id)}`}>Manage agent schedules</a></Button>
+        {flow.agent_snapshot?.context && <details className="text-xs"><summary className="cursor-pointer">View saved agent instructions</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-3">{flow.agent_snapshot.context}</pre></details>}
+      </section>}
       {/* Execution authority is separate from shared visibility. */}
       <section aria-labelledby="execution-account-heading" className="bg-card rounded-xl border border-border p-3 space-y-2">
         <h2 id="execution-account-heading" className="text-[13px] font-heading font-semibold text-foreground">Execution account</h2>
         <p className="text-[13px] break-all text-foreground">
           {flow.run_as ? `Current account: ${flow.run_as}` : "No account selected. Runs are blocked until an admin saves an account."}
         </p>
-        <p className="text-xs text-muted-foreground">Scheduled and webhook runs use this account&apos;s connected tools. Sharing a flow does not share permission to edit or run it.</p>
-        {isAdmin && (
+        <p className="text-xs text-muted-foreground">{flow.agent_id ? "Agent schedules always use their creator’s account. Create your own schedule to use a different account." : "Scheduled and webhook runs use this account’s connected tools. Sharing a flow does not share permission to edit or run it."}</p>
+        {isAdmin && !flow.agent_id && (
           <>
             <Select value={runAsDraft ?? flow.run_as ?? ""} disabled={runAsSaving || orgUsers.length === 0}
               onValueChange={(email) => { setRunAsDraft(email); setRunAsError(""); setRunAsMessage(""); }}>

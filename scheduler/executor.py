@@ -6,6 +6,7 @@ from agent.pool import ClientPool
 from api.drain import is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
+from scheduler.agent_work import validate_agent_work
 from scheduler.run_identity import require_execution_account
 from scheduler.engine import get_next_run_time, remove_flow_from_scheduler
 
@@ -19,6 +20,18 @@ FLOW_PREAMBLE = """You are executing a scheduled flow. IMPORTANT:
   then take the actions the flow describes.
 
 Flow name: {flow_name}
+---
+
+"""
+
+
+AGENT_WORK_PREAMBLE = """You are executing scheduled agent work.
+Your final response is saved in this job's private run history for its owner
+and workspace admins. Return the requested result there. Do not send messages
+or publish results elsewhere unless the job instructions explicitly request it.
+Use only the execution account supplied for this run.
+
+Job name: {flow_name}
 ---
 
 """
@@ -70,6 +83,8 @@ async def execute_flow(flow_id: str):
     )
     try:
         effective_user_email = await require_execution_account(db, flow)
+        if flow.get("agent_id"):
+            await validate_agent_work(db, flow)
     except ValueError as exc:
         await db.flows.update_one({"flow_id": flow_id}, {"$set": {"last_error": str(exc)}})
         logger.warning("[SCHEDULER] Flow %s: %s", flow_id, exc)
@@ -86,6 +101,9 @@ async def execute_flow(flow_id: str):
         "visibility": visibility,
         "run_as": effective_user_email,
     }
+    if flow.get("agent_id"):
+        metadata["agent_id"] = flow["agent_id"]
+        metadata["agent_snapshot"] = flow["agent_snapshot"]
     if visibility == "private" and creator_email:
         metadata["user_name"] = creator_email
 
@@ -93,9 +111,12 @@ async def execute_flow(flow_id: str):
     await observer.start()
 
     full_prompt = (
-        FLOW_PREAMBLE.format(flow_name=flow["name"])
+        (AGENT_WORK_PREAMBLE if flow.get("agent_id") else FLOW_PREAMBLE).format(flow_name=flow["name"])
         + flow["prompt"]
     )
+
+    if flow.get("agent_id"):
+        full_prompt = flow["agent_snapshot"]["context"] + "\n\n" + full_prompt
 
     last_text = ""
     try:

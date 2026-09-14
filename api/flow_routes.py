@@ -13,6 +13,7 @@ from scheduler.models import (
     delete_flow,
     list_all_labels,
 )
+from scheduler.agent_work import prepare_agent_work, validate_agent_work
 from scheduler.engine import add_flow_to_scheduler, remove_flow_from_scheduler, get_next_run_time
 from api.auth_helpers import require_analyst_or_above, require_operator_or_above, get_system_role, get_user_email
 
@@ -171,7 +172,10 @@ async def handle_list_flows(request: web.Request) -> web.Response:
         db, status=status, trigger_type=trigger_type,
         user_email=user_email, system_role=system_role,
     )
-    return web.json_response({"flows": _serialize([_sanitize_flow(f) for f in flows])})
+    agent_id = request.query.get("agent_id")
+    if agent_id:
+        flows = [f for f in flows if f.get("agent_id") == agent_id]
+    return web.json_response({"flows": _serialize([{**_sanitize_flow(f), "can_manage": _can_manage_flow(f, request)} for f in flows])})
 
 
 async def handle_get_flow(request: web.Request) -> web.Response:
@@ -262,6 +266,13 @@ async def handle_create_flow(request: web.Request) -> web.Response:
     if model_error is not None:
         return model_error
 
+    body.pop("agent_snapshot", None)
+    if body.get("agent_id") is not None:
+        try:
+            body = await prepare_agent_work(db, body, requester)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
     flow = await create_flow(db, body)
 
     # Add to live scheduler if active (scheduled flows only — webhook/slack are event-driven)
@@ -296,6 +307,17 @@ async def handle_update_flow(request: web.Request) -> web.Response:
     if existing is None or not _check_flow_access(existing, request):
         return web.json_response({"error": "Flow not found"}, status=404)
     _require_flow_manager(existing, request)
+
+    # Linked schedules pin their identity. Create a new schedule to adopt agent changes.
+    if "agent_id" in body or "agent_snapshot" in body:
+        return web.json_response({"error": "Agent identity cannot be changed on an existing schedule"}, status=400)
+    if existing.get("agent_id") and "status" in body:
+        return web.json_response({"error": "Use pause or resume to change the schedule status"}, status=400)
+    if existing.get("agent_id"):
+        try:
+            await validate_agent_work(db, {**existing, **body})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
     # Don't allow updating internal fields
     for field in ("flow_id", "created_at", "run_count", "last_run_at",
@@ -403,6 +425,12 @@ async def handle_resume_flow(request: web.Request) -> web.Response:
         return web.json_response({"error": "Flow not found"}, status=404)
     _require_flow_manager(existing, request)
 
+    if existing.get("agent_id"):
+        try:
+            await validate_agent_work(db, existing)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
     # A Slack flow can't be resumed if another active flow took its channel while paused.
     if existing.get("trigger_type") == "slack" and await _slack_channel_taken(
         db, existing.get("channel_id", ""), exclude_flow_id=flow_id,
@@ -451,6 +479,14 @@ async def handle_run_now(request: web.Request) -> web.Response:
             {"error": "Slack-triggered flows run when a message is posted in their channel"},
             status=400,
         )
+
+    if flow.get("status") != "active":
+        return web.json_response({"error": "Enable the schedule before running it"}, status=400)
+    if flow.get("agent_id"):
+        try:
+            await validate_agent_work(db, flow)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
     # Fire and forget
     from scheduler.executor import execute_flow

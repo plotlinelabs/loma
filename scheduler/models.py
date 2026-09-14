@@ -33,6 +33,8 @@ async def create_flow(db, data: dict) -> dict:
         "description": data.get("description", ""),
         "prompt": data.get("prompt", ""),
         "model": data.get("model"),
+        "agent_id": data.get("agent_id"),
+        "agent_snapshot": data.get("agent_snapshot"),
 
         # Trigger type: "scheduled" (cron/one-time), "webhook" (event-driven),
         # or "slack" (responds to top-level messages in a Slack channel)
