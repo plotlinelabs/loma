@@ -2,16 +2,18 @@
 
 ## Status and release gate
 
-This PR adds **disabled-by-default fetch and search endpoints**, a sanitized
+This PR adds **default-enabled, capability-protected fetch and search endpoints**, a sanitized
 index/backfill worker with opt-in automatic reconciliation, shared cursor/limit
 storage, and an execution-local MCP adapter. It is not a finished
 history recall feature: live chat/task registration, isolated credential issuance,
 production indexer deployment and complete runtime controls remain pending. Existing
 conversation ACLs are unchanged. See the dated batch sections below for current scope.
 
-Keep `LOMA_RECALL_ENABLED` unset/false in production until all remaining work and the
-security review pass. Setting the flag alone does not grant access: a valid
-recall-only signed capability and a live eligible user are also required.
+`LOMA_RECALL_ENABLED` now defaults to true. Set it explicitly to false for the
+emergency off switch. Empty or invalid values also disable it. This API default
+is not rollout of live-agent recall: without a valid public key and recall-only
+signed capability, requests fail closed before database access. Do not deploy a
+production issuer or register chat/task tools until the remaining gates pass.
 
 The existing backend trusts `X-User-Email`; it is NOT a sufficient identity source
 for a future recall issuer. PR 3 must verify the real dashboard session or trusted
@@ -136,7 +138,8 @@ not `$bsonSize`. An explicit real-Mongo test covers that guard.
 For real backend tests, follow `run-loma-local`: new `loma_local_<random>` DB,
 ports 13000/13001/14097, Slack/scheduler off, isolated asset/account directories,
 zero agent pool, no production writes. Generate a **throwaway** Ed25519 key pair;
-put only its public key and `LOMA_RECALL_ENABLED=true` into the test backend `.env`.
+put only its public key into the test backend `.env` and leave
+`LOMA_RECALL_ENABLED` unset to exercise the shipped default.
 Start the full `app.py` and dashboard, not a substitute test application. Give the
 private key only to the test process as base64url raw 32-byte key material:
 
@@ -162,7 +165,7 @@ PR 2: sanitized search projection, keyword/phrase/literal ranking, historical
 backfill and coverage, multi-worker cursor support and index/live-source revision
 agreement. PR 3: trusted isolated issuer, all runtime adapters, execution scope
 capture, per-user controls, budgets/rate limits, audits, citations, prompt-injection
-handling and full chat/task E2E. Do not enable recall until all gates pass.
+handling and full chat/task E2E. Do not roll out live-agent recall until all gates pass.
 
 ## Mandatory live chat regression gate (every recall PR)
 
@@ -175,7 +178,8 @@ without a valid answer is **not** a passing agent test.
    other users' credentials, histories or integrations. Connect the requesting
    user's provider in the isolated stack; empty provider pools are blockers, not
    reasons to substitute canned replies. For this test no external tools are needed.
-2. Run the unchanged `app.py` and dashboard with recall **disabled**, as shipped.
+2. Run the unchanged `app.py` and dashboard with the recall flag **unset** (the new API default). Also repeat with an
+   explicit `LOMA_RECALL_ENABLED=false` to verify the kill switch.
    Use one real-model pool worker (the zero-pool setup above is only for retrieval
    fixtures). Set a valid model in both the backend and test environment.
 3. Install Playwright in a separate test environment if unavailable; point
@@ -355,4 +359,29 @@ Still pending: isolated issuer and runtime registration, safe renewal/cleanup,
 production worker supervision and orphan-lock alerting, measured deletion SLO,
 large-corpus search, immutable ownership policy, audit events, live-model chat/task
 E2E, and independent security review. These backend changes do not solve the shared
-agent-process security boundary. Recall must remain disabled.
+agent-process security boundary. Live-agent recall remains unavailable until these gates pass.
+
+
+## Default-enabled API change
+
+The endpoint flag defaults to true, and backend control-index initialization uses
+exactly the same parser. All existing security fixtures run with the flag unset,
+so user isolation, scopes, redaction, stale records, pagination, limits and the
+MCP round trip test the actual default rather than an explicit opt-in.
+Missing or malformed public keys fail with 401 before source/database access;
+explicit false returns 403 even with otherwise valid credentials.
+
+This change does not supply an issuer, runtime registration or production worker
+supervision. It does not claim that a real chat/task can recall history yet.
+The independent indexer remains opt-in to avoid starting unconfigured bulk work.
+
+Validation for this change: 555 unit/regression tests passed (7 opt-in tests
+skipped), 7 real-Mongo/full-backend tests passed with the flag absent, and browser
+login/search/anchored-fetch/redaction/session-only-denial passed. Default startup
+created both shared-control TTL indexes. Restart tests verified both endpoints
+return 401 without a public key and 403 with the explicit off switch; backend
+health stayed available. Test ports were 23000/23001/24097 because the usual local
+ports were occupied; temporary copies of the existing harness changed only ports
+and the shared fixture import. No production database or provider credentials were
+used. Real model replies and autonomous chat/task recall were NOT tested and
+remain release blockers, not implied by these results.

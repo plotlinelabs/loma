@@ -197,3 +197,16 @@ async def test_delete_during_release_never_returns_snippets(search_rig):
     response = await search()
     assert response.status == 409
     assert await response.json() == {'error': 'revision_changed'}
+
+
+@pytest.mark.asyncio
+async def test_search_default_enabled_requires_key_and_honors_kill_switch(search_rig, monkeypatch):
+    _, search, *_ = search_rig
+    assert (await search()).status == 200
+    monkeypatch.delenv('LOMA_RECALL_PUBLIC_KEY')
+    def forbidden_db():
+        pytest.fail('Missing verification key must not read the database')
+    monkeypatch.setattr(recall_routes, 'get_db', forbidden_db)
+    assert (await search()).status == 401
+    monkeypatch.setenv('LOMA_RECALL_ENABLED', 'false')
+    assert (await search()).status == 403

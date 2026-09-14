@@ -30,7 +30,7 @@ for (const key of ['LOMA_EMAIL', 'LOMA_PASSWORD', 'LOMA_TOKEN', 'LOMA_CHAT_MODEL
 }
 const out = process.env.LOMA_CHAT_EVIDENCE;
 fs.mkdirSync(out, { recursive: true });
-const report = { commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), recallEnabled: backend.LOMA_RECALL_ENABLED || 'false', model: process.env.LOMA_CHAT_MODEL, mocked: false, checks: [], passed: false };
+const report = { commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), recallEnabled: (backend.LOMA_RECALL_ENABLED ?? 'true').trim().toLowerCase() === 'true', model: process.env.LOMA_CHAT_MODEL, mocked: false, checks: [], passed: false };
 function check(value, label) { assert(value, label); report.checks.push(label); console.log(`PASS ${label}`); }
 function parseStream(body) {
   assert(body.includes('data: [DONE]'), 'SSE must complete');

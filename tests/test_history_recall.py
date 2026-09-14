@@ -29,7 +29,7 @@ def capability(monkeypatch):
     key = Ed25519PrivateKey.generate()
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     monkeypatch.setenv('LOMA_RECALL_PUBLIC_KEY', base64.urlsafe_b64encode(public).decode())
-    monkeypatch.setenv('LOMA_RECALL_ENABLED', 'true')
+    monkeypatch.delenv('LOMA_RECALL_ENABLED', raising=False)
     claims = dict(aud='loma:recall:fetch:v1', sub=str(ObjectId()), email='owner@example.com',
                   execution_id='current', project_id=None, agent_id=None,
                   iat=int(time.time()), exp=int(time.time()) + 300)
@@ -162,9 +162,11 @@ async def test_invalid_inputs_are_bounded(rig, body):
 
 
 @pytest.mark.asyncio
-async def test_disabled_by_default_and_db_failure(rig, monkeypatch):
+async def test_enabled_by_default_kill_switch_and_db_failure(rig, monkeypatch):
     _, fetch, *_ = rig
-    monkeypatch.delenv('LOMA_RECALL_ENABLED')
+    monkeypatch.delenv('LOMA_RECALL_ENABLED', raising=False)
+    assert (await fetch()).status == 200
+    monkeypatch.setenv('LOMA_RECALL_ENABLED', 'false')
     assert await (await fetch()).json() == {'error': 'recall_disabled'}
     monkeypatch.setenv('LOMA_RECALL_ENABLED', 'true')
     monkeypatch.setattr(recall_routes, 'get_db', lambda: None)
@@ -346,3 +348,32 @@ async def test_user_revoked_during_fetch(rig):
         return await original(*args, **kwargs) if calls == 1 else None
     db.users.find_one = find
     assert (await fetch()).status == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('public_key', [None, '', 'invalid', 'a' * 44])
+async def test_default_enabled_without_valid_key_denies_before_db(rig, monkeypatch, public_key):
+    _, fetch, *_ = rig
+    if public_key is None:
+        monkeypatch.delenv('LOMA_RECALL_PUBLIC_KEY', raising=False)
+    else:
+        monkeypatch.setenv('LOMA_RECALL_PUBLIC_KEY', public_key)
+    def forbidden_db():
+        pytest.fail('Invalid credentials must not read the database')
+    monkeypatch.setattr(recall_routes, 'get_db', forbidden_db)
+    response = await fetch()
+    assert response.status == 401
+    assert await response.json() == {'error': 'unauthorized'}
+
+
+@pytest.mark.parametrize('value,expected', [
+    (None, True), ('true', True), ('TRUE', True), (' true ', True),
+    ('false', False), ('FALSE', False), ('', False), ('1', False), ('typo', False),
+])
+def test_recall_default_and_explicit_configuration(monkeypatch, value, expected):
+    from config.recall import recall_enabled
+    if value is None:
+        monkeypatch.delenv('LOMA_RECALL_ENABLED', raising=False)
+    else:
+        monkeypatch.setenv('LOMA_RECALL_ENABLED', value)
+    assert recall_enabled() is expected

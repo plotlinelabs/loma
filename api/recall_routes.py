@@ -1,8 +1,7 @@
-"""Disabled-by-default, read-only history fetch foundation. No runtime tool yet."""
+"""Authenticated, read-only history fetch foundation. No runtime tool yet."""
 import asyncio
 import hashlib
 import json
-import os
 import time
 from dataclasses import asdict
 from urllib.parse import quote
@@ -11,6 +10,7 @@ from aiohttp import web
 from bson import ObjectId
 from pymongo.errors import PyMongoError
 
+from config.recall import recall_enabled
 from api.recall_auth import verify_recall_token
 from api.recall_controls import (RecallError, create_cursor, read_cursor, admit_request, charge_response)
 from api.recall_content import SANITIZER_VERSION, revision, sanitize, visible_messages
@@ -32,7 +32,7 @@ def _integer(body, key, default, minimum, maximum):
 
 
 async def authenticate(request):
-    if os.environ.get('LOMA_RECALL_ENABLED', '').lower() != 'true':
+    if not recall_enabled():
         raise RecallError('recall_disabled', 403)
     auth = request.headers.get('Authorization', '')
     try:
