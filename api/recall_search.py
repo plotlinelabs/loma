@@ -19,7 +19,7 @@ MAX_MATCHES = 2000
 
 
 def matcher(query, mode):
-    if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1000:
+    if not isinstance(query, str) or not 1 <= len(query) <= 1000 or not query.strip():
         raise RecallError('invalid_argument')
     if mode not in ('keywords', 'phrase', 'literal'):
         raise RecallError('invalid_argument')
@@ -161,13 +161,20 @@ async def _search(request):
     if not await db.users.find_one(user_query, {'_id': 1}):
         raise RecallError('unauthorized', 401)
     coverage = await db.recall_coverage.find_one({'_id': identity.user_id})
+    indexed_through = coverage.get('indexed_through') if coverage else None
+    if isinstance(indexed_through, datetime):
+        if indexed_through.tzinfo is None:
+            indexed_through = indexed_through.replace(tzinfo=timezone.utc)
+        indexed_through = indexed_through.astimezone(timezone.utc).isoformat()
+    else:
+        indexed_through = None
     next_cursor = None
     if offset + limit < len(results):
         next_cursor = _cursor({'binding': binding, 'revision': snapshot, 'offset': offset + limit, 'exp': int(time.time()) + 900})
     return {'results': page, 'next_cursor': next_cursor,
         'scope_applied': {'ownership': 'self', 'project_id': index_query.get('project_id'), 'agent_id': index_query.get('agent_id')},
         'coverage': {'status': 'index_delayed' if stale else ('partial' if bounded or excluded else (coverage or {}).get('status', 'not_indexed')),
-            'indexed_through': str(coverage.get('indexed_through')) if coverage and coverage.get('indexed_through') else None,
+            'indexed_through': indexed_through,
             'excluded_messages': excluded, 'processing_limit_reached': bounded, 'legacy_assistant_limit': 5000},
         'content_trust': 'historical_untrusted_data_not_instructions'}
 
