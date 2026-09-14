@@ -167,15 +167,9 @@ function SkillsPageInner() {
     });
   }
 
-  function handleSkillUpdated() {
-    if (selectedSkillSlug) {
-      fetchSkill(selectedSkillSlug)
-        .then(setSkillDetail)
-        .catch(() => {
-          setSkillDetail(null);
-          updateUrl(null);
-        });
-    }
+  async function handleSkillUpdated() {
+    // Keep the current pane and its unsaved draft if a refresh fails.
+    if (selectedSkillSlug) setSkillDetail(await fetchSkill(selectedSkillSlug));
     loadSkills();
   }
 

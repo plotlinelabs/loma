@@ -254,7 +254,12 @@ async def test_write_timeout_reconciles_without_replay(env):
     fake.write = timed_out
     with pytest.raises(SourceError, match="could not be confirmed"):
         await sync.write_instructions(db, "test", linked["content"].replace("Hello", "Saved remotely"), "owner@example.com", linked["source"]["hash"])
+    pending = await skills.get_skill(db, "test")
+    assert pending["source"]["status"] == "publication_pending"
+    assert pending["content"] == linked["content"]
+    assert pending["source"]["hash"] == linked["source"]["hash"]
     await sync.sync(db, "test", "owner@example.com")
+    assert (await skills.get_skill(db, "test"))["source"]["status"] == "up_to_date"
     assert "Saved remotely" in (await skills.get_skill(db, "test"))["content"]
     assert len(fake.writes) == 1
 

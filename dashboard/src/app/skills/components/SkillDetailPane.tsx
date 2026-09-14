@@ -58,9 +58,10 @@ export default function SkillDetailPane({
   selectedFilePath: string | null;
   loading: boolean;
   createUrl: string;
-  onSkillUpdated: () => void;
+  onSkillUpdated: () => Promise<void>;
 }) {
   const [editorContent, setEditorContent] = useState("");
+  const [sourceRefreshFailed, setSourceRefreshFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [baseHash, setBaseHash] = useState<string | undefined>();
@@ -95,16 +96,36 @@ export default function SkillDetailPane({
     setActiveTab(value);
   }
 
+  async function refreshSkill() {
+    try {
+      await onSkillUpdated();
+      setSourceRefreshFailed(false);
+    } catch (e) {
+      setSourceRefreshFailed(true);
+      throw e;
+    }
+  }
+
   async function handleSave() {
     if (!skill || saving) return;
     const slug = skill.slug || skill.name;
     setSaving(true);
+    setSaveError("");
     try {
       await updateSkillFile(slug, filePath, editorContent, baseHash);
-      onSkillUpdated();
-      setActiveTab("viewer");
     } catch (e) {
       setSaveError((e as Error).message);
+      // A failed write can still leave a pending publication or conflict.
+      // Refresh metadata without resetting the editor or its original base hash.
+      if (skill.source) await refreshSkill().catch(() => {});
+      setSaving(false);
+      return;
+    }
+    try {
+      await refreshSkill();
+      setActiveTab("viewer");
+    } catch {
+      setSaveError("Save succeeded, but the latest skill could not be loaded. Your draft is preserved.");
     } finally {
       setSaving(false);
     }
@@ -149,7 +170,7 @@ export default function SkillDetailPane({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full">
-      {skill.source && <GoogleSkillSourcePanel source={skill.source} slug={slug} onUpdated={onSkillUpdated} disabled={saving} />}
+      {skill.source && <GoogleSkillSourcePanel source={skill.source} slug={slug} onUpdated={refreshSkill} statusUnknown={sourceRefreshFailed} disabled={saving} />}
       {/* Content area */}
       {isAssetFile ? (
         <ScrollArea className="flex-1 px-6 py-5">
