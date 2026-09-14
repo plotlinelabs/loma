@@ -80,7 +80,7 @@ async def build_board_context(db, owner: str) -> str:
 
 async def _run_task_headless(db, conversation_id: str, prompt: str,
                              model: str, files: list, owner: str,
-                             tool_config: dict | None = None):
+                             tool_config: dict | None = None, recall_session: dict | None = None):
     """Run a task's first agent turn in the background — no client stream.
 
     Powers quick-add: the task fires immediately and keeps running even if
@@ -117,6 +117,7 @@ async def _run_task_headless(db, conversation_id: str, prompt: str,
             user_email=owner,
             selected_model=model or None,
             tool_config=tool_config,
+            recall_session=recall_session,
         ):
             pass  # observer records; nobody is watching the stream
     except Exception as e:
@@ -397,9 +398,12 @@ async def handle_create_task(request: web.Request) -> web.Response:
         asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
 
     if start:
+        from api.recall_session import launch_recall
+        recall_session = await launch_recall(request, doc["conversation_id"], user_email)
         asyncio.create_task(_run_task_headless(
             db, doc["conversation_id"], prompt, model, files, user_email,
             tool_config=tool_config,
+            recall_session=recall_session,
         ))
 
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)

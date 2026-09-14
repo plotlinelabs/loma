@@ -2,6 +2,8 @@
 import asyncio
 import hashlib
 import json
+import os
+import aiohttp
 import time
 from dataclasses import asdict
 from urllib.parse import quote
@@ -36,10 +38,14 @@ async def authenticate(request):
         raise RecallError('recall_disabled', 403)
     auth = request.headers.get('Authorization', '')
     try:
-        if not auth.startswith('Bearer '):
+        if not auth.startswith('Bearer ') or len(auth) > 4103:
             raise ValueError()
-        identity = verify_recall_token(auth[7:])
-    except ValueError:
+        if os.environ.get('LOMA_RECALL_PUBLIC_KEY'):
+            identity = verify_recall_token(auth[7:])
+        else:
+            from api.recall_session import runtime_public_key
+            identity = verify_recall_token(auth[7:], await runtime_public_key(auth[7:]))
+    except (ValueError, KeyError, aiohttp.ClientError, TimeoutError):
         raise RecallError('unauthorized', 401) from None
 
     db = get_db()

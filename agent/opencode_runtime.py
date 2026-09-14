@@ -390,7 +390,7 @@ async def _ensure_server_instance(
     explicitly set, we assume that external server is intentionally managed by
     the operator.
     """
-    if os.environ.get("OPENCODE_SERVER_URL"):
+    if os.environ.get("OPENCODE_SERVER_URL") and not (user_mcp_overrides or {}).get("loma-recall"):
         base_url = _configured_server_url()
         if not await _health_check(base_url):
             raise OpenCodeError(f"Configured OPENCODE_SERVER_URL is not reachable: {base_url}")
@@ -469,24 +469,24 @@ async def _ensure_server_instance(
         _opencode_servers[config_hash] = server
         await _retire_stale_servers(keep_hash=config_hash)
 
-    deadline = asyncio.get_running_loop().time() + OPENCODE_START_TIMEOUT_SECONDS
-    while asyncio.get_running_loop().time() < deadline:
-        if await _health_check(server.base_url):
-            server.touch()
-            return server
-        if not server.is_alive:
-            tail = server.log_tail()
-            raise OpenCodeError(
-                f"OpenCode server exited with code {server.process.returncode}"
-                + (f"; last output:\n{tail}" if tail else "")
-            )
-        await asyncio.sleep(0.5)
+        deadline = asyncio.get_running_loop().time() + OPENCODE_START_TIMEOUT_SECONDS
+        while asyncio.get_running_loop().time() < deadline:
+            if await _health_check(server.base_url):
+                server.touch()
+                return server
+            if not server.is_alive:
+                tail = server.log_tail()
+                raise OpenCodeError(
+                    f"OpenCode server exited with code {server.process.returncode}"
+                    + (f"; last output:\n{tail}" if tail else "")
+                )
+            await asyncio.sleep(0.5)
 
-    tail = server.log_tail()
-    raise OpenCodeError(
-        f"OpenCode server did not become ready at {server.base_url}"
-        + (f"; last output:\n{tail}" if tail else "")
-    )
+        tail = server.log_tail()
+        raise OpenCodeError(
+            f"OpenCode server did not become ready at {server.base_url}"
+            + (f"; last output:\n{tail}" if tail else "")
+        )
 
 
 async def ensure_opencode_server(
@@ -507,7 +507,7 @@ async def _write_managed_opencode_config(
     """
     global _opencode_mcp_names
 
-    overrides_key = json.dumps(sorted((user_mcp_overrides or {}).keys()))
+    overrides_key = hashlib.sha256(json.dumps(user_mcp_overrides or {}, sort_keys=True).encode()).hexdigest()
     now = time.monotonic()
     cached = _opencode_config_cache.get(overrides_key)
     if cached is not None and now - cached[2] < OPENCODE_CONFIG_TTL_SECONDS:
@@ -532,6 +532,7 @@ async def _write_managed_opencode_config(
     config_home = Path(tempfile.gettempdir()) / f"loma-opencode-config-{config_hash[:12]}"
     config_dir = config_home / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
+    config_home.chmod(0o700)
     config_path = config_dir / "opencode.json"
     config_path.write_text(config_text)
     config_path.chmod(0o600)
@@ -1238,7 +1239,7 @@ async def _emit_text(
         yield text
 
 
-async def run_opencode_agent(
+async def _run_opencode_agent(
     *,
     full_prompt: str,
     selected_model: str,
@@ -1644,6 +1645,13 @@ async def run_opencode_agent(
     finally:
         server.active_turns = max(0, server.active_turns - 1)
         server.touch()
+        if (user_mcp_overrides or {}).get("loma-recall"):
+            await server.terminate()
+            _drop_server_state(server.config_hash)
+            for key, value in list(_opencode_config_cache.items()):
+                if value[1] == server.config_hash:
+                    _opencode_config_cache.pop(key, None)
+            shutil.rmtree(server.config_home, ignore_errors=True)
 
     if observer:
         usage_payload = total_usage if total_usage["input_tokens"] or total_usage["output_tokens"] else None
@@ -1663,3 +1671,22 @@ async def run_opencode_agent(
 
     if not last_text:
         yield "I didn't generate a response. Please try again."
+
+
+async def run_opencode_agent(**kwargs):
+    """Clean execution-only servers even if setup fails before the first event."""
+    overrides = kwargs.get("user_mcp_overrides") or {}
+    try:
+        async for event in _run_opencode_agent(**kwargs):
+            yield event
+    finally:
+        if overrides.get("loma-recall"):
+            key = hashlib.sha256(json.dumps(overrides, sort_keys=True).encode()).hexdigest()
+            cached = _opencode_config_cache.pop(key, None)
+            if cached:
+                home, config_hash, _ = cached
+                server = _opencode_servers.get(config_hash)
+                if server:
+                    await server.terminate()
+                    _drop_server_state(config_hash)
+                shutil.rmtree(home, ignore_errors=True)

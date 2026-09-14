@@ -1030,6 +1030,9 @@ async def handle_chat(request: web.Request) -> web.Response:
                 if conversation_context else agent_block
             )
 
+    from api.recall_session import launch_recall
+    recall_session = await launch_recall(request, observer.conversation_id if observer else None, user_email)
+
     response = web.StreamResponse(
         status=200,
         reason="OK",
@@ -1079,6 +1082,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             user_email=user_email,
             selected_model=selected_model,
             tool_config=tool_config,
+            recall_session=recall_session,
         ):
             # If the client already disconnected, keep consuming events so the
             # agent runs to completion (observability still records everything)

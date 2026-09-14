@@ -25,14 +25,14 @@ def decode64(value: str) -> bytes:
     return base64.b64decode(value + '=' * (-len(value) % 4), altchars=b'-_', validate=True)
 
 
-def verify_recall_token(token: str) -> RecallIdentity:
+def verify_recall_token(token: str, public_key: str | None = None) -> RecallIdentity:
     """Verify exact audience, lifetime, immutable user ID and signed scope."""
     try:
         if not isinstance(token, str) or len(token) > 4096:
             raise ValueError()
         payload, signature = token.split('.')
         key = Ed25519PublicKey.from_public_bytes(
-            decode64(os.environ.get('LOMA_RECALL_PUBLIC_KEY', '')),
+            decode64(public_key if public_key is not None else os.environ.get('LOMA_RECALL_PUBLIC_KEY', '')),
         )
         key.verify(decode64(signature), payload.encode('ascii'))
         claims = json.loads(decode64(payload))

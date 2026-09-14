@@ -6,6 +6,7 @@ LOMA_RECALL_BACKEND_URL. Never register this server in a shared runtime pool.
 import asyncio
 import json
 import os
+import time
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -13,7 +14,7 @@ from mcp.server import MCPServer
 
 
 class RecallClient:
-    def __init__(self, url, capability):
+    def __init__(self, url, capability, issuer=None, grant=None, expires_at=0):
         parsed = urlsplit(url)
         if (parsed.scheme not in ('http', 'https') or parsed.username or parsed.password
                 or parsed.query or parsed.fragment or parsed.path not in ('', '/')
@@ -21,6 +22,18 @@ class RecallClient:
             raise ValueError('invalid_recall_configuration')
         if parsed.scheme == 'http' and parsed.hostname not in ('127.0.0.1', 'localhost', 'loma-backend'):
             raise ValueError('recall_requires_tls')
+        self.issuer = None
+        self.grant = grant
+        self.expires_at = expires_at
+        if issuer:
+            issuer_parts = urlsplit(issuer)
+            if (issuer_parts.scheme not in ('http', 'https') or not issuer_parts.hostname
+                    or issuer_parts.username or issuer_parts.password or issuer_parts.query
+                    or issuer_parts.fragment or issuer_parts.path not in ('', '/')
+                    or (issuer_parts.scheme == 'http' and issuer_parts.hostname not in
+                        ('127.0.0.1', 'localhost', 'loma-dashboard'))):
+                raise ValueError('invalid_issuer_configuration')
+            self.issuer = issuer.rstrip('/')
         self.url = url.rstrip('/')
         self.capability = capability
         self.calls = 0
@@ -38,6 +51,17 @@ class RecallClient:
             self.calls += 1
             try:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=7)) as session:
+                    if self.issuer and self.grant and self.expires_at <= time.time() + 30:
+                        async with session.post(self.issuer + '/api/recall-session',
+                                json={'action': 'renew', 'grant': self.grant}, allow_redirects=False) as renewal:
+                            if renewal.status != 200:
+                                return {'error': 'unauthorized'}
+                            raw_renewal = await renewal.content.read(8193)
+                            if len(raw_renewal) > 8192:
+                                return {'error': 'recall_unavailable'}
+                            renewed = json.loads(raw_renewal)
+                            self.capability = renewed['capability']
+                            self.expires_at = renewed['expires_at']
                     async with session.post(self.url + '/api/recall/' + name,
                             json=arguments, headers={'Authorization': 'Bearer ' + self.capability},
                             allow_redirects=False) as response:
@@ -62,7 +86,7 @@ class RecallClient:
                             return {'error': 'recall_budget_exhausted'}
                         self.characters += size
                         return result
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError, TypeError):
                 return {'error': 'recall_unavailable'}
 
 
@@ -101,5 +125,7 @@ def build_server(client):
 
 if __name__ == '__main__':
     client = RecallClient(os.environ.get('LOMA_RECALL_BACKEND_URL', ''),
-        os.environ.get('LOMA_RECALL_CAPABILITY', ''))
+        os.environ.get('LOMA_RECALL_CAPABILITY', ''),
+        os.environ.get('LOMA_RECALL_ISSUER_URL'), os.environ.get('LOMA_RECALL_GRANT'),
+        int(os.environ.get('LOMA_RECALL_EXPIRES_AT', '0')))
     build_server(client).run(transport='stdio')
