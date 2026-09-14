@@ -1815,6 +1815,8 @@ async def handle_available_tools(request: web.Request) -> web.Response:
                     "name": s.get("name") or s["slug"],
                     "description": s.get("description", ""),
                     "tags": s.get("tags", []),
+                    "scope": s.get("scope", "workspace"),
+                    "folder": s.get("folder"),
                 })
         except Exception as e:
             logger.warning("Failed to read skills for available tools: %s", e)

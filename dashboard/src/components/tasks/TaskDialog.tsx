@@ -20,7 +20,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
-import { fetchAgentModels, type AgentModel, type BoardLane, type Task } from "@/lib/api";
+import { fetchAgentModels, type AgentModel, type BoardLane, type Task, type ToolConfig } from "@/lib/api";
+
+import { useToolsPicker } from "@/hooks/useToolsPicker";
+import { ToolsPicker } from "@/components/composer/ToolsPicker";
 
 interface TaskDialogProps {
   open: boolean;
@@ -30,7 +33,7 @@ interface TaskDialogProps {
   task?: Task | null;
   defaultLane?: string;
   onSubmit: (
-    values: { title: string; prompt: string; lane: string; model: string },
+    values: { title: string; prompt: string; lane: string; model: string; tool_config: ToolConfig },
     start: boolean,
   ) => Promise<void>;
 }
@@ -47,6 +50,8 @@ function Kbd({ children }: { children: ReactNode }) {
 }
 
 export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSubmit }: TaskDialogProps) {
+  const picker = useToolsPicker();
+  const { reset } = picker;
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [lane, setLane] = useState(lanes[0]?.id ?? "todo");
@@ -57,6 +62,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
 
   useEffect(() => {
     if (open) {
+      reset(task?.tool_config);
       setTitle(task?.title ?? "");
       setPrompt(task?.prompt ?? "");
       setLane(task?.task_lane ?? defaultLane ?? lanes[0]?.id ?? "todo");
@@ -96,7 +102,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ title: title.trim(), prompt: prompt.trim(), lane, model }, start);
+      await onSubmit({ title: title.trim(), prompt: prompt.trim(), lane, model, tool_config: picker.toolConfig }, start);
       onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
@@ -153,6 +159,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               rows={6}
             />
           </div>
+          <ToolsPicker tools={picker.tools} skills={picker.skills} selection={picker.selection} onSetEnabled={picker.setEnabled} onSetAll={picker.setAll} onOpen={picker.loadCatalog} loadState={picker.loadState} disabled={busy} />
           {/* Stacked on phones — side by side the long model label forces a
               horizontal overflow; min-w-0 lets the triggers truncate. */}
           <div className="flex gap-3 max-md:flex-col">
