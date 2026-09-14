@@ -30,6 +30,7 @@ from observability.db import init_observability, get_db
 from api.skill_seed import seed_default_skills
 from api.routes import setup_api_routes
 from api.auth_middleware import auth_middleware
+from api.skill_source_routes import skill_context, setup_skill_source_routes
 from api.governance_routes import setup_governance_routes
 from api.oauth_routes import setup_oauth_routes
 from api.webhook_log_routes import setup_webhook_log_routes
@@ -120,7 +121,7 @@ async def main():
 
     # Webhook HTTP server
     webhook_app = web.Application(
-        middlewares=[log_404_middleware, auth_middleware],
+        middlewares=[log_404_middleware, auth_middleware, skill_context],
         client_max_size=110 * 1024 * 1024,  # Supports skill assets up to 100 MB.
     )
     if LOMA_ENABLE_WEBHOOKS:
@@ -132,6 +133,7 @@ async def main():
         setup_incoming_webhook_routes(webhook_app)
         setup_telegram_webhook_routes(webhook_app)
     setup_api_routes(webhook_app)
+    setup_skill_source_routes(webhook_app)
     setup_governance_routes(webhook_app)
     setup_oauth_routes(webhook_app)
     setup_webhook_log_routes(webhook_app)
