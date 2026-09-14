@@ -32,9 +32,12 @@ COLLECTION = "pr_notification_targets"
 # `/rereview` is silently ignored — always tell humans the mention form.
 REREVIEW_COMMAND = "@loma-agent /rereview"
 
-# Tolerance applied to `started_at` when scoping reviews to the current run,
-# to absorb clock skew between this host and GitHub. A self-review takes
-# minutes to post, so a previous run's review is always far older than this.
+# Tolerance applied to `started_at` in the timestamp FALLBACK path of
+# `extract_self_review_verdict` (only used when the pipeline could not
+# snapshot pre-run review IDs), to absorb clock skew between this host and
+# GitHub. Timestamps are never the primary run-scoping mechanism: a coalesced
+# re-run starts seconds after the previous run posted, well inside any skew
+# window, so only the ID snapshot can tell the two apart.
 _RUN_SCOPE_SKEW = timedelta(seconds=60)
 
 # Supported target types and the fields each requires.
@@ -124,6 +127,7 @@ def extract_self_review_verdict(
     reviews: list[dict],
     agent_login: str,
     started_at: datetime | None = None,
+    exclude_review_ids: set[str] | list[str] | None = None,
 ) -> str | None:
     """Pull the verdict line out of the agent's self-review for THIS run.
 
@@ -132,16 +136,30 @@ def extract_self_review_verdict(
     from `webhooks.github_graphql.get_pr_reviews` in chronological order, so
     the last matching review is the freshest.
 
-    When ``started_at`` is given, only reviews created at or after that
-    instant (minus a small skew tolerance) are considered. Without this, a run
-    whose agent finished WITHOUT posting (max turns, MCP error) would report
-    the previous push's verdict as if it were fresh — on a `synchronize` that
-    is exactly the case where a stale verdict is most misleading.
+    Run scoping — a run whose agent finished WITHOUT posting (max turns, MCP
+    error, 422) must never report a previous run's verdict as fresh:
+
+    - ``exclude_review_ids`` (primary, structural): the node IDs of every agent
+      review that existed BEFORE this run's agent started. Anything in the set
+      — or with no ID at all — cannot be this run's review and is skipped.
+      This is the only scoping that survives a coalesced re-run, which starts
+      seconds after the previous run posted, and it does not depend on which
+      head SHA GitHub stamped on the review (a review submitted while the head
+      is moving is stamped with the NEW head, not the reviewed one).
+    - ``started_at`` (fallback, temporal): only reviews created at or after
+      that instant minus ``_RUN_SCOPE_SKEW``. Used when the pipeline could not
+      take the ID snapshot; both filters apply when both are given.
     """
     cutoff = started_at - _RUN_SCOPE_SKEW if started_at else None
+    excluded = set(exclude_review_ids) if exclude_review_ids is not None else None
     for review in reversed(reviews or []):
         if review.get("author") != agent_login:
             continue
+        if excluded is not None:
+            review_id = review.get("id")
+            # No ID → cannot prove it is new → skip, same rule as timestamps.
+            if not review_id or review_id in excluded:
+                continue
         if cutoff is not None:
             created_at = _parse_github_timestamp(review.get("created_at"))
             # Unparseable timestamp → cannot prove it belongs to this run → skip.

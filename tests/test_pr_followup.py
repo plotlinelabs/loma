@@ -154,6 +154,31 @@ class TestVerdictExtraction:
                     "body": "✅ Self-review: no blocking issues found"}]
         assert extract_self_review_verdict(reviews, "loma-insights", started_at=started_at) is None
 
+    def test_exclude_review_ids_is_structural_not_temporal(self):
+        # The coalescing case: the previous run's review is 10s old — inside
+        # the skew window — so only the ID snapshot can reject it.
+        now = datetime.now(timezone.utc)
+        ten_s_ago = (now - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        previous = {"id": "R1", "author": "loma-insights", "created_at": ten_s_ago,
+                    "body": "✅ Self-review: no blocking issues found (previous run)"}
+        # Timestamp scoping alone would (wrongly) accept it…
+        assert extract_self_review_verdict([previous], "loma-insights", started_at=now)
+        # …the ID snapshot rejects it.
+        assert extract_self_review_verdict([previous], "loma-insights", exclude_review_ids={"R1"}) is None
+        # A review that was not in the snapshot is this run's, whatever its timestamp
+        fresh = {"id": "R2", "author": "loma-insights", "created_at": ten_s_ago,
+                 "body": "🔴 Self-review: 1 blocking issue(s) found"}
+        assert extract_self_review_verdict(
+            [previous, fresh], "loma-insights", exclude_review_ids={"R1"}
+        ).startswith("🔴")
+
+    def test_exclude_review_ids_skips_reviews_without_id(self):
+        reviews = [{"author": "loma-insights", "body": "✅ Self-review: no id, cannot be proven new"}]
+        assert extract_self_review_verdict(reviews, "loma-insights", exclude_review_ids=set()) is None
+        # An empty snapshot (no prior agent reviews) still accepts an ID'd review
+        reviews = [{"id": "R1", "author": "loma-insights", "body": "✅ Self-review: first ever"}]
+        assert extract_self_review_verdict(reviews, "loma-insights", exclude_review_ids=set())
+
 
 class TestMessageOutcomes:
     def test_retry_instruction_uses_mention_form(self):
@@ -365,15 +390,8 @@ class TestPipelineWiring:
         self.skill_source = Path("seed/skills/implement-ticket/SKILL.md").read_text()
         self.db_source = Path("observability/db.py").read_text()
 
-    def test_review_pipeline_dispatches_followup_on_self_review(self):
-        assert "if self_review:" in self.github_source
-        assert "post_self_review_followup(" in self.github_source
-        assert "started_at=started_at" in self.github_source
-
-    def test_followup_runs_on_success_and_failure(self):
-        # The dispatch must sit in the finally-block region and pass the
-        # review outcome through, so failures are visible, not silent.
-        assert "succeeded=review_succeeded" in self.github_source
+    # Follow-up dispatch wiring (success / incomplete / failure) is covered
+    # behaviourally by tests/test_github_self_review.py::TestSelfReviewPipeline.
 
     def test_linear_prompts_register_target_and_announce_pending_review(self):
         assert self.linear_source.count("tools/github_pr_notify.py register") == 2
@@ -395,6 +413,13 @@ class TestPipelineWiring:
     def test_notification_targets_have_unique_compound_index(self):
         assert "pr_notification_targets.create_index(" in self.db_source
         idx = self.db_source.index("pr_notification_targets.create_index(")
+        assert 'unique=True' in self.db_source[idx: idx + 200]
+
+    def test_self_review_locks_have_unique_compound_index(self):
+        # Load-bearing: SelfReviewLock.acquire() relies on the unique index to
+        # reject a second live holder.
+        assert "pr_self_review_locks.create_index(" in self.db_source
+        idx = self.db_source.index("pr_self_review_locks.create_index(")
         assert 'unique=True' in self.db_source[idx: idx + 200]
 
 

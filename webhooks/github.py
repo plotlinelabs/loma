@@ -35,6 +35,7 @@ from webhooks.github_graphql import (
     resolve_review_thread,
 )
 from observability.review_quality import process_human_review_for_quality
+from webhooks.self_review_lock import SelfReviewLock
 from utils.pr_followup import (
     extract_self_review_verdict,
     post_self_review_followup,
@@ -1077,6 +1078,40 @@ async def _snapshot_stale_agent_request_changes_ids(
     ]
 
 
+async def _snapshot_agent_review_ids(
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+    agent_login: str = AGENT_GITHUB_LOGIN,
+) -> set[str] | None:
+    """Return the node IDs of EVERY agent review on the PR right now, or None on failure.
+
+    Taken immediately before the self-review agent starts so the verdict lookup
+    afterwards can be scoped structurally: a review whose ID is in this set
+    existed before this run and can never be this run's verdict. This is what
+    keeps a coalesced re-run (started seconds after the previous run posted)
+    from re-reporting the previous verdict as fresh — timestamps cannot tell
+    those two apart, and GitHub stamps a review with whatever the head is at
+    submission time, so `commit_oid` cannot either.
+
+    None (as opposed to an empty set) means the snapshot failed; the caller
+    falls back to timestamp scoping.
+    """
+    try:
+        reviews = await get_pr_reviews(repo_owner, repo_name, pr_number)
+    except Exception as e:
+        logger.warning(
+            "[GITHUB-WEBHOOK] Failed to snapshot agent review IDs on %s/%s#%d: %s",
+            repo_owner, repo_name, pr_number, e,
+        )
+        return None
+    return {
+        review["id"]
+        for review in reviews
+        if review.get("author") == agent_login and review.get("id")
+    }
+
+
 async def _dismiss_reviews_by_id(
     review_ids: list[str],
     message: str = "Superseded by re-evaluation on new commits",
@@ -1200,34 +1235,100 @@ async def _process_pr_review(
             )
             return
 
-        # Self-reviews: coalesce rapid pushes. Agent flows push one commit per
-        # `push_files` call, so a single logical change can fire several
-        # `synchronize` events within a minute. SHA-keyed dedup lets each of
-        # those start its own reviewer, all racing to minimize each other's
-        # comments and posting N verdict follow-ups into the same thread.
-        # Instead: if a self-review for this PR is already running (any SHA),
-        # skip this event — the running review re-checks the head when it
-        # finishes and re-runs itself on the newest commit (see the tail of
-        # the finally block below). Net effect: at most two reviews for a
-        # burst of N pushes, and the last one is always on the final head.
-        if self_review:
-            in_flight = await db.conversations.find_one({
-                "metadata.github_pr_number": pr_number,
-                "metadata.github_repo": repo_full_name,
-                "metadata.trigger_type": "pr_self_review",
-                "source": "github_webhook",
-                "status": "running",
-            })
-            if in_flight:
-                logger.info(
-                    "[GITHUB-WEBHOOK] Self-review already running for PR %s#%d "
-                    "(conversation %s) — skipping %s; it will re-run on the "
-                    "latest head when the current run finishes",
-                    repo_full_name, pr_number, in_flight.get("conversation_id"),
-                    head_sha[:7],
-                )
+    # Self-reviews: coalesce rapid pushes. Agent flows push one commit per
+    # `push_files` call, so a single logical change can fire several
+    # `synchronize` events within seconds. SHA-keyed dedup alone lets each of
+    # those start its own reviewer, all racing to minimize each other's
+    # comments and posting N verdict follow-ups into the same thread.
+    #
+    # The lock is claimed HERE, before any GitHub round-trip, in one atomic
+    # Mongo upsert (see webhooks/self_review_lock.py) — a conversation-based
+    # "is one running?" check has a multi-second window before observer.start()
+    # inserts the doc, which is exactly the window a push burst lands in. The
+    # lock heartbeats, so a crashed holder expires instead of blocking the PR.
+    #
+    # Whoever holds the lock re-checks the head on exit and re-runs on the
+    # newest commit if it moved. Net effect: at most two reviews for a burst
+    # of N pushes, and the last one is always on the final head.
+    #
+    # Explicit re-review requests (`force_review`) claim the lock when it is
+    # free — so automatic runs coalesce behind them — but proceed unlocked if
+    # a run is in flight: a human asked, a human gets a review.
+    lock: SelfReviewLock | None = None
+    if self_review and db is not None:
+        lock = SelfReviewLock(db, repo_full_name, pr_number, conversation_id, head_sha)
+        if not await lock.acquire():
+            if not force_review:
                 return
+            logger.info(
+                "[GITHUB-WEBHOOK] Explicit re-review of %s#%d proceeds alongside the "
+                "in-flight self-review (conversation %s)",
+                repo_full_name, pr_number, (lock.holder or {}).get("conversation_id"),
+            )
+            lock = None
 
+    try:
+        await _run_pr_review(
+            db=db,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            pr_title=pr_title,
+            pr_url=pr_url,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            base_branch=base_branch,
+            head_branch=head_branch,
+            action=action,
+            pr_author=pr_author,
+            conversation_id=conversation_id,
+            pr_stats=pr_stats,
+            self_review=self_review,
+        )
+    finally:
+        if lock is not None and lock.held:
+            # Release BEFORE the coalesced re-run so it can claim the lock.
+            await lock.release()
+            # Coalesced re-run: while this self-review held the lock, further
+            # `synchronize` events for the PR were skipped. If the head moved,
+            # review the newest commit now so the final verdict always describes
+            # the code a human will actually open. SHA-keyed dedup in the new
+            # run guarantees this cannot loop on the same head. Runs in the
+            # finally on purpose: a run that crashed in pre-work still owes the
+            # skipped pushes a review.
+            await _rerun_self_review_if_head_moved(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                reviewed_head_sha=head_sha,
+            )
+
+
+async def _run_pr_review(
+    db,
+    repo_owner: str,
+    repo_name: str,
+    repo_full_name: str,
+    pr_number: int,
+    pr_title: str,
+    pr_url: str,
+    base_sha: str,
+    head_sha: str,
+    base_branch: str,
+    head_branch: str,
+    action: str,
+    pr_author: str,
+    conversation_id: str,
+    pr_stats: dict | None = None,
+    self_review: bool = False,
+):
+    """The review pipeline proper: PR context → prompt → agent → GitHub side effects.
+
+    Split out of `_process_pr_review` so the self-review lock wraps the WHOLE
+    pipeline (pre-work included) in a single try/finally.
+    """
     # Fetch PR stats and estimate review time (use passed-in stats if available)
     if pr_stats is None:
         pr_stats = await _get_pr_stats(repo_owner, repo_name, pr_number)
@@ -1518,7 +1619,14 @@ async def _process_pr_review(
         await observer.start()
 
     # Captured BEFORE the agent runs so the verdict lookup afterwards can be
-    # scoped to reviews created by THIS run, never a previous push's review.
+    # scoped to reviews created by THIS run, never a previous run's review.
+    # Primary scoping is structural (IDs of the agent reviews that already
+    # exist); `started_at` is only the fallback if that snapshot fails.
+    pre_run_review_ids: set[str] | None = None
+    if self_review:
+        pre_run_review_ids = await _snapshot_agent_review_ids(
+            repo_owner, repo_name, pr_number
+        )
     started_at = datetime.now(timezone.utc)
 
     review_succeeded = True
@@ -1562,17 +1670,30 @@ async def _process_pr_review(
         # Self-review: look up the verdict the agent posted during THIS run.
         # `review_succeeded` only says the pipeline did not error — the agent
         # can still finish without posting (max turns, MCP error, 422). Scope
-        # the lookup to `started_at` so a previous push's review is never
-        # reported as fresh, and treat "no review from this run" as a failed
-        # outcome for the check run, status comment and follow-up alike.
+        # the lookup to reviews that did not exist before this run (falling
+        # back to `started_at` only if the snapshot failed) so a previous
+        # run's review is never reported as fresh, and treat "no review from
+        # this run" as a failed outcome for the check run, status comment and
+        # follow-up alike.
         verdict = None
         self_review_posted = True
         if self_review and review_succeeded:
             try:
                 reviews = await get_pr_reviews(repo_owner, repo_name, pr_number)
-                verdict = extract_self_review_verdict(
-                    reviews, AGENT_GITHUB_LOGIN, started_at=started_at
-                )
+                if pre_run_review_ids is not None:
+                    verdict = extract_self_review_verdict(
+                        reviews, AGENT_GITHUB_LOGIN,
+                        exclude_review_ids=pre_run_review_ids,
+                    )
+                else:
+                    logger.warning(
+                        "[GITHUB-WEBHOOK] No pre-run review snapshot for %s#%d — "
+                        "scoping the verdict by timestamp instead",
+                        repo_full_name, pr_number,
+                    )
+                    verdict = extract_self_review_verdict(
+                        reviews, AGENT_GITHUB_LOGIN, started_at=started_at
+                    )
             except Exception:
                 logger.warning(
                     "[GITHUB-WEBHOOK] Could not extract self-review verdict on %s#%d",
@@ -1650,20 +1771,6 @@ async def _process_pr_review(
                     repo_full_name, pr_number,
                 )
 
-        # Coalesced re-run: while this self-review ran, further `synchronize`
-        # events for the PR were skipped (see the in-flight check above). If
-        # the head moved, review the newest commit now so the final verdict
-        # always describes the code a human will actually open. SHA-keyed
-        # dedup in the new run guarantees this cannot loop on the same head.
-        if self_review and not force_review:
-            await _rerun_self_review_if_head_moved(
-                repo_owner=repo_owner,
-                repo_name=repo_name,
-                repo_full_name=repo_full_name,
-                pr_number=pr_number,
-                reviewed_head_sha=head_sha,
-            )
-
 
 async def _rerun_self_review_if_head_moved(
     repo_owner: str,
@@ -1685,7 +1792,17 @@ async def _rerun_self_review_if_head_moved(
             repo_full_name, pr_number,
         )
         return False
-    if not latest or latest.get("state") != "open":
+    if not latest:
+        # `_get_pr_details` returns None when GITHUB_API_KEY is unset or the
+        # request fails. Say so — otherwise "at most two runs, last on the
+        # final head" silently degrades to "one run on a stale head".
+        logger.warning(
+            "[GITHUB-WEBHOOK] Could not fetch %s#%d after self-review "
+            "(GITHUB_API_KEY unset or API error) — skipping the newest-head check",
+            repo_full_name, pr_number,
+        )
+        return False
+    if latest.get("state") != "open":
         return False
 
     latest_head_sha = latest.get("head", {}).get("sha", "")

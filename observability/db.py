@@ -91,6 +91,13 @@ async def init_observability():
         [("pr_number", 1), ("repo_full_name", 1)], unique=True,
     )
 
+    # Self-review locks (webhooks/self_review_lock.py). The unique index is
+    # load-bearing: SelfReviewLock.acquire() upserts against it so that two
+    # near-simultaneous `synchronize` events cannot both claim a PR.
+    await _db.pr_self_review_locks.create_index(
+        [("repo_full_name", 1), ("pr_number", 1)], unique=True,
+    )
+
     # Preexisting issues (for maintenance flow)
     await _db.preexisting_issues.create_index("issue_id", unique=True)
     await _db.preexisting_issues.create_index([("repo_full_name", 1), ("file_path", 1)])

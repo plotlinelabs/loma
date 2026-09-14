@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from webhooks.github import (
     AGENT_GITHUB_LOGIN,
@@ -236,6 +237,21 @@ def _review_kwargs(**overrides) -> dict:
     return base
 
 
+def _lock_db(update_one=None):
+    """db double: SHA dedup finds nothing; db["pr_self_review_locks"] is `locks`."""
+    locks = MagicMock()
+    result = MagicMock(matched_count=0, upserted_id="new")
+    locks.update_one = update_one or AsyncMock(return_value=result)
+    locks.delete_one = AsyncMock()
+    locks.find_one = AsyncMock(return_value=None)
+    db = MagicMock()
+    db.__getitem__ = MagicMock(return_value=locks)
+    db.conversations.find_one = AsyncMock(return_value=None)
+    db.conversations.insert_one = AsyncMock()
+    db.conversations.update_one = AsyncMock()
+    return db, locks
+
+
 def _agent_stream(*chunks: str):
     async def _gen(**_kwargs):
         for chunk in chunks:
@@ -247,7 +263,19 @@ class TestSelfReviewPipeline:
     """Behavioural tests of _process_pr_review's finally-block for self-reviews,
     with the agent and GitHub calls stubbed."""
 
-    def _patches(self, reviews, stream=None, pr_details=None):
+    def _patches(self, reviews, stream=None, pr_details=None, reviews_before=None):
+        # get_pr_reviews is called twice per self-review: once BEFORE the agent
+        # (ID snapshot) and once AFTER (verdict lookup). Model both.
+        calls = {"n": 0}
+
+        async def _reviews(*_a, **_k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                if isinstance(reviews_before, Exception):
+                    raise reviews_before
+                return list(reviews_before or [])
+            return reviews
+
         return [
             patch("webhooks.github.get_db", return_value=None),
             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, return_value={}),
@@ -259,13 +287,14 @@ class TestSelfReviewPipeline:
             patch("webhooks.github._delete_pr_comment", new_callable=AsyncMock),
             patch("webhooks.github._update_pr_comment", new_callable=AsyncMock),
             patch("webhooks.github._update_check_run", new_callable=AsyncMock),
-            patch("webhooks.github.get_pr_reviews", new_callable=AsyncMock, return_value=reviews),
+            patch("webhooks.github.get_pr_reviews", new_callable=AsyncMock, side_effect=_reviews),
             patch("webhooks.github.post_self_review_followup", new_callable=AsyncMock, return_value=True),
             patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=pr_details),
         ]
 
-    async def _run(self, reviews, stream=None, pr_details=None, **kwargs):
-        patches = self._patches(reviews, stream=stream, pr_details=pr_details)
+    async def _run(self, reviews, stream=None, pr_details=None, reviews_before=None, **kwargs):
+        patches = self._patches(reviews, stream=stream, pr_details=pr_details,
+                                reviews_before=reviews_before)
         mocks = {}
         for p in patches:
             mocks[p.attribute] = p.start()
@@ -279,9 +308,9 @@ class TestSelfReviewPipeline:
     @pytest.mark.asyncio
     async def test_verdict_from_this_run_is_threaded_back(self):
         fresh = _ts(datetime.now(timezone.utc) + timedelta(minutes=2))
-        reviews = [{"author": AGENT_GITHUB_LOGIN, "created_at": fresh,
+        reviews = [{"id": "R2", "author": AGENT_GITHUB_LOGIN, "created_at": fresh,
                     "body": "✅ Self-review: no blocking issues found — ready for human review"}]
-        mocks = await self._run(reviews)
+        mocks = await self._run(reviews, reviews_before=[])
 
         followup = mocks["post_self_review_followup"].call_args.kwargs
         assert followup["succeeded"] is True
@@ -295,9 +324,9 @@ class TestSelfReviewPipeline:
         # Agent finished cleanly but posted nothing; the only review on the PR is
         # from the previous push. Must surface as incomplete, not "complete".
         stale = _ts(datetime.now(timezone.utc) - timedelta(hours=1))
-        reviews = [{"author": AGENT_GITHUB_LOGIN, "created_at": stale,
+        reviews = [{"id": "R1", "author": AGENT_GITHUB_LOGIN, "created_at": stale,
                     "body": "✅ Self-review: no blocking issues found (previous push)"}]
-        mocks = await self._run(reviews, action="synchronize")
+        mocks = await self._run(reviews, reviews_before=reviews, action="synchronize")
 
         followup = mocks["post_self_review_followup"].call_args.kwargs
         assert followup["succeeded"] is True
@@ -316,7 +345,51 @@ class TestSelfReviewPipeline:
         assert followup["succeeded"] is False
         assert followup["verdict"] is None
         assert mocks["_update_check_run"].call_args.kwargs["conclusion"] == "failure"
-        mocks["get_pr_reviews"].assert_not_awaited()
+        # Only the pre-run snapshot; no verdict lookup after a failed run
+        assert mocks["get_pr_reviews"].await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_coalesced_rerun_never_reports_previous_runs_verdict(self):
+        # Regression for the coalescing hole: run A posted its review, its
+        # finally scheduled run B on the new head ~10s later, and B's agent
+        # posted nothing. A's review is INSIDE any timestamp skew window, so
+        # only the ID snapshot can reject it.
+        seconds_ago = _ts(datetime.now(timezone.utc) - timedelta(seconds=10))
+        previous = [{"id": "R-runA", "author": AGENT_GITHUB_LOGIN, "created_at": seconds_ago,
+                     "body": "✅ Self-review: no blocking issues found (run A, old head)"}]
+        mocks = await self._run(previous, reviews_before=previous, action="synchronize_coalesced")
+
+        followup = mocks["post_self_review_followup"].call_args.kwargs
+        assert followup["verdict"] is None
+        assert mocks["_update_check_run"].call_args.kwargs["conclusion"] == "failure"
+        mocks["_delete_pr_comment"].assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_review_stamped_with_moved_head_still_counts_for_this_run(self):
+        # GitHub stamps a review with the head at submission time. If a push
+        # landed mid-review, this run's review carries the NEW head sha, so
+        # commit_oid must not be used to reject it — only the ID snapshot.
+        fresh = _ts(datetime.now(timezone.utc) + timedelta(minutes=1))
+        reviews = [{"id": "R-new", "author": AGENT_GITHUB_LOGIN, "created_at": fresh,
+                    "commit_oid": "n" * 40,  # != head_sha "h"*40 being reviewed
+                    "body": "🔴 Self-review: 1 blocking issue(s) found — address before human review"}]
+        mocks = await self._run(reviews, reviews_before=[])
+        assert mocks["post_self_review_followup"].call_args.kwargs["verdict"].startswith("🔴")
+        assert mocks["_update_check_run"].call_args.kwargs["conclusion"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_snapshot_failure_falls_back_to_timestamp_scoping(self):
+        fresh = _ts(datetime.now(timezone.utc) + timedelta(minutes=2))
+        old = _ts(datetime.now(timezone.utc) - timedelta(hours=1))
+        reviews = [
+            {"id": "R1", "author": AGENT_GITHUB_LOGIN, "created_at": old,
+             "body": "✅ Self-review: stale"},
+            {"id": "R2", "author": AGENT_GITHUB_LOGIN, "created_at": fresh,
+             "body": "✅ Self-review: no blocking issues found"},
+        ]
+        mocks = await self._run(reviews, reviews_before=RuntimeError("graphql down"))
+        verdict = mocks["post_self_review_followup"].call_args.kwargs["verdict"]
+        assert verdict == "✅ Self-review: no blocking issues found"
 
     @pytest.mark.asyncio
     async def test_followup_failure_never_masks_review_result(self):
@@ -335,28 +408,81 @@ class TestSelfReviewPipeline:
                 p.stop()
 
     @pytest.mark.asyncio
-    async def test_in_flight_self_review_coalesces_rapid_pushes(self):
-        db = MagicMock()
-        # 1st find_one: SHA-keyed dedup → nothing; 2nd: a running self-review exists
-        db.conversations.find_one = AsyncMock(side_effect=[None, {"conversation_id": "running-1"}])
+    async def test_held_lock_skips_run_before_any_github_work(self):
+        # Two `synchronize` events seconds apart: the second must lose the lock
+        # at the very top of the pipeline — before _get_pr_stats & co, which is
+        # the multi-second window a conversation-based check could not cover.
+        db, locks = _lock_db(update_one=AsyncMock(side_effect=DuplicateKeyError("dup")))
+        locks.find_one = AsyncMock(return_value={"conversation_id": "running-1", "head_sha": "a" * 40})
         with patch("webhooks.github.get_db", return_value=db), \
-             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock) as stats_mock:
+             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock) as stats_mock, \
+             patch("webhooks.github._get_pr_details", new_callable=AsyncMock) as details_mock:
             await _process_pr_review(**_review_kwargs(action="synchronize", head_sha="n" * 40))
-        stats_mock.assert_not_awaited()  # skipped before doing any work
-        in_flight_query = db.conversations.find_one.call_args_list[1].args[0]
-        assert in_flight_query["metadata.trigger_type"] == "pr_self_review"
-        assert in_flight_query["status"] == "running"
-        assert "metadata.github_head_sha" not in in_flight_query  # any SHA
+        stats_mock.assert_not_awaited()      # skipped before doing any work
+        details_mock.assert_not_awaited()    # a loser never schedules a re-run
+        locks.delete_one.assert_not_awaited()  # and never releases someone else's lock
+        claim = locks.update_one.call_args
+        assert claim.kwargs["upsert"] is True
+        assert "$lt" in claim.args[0]["last_heartbeat"]  # stale holders are taken over
 
     @pytest.mark.asyncio
-    async def test_in_flight_check_only_applies_to_self_reviews(self):
-        db = MagicMock()
-        db.conversations.find_one = AsyncMock(return_value=None)
+    async def test_lock_holder_releases_then_checks_for_newer_head(self):
+        db, locks = _lock_db()
+        order: list[str] = []
+        locks.delete_one = AsyncMock(side_effect=lambda *a, **k: order.append("release"))
+
+        async def _details(*_a, **_k):
+            order.append("head_check")
+            return None
+
+        patches = self._patches([{"id": "R2", "author": AGENT_GITHUB_LOGIN,
+                                  "created_at": _ts(datetime.now(timezone.utc)),
+                                  "body": "✅ Self-review: no blocking issues found"}],
+                                reviews_before=[])
+        patches[0] = patch("webhooks.github.get_db", return_value=db)
+        patches[-1] = patch("webhooks.github._get_pr_details", new_callable=AsyncMock, side_effect=_details)
+        for p in patches:
+            p.start()
+        try:
+            await _process_pr_review(**_review_kwargs())
+        finally:
+            for p in patches:
+                p.stop()
+        assert order == ["release", "head_check"]  # release first so the re-run can claim it
+        release_filter = locks.delete_one.call_args.args[0]
+        assert release_filter["conversation_id"] == "conv-1"
+
+    @pytest.mark.asyncio
+    async def test_lock_released_even_when_prework_raises(self):
+        db, locks = _lock_db()
+        with patch("webhooks.github.get_db", return_value=db), \
+             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, side_effect=RuntimeError("github down")), \
+             patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=None):
+            with pytest.raises(RuntimeError):
+                await _process_pr_review(**_review_kwargs())
+        locks.delete_one.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_force_review_proceeds_when_lock_is_held(self):
+        db, locks = _lock_db(update_one=AsyncMock(side_effect=DuplicateKeyError("dup")))
+        locks.find_one = AsyncMock(return_value={"conversation_id": "running-1"})
+        with patch("webhooks.github.get_db", return_value=db), \
+             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, side_effect=RuntimeError("stop here")), \
+             patch("webhooks.github._get_pr_details", new_callable=AsyncMock) as details_mock:
+            with pytest.raises(RuntimeError):
+                await _process_pr_review(**_review_kwargs(force_review=True))
+        details_mock.assert_not_awaited()  # not the holder → no re-run duty
+        locks.delete_one.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_lock_only_applies_to_self_reviews(self):
+        db, locks = _lock_db()
         with patch("webhooks.github.get_db", return_value=db), \
              patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, side_effect=RuntimeError("stop here")):
             with pytest.raises(RuntimeError):
                 await _process_pr_review(**_review_kwargs(self_review=False, pr_author="human"))
         assert db.conversations.find_one.await_count == 1  # only the SHA dedup query
+        locks.update_one.assert_not_awaited()
 
 
 class TestCoalescedRerun:
