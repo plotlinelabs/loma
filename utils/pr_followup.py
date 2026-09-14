@@ -170,6 +170,12 @@ def find_self_review(
       that instant minus ``_RUN_SCOPE_SKEW``. Used when the pipeline could not
       take the ID snapshot; both filters apply when both are given.
 
+    ``PENDING`` reviews never count. GitHub returns a pending (unsubmitted)
+    review to its author — which is the very token this pipeline queries with
+    — so an agent that opened a pending review and died before submitting it
+    (max turns, MCP error) would otherwise register as "review posted" for a
+    review nobody but the bot can see.
+
     Returns ``review_found=True`` as soon as any review passes the run scoping,
     with ``verdict`` set from the newest such review that carries a verdict
     line (``None`` if none of them does).
@@ -179,6 +185,8 @@ def find_self_review(
     review_found = False
     for review in reversed(reviews or []):
         if review.get("author") != agent_login:
+            continue
+        if (review.get("state") or "").upper() == "PENDING":
             continue
         if excluded is not None:
             review_id = review.get("id")
@@ -383,6 +391,8 @@ async def post_self_review_followup(
     # pull_request event (opened, each synchronize, …) re-enters this path,
     # but the human only needs to hear "no verdict is coming" once per
     # announcement, not once per push.
+    key = {"repo_full_name": repo_full_name, "pr_number": pr_number}
+    disabled_notice_key = None
     if disabled:
         last_at = record.get("last_followup_at")
         registered_at = record.get("registered_at")
@@ -395,6 +405,29 @@ async def post_self_review_followup(
             logger.info(
                 "[PR-FOLLOWUP] Already told %s#%d's target that self-review is "
                 "disabled — skipping repeat", repo_full_name, pr_number,
+            )
+            return False
+        # The read above is not enough on its own: `opened` and the first
+        # `synchronize` land within seconds and both read the doc before
+        # either records a delivery. Claim the notice for THIS registration
+        # atomically — the claim is keyed by `registered_at`, so a later
+        # re-registration (new announcement) can be told again.
+        disabled_notice_key = registered_at or "unregistered"
+        try:
+            claimed = await db[COLLECTION].find_one_and_update(
+                {**key, "disabled_notice_for": {"$ne": disabled_notice_key}},
+                {"$set": {"disabled_notice_for": disabled_notice_key}},
+            )
+        except Exception:
+            logger.exception(
+                "[PR-FOLLOWUP] Could not claim the disabled notice for %s#%d",
+                repo_full_name, pr_number,
+            )
+            return False
+        if not claimed:
+            logger.info(
+                "[PR-FOLLOWUP] Another event already claimed %s#%d's disabled "
+                "notice — skipping repeat", repo_full_name, pr_number,
             )
             return False
 
@@ -419,12 +452,23 @@ async def post_self_review_followup(
             "[PR-FOLLOWUP] Failed to deliver %s follow-up for %s#%d",
             target.get("type"), repo_full_name, pr_number,
         )
-        return False
+        delivered = False
+
+    if not delivered and disabled_notice_key is not None:
+        # Give the claim back so the next event can retry the notice.
+        try:
+            await db[COLLECTION].update_one(
+                {**key, "disabled_notice_for": disabled_notice_key},
+                {"$unset": {"disabled_notice_for": ""}},
+            )
+        except Exception:
+            logger.warning("[PR-FOLLOWUP] Could not release the disabled-notice claim for %s#%d",
+                           repo_full_name, pr_number)
 
     if delivered:
         try:
             await db[COLLECTION].update_one(
-                {"repo_full_name": repo_full_name, "pr_number": pr_number},
+                key,
                 {"$set": {
                     "last_followup_at": datetime.now(timezone.utc),
                     "last_followup_succeeded": succeeded,

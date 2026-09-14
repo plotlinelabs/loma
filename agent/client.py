@@ -835,12 +835,16 @@ async def stream_agent(
             f"Never use a different user's email with --user-email."
         )
 
-    # Expose the conversation id so tools (e.g. tools/notify.py) can deep-link
-    # notifications back to this conversation.
+    # Expose the conversation id so tools can address this run: tools/notify.py
+    # deep-links notifications back to it, and tools/github_pr_notify.py
+    # resolves the Slack thread / Linear issue a run came from with nothing but
+    # this ID. It must NOT depend on user_email — a Slack run whose email
+    # lookup failed still needs to register its self-review follow-up target.
     conversation_id = getattr(observer, "conversation_id", None) if observer else None
+    if conversation_id:
+        text_parts.append(f"[Conversation ID: {conversation_id}]")
     if user_email and conversation_id:
         text_parts.append(
-            f"[Conversation ID: {conversation_id}]\n"
             f"To leave a persistent notification in this user's Loma inbox (the bell icon "
             f"in the dashboard), run `python3 tools/notify.py --user-email {user_email} "
             f"--auth-token {auth_token} send --title \"...\" --body \"...\" "

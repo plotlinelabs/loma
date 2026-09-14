@@ -36,6 +36,8 @@ def _fake_db(existing_record=None):
     collection = MagicMock()
     collection.update_one = AsyncMock()
     collection.find_one = AsyncMock(return_value=existing_record)
+    # The disabled-notice claim: by default this event wins it.
+    collection.find_one_and_update = AsyncMock(return_value=existing_record)
     db = MagicMock()
     db.__getitem__ = MagicMock(return_value=collection)
     return db, collection
@@ -108,6 +110,22 @@ class TestVerdictExtraction:
         assert extract_self_review_verdict(None, "loma-insights") is None
         reviews = [{"author": "human", "body": "✅ Self-review: nope"}]
         assert extract_self_review_verdict(reviews, "loma-insights") is None
+
+    def test_pending_reviews_never_count_as_posted(self):
+        # GitHub returns an unsubmitted (PENDING) review to its author — the
+        # very token this pipeline queries with. An agent that opened one and
+        # died before `submit_pending` must not register as "review posted":
+        # nobody but the bot can see that review.
+        reviews = [{"id": "R-pending", "author": "loma-insights", "state": "PENDING",
+                    "body": "✅ Self-review: no blocking issues found (never submitted)"}]
+        assert find_self_review(reviews, "loma-insights", exclude_review_ids=set()) == (
+            SelfReviewLookup(review_found=False, verdict=None)
+        )
+        assert extract_self_review_verdict(reviews, "loma-insights") is None
+        reviews.append({"id": "R-sub", "author": "loma-insights", "state": "COMMENTED",
+                        "body": "🔴 Self-review: 1 blocking issue(s) found"})
+        lookup = find_self_review(reviews, "loma-insights", exclude_review_ids=set())
+        assert lookup.review_found is True and lookup.verdict.startswith("🔴")
 
     def test_falls_back_to_older_review_when_latest_has_no_verdict(self):
         reviews = [
@@ -397,6 +415,10 @@ class TestFollowupDispatch:
         assert "Self-review skipped" in fake_client.chat_postMessage.call_args.kwargs["text"]
         recorded = collection.update_one.call_args.args[1]["$set"]
         assert recorded["last_followup_disabled"] is True
+        # The notice was claimed atomically for THIS registration first
+        claim_filter, claim_update = collection.find_one_and_update.call_args.args
+        assert claim_filter["disabled_notice_for"] == {"$ne": registered_at}
+        assert claim_update["$set"]["disabled_notice_for"] == registered_at
 
         # Same registration, later synchronize: already told → no repeat post
         told = dict(base, last_followup_disabled=True,
@@ -418,6 +440,44 @@ class TestFollowupDispatch:
                 db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
                 verdict=None, succeeded=False, disabled=True,
             ) is True
+
+    @pytest.mark.asyncio
+    async def test_disabled_notice_is_claimed_atomically_across_concurrent_events(self):
+        # `opened` and the first `synchronize` land within seconds and both
+        # read the doc before either records a delivery. Only the event that
+        # wins the atomic claim may post; a loser must not double-post.
+        registered_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        record = {
+            "repo_full_name": REPO, "pr_number": 42, "registered_at": registered_at,
+            "target": {"type": "slack", "channel": "C123", "thread_ts": "1.2"},
+        }
+        fake_client = MagicMock()
+        fake_client.chat_postMessage = AsyncMock()
+        env = patch.dict("os.environ", {"SLACK_BOT_TOKEN": "xoxb-test"})
+        client_patch = patch("slack_sdk.web.async_client.AsyncWebClient", return_value=fake_client)
+
+        db, collection = _fake_db(existing_record=dict(record))
+        collection.find_one_and_update = AsyncMock(return_value=None)  # the other event won
+        with env, client_patch:
+            assert await post_self_review_followup(
+                db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+                verdict=None, succeeded=False, disabled=True,
+            ) is False
+        fake_client.chat_postMessage.assert_not_awaited()
+        collection.update_one.assert_not_awaited()
+
+        # Won the claim but Slack failed: hand the claim back so the next
+        # event can retry instead of the notice being lost for good.
+        db, collection = _fake_db(existing_record=dict(record))
+        fake_client.chat_postMessage = AsyncMock(side_effect=RuntimeError("slack down"))
+        with env, client_patch:
+            assert await post_self_review_followup(
+                db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+                verdict=None, succeeded=False, disabled=True,
+            ) is False
+        release_filter, release_update = collection.update_one.call_args.args
+        assert release_filter["disabled_notice_for"] == registered_at
+        assert release_update == {"$unset": {"disabled_notice_for": ""}}
 
     @pytest.mark.asyncio
     async def test_delivery_error_never_raises(self):
@@ -485,6 +545,33 @@ class TestPipelineWiring:
         assert "LOMA_AUTH_TOKEN=<personal-auth-token> python3 tools/github_pr_notify.py register" in self.skill_source
         assert "--auth-token <personal-auth-token>" not in self.skill_source
         assert "--linear-issue-id <linear-issue-uuid> --conversation-id <conversation-id>" in self.skill_source
+        # A Slack-started run is never told its channel/thread_ts (the Slack
+        # ingress streams the reply itself), so the skill must not ask for
+        # them: it registers with the conversation ID alone and the CLI
+        # resolves the origin server-side.
+        slack_block = self.skill_source.split("# Dashboard conversation")[0]
+        assert "--conversation-id <conversation-id>" in slack_block
+        assert "--slack-channel <channel-id>" not in self.skill_source
+        # A failed registration must not leave a "verdict in this thread" promise
+        assert 'drop the "verdict will be posted in this thread" line' in self.skill_source
+
+    def test_review_prompt_requires_a_submitted_review(self):
+        # The verdict lookup only ever sees SUBMITTED reviews. The prompt must
+        # name the current review-writing tool (the old `create_pull_request_review`
+        # no longer exists in the GitHub MCP tool set) and forbid leaving the
+        # pending review from the create → add_comment → submit flow unsubmitted.
+        assert "mcp__github__pull_request_review_write" in self.github_source
+        assert '`method: \\"submit_pending\\"`' in self.github_source
+        assert "You MUST end with the submitting call" in self.github_source
+        assert "using `mcp__github__create_pull_request_review`:" not in self.github_source
+        assert "mcp__github__add_reply_to_pull_request_comment" in self.github_source
+
+    def test_conversation_id_is_injected_independently_of_user_email(self):
+        # tools/github_pr_notify.py resolves a Slack run's origin from nothing
+        # but its conversation ID, so the ID must reach the agent even when the
+        # Slack ingress could not resolve the requester's email.
+        source = Path("agent/client.py").read_text()
+        assert 'if conversation_id:\n        text_parts.append(f"[Conversation ID: {conversation_id}]")' in source
 
     def test_notification_targets_have_unique_compound_index(self):
         assert "pr_notification_targets.create_index(" in self.db_source
@@ -523,7 +610,11 @@ class TestSelfReviewFlag:
         assert 'os.environ.get("LOMA_ENABLE_SELF_REVIEW"' not in source
 
     def test_env_example_documents_flag(self):
-        assert "LOMA_ENABLE_SELF_REVIEW=" in Path(".env.example").read_text()
+        env_example = Path(".env.example").read_text()
+        assert "LOMA_ENABLE_SELF_REVIEW=" in env_example
+        # Agent PRs are detected by author login on `opened`; a deploy that
+        # never set this skips every agent PR's self-review until the next push.
+        assert "AGENT_GITHUB_LOGIN=" in env_example
 
 
 def _load_notify_cli():
@@ -578,6 +669,12 @@ class TestNotifyCliAuth:
         assert cli._build_target(self._args(slack_channel="C1", thread_ts="1.2"))["type"] == "slack"
         assert cli._build_target(self._args(linear_issue_id="u1"))["type"] == "linear"
 
+    def test_conversation_id_alone_defers_to_origin_resolution(self):
+        cli = _load_notify_cli()
+        assert cli._build_target(self._args(conversation_id="c1")) is None
+        with pytest.raises(ValueError, match="--conversation-id alone"):
+            cli._build_target(self._args())
+
 
 class TestNotifyCliOriginCheck:
     """Slack/Linear targets must be the verified origin of a Loma conversation
@@ -614,6 +711,48 @@ class TestNotifyCliOriginCheck:
             "metadata.linear_issue_id": "uuid-1", "conversation_id": "c9",
         }
         await cli._verify_target_origin(self._db({"conversation_id": "c9"}), target, "c9")
+
+    @pytest.mark.asyncio
+    async def test_conversation_only_registration_resolves_the_stamped_origin(self):
+        # A Slack-started run is never told its channel/thread_ts: the target
+        # comes from what the Slack ingress stamped on the conversation, so the
+        # target IS the origin and no separate origin check is needed.
+        cli = _load_notify_cli()
+        db = self._db({"conversation_id": "c1", "metadata": {
+            "source": "slack", "slack_channel_id": "C1", "slack_thread_ts": "1.2"}})
+        target = await cli._resolve_target_from_conversation(db, "c1")
+        assert target == {"type": "slack", "channel": "C1", "thread_ts": "1.2", "conversation_id": "c1"}
+        assert db.conversations.find_one.call_args.args[0] == {"conversation_id": "c1"}
+
+        db = self._db({"conversation_id": "c2", "metadata": {"linear_issue_id": "uuid-1"}})
+        target = await cli._resolve_target_from_conversation(db, "c2")
+        assert target == {"type": "linear", "issue_id": "uuid-1", "conversation_id": "c2"}
+
+    @pytest.mark.asyncio
+    async def test_conversation_only_registration_refuses_unknown_or_dashboard_runs(self):
+        cli = _load_notify_cli()
+        with pytest.raises(ValueError, match="not found"):
+            await cli._resolve_target_from_conversation(self._db(None), "nope")
+        dashboard = self._db({"conversation_id": "c3", "metadata": {"source": "dashboard"}})
+        with pytest.raises(ValueError, match="--user-email"):
+            await cli._resolve_target_from_conversation(dashboard, "c3")
+
+    @pytest.mark.asyncio
+    async def test_register_with_conversation_id_only_writes_the_resolved_origin(self):
+        cli = _load_notify_cli()
+        db = self._db({"conversation_id": "c1", "metadata": {
+            "slack_channel_id": "C1", "slack_thread_ts": "1.2"}})
+        client = MagicMock()
+        args = Namespace(repo="o/r", pr=7, slack_channel=None, thread_ts=None,
+                         linear_issue_id=None, user_email=None, auth_token=None,
+                         conversation_id="c1")
+        with patch.object(cli, "_get_db", return_value=(client, db)), \
+             patch.object(cli, "register_pr_notification_target", new_callable=AsyncMock) as reg:
+            assert await cli._cmd_register(args) == 0
+        assert reg.call_args.args[1:] == (
+            "o/r", 7, {"type": "slack", "channel": "C1", "thread_ts": "1.2", "conversation_id": "c1"},
+        )
+        client.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_loma_target_is_hmac_gated_not_origin_checked(self):

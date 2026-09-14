@@ -43,6 +43,11 @@ COLLECTION = "pr_self_review_locks"
 LOCK_HEARTBEAT_SECONDS = 30
 LOCK_STALE_SECONDS = LOCK_HEARTBEAT_SECONDS * 2
 
+# `release()` retries the delete once after this delay before giving up. A
+# failed release does not just leave the lock to expire: it also drops a
+# queued re-review flag the holder owes someone (see `release`).
+RELEASE_RETRY_SECONDS = 1.0
+
 
 class SelfReviewLock:
     """Claim exclusive self-review ownership of one PR for the duration of a run.
@@ -154,13 +159,15 @@ class SelfReviewLock:
         a second reviewer in parallel (both minimizing each other's comments,
         two verdict follow-ups in one thread), it flags the holder's lock. The
         holder reads the flag in ``release`` and schedules a forced run on the
-        newest head. Returns False if no live lock exists any more (the holder
-        finished or expired between our claim and this call) — the caller
-        should then claim the lock itself.
+        newest head. Returns False if no LIVE lock exists any more (the holder
+        finished, or its heartbeat is older than ``LOCK_STALE_SECONDS`` — a
+        crashed holder will never read the flag) — the caller should then
+        claim the lock itself, which takes over a stale doc.
         """
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=LOCK_STALE_SECONDS)
         try:
             result = await self.db[COLLECTION].update_one(
-                self._key,
+                {**self._key, "last_heartbeat": {"$gte": stale_cutoff}},
                 {"$set": {
                     "rerun_requested": True,
                     "rerun_requested_by": self.conversation_id,
@@ -194,22 +201,37 @@ class SelfReviewLock:
         if not self.held:
             return
         self.held = False
-        try:
-            # Filtered by conversation_id so we never delete a lock that was
-            # taken over from us while we were stalled. find_one_and_delete so
-            # the flag read and the release are one atomic step: a
-            # request_rerun that lands after this cannot be lost, it simply
-            # finds no lock and claims one itself.
-            released = await self.db[COLLECTION].find_one_and_delete(
-                {**self._key, "conversation_id": self.conversation_id}
-            )
-            self.rerun_requested = bool((released or {}).get("rerun_requested"))
-        except Exception:
-            logger.warning(
-                "[SELF-REVIEW-LOCK] Failed to release lock for %s#%d (conversation %s); "
-                "it expires after %ds without a heartbeat",
-                self.repo_full_name, self.pr_number, self.conversation_id, LOCK_STALE_SECONDS,
-            )
+        # Filtered by conversation_id so we never delete a lock that was
+        # taken over from us while we were stalled. find_one_and_delete so
+        # the flag read and the release are one atomic step: a
+        # request_rerun that lands after this cannot be lost, it simply
+        # finds no lock and claims one itself.
+        release_filter = {**self._key, "conversation_id": self.conversation_id}
+        for attempt in (1, 2):
+            try:
+                released = await self.db[COLLECTION].find_one_and_delete(release_filter)
+                self.rerun_requested = bool((released or {}).get("rerun_requested"))
+                return
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(
+                        "[SELF-REVIEW-LOCK] Failed to release lock for %s#%d (conversation %s), "
+                        "retrying once in %ss: %s",
+                        self.repo_full_name, self.pr_number, self.conversation_id,
+                        RELEASE_RETRY_SECONDS, e,
+                    )
+                    await asyncio.sleep(RELEASE_RETRY_SECONDS)
+        # Both attempts failed. The doc expires after LOCK_STALE_SECONDS without
+        # a heartbeat, but a re-review that was queued on it (`rerun_requested`)
+        # is LOST: this run never read the flag, and the next claim resets it.
+        # The PR may carry a "a fresh one will start" promise nobody will keep.
+        logger.error(
+            "[SELF-REVIEW-LOCK] Could not release lock for %s#%d (conversation %s) after "
+            "2 attempts; it expires after %ds without a heartbeat. A re-review queued "
+            "behind this run may have been lost — if one was promised on the PR, "
+            "trigger it manually with a /rereview.",
+            self.repo_full_name, self.pr_number, self.conversation_id, LOCK_STALE_SECONDS,
+        )
 
     async def _heartbeat_loop(self) -> None:
         # One failed beat (Mongo blip, primary election) must NOT end the loop:

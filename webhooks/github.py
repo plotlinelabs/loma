@@ -87,6 +87,11 @@ _ssl_context = ssl.create_default_context(cafile=certifi.where())
 # Marker to identify review comments posted by this agent (prevents loop)
 AGENT_REVIEW_MARKER = "<!-- loma-agent-review -->"
 
+# `action` values of self-review runs scheduled by a previous holder's release
+# (`_rerun_self_review_if_head_moved`), as opposed to a webhook event or a
+# human command. See the lost-lock branch of `_process_pr_review`.
+COALESCED_ACTIONS = ("synchronize_coalesced", "rereview_coalesced")
+
 
 def _is_agent_authored(
     pr_author: str, labels=None, *, draft: bool | None = None, context: str = "",
@@ -1303,6 +1308,20 @@ async def _process_pr_review(
         if not await lock.acquire():
             if not force_review:
                 return
+            if action in COALESCED_ACTIONS:
+                # This forced run was scheduled by a previous holder's release
+                # (`_rerun_self_review_if_head_moved`), not by a human. Whoever
+                # beat us to the lock started after that release, on a head at
+                # least as new as ours, and re-checks the head when it exits —
+                # flagging it would only make it run one more forced review of
+                # a head it just reviewed. The human's request is honoured by
+                # the run that is already in flight.
+                logger.info(
+                    "[GITHUB-WEBHOOK] Coalesced re-run of %s#%d lost the lock to a newer "
+                    "run (conversation %s) — dropping it, the holder covers this head",
+                    repo_full_name, pr_number, (lock.holder or {}).get("conversation_id"),
+                )
+                return
             if await lock.request_rerun():
                 logger.info(
                     "[GITHUB-WEBHOOK] Explicit re-review of %s#%d queued behind the "
@@ -1562,13 +1581,14 @@ async def _run_pr_review(
             "2. Decide FIXED / STILL_BROKEN / OBSOLETE.",
             "3. For every FIXED or OBSOLETE thread, run from the repo root:",
             "   `python3 tools/github_pr_resolve.py resolve --thread-id <thread_id>`",
-            "   Do this BEFORE you call `mcp__github__create_pull_request_review` "
+            "   Do this BEFORE you submit the final review (step 8 below) "
             "— once you submit the final review, further resolves are still valid "
             "but posting a new inline comment on a line that already has a "
             "STILL_BROKEN thread is duplication.",
             "4. For STILL_BROKEN threads: do NOT create a new inline comment "
             "duplicating the same concern. The existing thread is enough. You "
-            "MAY use `mcp__github__create_pull_request_review_comment_reply` to "
+            "MAY use `mcp__github__add_reply_to_pull_request_comment` (older tool "
+            "sets: `mcp__github__create_pull_request_review_comment_reply`) to "
             "add a short note like 'Still present at line N' if helpful.",
             "5. Only add NEW inline comments for issues introduced by commits "
             f"since your last review (new code between the previous head and "
@@ -1648,10 +1668,21 @@ async def _run_pr_review(
         "   **IMPORTANT**: Before flagging missing code/functions, verify you have the COMPLETE file.",
         "   If you only see part of a file, DO NOT claim code is missing - re-fetch the full file first.",
         "",
-        "8. **Post the review** using `mcp__github__create_pull_request_review`:",
+        "8. **Post the review** using `mcp__github__pull_request_review_write` "
+        "(older tool sets expose the same operation as "
+        "`mcp__github__create_pull_request_review` with a `comments` array — use "
+        "whichever exists in your tool list):",
         f"   - owner: `{repo_owner}`",
         f"   - repo: `{repo_name}`",
-        f"   - pull_number: {pr_number}",
+        f"   - pullNumber: {pr_number} (`pull_number` on the older tool)",
+        "   - Body-only review: ONE call with `method: \"create\"`, `event` and `body` "
+        "— the review is submitted immediately.",
+        "   - With inline comments: `method: \"create\"` WITHOUT `event` (opens a "
+        "pending review), then `mcp__github__add_comment_to_pending_review` once per "
+        "comment, then `method: \"submit_pending\"` with `event` and `body`.",
+        "   - **You MUST end with the submitting call.** A pending review that is never "
+        "submitted is visible to nobody but you, and the pipeline treats it as NO "
+        "review posted — the PR is reported as unreviewed.",
         *review_event_lines,
         "",
         "## Review Priorities (most important first)",
@@ -1731,6 +1762,7 @@ async def _run_pr_review(
     started_at = datetime.now(timezone.utc)
 
     review_succeeded = True
+    interrupted = False
     try:
         # The status comment and check run exist from here on, so everything
         # that can still fail — observer start (Mongo), the review-ID snapshot,
@@ -1762,6 +1794,19 @@ async def _run_pr_review(
                 "[GITHUB-WEBHOOK] Review failed for PR %s#%d",
                 repo_full_name, pr_number,
             )
+    except asyncio.CancelledError:
+        # Process shutdown (deploy restart) cancelled the task mid-agent. The
+        # agent posted nothing, so this is not "finished but posted nothing":
+        # mark it interrupted so the check run, handoff comment and Stage-2
+        # follow-up say so, then let the cancellation propagate after the
+        # fail-visible cleanup below (each step swallows its own errors).
+        review_succeeded = False
+        interrupted = True
+        logger.warning(
+            "[GITHUB-WEBHOOK] Review of PR %s#%d interrupted by shutdown",
+            repo_full_name, pr_number,
+        )
+        raise
     except Exception:
         review_succeeded = False
         logger.exception(
@@ -1881,6 +1926,12 @@ async def _run_pr_review(
                     "failure", "Self-Review Incomplete",
                     "The self-review agent finished but posted no review for this run. "
                     f"Treat the PR as unreviewed; comment `{REREVIEW_COMMAND}` to retry.",
+                )
+            elif interrupted:
+                conclusion, title, summary = (
+                    "failure", "Review Interrupted",
+                    "Loma restarted for a deploy while the review was running; nothing "
+                    f"was posted. Comment `{REREVIEW_COMMAND}` once it is back to retry.",
                 )
             else:
                 conclusion, title, summary = (
@@ -2297,7 +2348,8 @@ async def _process_review_comment_reply(
         "1. Read the comment and understand what the user is asking",
         "2. If they're asking about code, fetch the relevant file context",
         "3. Provide a helpful response",
-        "4. Reply using `mcp__github__create_pull_request_review_comment_reply`:",
+        "4. Reply using `mcp__github__add_reply_to_pull_request_comment` "
+        "(older tool sets: `mcp__github__create_pull_request_review_comment_reply`):",
         f"   - owner: `{repo_owner}`",
         f"   - repo: `{repo_name}`",
         f"   - comment_id: {comment_id}",

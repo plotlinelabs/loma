@@ -8,11 +8,18 @@ utils/pr_followup.py) posts the verdict back to that same place.
 
 Exactly one target type must be provided per registration:
 
-  # Slack thread (implement-ticket conversations started from Slack)
+  # Slack thread or Linear issue — the ORIGIN of the run. Pass only the Loma
+  # conversation ID (the `[Conversation ID: ...]` line in the run's prompt); the
+  # target is resolved server-side from what the Slack ingress / Linear webhook
+  # stamped on that conversation. A Slack-started run never sees its channel
+  # or thread_ts, so this is the only form that works for it.
+  python3 tools/github_pr_notify.py register --repo <owner>/<name> --pr <num> \
+      --conversation-id <uuid>
+
+  # Explicit Slack thread / Linear issue (still origin-checked against the
+  # conversation; kept for flows that already know these values)
   python3 tools/github_pr_notify.py register --repo <owner>/<name> --pr <num> \
       --slack-channel C0123ABC --thread-ts 1700000000.123456
-
-  # Linear issue (Linear webhook flows) — pass the issue UUID, not ENG-123
   python3 tools/github_pr_notify.py register --repo <owner>/<name> --pr <num> \
       --linear-issue-id <linear-issue-uuid> --conversation-id <uuid>
 
@@ -94,7 +101,13 @@ def _get_db():
     return client, client[db_name]
 
 
-def _build_target(args: argparse.Namespace) -> dict:
+def _build_target(args: argparse.Namespace) -> dict | None:
+    """Build the target from explicit flags.
+
+    Returns ``None`` when no explicit target was given but ``--conversation-id``
+    was: the caller then resolves the target from the conversation's stamped
+    origin (``_resolve_target_from_conversation``).
+    """
     provided = []
     if args.slack_channel or args.thread_ts:
         provided.append("slack")
@@ -103,10 +116,13 @@ def _build_target(args: argparse.Namespace) -> dict:
     if args.user_email:
         provided.append("loma")
 
+    if not provided and args.conversation_id:
+        return None
     if len(provided) != 1:
         raise ValueError(
-            "Provide exactly one target: --slack-channel + --thread-ts, "
-            "or --linear-issue-id, or --user-email"
+            "Provide exactly one target: --conversation-id alone (resolves the "
+            "Slack thread / Linear issue the run came from), or --slack-channel + "
+            "--thread-ts, or --linear-issue-id, or --user-email"
         )
 
     target_type = provided[0]
@@ -170,11 +186,51 @@ async def _verify_target_origin(db, target: dict, conversation_id: str | None = 
         )
 
 
+async def _resolve_target_from_conversation(db, conversation_id: str) -> dict:
+    """Derive the follow-up target from the conversation's server-stamped origin.
+
+    The Slack ingress stamps ``metadata.slack_channel_id`` / ``slack_thread_ts``
+    and the Linear webhook stamps ``metadata.linear_issue_id`` on every run it
+    starts, from authenticated events the agent cannot influence. Reading the
+    target from there means the target IS the origin — no separate origin check
+    is needed, and a run only ever has to know its own conversation ID.
+    Dashboard runs have neither and must register a Loma inbox target with
+    ``--user-email`` (HMAC-gated) instead.
+    """
+    found = await db.conversations.find_one(
+        {"conversation_id": conversation_id}, {"conversation_id": 1, "metadata": 1}
+    )
+    if not found:
+        raise ValueError(
+            f"Conversation {conversation_id} not found — refusing to register a "
+            f"follow-up target for it. Pass the conversation ID from this run's prompt."
+        )
+    metadata = found.get("metadata") or {}
+    channel = metadata.get("slack_channel_id")
+    thread_ts = metadata.get("slack_thread_ts")
+    issue_id = metadata.get("linear_issue_id")
+    if channel and thread_ts:
+        target = {"type": "slack", "channel": channel, "thread_ts": thread_ts}
+    elif issue_id:
+        target = {"type": "linear", "issue_id": issue_id}
+    else:
+        raise ValueError(
+            f"Conversation {conversation_id} did not start from a Slack thread or a "
+            f"Linear issue, so there is nothing to resolve. Dashboard runs must register "
+            f"a Loma inbox target with --user-email (and the requester's auth token)."
+        )
+    target["conversation_id"] = conversation_id
+    return target
+
+
 async def _cmd_register(args: argparse.Namespace) -> int:
     target = _build_target(args)
     client, db = _get_db()
     try:
-        await _verify_target_origin(db, target, args.conversation_id)
+        if target is None:
+            target = await _resolve_target_from_conversation(db, args.conversation_id)
+        else:
+            await _verify_target_origin(db, target, args.conversation_id)
         await register_pr_notification_target(db, args.repo, args.pr, target)
     finally:
         client.close()
@@ -219,8 +275,10 @@ def main() -> int:
     )
     reg.add_argument(
         "--conversation-id",
-        help="Loma conversation this registration belongs to: pins the Slack/Linear "
-             "origin check to that conversation and lets inbox notifications deep-link back",
+        help="Loma conversation this registration belongs to. On its own, resolves the "
+             "target from the Slack thread / Linear issue the conversation was started "
+             "from; with an explicit target it pins the origin check to that conversation "
+             "and lets inbox notifications deep-link back",
     )
 
     show = sub.add_parser("show", help="Show the registered target for a PR")

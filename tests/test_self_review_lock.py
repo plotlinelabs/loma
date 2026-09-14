@@ -11,7 +11,7 @@ import os
 import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pymongo.errors import DuplicateKeyError
@@ -143,7 +143,12 @@ class TestAcquireRelease:
         locks.update_one = AsyncMock(return_value=MagicMock(matched_count=1))
         assert await lock.request_rerun() is True
         filt, update = locks.update_one.call_args.args
-        assert filt == {"repo_full_name": REPO, "pr_number": 42}
+        assert filt["repo_full_name"] == REPO and filt["pr_number"] == 42
+        # Only a LIVE holder is flagged. A crashed holder (stale heartbeat)
+        # never reads the flag, so "not flagged" sends the caller to acquire(),
+        # which takes the stale doc over and IS the requested fresh run.
+        live_bound = filt["last_heartbeat"]["$gte"]
+        assert datetime.now(timezone.utc) - live_bound >= timedelta(seconds=LOCK_STALE_SECONDS - 1)
         assert "upsert" not in locks.update_one.call_args.kwargs
         assert update["$set"]["rerun_requested"] is True
         assert update["$set"]["rerun_requested_by"] == "conv-8"
@@ -176,6 +181,32 @@ class TestAcquireRelease:
         await lock2.acquire()
         await lock2.release()
         assert lock2.rerun_requested is False
+
+    @pytest.mark.asyncio
+    async def test_release_retries_once_then_reports_a_possibly_lost_rerun(self, monkeypatch):
+        monkeypatch.setattr("webhooks.self_review_lock.RELEASE_RETRY_SECONDS", 0)
+        # One blip: the retry lands and recovers the queued flag.
+        db, locks = _db()
+        locks.find_one_and_delete = AsyncMock(
+            side_effect=[RuntimeError("blip"), {"conversation_id": "conv-11", "rerun_requested": True}]
+        )
+        lock = SelfReviewLock(db, REPO, 42, "conv-11", "n" * 40)
+        assert await lock.acquire() is True
+        await lock.release()
+        assert locks.find_one_and_delete.await_count == 2
+        assert lock.rerun_requested is True
+
+        # Mongo down for both attempts: never raises, but says loudly that a
+        # queued re-review (promised on the PR) may have been dropped.
+        db, locks = _db()
+        locks.find_one_and_delete = AsyncMock(side_effect=RuntimeError("mongo down"))
+        lock = SelfReviewLock(db, REPO, 42, "conv-12", "n" * 40)
+        assert await lock.acquire() is True
+        with patch("webhooks.self_review_lock.logger") as logger_mock:
+            await lock.release()
+        assert locks.find_one_and_delete.await_count == 2
+        assert lock.held is False and lock.rerun_requested is False
+        assert "may have been lost" in logger_mock.error.call_args.args[0]
 
     def test_lock_cadence_is_not_derived_from_the_observer_heartbeat(self):
         # Tuning how often conversations heartbeat for the deploy drain must

@@ -265,10 +265,11 @@ If none of the above apply (e.g. a small single-file fix, copy change, or config
 Every agent-created PR gets an automatic fresh-context self-review (triggered by the `pull_request` webhook). Register WHERE you are about to announce the PR so the self-review verdict is threaded back to the same place as a follow-up:
 
 ```bash
-# Slack-originated request (use the channel ID and thread timestamp you will reply in — the tool
-# checks they are the origin of a Loma conversation and refuses any other thread):
+# Slack-originated request (you are NOT given the channel ID or thread timestamp — pass only the
+# conversation ID from the `[Conversation ID: …]` line of your prompt; the tool resolves the Slack
+# thread the run was started in from the conversation record and refuses any other thread):
 python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
-  --slack-channel <channel-id> --thread-ts <thread-ts>
+  --conversation-id <conversation-id>
 
 # Dashboard conversation (use the requester's email AND their personal auth token from the
 # message context — the tool HMAC-verifies it, same as tools/notify.py). Pass the token through
@@ -283,7 +284,7 @@ python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number
   --linear-issue-id <linear-issue-uuid> --conversation-id <conversation-id>
 ```
 
-If registration fails, continue — the PR still gets its self-review on GitHub; only the follow-up notification is skipped. Never work around a refused Slack/Linear target by registering a different one: the refusal means that thread/issue is not where this run came from.
+If registration fails, continue — the PR still gets its self-review on GitHub; only the follow-up notification is skipped. In that case **drop the "verdict will be posted in this thread" line from Step 7** and say the verdict will appear on the PR instead — never promise a follow-up you did not register. Never work around a refused Slack/Linear target by registering a different one: the refusal means that thread/issue is not where this run came from.
 
 > **If self-review is disabled on the deployment** (`LOMA_ENABLE_SELF_REVIEW=false`), the webhook pipeline posts a "self-review skipped" follow-up to the registered target instead of a verdict, so the Stage-1 line below is still safe to send.
 
@@ -307,7 +308,7 @@ Post back in Slack:
 This is a *draft PR* — please review the changes before marking it ready for review.
 ```
 
-> **Two-stage notification:** The "self-review running" line is Stage 1. Stage 2 (the verdict follow-up) is posted automatically by the webhook pipeline to the target you registered in Step 6c — do NOT wait for the review to finish before posting this message.
+> **Two-stage notification:** The "self-review running" line is Stage 1. Stage 2 (the verdict follow-up) is posted automatically by the webhook pipeline to the target you registered in Step 6c — do NOT wait for the review to finish before posting this message. If Step 6c's registration failed, replace the line with: `:mag: A fresh-context *self-review* of this PR is running — check the PR for its verdict before reviewing.`
 
 > **Webhook-triggered mode:** When invoked from a Linear webhook, instead of posting to Slack, comment on the Linear ticket with the PR details using `mcp__linear__create_comment`. The comment MUST start with a bot marker comment (e.g. `<!-- agent -->`) to prevent webhook loops, and MUST also state that a self-review is running with the verdict to follow.
 

@@ -704,6 +704,78 @@ class TestSelfReviewPipeline:
         mocks["_update_pr_comment"].assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_unsubmitted_pending_review_is_not_a_posted_review(self):
+        # The agent opened a pending review (`create` without `event`) and died
+        # before `submit_pending`. GitHub returns that review to the bot token,
+        # but nobody else can see it — it must surface as incomplete, not as
+        # "review posted, read it on the PR".
+        fresh = _ts(datetime.now(timezone.utc) + timedelta(minutes=1))
+        reviews = [{"id": "R-pending", "author": AGENT_GITHUB_LOGIN, "created_at": fresh,
+                    "state": "PENDING",
+                    "body": "✅ Self-review: no blocking issues found (never submitted)"}]
+        mocks = await self._run(reviews, reviews_before=[])
+        followup = mocks["post_self_review_followup"].call_args.kwargs
+        assert followup["succeeded"] is True
+        assert followup["review_posted"] is False and followup["verdict"] is None
+        check = mocks["_update_check_run"].call_args.kwargs
+        assert check["conclusion"] == "failure" and "Incomplete" in check["title"]
+        mocks["_delete_pr_comment"].assert_not_awaited()  # status comment → handoff
+        mocks["_update_pr_comment"].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_agent_run_is_reported_as_interrupted(self):
+        # A deploy restart cancels the task mid-agent. The check run and the
+        # follow-up must say interrupted/failed — never "finished but posted
+        # nothing" — and the cancellation must still propagate.
+        async def _cancelled(**_kwargs):
+            raise asyncio.CancelledError()
+            yield  # noqa: unreachable — makes this an async generator
+
+        patches = self._patches([], stream=_cancelled, reviews_before=[])
+        mocks = {}
+        for p in patches:
+            mocks[p.attribute] = p.start()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await _process_pr_review(**_review_kwargs())
+        finally:
+            for p in patches:
+                p.stop()
+        check = mocks["_update_check_run"].call_args.kwargs
+        assert check["conclusion"] == "failure" and check["title"] == "Review Interrupted"
+        mocks["_update_pr_comment"].assert_awaited_once()
+        mocks["_delete_pr_comment"].assert_not_awaited()
+        followup = mocks["post_self_review_followup"].call_args.kwargs
+        assert followup["succeeded"] is False and followup["review_posted"] is False
+        assert mocks["get_pr_reviews"].await_count == 1  # snapshot only, no verdict lookup
+
+    @pytest.mark.asyncio
+    async def test_coalesced_forced_rerun_that_lost_the_lock_does_not_flag_the_holder(self):
+        # Holder A honoured a queued /rereview by scheduling forced run R; a
+        # `synchronize` S claimed the lock first. R must NOT flag S — S is on a
+        # head at least as new and re-checks it on exit — otherwise S would run
+        # one more forced review of the head it just reviewed.
+        db, locks = _lock_db()
+        locks.find_one = AsyncMock(return_value={"conversation_id": "S"})
+        flags: list[tuple] = []
+
+        async def _update_one(filt, update, **kwargs):
+            if kwargs.get("upsert"):
+                raise DuplicateKeyError("dup")
+            flags.append((filt, update))
+            return MagicMock(matched_count=1)
+
+        locks.update_one = _update_one
+        with patch("webhooks.github.get_db", return_value=db), \
+             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock) as stats_mock, \
+             patch("webhooks.github._create_pr_comment", new_callable=AsyncMock) as comment_mock:
+            await _process_pr_review(**_review_kwargs(force_review=True, action="rereview_coalesced"))
+        stats_mock.assert_not_awaited()      # no second reviewer
+        comment_mock.assert_not_awaited()    # no "already running" notice either
+        assert flags == []                   # and the holder was NOT flagged
+        locks.find_one_and_delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_cancelled_run_releases_the_lock_but_schedules_nothing(self):
         # Deploy restart cancels the task: release the lock so the PR is not
         # blocked for LOCK_STALE_SECONDS, but never spawn a fresh multi-minute
