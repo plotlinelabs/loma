@@ -151,17 +151,22 @@ class SelfReviewLock:
             )
 
     async def _heartbeat_loop(self) -> None:
-        try:
-            while True:
+        # One failed beat (Mongo blip, primary election) must NOT end the loop:
+        # the run keeps going for minutes, the lock would go stale after
+        # LOCK_STALE_SECONDS, the next `synchronize` would take it over, and we
+        # would be back to two live reviewers — the exact race this lock exists
+        # to prevent. Log and keep beating; only cancellation ends the loop.
+        while True:
+            try:
                 await asyncio.sleep(LOCK_HEARTBEAT_SECONDS)
                 await self.db[COLLECTION].update_one(
                     {**self._key, "conversation_id": self.conversation_id},
                     {"$set": {"last_heartbeat": datetime.now(timezone.utc)}},
                 )
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.warning(
-                "[SELF-REVIEW-LOCK] Heartbeat failed for %s#%d: %s",
-                self.repo_full_name, self.pr_number, e,
-            )
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.warning(
+                    "[SELF-REVIEW-LOCK] Heartbeat failed for %s#%d (will retry in %ss): %s",
+                    self.repo_full_name, self.pr_number, LOCK_HEARTBEAT_SECONDS, e,
+                )

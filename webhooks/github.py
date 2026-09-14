@@ -85,6 +85,42 @@ _ssl_context = ssl.create_default_context(cafile=certifi.where())
 # Marker to identify review comments posted by this agent (prevents loop)
 AGENT_REVIEW_MARKER = "<!-- loma-agent-review -->"
 
+
+def _is_agent_authored(pr_author: str, labels=None, *, context: str = "") -> bool:
+    """Single source of truth for "did the agent write this PR?".
+
+    Primary signal: the author login matches ``AGENT_GITHUB_LOGIN``. Secondary
+    signal: the ``Agent PR`` label (applied right after creation, so absent on
+    ``opened`` but present on every later event). If the label is present but
+    the login does not match, the PR is still treated as agent-authored and a
+    warning names the env var — otherwise a misconfigured ``AGENT_GITHUB_LOGIN``
+    silently routes every agent PR into the wrong mode: the draft-skip path on
+    the webhook, or a normal review that tries APPROVE/REQUEST_CHANGES on its
+    own PR (422) on the ``/rereview`` and ``@mention`` paths. Other bots
+    (``[bot]`` suffix, e.g. dependabot) are never agent-authored, label or not.
+
+    ``labels`` accepts the GitHub payload shape (``[{"name": ...}]``) or plain
+    label names.
+    """
+    if pr_author == AGENT_GITHUB_LOGIN:
+        return True
+    if pr_author.endswith("[bot]"):
+        return False
+    label_names = {
+        (label.get("name", "") if isinstance(label, dict) else str(label or ""))
+        for label in (labels or [])
+    }
+    if AGENT_PR_LABEL in label_names:
+        logger.warning(
+            "[GITHUB-WEBHOOK] PR %s carries the %r label but is authored by %r, "
+            "not AGENT_GITHUB_LOGIN=%r — check the AGENT_GITHUB_LOGIN env var. "
+            "Treating it as agent-authored based on the label.",
+            context or "?", AGENT_PR_LABEL, pr_author, AGENT_GITHUB_LOGIN,
+        )
+        return True
+    return False
+
+
 def _review_in_progress_comment(estimated_time: str) -> str:
     """Generate status comment with estimated review time."""
     return f"""⏳ **Reviewing this PR...**
@@ -695,27 +731,13 @@ async def handle_github_webhook(request: web.Request) -> web.Response:
         # is the single architectural hook that guarantees a clean-context review of
         # agent-written code before a human reads it. Agent PRs are draft-by-policy,
         # so the draft skip must not apply to them.
+        # Login match, or the "Agent PR" label as a misconfiguration backstop —
+        # see `_is_agent_authored`, shared with the /rereview and @mention paths.
         pr_author = pr.get("user", {}).get("login", "")
-        is_agent_pr = pr_author == AGENT_GITHUB_LOGIN
-
-        # Secondary signal: the "Agent PR" label. It is applied right after PR
-        # creation, so it is absent on `opened` but present on every later
-        # event. If it is present and the author does not match, treat the PR
-        # as agent-authored anyway and shout — otherwise a misconfigured
-        # AGENT_GITHUB_LOGIN silently routes every agent PR into the old
-        # draft-skip path and nothing ever tells you.
-        pr_labels = {
-            (label or {}).get("name", "") for label in (pr.get("labels") or [])
-        }
-        if not is_agent_pr and AGENT_PR_LABEL in pr_labels and not pr_author.endswith("[bot]"):
-            logger.warning(
-                "[GITHUB-WEBHOOK] PR %s#%s carries the %r label but is authored by %r, "
-                "not AGENT_GITHUB_LOGIN=%r — check the AGENT_GITHUB_LOGIN env var. "
-                "Routing to self-review based on the label.",
-                repo.get("full_name", ""), pr.get("number"), AGENT_PR_LABEL,
-                pr_author, AGENT_GITHUB_LOGIN,
-            )
-            is_agent_pr = True
+        is_agent_pr = _is_agent_authored(
+            pr_author, pr.get("labels"),
+            context=f"{repo.get('full_name', '')}#{pr.get('number')}",
+        )
 
         if is_agent_pr:
             if not SELF_REVIEW_ENABLED:
@@ -1286,6 +1308,34 @@ async def _process_pr_review(
             pr_stats=pr_stats,
             self_review=self_review,
         )
+    except Exception:
+        # `_run_pr_review` makes its own pipeline fail-visible from the check
+        # run onwards, but the GitHub round-trips before that (PR stats, prior
+        # threads, minimize, status comment) can still raise on a rate limit
+        # or 5xx. A self-review that dies there must answer the Stage-1
+        # "verdict coming" promise too — never a silent skip. Every failure
+        # path inside `_run_pr_review` swallows its own exceptions after the
+        # follow-up is posted, so this cannot double-post.
+        logger.exception(
+            "[GITHUB-WEBHOOK] Review pipeline crashed before completing for %s#%d",
+            repo_full_name, pr_number,
+        )
+        if self_review:
+            try:
+                await post_self_review_followup(
+                    db,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    pr_url=pr_url,
+                    verdict=None,
+                    succeeded=False,
+                )
+            except Exception:
+                logger.exception(
+                    "[GITHUB-WEBHOOK] Self-review failure follow-up failed for %s#%d",
+                    repo_full_name, pr_number,
+                )
+        raise
     finally:
         if lock is not None and lock.held:
             # Release BEFORE the coalesced re-run so it can claim the lock.
@@ -1616,21 +1666,30 @@ async def _run_pr_review(
             "linear_ticket_id": ticket_id,
             "trigger_type": "pr_self_review" if self_review else "pr_review",
         }, conversation_id=conversation_id)
-        await observer.start()
 
     # Captured BEFORE the agent runs so the verdict lookup afterwards can be
     # scoped to reviews created by THIS run, never a previous run's review.
     # Primary scoping is structural (IDs of the agent reviews that already
     # exist); `started_at` is only the fallback if that snapshot fails.
     pre_run_review_ids: set[str] | None = None
-    if self_review:
-        pre_run_review_ids = await _snapshot_agent_review_ids(
-            repo_owner, repo_name, pr_number
-        )
     started_at = datetime.now(timezone.utc)
 
     review_succeeded = True
     try:
+        # The status comment and check run exist from here on, so everything
+        # that can still fail — observer start (Mongo), the review-ID snapshot,
+        # the agent itself — runs inside this try: a failure lands in the
+        # fail-visible cleanup below (check run completed as failure, status
+        # comment turned into a handoff, Stage-2 follow-up posted) instead of
+        # orphaning an `in_progress` check run and a "review running" comment.
+        if observer is not None:
+            await observer.start()
+        if self_review:
+            pre_run_review_ids = await _snapshot_agent_review_ids(
+                repo_owner, repo_name, pr_number
+            )
+        started_at = datetime.now(timezone.utc)
+
         async for text in stream_agent(prompt=prompt, observer=observer, source="github_webhook"):
             logger.info("[GITHUB-WEBHOOK] Agent output: %.500s", text)
             # stream_agent catches exceptions and yields error messages instead of propagating
@@ -1888,7 +1947,7 @@ async def _handle_slash_command(
                 # Intentionally NOT gated on SELF_REVIEW_ENABLED: that flag only
                 # controls the automatic webhook trigger; an explicit human request
                 # is always honoured.
-                self_review=pr_details.get("user", {}).get("login", "") == AGENT_GITHUB_LOGIN,
+                self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), pr_details.get("labels")),
             )
         else:
             # Failed to fetch PR details - post error comment
@@ -2237,7 +2296,7 @@ async def _process_pr_conversation_comment(
             # Keep self-review mode for agent-authored PRs (COMMENT-only reviews).
             # Intentionally NOT gated on SELF_REVIEW_ENABLED — explicit human
             # request, same reasoning as the /rereview slash command.
-            self_review=pr_details.get("user", {}).get("login", "") == AGENT_GITHUB_LOGIN,
+            self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), pr_details.get("labels")),
         )
         return
 

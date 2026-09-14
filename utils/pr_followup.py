@@ -123,6 +123,11 @@ def _parse_github_timestamp(value) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+# The self-review prompt requires the review body to START with one of these.
+VERDICT_PREFIXES = ("✅ Self-review:", "🔴 Self-review:")
+VERDICT_MAX_CHARS = 300
+
+
 def extract_self_review_verdict(
     reviews: list[dict],
     agent_login: str,
@@ -167,9 +172,14 @@ def extract_self_review_verdict(
                 continue
         body = (review.get("body") or "").strip()
         for line in body.splitlines():
-            line = line.strip()
-            if "Self-review:" in line:
-                return line
+            # Anchor to a line that STARTS with the verdict (after any markdown
+            # emphasis/heading noise). The review body is agent-controlled and
+            # this line is relayed verbatim to Slack / Linear / the inbox, so a
+            # "Self-review:" buried in prose or a quoted diff must not be
+            # promoted to the verdict, and a runaway line is capped.
+            candidate = line.strip().strip("*_`#> ").strip()
+            if candidate.startswith(VERDICT_PREFIXES):
+                return candidate[:VERDICT_MAX_CHARS]
         # Agent review without a verdict line — keep looking at older reviews
     return None
 

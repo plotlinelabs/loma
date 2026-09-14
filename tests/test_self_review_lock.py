@@ -106,6 +106,32 @@ class TestAcquireRelease:
             assert "last_heartbeat" in call.args[1]["$set"]
 
 
+    @pytest.mark.asyncio
+    async def test_heartbeat_survives_transient_errors(self, monkeypatch):
+        # One failed beat (Mongo blip, primary election) must not kill the
+        # loop: a silently dead heartbeat lets the lock go stale mid-run, the
+        # next `synchronize` takes it over, and two live reviewers race —
+        # exactly what the lock exists to prevent.
+        monkeypatch.setattr("webhooks.self_review_lock.LOCK_HEARTBEAT_SECONDS", 0.01)
+        db, locks = _db()
+        calls = {"n": 0}
+
+        async def _update_one(*_a, **_k):
+            calls["n"] += 1
+            if calls["n"] == 2:  # first beat after the claim fails
+                raise RuntimeError("mongo blip")
+            return MagicMock(matched_count=0)
+
+        locks.update_one = _update_one
+        lock = SelfReviewLock(db, REPO, 42, "conv-7", "n" * 40)
+        assert await lock.acquire() is True
+        await asyncio.sleep(0.08)
+        assert not lock._heartbeat_task.done(), "heartbeat loop died on a transient error"
+        assert calls["n"] >= 4  # claim + failed beat + at least two more beats
+        await lock.release()
+        assert lock._heartbeat_task is None
+
+
 MONGO_URI = os.environ.get("LOMA_TEST_MONGODB_URI", "")
 
 

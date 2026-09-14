@@ -19,6 +19,7 @@ from pymongo.errors import DuplicateKeyError
 from webhooks.github import (
     AGENT_GITHUB_LOGIN,
     AGENT_PR_LABEL,
+    _is_agent_authored,
     _process_pr_review,
     _rerun_self_review_if_head_moved,
     handle_github_webhook,
@@ -211,13 +212,39 @@ class TestSelfReviewPromptSource:
         assert "`REQUEST_CHANGES` if any" in self.source
 
     def test_rereview_call_sites_propagate_self_review(self):
-        # Both explicit re-review call sites must keep agent PRs in self-review mode
+        # Both explicit re-review call sites must keep agent PRs in self-review
+        # mode, using the SAME detection (login OR "Agent PR" label) as the
+        # webhook path — a login-only check here would drop a misconfigured
+        # deploy's /rereview into normal mode (APPROVE on its own PR → 422).
         assert self.source.count(
-            'self_review=pr_details.get("user", {}).get("login", "") == AGENT_GITHUB_LOGIN'
+            'self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), '
+            'pr_details.get("labels"))'
         ) == 2
+        assert 'get("login", "") == AGENT_GITHUB_LOGIN' not in self.source
 
     def test_trigger_type_distinguishes_self_review(self):
         assert '"pr_self_review" if self_review else "pr_review"' in self.source
+
+
+class TestIsAgentAuthored:
+    def test_login_match(self):
+        assert _is_agent_authored(AGENT_GITHUB_LOGIN) is True
+        assert _is_agent_authored(AGENT_GITHUB_LOGIN, [{"name": "preview"}]) is True
+
+    def test_label_overrides_mismatched_login_with_warning(self):
+        with patch("webhooks.github.logger") as logger_mock:
+            assert _is_agent_authored("some-other-login", [{"name": AGENT_PR_LABEL}],
+                                      context="example-org/example-repo#42") is True
+        assert any("AGENT_GITHUB_LOGIN" in str(c) for c in logger_mock.warning.call_args_list)
+        # Plain label names (non-payload shape) work too
+        assert _is_agent_authored("some-other-login", [AGENT_PR_LABEL]) is True
+
+    def test_label_never_overrides_other_bots(self):
+        assert _is_agent_authored("dependabot[bot]", [{"name": AGENT_PR_LABEL}]) is False
+
+    def test_human_without_label(self):
+        assert _is_agent_authored("human", [{"name": "preview"}, None]) is False
+        assert _is_agent_authored("human", None) is False
 
 
 def _ts(dt: datetime) -> str:
@@ -453,14 +480,71 @@ class TestSelfReviewPipeline:
         assert release_filter["conversation_id"] == "conv-1"
 
     @pytest.mark.asyncio
-    async def test_lock_released_even_when_prework_raises(self):
+    async def test_prework_failure_releases_lock_and_posts_failed_followup(self):
+        # A GitHub failure BEFORE the check run / status comment exist (rate
+        # limit, 5xx on _get_pr_stats) used to escape with no follow-up at
+        # all — the human told "verdict coming" waited forever. The failure
+        # must be reported to the registered target, then the lock released.
         db, locks = _lock_db()
         with patch("webhooks.github.get_db", return_value=db), \
              patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, side_effect=RuntimeError("github down")), \
+             patch("webhooks.github.post_self_review_followup", new_callable=AsyncMock) as followup_mock, \
              patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=None):
             with pytest.raises(RuntimeError):
                 await _process_pr_review(**_review_kwargs())
         locks.delete_one.assert_awaited_once()
+        followup_mock.assert_awaited_once()
+        followup = followup_mock.call_args.kwargs
+        assert followup["succeeded"] is False and followup["verdict"] is None
+        assert followup["pr_number"] == 42
+
+    @pytest.mark.asyncio
+    async def test_prework_failure_followup_error_does_not_mask_the_cause(self):
+        db, _locks = _lock_db()
+        with patch("webhooks.github.get_db", return_value=db), \
+             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, side_effect=RuntimeError("github down")), \
+             patch("webhooks.github.post_self_review_followup", new_callable=AsyncMock, side_effect=RuntimeError("slack down")), \
+             patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=None):
+            with pytest.raises(RuntimeError, match="github down"):
+                await _process_pr_review(**_review_kwargs())
+
+    @pytest.mark.asyncio
+    async def test_prework_failure_on_normal_review_posts_no_followup(self):
+        with patch("webhooks.github.get_db", return_value=None), \
+             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, side_effect=RuntimeError("github down")), \
+             patch("webhooks.github.post_self_review_followup", new_callable=AsyncMock) as followup_mock:
+            with pytest.raises(RuntimeError):
+                await _process_pr_review(**_review_kwargs(self_review=False, pr_author="human"))
+        followup_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failure_after_check_run_exists_is_fail_visible(self):
+        # observer.start() (Mongo) runs AFTER the status comment and check run
+        # are created. If it raises, the check run must be completed as a
+        # failure and the comment turned into a handoff — not left
+        # `in_progress` forever — and exactly ONE failure follow-up posted.
+        db, _locks = _lock_db()
+        observer = MagicMock()
+        observer.start = AsyncMock(side_effect=RuntimeError("mongo down"))
+        patches = self._patches([])
+        patches[0] = patch("webhooks.github.get_db", return_value=db)
+        patches.append(patch("webhooks.github.ConversationObserver", return_value=observer))
+        mocks = {}
+        for p in patches:
+            mocks[p.attribute] = p.start()
+        try:
+            await _process_pr_review(**_review_kwargs())  # must not raise
+        finally:
+            for p in patches:
+                p.stop()
+        check = mocks["_update_check_run"].call_args.kwargs
+        assert check["status"] == "completed" and check["conclusion"] == "failure"
+        mocks["_update_pr_comment"].assert_awaited_once()
+        mocks["_delete_pr_comment"].assert_not_awaited()
+        mocks["post_self_review_followup"].assert_awaited_once()
+        followup = mocks["post_self_review_followup"].call_args.kwargs
+        assert followup["succeeded"] is False and followup["verdict"] is None
+        mocks["get_pr_reviews"].assert_not_awaited()  # never reached the snapshot or the verdict lookup
 
     @pytest.mark.asyncio
     async def test_force_review_proceeds_when_lock_is_held(self):

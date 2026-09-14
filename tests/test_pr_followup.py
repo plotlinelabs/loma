@@ -16,6 +16,7 @@ import pytest
 from utils.pr_followup import (
     COLLECTION,
     REREVIEW_COMMAND,
+    VERDICT_MAX_CHARS,
     _build_messages,
     extract_self_review_verdict,
     get_pr_notification_target,
@@ -178,6 +179,21 @@ class TestVerdictExtraction:
         # An empty snapshot (no prior agent reviews) still accepts an ID'd review
         reviews = [{"id": "R1", "author": "loma-insights", "body": "✅ Self-review: first ever"}]
         assert extract_self_review_verdict(reviews, "loma-insights", exclude_review_ids=set())
+
+
+    def test_verdict_line_is_anchored_and_capped(self):
+        # The review body is agent-controlled and the verdict line is relayed
+        # verbatim to Slack / Linear / the inbox: only a line that STARTS with
+        # the verdict counts (markdown emphasis tolerated), and it is capped so
+        # a runaway line cannot bloat the notification.
+        buried = [{"id": "R1", "author": "loma-insights",
+                   "body": "Notes: the earlier Self-review: line was wrong.\n\nmore prose"}]
+        assert extract_self_review_verdict(buried, "loma-insights") is None
+        bold = [{"id": "R2", "author": "loma-insights",
+                 "body": "**✅ Self-review: no blocking issues found**\n\ndetails"}]
+        assert extract_self_review_verdict(bold, "loma-insights") == "✅ Self-review: no blocking issues found"
+        long = [{"id": "R3", "author": "loma-insights", "body": "🔴 Self-review: " + "x" * 1000}]
+        assert len(extract_self_review_verdict(long, "loma-insights")) == VERDICT_MAX_CHARS
 
 
 class TestMessageOutcomes:
