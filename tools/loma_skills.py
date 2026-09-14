@@ -64,12 +64,22 @@ def _compact_skill(skill: dict) -> dict:
         "tags": skill.get("tags") or [],
         "files": skill.get("files") or [],
         "assets": skill.get("assets") or [],
+        "source": skill.get("source"),
     }
 
 
 async def _run(args) -> int:
     client, db = _connect_db()
+    context = None
     try:
+        if getattr(args, "user_email", None) or getattr(args, "auth_token", None):
+            if not args.user_email or not verify_user_auth_token(args.auth_token or "", args.user_email):
+                raise skill_service.SkillError("Invalid or expired auth token", status=403)
+            context = skill_service.skill_actor.set(args.user_email)
+        if args.command == "sync":
+            from api.skill_sync_service import sync
+            actor = await _require_maintainer(db, args.user_email, args.auth_token)
+            return _json(await sync(db, args.slug, actor))
         if args.command == "list":
             return _json({"skills": [_compact_skill(s) for s in await skill_service.list_skills(db)]})
 
@@ -137,6 +147,7 @@ async def _run(args) -> int:
                 file_doc=skill_service.validate_text_file(args.path, content),
                 actor=actor,
                 source="agent",
+                base_hash=args.base_hash,
             )
             return _json(_compact_skill(result))
 
@@ -179,8 +190,10 @@ async def _run(args) -> int:
 
         return _json({"error": f"Unknown command: {args.command}"}, 1)
     except skill_service.SkillError as exc:
-        return _json({"error": str(exc), "status": exc.status}, 1)
+        return _json({"error": str(exc), "status": exc.status, "code": getattr(exc, "code", "skill_error")}, 1)
     finally:
+        if context is not None:
+            skill_service.skill_actor.reset(context)
         client.close()
 
 
@@ -191,10 +204,13 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_auth(p):
-        p.add_argument("--user-email")
-        p.add_argument("--auth-token")
+        p.add_argument("--user-email", default=argparse.SUPPRESS)
+        p.add_argument("--auth-token", default=argparse.SUPPRESS)
 
-    sub.add_parser("list")
+    add_auth(sub.add_parser("list"))
+    sync_cmd = sub.add_parser("sync", help="Reconcile a linked skill from Google Docs")
+    sync_cmd.add_argument("--slug", required=True)
+    add_auth(sync_cmd)
     search = sub.add_parser("search")
     search.add_argument("query_text", nargs="?")
     search.add_argument("--query")
@@ -221,6 +237,7 @@ def main() -> int:
     update.add_argument("--slug", required=True)
     update.add_argument("--path", required=True)
     update.add_argument("--content-file", required=True)
+    update.add_argument("--base-hash", help="Required for linked instructions; source.hash from get")
     add_auth(update)
     upload = sub.add_parser("upload-asset")
     upload.add_argument("--slug", required=True)

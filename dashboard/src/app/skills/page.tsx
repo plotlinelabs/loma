@@ -213,6 +213,7 @@ function SkillsPageInner() {
       />
       <PanelResizer onResize={handleResize} onDoubleClick={handleResetSplit} />
       <SkillDetailPane
+        key={`${selectedSkillSlug}:${selectedFilePath}`}
         skill={skillDetail}
         selectedFilePath={selectedFilePath}
         loading={detailLoading}

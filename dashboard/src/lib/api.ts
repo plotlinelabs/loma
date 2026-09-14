@@ -230,6 +230,7 @@ export async function generateTitles(): Promise<{ processed: number; message: st
 }
 
 export interface Skill {
+  source?: GoogleSkillSource;
   slug?: string;
   name: string;
   description: string;
@@ -254,6 +255,7 @@ export interface SkillFile {
 }
 
 export interface SkillDetailResponse {
+  source?: GoogleSkillSource;
   slug?: string;
   name: string;
   description?: string;
@@ -339,11 +341,11 @@ export async function updateSkill(name: string, payload: { content?: string; fil
   return res.json();
 }
 
-export async function updateSkillFile(name: string, path: string, content: string): Promise<SkillDetailResponse> {
+export async function updateSkillFile(name: string, path: string, content: string, baseHash?: string): Promise<SkillDetailResponse> {
   const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/files`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, content }),
+    body: JSON.stringify({ path, content, base_hash: baseHash }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -1321,4 +1323,39 @@ export async function fetchConversationCost(conversationId: string): Promise<Con
   const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/cost`);
   if (!res.ok) throw new Error(`Failed to fetch cost: ${res.status}`);
   return res.json();
+}
+
+export interface GoogleSkillSource {
+  type: "google_doc";
+  document_id: string;
+  tab_id: string;
+  tab_title: string;
+  title: string;
+  connection_owner: string;
+  auto_sync_enabled: boolean;
+  status: string;
+  hash: string;
+  last_checked?: string;
+  last_published?: string;
+  error?: string;
+}
+
+export interface GoogleSkillPreview {
+  document_id: string;
+  title: string;
+  tabs: { id: string; title: string }[];
+  can_edit: boolean;
+  connection_owner: string;
+  tab_id?: string;
+  content?: string;
+  hash?: string;
+}
+
+export async function skillSourceRequest<T>(path: string, body?: object): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/${path}`, body ? {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  } : undefined);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Google Docs skill request failed");
+  return data;
 }

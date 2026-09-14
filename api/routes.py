@@ -1252,10 +1252,10 @@ async def handle_list_skills(request: web.Request) -> web.Response:
 
 
 def _skill_error_response(exc: skill_service.SkillError) -> web.Response:
-    return web.json_response({"error": str(exc)}, status=exc.status)
+    return web.json_response({"error": str(exc), "code": getattr(exc, "code", "skill_error")}, status=exc.status)
 
 
-async def _refresh_skill_prompt_cache() -> None:
+async def _refresh_skill_prompt_cache() -> bool:
     """Best-effort refresh for system prompts after DB-backed skill mutations."""
     try:
         await refresh_loma_skill_index_from_db()
@@ -1268,8 +1268,10 @@ async def _refresh_skill_prompt_cache() -> None:
             await get_codex_pool().reload_prompt()
         except RuntimeError:
             pass
+        return True
     except Exception:
         logger.exception("Failed to refresh Loma skill prompt cache")
+        return False
 
 
 async def handle_create_skill(request: web.Request) -> web.Response:
@@ -1311,6 +1313,13 @@ async def handle_update_skill(request: web.Request) -> web.Response:
     try:
         body = await request.json()
         current = await skill_service.get_skill(db, name)
+        if (current.get("source") or {}).get("type") == "google_doc":
+            if body.get("files") or not isinstance(body.get("content"), str):
+                raise skill_service.SkillError("Edit linked instructions and supporting files separately")
+            result = await skill_service.update_skill_file(db, slug=name,
+                file_doc=skill_service.validate_text_file("SKILL.md", body["content"]),
+                actor=get_user_email(request), base_hash=body.get("base_hash"))
+            return web.json_response(result)
         by_path = {f["path"]: f for f in current["files"]}
         if "content" in body:
             by_path["SKILL.md"] = skill_service.validate_text_file("SKILL.md", body.get("content") or "")
@@ -1361,6 +1370,7 @@ async def handle_update_skill_file(request: web.Request) -> web.Response:
             file_doc=file_doc,
             actor=get_user_email(request),
             source="dashboard",
+            base_hash=body.get("base_hash"),
         )
         await _refresh_skill_prompt_cache()
         return web.json_response(skill)
