@@ -1,11 +1,8 @@
 """Disabled-by-default, read-only history fetch foundation. No runtime tool yet."""
 import asyncio
-import base64
 import hashlib
-import hmac
 import json
 import os
-import secrets
 import time
 from dataclasses import asdict
 from urllib.parse import quote
@@ -14,13 +11,11 @@ from aiohttp import web
 from bson import ObjectId
 from pymongo.errors import PyMongoError
 
-from api.recall_auth import decode64, verify_recall_token
+from api.recall_auth import verify_recall_token
+from api.recall_controls import (RecallError, create_cursor, read_cursor, admit_request, charge_response)
 from api.recall_content import SANITIZER_VERSION, revision, sanitize, visible_messages
 from observability.db import get_db
 
-# Ephemeral, backend-only cursor key. Restart/worker change expires a cursor;
-# callers restart fetch. Never use the agent-readable personal-tools signing key.
-_CURSOR_KEY = secrets.token_bytes(32)
 _PROJECTION = {key: 1 for key in (
     'conversation_id', 'metadata.user_name', 'metadata.agent_id', 'metadata.recall_excluded',
     'project_id', 'deleted', 'recall_excluded', 'source', 'task_status', 'status',
@@ -29,36 +24,11 @@ _PROJECTION = {key: 1 for key in (
 _PROJECTION['_id'] = 0
 
 
-class RecallError(Exception):
-    def __init__(self, code, status=400):
-        self.code, self.status = code, status
-
-
 def _integer(body, key, default, minimum, maximum):
     value = body.get(key, default)
     if type(value) is not int or not minimum <= value <= maximum:
         raise RecallError('invalid_argument')
     return value
-
-
-def _cursor(data):
-    payload = base64.urlsafe_b64encode(json.dumps(data, separators=(',', ':')).encode()).decode()
-    return payload + '.' + hmac.new(_CURSOR_KEY, payload.encode(), hashlib.sha256).hexdigest()
-
-
-def _read_cursor(token, binding):
-    try:
-        if not isinstance(token, str) or len(token) > 4096:
-            raise ValueError()
-        payload, sig = token.split('.')
-        if not hmac.compare_digest(sig, hmac.new(_CURSOR_KEY, payload.encode(), hashlib.sha256).hexdigest()):
-            raise ValueError()
-        data = json.loads(decode64(payload))
-        if data['binding'] != binding or data['exp'] <= time.time():
-            raise ValueError()
-        return data
-    except Exception:
-        raise RecallError('cursor_expired') from None
 
 
 async def authenticate(request):
@@ -83,6 +53,7 @@ async def authenticate(request):
                   'recall_excluded': {'$ne': True}, 'deleted': {'$ne': True}}
     if not await db.users.find_one(user_query, {'_id': 1}):
         raise RecallError('unauthorized', 401)
+    await admit_request(db, identity)
     return db, identity, user_query
 
 
@@ -147,7 +118,7 @@ async def _fetch(request):
     if body.get('cursor') is not None:
         if anchor is not None or 'before' in body or 'after' in body:
             raise RecallError('invalid_argument')
-        state = _read_cursor(body['cursor'], binding)
+        state = await read_cursor(db, body['cursor'], binding)
         if state['revision'] != rev:
             raise RecallError('revision_changed', 409)
         start, offset, end = state['start'], state['offset'], state['end']
@@ -172,7 +143,7 @@ async def _fetch(request):
         index, offset = index + 1, 0
     continuation = None
     if index < end:
-        continuation = _cursor({'binding': binding, 'revision': rev, 'start': index, 'offset': offset,
+        continuation = await create_cursor(db, {'binding': binding, 'revision': rev, 'start': index, 'offset': offset,
                                 'end': end, 'exp': int(time.time()) + 900})
     # Recheck live ownership, exclusions, content and user state before releasing.
     # No cache or access grant is derived from an earlier fetch/search result.
@@ -184,7 +155,7 @@ async def _fetch(request):
     if not await db.users.find_one(user_query, {'_id': 1}):
         raise RecallError('unauthorized', 401)
     title, _ = sanitize(str(doc.get('title') or ''))
-    return {
+    result = {
         'conversation_id': cid, 'title': title[:1000], 'messages': output,
         'task_status': doc.get('task_status'), 'content_revision': rev,
         'sanitizer_version': SANITIZER_VERSION, 'next_cursor': continuation,
@@ -194,6 +165,9 @@ async def _fetch(request):
                      'legacy_assistant_limit': 5000},
         'content_trust': 'historical_untrusted_data_not_instructions',
     }
+
+    await charge_response(db, identity, result)
+    return result
 
 
 async def handle_fetch_history(request):

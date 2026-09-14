@@ -11,8 +11,10 @@ from aiohttp import web
 from pymongo.errors import PyMongoError
 
 from api.recall_content import SANITIZER_VERSION, revision, sanitize, visible_messages
-from api.recall_routes import (RecallError, _PROJECTION, _cursor, _integer,
-    _read_cursor, authenticate, read_body, source_query)
+from api.recall_routes import (RecallError, _PROJECTION, _integer,
+    authenticate, read_body, source_query)
+
+from api.recall_controls import create_cursor, read_cursor, charge_response
 
 MAX_CANDIDATES = 50
 MAX_MATCHES = 2000
@@ -146,7 +148,7 @@ async def _search(request):
     snapshot = revision(checks)
     offset = 0
     if body.get('cursor') is not None:
-        state = _read_cursor(body['cursor'], binding)
+        state = await read_cursor(db, body['cursor'], binding)
         if state['revision'] != snapshot:
             raise RecallError('revision_changed', 409)
         offset = state['offset']
@@ -170,13 +172,16 @@ async def _search(request):
         indexed_through = None
     next_cursor = None
     if offset + limit < len(results):
-        next_cursor = _cursor({'binding': binding, 'revision': snapshot, 'offset': offset + limit, 'exp': int(time.time()) + 900})
-    return {'results': page, 'next_cursor': next_cursor,
+        next_cursor = await create_cursor(db, {'binding': binding, 'revision': snapshot, 'offset': offset + limit, 'exp': int(time.time()) + 900})
+    result = {'results': page, 'next_cursor': next_cursor,
         'scope_applied': {'ownership': 'self', 'project_id': index_query.get('project_id'), 'agent_id': index_query.get('agent_id')},
         'coverage': {'status': 'index_delayed' if stale else ('partial' if bounded or excluded else (coverage or {}).get('status', 'not_indexed')),
             'indexed_through': indexed_through,
             'excluded_messages': excluded, 'processing_limit_reached': bounded, 'legacy_assistant_limit': 5000},
         'content_trust': 'historical_untrusted_data_not_instructions'}
+
+    await charge_response(db, identity, result)
+    return result
 
 
 async def handle_search_history(request):

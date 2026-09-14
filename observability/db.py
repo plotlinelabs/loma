@@ -21,6 +21,10 @@ async def init_observability():
     _client = AsyncIOMotorClient(uri)
     _db = _client[OBSERVABILITY_DB_NAME]
 
+    if os.environ.get("LOMA_RECALL_ENABLED", "").lower() == "true":
+        from api.recall_controls import ensure_control_indexes
+        await ensure_control_indexes(_db)
+
     # Create indexes
     await _db.conversations.create_index([("started_at", -1)])
     await _db.conversations.create_index("source")

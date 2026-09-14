@@ -40,7 +40,8 @@ def capability(monkeypatch):
 async def rig(aiohttp_client, monkeypatch, capability):
     key, claims = capability
     mongo = AsyncMongoMockClient().db
-    db = SimpleNamespace(users=mongo.users, conversations=mongo.conversations)
+    db = SimpleNamespace(**{name: mongo[name] for name in (
+        "users", "conversations", "recall_index", "recall_coverage", "recall_cursors", "recall_limits")})
     await db.users.insert_one({'_id': ObjectId(claims['sub']), 'email': claims['email'], 'status': 'active', 'system_role': 'admin'})
     await db.conversations.insert_one({
         'conversation_id': 'old', 'source': 'dashboard', 'status': 'completed',

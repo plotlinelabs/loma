@@ -89,8 +89,50 @@ async def test_real_mongo_pagination_edit_and_deletion(real_stack):
 
 async def test_real_mongo_exclusion_and_user_revocation(real_stack):
     db, cid, uid, fetch, _ = real_stack
+    # Keep the fixed-window assertion away from the minute boundary.
+    if time.time() % 60 > 50:
+        await asyncio.sleep(60 - time.time() % 60)
     await db.conversations.update_one({'conversation_id': cid}, {'$set': {'recall_excluded': True}})
     assert (await fetch())[0] == 404
     await db.conversations.update_one({'conversation_id': cid}, {'$unset': {'recall_excluded': ''}})
     await db.users.update_one({'_id': uid}, {'$set': {'status': 'disabled'}})
     assert (await fetch())[0] == 401
+
+
+async def test_real_shared_cursor_and_distributed_limits(real_stack):
+    import asyncio
+    from api.recall_auth import RecallIdentity
+    from api.recall_controls import RecallError, admit_request
+    db, cid, uid, fetch, _ = real_stack
+    # Keep the fixed-window assertion away from the minute boundary.
+    if time.time() % 60 > 50:
+        await asyncio.sleep(60 - time.time() % 60)
+    await db.conversations.update_one({'conversation_id': cid}, {'$set': {
+        'messages': [{'role': 'assistant', 'content': 'shared pagination ' * 200}]}})
+    status, page = await fetch(max_chars=256)
+    assert status == 200 and len(page['next_cursor']) == 43
+    # Cursor persisted by the full HTTP process, not a process-local signer.
+    assert await db.recall_cursors.count_documents({}) >= 1
+    status, following = await fetch(cursor=page['next_cursor'], max_chars=256)
+    assert status == 200 and following['messages'][0]['content_offset'] == 256
+    identity = RecallIdentity(str(uid), 'unused-for-counter', 'synthetic-current', None, None)
+    results = await asyncio.gather(*(admit_request(db, identity) for _ in range(70)),
+                                   return_exceptions=True)
+    assert sum(r is None for r in results) == 58
+    assert all(r is None or isinstance(r, RecallError) for r in results)
+    assert (await fetch())[0] == 429
+    indexes = await db.recall_cursors.index_information()
+    assert indexes['expires_at_1']['expireAfterSeconds'] == 0
+
+
+async def test_real_reconcile_lock_and_purge(real_stack):
+    from scripts.recall_reconcile import reconcile_owner
+    db, cid, uid, _, _ = real_stack
+    result = await reconcile_owner(db, str(uid))
+    assert result['indexed'] == 1
+    await db.recall_index_locks.insert_one({'_id': str(uid), 'run_id': 'synthetic-held-lock'})
+    assert await reconcile_owner(db, str(uid)) == {'status': 'worker_locked'}
+    await db.recall_index_locks.delete_one({'_id': str(uid)})
+    await db.conversations.delete_one({'conversation_id': cid})
+    await reconcile_owner(db, str(uid))
+    assert await db.recall_index.count_documents({'owner_user_id': str(uid)}) == 0

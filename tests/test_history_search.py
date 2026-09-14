@@ -19,8 +19,8 @@ from tests.test_history_recall import capability, signed
 async def search_rig(aiohttp_client, monkeypatch, capability):
     key, claims = capability
     mongo = AsyncMongoMockClient().db
-    db = SimpleNamespace(users=mongo.users, conversations=mongo.conversations,
-        recall_index=mongo.recall_index, recall_coverage=mongo.recall_coverage)
+    db = SimpleNamespace(**{name: mongo[name] for name in (
+        "users", "conversations", "recall_index", "recall_coverage", "recall_cursors", "recall_limits")})
     await db.users.insert_one({'_id': ObjectId(claims['sub']), 'email': claims['email'], 'status': 'active'})
     await db.conversations.insert_one({'conversation_id': 'old', 'source': 'dashboard', 'status': 'completed',
         'title': 'A decision', 'metadata': {'user_name': claims['email']},

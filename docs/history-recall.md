@@ -2,10 +2,11 @@
 
 ## Status and release gate
 
-This PR adds **disabled-by-default fetch and search endpoints**, an offline sanitized
-index/backfill worker, and an execution-local MCP adapter. It is not a finished
+This PR adds **disabled-by-default fetch and search endpoints**, a sanitized
+index/backfill worker with opt-in automatic reconciliation, shared cursor/limit
+storage, and an execution-local MCP adapter. It is not a finished
 history recall feature: live chat/task registration, isolated credential issuance,
-automatic indexing and distributed production controls remain pending. Existing
+production indexer deployment and complete runtime controls remain pending. Existing
 conversation ACLs are unchanged. See the dated batch sections below for current scope.
 
 Keep `LOMA_RECALL_ENABLED` unset/false in production until all remaining work and the
@@ -68,11 +69,12 @@ mirrored duplicates. Archived/failed/cancelled work remains eligible; unstarted
 - Oversized messages have explicit `content_offset`, `truncated`, and a cursor.
   Concatenating successive fragments exactly reconstructs the sanitized message,
   including Unicode and code. Never silently discard a middle section.
-- Cursors are HMAC-authenticated and bound to user, execution, scope, conversation
-  and revision. Expire after 15 minutes. The process-random signing key is not an
-  environment secret: restart or a different worker expires the cursor. PR 2 must
-  introduce an isolated shared signer or another multi-worker pagination design
-  before scaling. Restart fetch on `cursor_expired`.
+- Cursors are random 256-bit opaque handles. Only their SHA-256 digests and
+  content-free pagination state are stored in MongoDB. They work across backend
+  workers/restarts without introducing a shared signing secret. Bound to user,
+  execution, scope, conversation/query and revision; expire after 15 minutes.
+  Expiration is checked during reads independently of asynchronous TTL cleanup.
+  Lost/expired cursor state returns `cursor_expired`; restart retrieval.
 - Source link is a relative, server-generated `/conversations/<encoded-id>` link.
   Message anchor UI is deferred; do not imply that the current dashboard scrolls
   to `mN`.
@@ -113,8 +115,8 @@ omits unrelated fields. Oversize/ineligible/missing source records all return
 Errors: `invalid_argument` (400), `cursor_expired` (400), `unauthorized` (401),
 `recall_disabled` (403), `not_found` (404), `revision_changed` (409),
 `index_unavailable` (503; also used for source database/deadline failure).
-Database exception detail is never returned. Cross-request rate limiting, recall
-token budgets and auditing without content are additional enablement gates in PR 3.
+Database exception detail is never returned. Cross-request limits now use shared Mongo counters (details below). Exact runtime
+token budgets and content-free audit events remain enablement gates.
 
 ## Tests
 
@@ -259,15 +261,16 @@ at most 100 IDs and one size-guarded source at a time. Retries are idempotent.
 Do not run overlapping passes for one owner: projection writes are last-writer-wins,
 not source-ordered. Live revision checks protect reads if an old writer wins.
 Coverage reports the last completed pass, not real-time freshness or completeness.
-Scheduling the worker and event-driven updates are NOT wired yet. No production
+Opt-in periodic reconciliation is now available through the separate worker below;
+event-driven updates are NOT wired yet. No production
 backfill has been run. Index retention/deletion SLO must be set before enablement.
 
 ### Remaining release gates
 
-This is a bounded lexical baseline, not all of planned PR 2: distributed cursors,
-automatic indexing, exhaustive pagination beyond the candidate cap, immutable
+This is a bounded lexical baseline, not all of planned PR 2: production reconciliation deployment,
+exhaustive pagination beyond the candidate cap, immutable
 legacy ownership migration and production performance evaluation remain pending.
-Process-local cursors still expire on a different worker or restart. These limits
+Shared cursors now survive worker changes and restarts. These limits
 must be resolved before claiming the full approved plan is complete.
 
 ## Execution-local MCP adapter batch
@@ -280,7 +283,7 @@ connection and no credential-issuing endpoint. Plain HTTP is restricted to loopb
 or the internal `loma-backend` host; redirects are never followed with credentials.
 Errors are allowlisted, response size is bounded, and each adapter process allows
 at most eight calls and 24,000 serialized response characters. That is a character
-budget, not an exact tokenizer count, and is not a distributed abuse limit.
+budget, not an exact tokenizer count. Shared backend abuse limits now apply too.
 
 Tool instructions label history as untrusted reference data, require source links,
 and forbid treating old approvals as new authorization. Actual stdio tests perform
@@ -308,3 +311,48 @@ isolated stack, a local JSON state file (`email`, `password`, `setup`, optional
 `capability`), and `LOMA_RECALL_SCREENSHOT`. Never commit the state file or a real
 credential. Screenshot output is explicitly labelled as an API response, not an
 AI reply. Existing `chat-smoke.cjs` remains the separate live-model merge gate.
+
+## Shared controls and automatic reconciliation batch
+
+Both endpoints now enforce Mongo-backed fixed-window limits after capability and
+live-user verification, before source reads:
+- 60 requests per authenticated user per minute, across both endpoints and workers.
+- 120 requests per user/execution per 15-minute window.
+- 240,000 serialized response characters per user/execution per 15-minute window,
+  atomically charged before release. This is not an exact token count.
+- Rejected post-authentication calls count. Scope changes, new capabilities and
+  adapter restarts do not reset a bucket. Fixed windows can permit a boundary burst.
+- A database outage fails closed with 503; exhaustion returns `rate_limited` (429).
+- Cursor and counter TTL indexes are created on backend startup only when recall
+  is enabled. TTL is cleanup, never authorization. Records contain no source text,
+  email, raw query, capability, or raw cursor. Counters store hashed bucket IDs.
+
+The independent worker can run repeated full passes for one explicitly configured
+owner, including edits, deletes and exclusions:
+
+```bash
+# Set LOMA_RECALL_INDEXER_ENABLED=true only in the isolated worker's environment.
+python -m scripts.recall_reconcile --user-id USER_OBJECT_ID --confirm-db DATABASE_NAME --interval 60
+# For a single complete pass:
+python -m scripts.recall_reconcile --user-id USER_OBJECT_ID --confirm-db DATABASE_NAME --once
+```
+
+This is automatic polling once deliberately started, not deployment automation.
+It is disabled by default and is not started inside a chat/task or web process.
+It uses the existing sanitizer and bounded batches. A normal pass completes before
+the interval begins; freshness is pass duration plus interval, not a promised
+60-second deletion SLO. Live endpoint checks continue to deny deleted/excluded
+sources immediately when observed.
+
+A durable per-owner Mongo lock prevents competing automatic workers. Normal exit,
+exceptions and cancellation release only the matching run's lock. A hard-killed
+worker deliberately leaves the lock: before deleting it, an operator must verify
+that the former process cannot resume. There is no unsafe expiring-lease takeover.
+Do not run the legacy offline backfill CLI or direct index writers concurrently
+with this worker; those maintenance paths are not coordinated by its lock.
+
+Still pending: isolated issuer and runtime registration, safe renewal/cleanup,
+production worker supervision and orphan-lock alerting, measured deletion SLO,
+large-corpus search, immutable ownership policy, audit events, live-model chat/task
+E2E, and independent security review. These backend changes do not solve the shared
+agent-process security boundary. Recall must remain disabled.
