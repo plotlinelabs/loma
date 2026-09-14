@@ -45,14 +45,14 @@ const created=[source];
   check(!events.some(e=>e.type==='error'||e.error),'No runtime error');
   for(const tool of ['search_history','fetch_history']) check(events.some(e=>e.type==='tool_call'&&e.name.includes(tool)),'Live chat invoked '+tool);
   check(text.includes(answer)&&text.includes('/conversations/'+source),'Live chat recalled unpredictable fact and cited source');
-  await page.goto('http://localhost:13001/conversations/'+cid);await page.waitForTimeout(1500);await page.screenshot({path:path.join(out,'chat-recall.png'),fullPage:true});
+  await page.goto('http://localhost:13001/conversations/'+cid);await page.getByText(answer,{exact:false}).first().waitFor({state:'visible',timeout:30000});await page.screenshot({path:path.join(out,'chat-recall.png'),fullPage:true});
   const task=await post('/api/tasks',{prompt,model:process.env.LOMA_CHAT_MODEL,start:true,title:'Synthetic live recall task'});
   check(task.status===201,'Headless task started');const tid=JSON.parse(task.text).task.conversation_id;created.push(tid);
   let data;for(let i=0;i<300;i++){await page.waitForTimeout(2000);data=await page.evaluate(async id=>(await fetch('/api/conversations/'+id)).json(),tid);if(['completed','error'].includes(data.conversation?.status))break;}
   check(data.conversation.status==='completed','Headless task completed');
   check(data.conversation.final_response.includes(answer)&&data.conversation.final_response.includes('/conversations/'),'Task recalled unpredictable fact and cited history');
   for(const tool of ['search_history','fetch_history'])check(JSON.stringify(data.turns).includes(tool),'Live task invoked '+tool);
-  await page.goto('http://localhost:13001/conversations/'+tid);await page.waitForTimeout(1500);await page.screenshot({path:path.join(out,'task-recall.png'),fullPage:true});
+  await page.goto('http://localhost:13001/conversations/'+tid);await page.getByText(answer,{exact:false}).first().waitFor({state:'visible',timeout:30000});await page.screenshot({path:path.join(out,'task-recall.png'),fullPage:true});
   report.passed=true;
  } finally {
   fs.writeFileSync(path.join(out,'recall-result.json'),JSON.stringify(report,null,2));
