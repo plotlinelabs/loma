@@ -75,6 +75,9 @@ async def log_404_middleware(request, handler):
 async def main():
     # Initialize observability MongoDB
     await init_observability()
+    # Complete compatibility assignments before any scheduler or webhook can run.
+    from scheduler.legacy_identity import backfill_legacy_identities
+    await backfill_legacy_identities(get_db())
     # Ensure skill indexes exist (idempotent, covers new indexes on upgrades).
     from api import skill_service
     await skill_service.ensure_skill_indexes(get_db())

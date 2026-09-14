@@ -73,6 +73,7 @@ async def create_flow(db, data: dict) -> dict:
         # Metadata
         "created_by": data.get("created_by", {}),
         "run_as": data.get("run_as"),
+        "identity_version": 1,  # Never eligible for legacy creator backfill.
         "created_at": now,
         "updated_at": now,
 
