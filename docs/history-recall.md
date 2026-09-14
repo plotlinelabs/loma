@@ -1,12 +1,14 @@
-# History recall: secure fetch foundation (PR 1 of 3)
+# History recall: retrieval, search and execution-local adapter (WIP)
 
 ## Status and release gate
 
-This PR adds a **disabled-by-default, read-only backend endpoint**, not a finished
-history recall feature. No tool registration, search, index/backfill, dashboard
-controls, or credential issuance is included. No existing conversation ACL changes.
+This PR adds **disabled-by-default fetch and search endpoints**, an offline sanitized
+index/backfill worker, and an execution-local MCP adapter. It is not a finished
+history recall feature: live chat/task registration, isolated credential issuance,
+automatic indexing and distributed production controls remain pending. Existing
+conversation ACLs are unchanged. See the dated batch sections below for current scope.
 
-Keep `LOMA_RECALL_ENABLED` unset/false in production until PRs 2 and 3 and the
+Keep `LOMA_RECALL_ENABLED` unset/false in production until all remaining work and the
 security review pass. Setting the flag alone does not grant access: a valid
 recall-only signed capability and a live eligible user are also required.
 
