@@ -265,22 +265,25 @@ If none of the above apply (e.g. a small single-file fix, copy change, or config
 Every agent-created PR gets an automatic fresh-context self-review (triggered by the `pull_request` webhook). Register WHERE you are about to announce the PR so the self-review verdict is threaded back to the same place as a follow-up:
 
 ```bash
-# Slack-originated request (use the channel ID and thread timestamp you will reply in):
+# Slack-originated request (use the channel ID and thread timestamp you will reply in — the tool
+# checks they are the origin of a Loma conversation and refuses any other thread):
 python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
   --slack-channel <channel-id> --thread-ts <thread-ts>
 
 # Dashboard conversation (use the requester's email AND their personal auth token from the
-# message context — the tool HMAC-verifies it, same as tools/notify.py; conversation ID makes
-# the notification deep-link back):
-python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
-  --user-email <requester-email> --auth-token <personal-auth-token> --conversation-id <conversation-id>
+# message context — the tool HMAC-verifies it, same as tools/notify.py). Pass the token through
+# the LOMA_AUTH_TOKEN environment variable, NOT a --auth-token flag, so it never appears in the
+# process list; the conversation ID makes the notification deep-link back:
+LOMA_AUTH_TOKEN=<personal-auth-token> python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
+  --user-email <requester-email> --conversation-id <conversation-id>
 
-# Linear webhook flow (use the Linear issue UUID, not the ENG-123 identifier):
+# Linear webhook flow (use the Linear issue UUID, not the ENG-123 identifier, plus the conversation
+# ID from your prompt — the tool checks the issue is the origin of that conversation):
 python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> \
-  --linear-issue-id <linear-issue-uuid>
+  --linear-issue-id <linear-issue-uuid> --conversation-id <conversation-id>
 ```
 
-If registration fails, continue — the PR still gets its self-review on GitHub; only the follow-up notification is skipped.
+If registration fails, continue — the PR still gets its self-review on GitHub; only the follow-up notification is skipped. Never work around a refused Slack/Linear target by registering a different one: the refusal means that thread/issue is not where this run came from.
 
 > **If self-review is disabled on the deployment** (`LOMA_ENABLE_SELF_REVIEW=false`), the webhook pipeline posts a "self-review skipped" follow-up to the registered target instead of a verdict, so the Stage-1 line below is still safe to send.
 

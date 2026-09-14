@@ -36,8 +36,10 @@ from webhooks.github_graphql import (
 )
 from observability.review_quality import process_human_review_for_quality
 from webhooks.self_review_lock import SelfReviewLock
+from api.drain import is_draining
 from utils.pr_followup import (
-    extract_self_review_verdict,
+    REREVIEW_COMMAND,
+    find_self_review,
     post_self_review_followup,
 )
 
@@ -86,7 +88,9 @@ _ssl_context = ssl.create_default_context(cafile=certifi.where())
 AGENT_REVIEW_MARKER = "<!-- loma-agent-review -->"
 
 
-def _is_agent_authored(pr_author: str, labels=None, *, context: str = "") -> bool:
+def _is_agent_authored(
+    pr_author: str, labels=None, *, draft: bool | None = None, context: str = "",
+) -> bool:
     """Single source of truth for "did the agent write this PR?".
 
     Primary signal: the author login matches ``AGENT_GITHUB_LOGIN``. Secondary
@@ -98,6 +102,11 @@ def _is_agent_authored(pr_author: str, labels=None, *, context: str = "") -> boo
     the webhook, or a normal review that tries APPROVE/REQUEST_CHANGES on its
     own PR (422) on the ``/rereview`` and ``@mention`` paths. Other bots
     (``[bot]`` suffix, e.g. dependabot) are never agent-authored, label or not.
+
+    The label backstop only applies while the PR is a draft (``draft`` True or
+    unknown). Agent PRs are draft-by-policy; once a PR is ready for review a
+    human owns it, and a human PR that merely carries the label must get a
+    normal review rather than COMMENT-only "you wrote this" framing.
 
     ``labels`` accepts the GitHub payload shape (``[{"name": ...}]``) or plain
     label names.
@@ -111,6 +120,15 @@ def _is_agent_authored(pr_author: str, labels=None, *, context: str = "") -> boo
         for label in (labels or [])
     }
     if AGENT_PR_LABEL in label_names:
+        if draft is False:
+            logger.warning(
+                "[GITHUB-WEBHOOK] PR %s carries the %r label but is authored by %r, "
+                "not AGENT_GITHUB_LOGIN=%r — check the AGENT_GITHUB_LOGIN env var. "
+                "NOT treating it as agent-authored: the PR is ready for review, so a "
+                "human owns it and it gets a normal review.",
+                context or "?", AGENT_PR_LABEL, pr_author, AGENT_GITHUB_LOGIN,
+            )
+            return False
         logger.warning(
             "[GITHUB-WEBHOOK] PR %s carries the %r label but is authored by %r, "
             "not AGENT_GITHUB_LOGIN=%r — check the AGENT_GITHUB_LOGIN env var. "
@@ -735,7 +753,7 @@ async def handle_github_webhook(request: web.Request) -> web.Response:
         # see `_is_agent_authored`, shared with the /rereview and @mention paths.
         pr_author = pr.get("user", {}).get("login", "")
         is_agent_pr = _is_agent_authored(
-            pr_author, pr.get("labels"),
+            pr_author, pr.get("labels"), draft=pr.get("draft"),
             context=f"{repo.get('full_name', '')}#{pr.get('number')}",
         )
 
@@ -1274,21 +1292,47 @@ async def _process_pr_review(
     # of N pushes, and the last one is always on the final head.
     #
     # Explicit re-review requests (`force_review`) claim the lock when it is
-    # free — so automatic runs coalesce behind them — but proceed unlocked if
-    # a run is in flight: a human asked, a human gets a review.
+    # free — so automatic runs coalesce behind them. If a run is already in
+    # flight they do NOT start a second reviewer (two live reviewers minimize
+    # each other's comments and double-post follow-ups — the race the lock
+    # exists to close): they flag the holder's lock instead, and the holder
+    # schedules one forced run on the newest head when it finishes.
     lock: SelfReviewLock | None = None
     if self_review and db is not None:
         lock = SelfReviewLock(db, repo_full_name, pr_number, conversation_id, head_sha)
         if not await lock.acquire():
             if not force_review:
                 return
-            logger.info(
-                "[GITHUB-WEBHOOK] Explicit re-review of %s#%d proceeds alongside the "
-                "in-flight self-review (conversation %s)",
-                repo_full_name, pr_number, (lock.holder or {}).get("conversation_id"),
-            )
-            lock = None
+            if await lock.request_rerun():
+                logger.info(
+                    "[GITHUB-WEBHOOK] Explicit re-review of %s#%d queued behind the "
+                    "in-flight self-review (conversation %s)",
+                    repo_full_name, pr_number, (lock.holder or {}).get("conversation_id"),
+                )
+                try:
+                    await _create_pr_comment(
+                        repo_owner, repo_name, pr_number,
+                        "🔍 A self-review of this PR is already running. A fresh one "
+                        "will start on the newest commit as soon as it finishes — no "
+                        f"need to ask again.\n\n{AGENT_REVIEW_MARKER}",
+                    )
+                except Exception:
+                    logger.warning(
+                        "[GITHUB-WEBHOOK] Could not post the queued re-review notice on %s#%d",
+                        repo_full_name, pr_number,
+                    )
+                return
+            # The holder finished or expired between our claim and the flag:
+            # nobody is left to honour a request, so claim the lock ourselves.
+            if not await lock.acquire():
+                logger.warning(
+                    "[GITHUB-WEBHOOK] Explicit re-review of %s#%d could neither claim "
+                    "nor flag the self-review lock — proceeding unlocked",
+                    repo_full_name, pr_number,
+                )
+                lock = None
 
+    cancelled = False
     try:
         await _run_pr_review(
             db=db,
@@ -1308,6 +1352,11 @@ async def _process_pr_review(
             pr_stats=pr_stats,
             self_review=self_review,
         )
+    except asyncio.CancelledError:
+        # Process shutdown (deploy restart). The lock is still released below,
+        # but nothing may be *started* from a dying task — see the finally.
+        cancelled = True
+        raise
     except Exception:
         # `_run_pr_review` makes its own pipeline fail-visible from the check
         # run onwards, but the GitHub round-trips before that (PR stats, prior
@@ -1341,19 +1390,26 @@ async def _process_pr_review(
             # Release BEFORE the coalesced re-run so it can claim the lock.
             await lock.release()
             # Coalesced re-run: while this self-review held the lock, further
-            # `synchronize` events for the PR were skipped. If the head moved,
-            # review the newest commit now so the final verdict always describes
-            # the code a human will actually open. SHA-keyed dedup in the new
-            # run guarantees this cannot loop on the same head. Runs in the
-            # finally on purpose: a run that crashed in pre-work still owes the
-            # skipped pushes a review.
-            await _rerun_self_review_if_head_moved(
-                repo_owner=repo_owner,
-                repo_name=repo_name,
-                repo_full_name=repo_full_name,
-                pr_number=pr_number,
-                reviewed_head_sha=head_sha,
-            )
+            # `synchronize` events for the PR were skipped and any explicit
+            # re-review was queued (`lock.rerun_requested`). If the head moved,
+            # or a human asked, review the newest commit now so the final
+            # verdict always describes the code a human will actually open.
+            # SHA-keyed dedup in the new run guarantees this cannot loop on the
+            # same head. Runs in the finally on purpose: a run that crashed in
+            # pre-work still owes the skipped pushes a review — unless this
+            # task is being cancelled, in which case the process is going away
+            # and a fresh multi-minute task must not be spawned from it (the
+            # drain would not even see it: it counts conversations, and a new
+            # run has none for several seconds).
+            if not cancelled:
+                await _rerun_self_review_if_head_moved(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    reviewed_head_sha=head_sha,
+                    rerun_requested=lock.rerun_requested,
+                )
 
 
 async def _run_pr_review(
@@ -1735,12 +1791,13 @@ async def _run_pr_review(
         # this run" as a failed outcome for the check run, status comment and
         # follow-up alike.
         verdict = None
+        review_posted = False
         self_review_posted = True
         if self_review and review_succeeded:
             try:
                 reviews = await get_pr_reviews(repo_owner, repo_name, pr_number)
                 if pre_run_review_ids is not None:
-                    verdict = extract_self_review_verdict(
+                    lookup = find_self_review(
                         reviews, AGENT_GITHUB_LOGIN,
                         exclude_review_ids=pre_run_review_ids,
                     )
@@ -1750,70 +1807,105 @@ async def _run_pr_review(
                         "scoping the verdict by timestamp instead",
                         repo_full_name, pr_number,
                     )
-                    verdict = extract_self_review_verdict(
+                    lookup = find_self_review(
                         reviews, AGENT_GITHUB_LOGIN, started_at=started_at
                     )
+                verdict, review_posted = lookup.verdict, lookup.review_found
             except Exception:
                 logger.warning(
                     "[GITHUB-WEBHOOK] Could not extract self-review verdict on %s#%d",
                     repo_full_name, pr_number,
                 )
-            self_review_posted = verdict is not None
-            if not self_review_posted:
+            self_review_posted = review_posted
+            if not review_posted:
                 logger.error(
                     "[GITHUB-WEBHOOK] Self-review agent finished on PR %s#%d but no "
                     "review from this run (started %s) was found on the PR",
                     repo_full_name, pr_number, started_at.isoformat(),
                 )
+            elif verdict is None:
+                logger.warning(
+                    "[GITHUB-WEBHOOK] Self-review agent posted a review on PR %s#%d "
+                    "without the required verdict line",
+                    repo_full_name, pr_number,
+                )
         review_complete = review_succeeded and self_review_posted
+
+        # Everything below is cleanup and reporting. Each step is isolated so a
+        # GitHub 5xx on, say, deleting the status comment cannot escape this
+        # finally, skip the Stage-2 follow-up, and make the outer handler in
+        # `_process_pr_review` report a review that DID succeed as failed.
 
         # Delete status comment on success; update with handoff context on failure
         if status_comment_id:
-            if review_complete:
-                await _delete_pr_comment(repo_owner, repo_name, status_comment_id)
-            else:
-                # Generate handoff context for manual intervention
-                handoff_context = _generate_handoff_context(
-                    repo_full_name=repo_full_name,
-                    pr_number=pr_number,
-                    pr_title=pr_title,
-                    pr_url=pr_url,
-                    base_branch=base_branch,
-                    head_branch=head_branch,
+            try:
+                if review_complete:
+                    await _delete_pr_comment(repo_owner, repo_name, status_comment_id)
+                else:
+                    # Generate handoff context for manual intervention
+                    handoff_context = _generate_handoff_context(
+                        repo_full_name=repo_full_name,
+                        pr_number=pr_number,
+                        pr_title=pr_title,
+                        pr_url=pr_url,
+                        base_branch=base_branch,
+                        head_branch=head_branch,
+                    )
+                    await _update_pr_comment(
+                        repo_owner, repo_name, status_comment_id,
+                        _review_needs_handoff_comment(handoff_context),
+                    )
+            except Exception:
+                logger.exception(
+                    "[GITHUB-WEBHOOK] Failed to finalize the status comment on %s#%d",
+                    repo_full_name, pr_number,
                 )
-                await _update_pr_comment(repo_owner, repo_name, status_comment_id, _review_needs_handoff_comment(handoff_context))
 
         # Update check run to show completion in PR UI
         if check_run_id:
-            if review_complete:
+            if review_complete and (verdict or not self_review):
                 conclusion, title, summary = (
                     "success", "Review Complete", f"Reviewed PR #{pr_number}: {pr_title}",
+                )
+            elif review_complete:
+                # Self-review posted a review this run, but without the verdict
+                # line. Findings are on the PR — point at them, do not fail.
+                conclusion, title, summary = (
+                    "neutral", "Self-Review Posted Without Verdict",
+                    "The self-review agent posted a review for this run, but it does "
+                    "not start with the required verdict line. Read the review directly.",
                 )
             elif review_succeeded:
                 # Self-review agent finished without posting a review this run.
                 conclusion, title, summary = (
                     "failure", "Self-Review Incomplete",
                     "The self-review agent finished but posted no review for this run. "
-                    "Treat the PR as unreviewed; comment `@loma-agent /rereview` to retry.",
+                    f"Treat the PR as unreviewed; comment `{REREVIEW_COMMAND}` to retry.",
                 )
             else:
                 conclusion, title, summary = (
                     "failure", "Review Failed", "The review encountered an error.",
                 )
-            await _update_check_run(
-                repo_owner, repo_name, check_run_id,
-                status="completed",
-                conclusion=conclusion,
-                title=title,
-                summary=summary,
-            )
+            try:
+                await _update_check_run(
+                    repo_owner, repo_name, check_run_id,
+                    status="completed",
+                    conclusion=conclusion,
+                    title=title,
+                    summary=summary,
+                )
+            except Exception:
+                logger.exception(
+                    "[GITHUB-WEBHOOK] Failed to complete the check run on %s#%d",
+                    repo_full_name, pr_number,
+                )
 
         # Stage-2 follow-up (self-review only): thread the review outcome back
         # to wherever the PR was announced (Slack thread / Linear issue / Loma
         # inbox), if the creating flow registered a notification target. This
-        # runs on success, "finished but posted nothing", AND failure — a
-        # self-review that did not produce a verdict must be visible to the
-        # human, never a silent skip.
+        # runs on success, "posted without a verdict", "finished but posted
+        # nothing", AND failure — a self-review that did not produce a verdict
+        # must be visible to the human, never a silent skip.
         if self_review:
             try:
                 await post_self_review_followup(
@@ -1823,6 +1915,7 @@ async def _run_pr_review(
                     pr_url=pr_url,
                     verdict=verdict,
                     succeeded=review_succeeded,
+                    review_posted=review_posted,
                 )
             except Exception:
                 logger.exception(
@@ -1837,8 +1930,11 @@ async def _rerun_self_review_if_head_moved(
     repo_full_name: str,
     pr_number: int,
     reviewed_head_sha: str,
+    rerun_requested: bool = False,
 ) -> bool:
-    """Schedule a fresh self-review if the PR head moved past the SHA just reviewed.
+    """Schedule a fresh self-review if the PR head moved past the SHA just
+    reviewed, or if an explicit re-review was queued behind this run
+    (``rerun_requested``, see ``SelfReviewLock.request_rerun``).
 
     Returns True if a re-run was scheduled. Never raises — this is a
     best-effort tail step in the review pipeline's cleanup path.
@@ -1865,13 +1961,43 @@ async def _rerun_self_review_if_head_moved(
         return False
 
     latest_head_sha = latest.get("head", {}).get("sha", "")
-    if not latest_head_sha or latest_head_sha == reviewed_head_sha:
+    if not latest_head_sha:
+        return False
+    head_moved = latest_head_sha != reviewed_head_sha
+    if not head_moved and not rerun_requested:
+        return False
+
+    if is_draining():
+        # A deploy is waiting for in-flight runs to finish. A fresh multi-minute
+        # reviewer started now would be killed by the restart or hold the
+        # deploy — and the drain count would not even see it (it counts
+        # conversations, which a new run has none of for several seconds).
+        # Tell the human on the PR instead of dropping the run silently.
+        logger.warning(
+            "[GITHUB-WEBHOOK] Not scheduling the follow-up self-review of %s#%d "
+            "(head %s, rerun_requested=%s): Loma is draining for a deploy",
+            repo_full_name, pr_number, latest_head_sha[:7], rerun_requested,
+        )
+        try:
+            await _create_pr_comment(
+                repo_owner, repo_name, pr_number,
+                f"⚠️ The self-review of the newest commit (`{latest_head_sha[:7]}`) was "
+                "not started because Loma is restarting for a deploy. Comment "
+                f"`{REREVIEW_COMMAND}` once it is back to review it.\n\n{AGENT_REVIEW_MARKER}",
+            )
+        except Exception:
+            logger.warning(
+                "[GITHUB-WEBHOOK] Could not post the drain notice on %s#%d",
+                repo_full_name, pr_number,
+            )
         return False
 
     logger.info(
-        "[GITHUB-WEBHOOK] PR %s#%d head moved %s → %s during self-review — "
-        "scheduling a self-review of the newest commit",
-        repo_full_name, pr_number, reviewed_head_sha[:7], latest_head_sha[:7],
+        "[GITHUB-WEBHOOK] PR %s#%d: %s — scheduling a self-review of %s",
+        repo_full_name, pr_number,
+        (f"head moved {reviewed_head_sha[:7]} → {latest_head_sha[:7]} during self-review"
+         if head_moved else "re-review requested while a run was in flight"),
+        latest_head_sha[:7],
     )
     asyncio.create_task(
         _process_pr_review(
@@ -1885,9 +2011,12 @@ async def _rerun_self_review_if_head_moved(
             head_sha=latest_head_sha,
             base_branch=latest.get("base", {}).get("ref", ""),
             head_branch=latest.get("head", {}).get("ref", ""),
-            action="synchronize_coalesced",
+            action="synchronize_coalesced" if head_moved else "rereview_coalesced",
             pr_author=latest.get("user", {}).get("login", ""),
             conversation_id=str(uuid.uuid4()),
+            # A queued re-review on an unchanged head must get past the
+            # SHA-keyed dedup; a moved head passes it anyway.
+            force_review=rerun_requested,
             self_review=True,
         )
     )
@@ -1947,7 +2076,7 @@ async def _handle_slash_command(
                 # Intentionally NOT gated on SELF_REVIEW_ENABLED: that flag only
                 # controls the automatic webhook trigger; an explicit human request
                 # is always honoured.
-                self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), pr_details.get("labels")),
+                self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), pr_details.get("labels"), draft=pr_details.get("draft")),
             )
         else:
             # Failed to fetch PR details - post error comment
@@ -2296,7 +2425,7 @@ async def _process_pr_conversation_comment(
             # Keep self-review mode for agent-authored PRs (COMMENT-only reviews).
             # Intentionally NOT gated on SELF_REVIEW_ENABLED — explicit human
             # request, same reasoning as the /rereview slash command.
-            self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), pr_details.get("labels")),
+            self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), pr_details.get("labels"), draft=pr_details.get("draft")),
         )
         return
 

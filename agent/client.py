@@ -80,6 +80,13 @@ def _redact_prompt_for_logs(prompt: str) -> str:
         r"\1<redacted>",
         prompt,
     )
+    # Env-var form used by tools/github_pr_notify.py so the token stays out of
+    # the process argument list; keep it out of the logs too.
+    prompt = re.sub(
+        r"(LOMA_AUTH_TOKEN=)[^\s`]+",
+        r"\1<redacted>",
+        prompt,
+    )
     return prompt
 
 

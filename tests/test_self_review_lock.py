@@ -9,6 +9,7 @@ semantics are exactly the kind of thing a mock cannot prove.
 import asyncio
 import os
 import uuid
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,7 +24,7 @@ REPO = "example-org/example-repo"
 def _db(update_one=None, matched_count=0):
     locks = MagicMock()
     locks.update_one = update_one or AsyncMock(return_value=MagicMock(matched_count=matched_count))
-    locks.delete_one = AsyncMock()
+    locks.find_one_and_delete = AsyncMock(return_value=None)
     locks.find_one = AsyncMock(return_value={"conversation_id": "other", "head_sha": "a" * 40})
     db = MagicMock()
     db.__getitem__ = MagicMock(return_value=locks)
@@ -48,7 +49,7 @@ class TestAcquireRelease:
         await lock.release()
         assert lock.held is False
         assert lock._heartbeat_task is None
-        locks.delete_one.assert_awaited_once_with(
+        locks.find_one_and_delete.assert_awaited_once_with(
             {"repo_full_name": REPO, "pr_number": 42, "conversation_id": "conv-1"}
         )
 
@@ -61,7 +62,7 @@ class TestAcquireRelease:
         assert lock.holder["conversation_id"] == "other"
         assert lock._heartbeat_task is None
         await lock.release()  # no-op for a loser
-        locks.delete_one.assert_not_awaited()
+        locks.find_one_and_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_stale_holder_is_taken_over(self):
@@ -80,12 +81,12 @@ class TestAcquireRelease:
         assert await lock.acquire() is True   # a missed review is worse than a duplicate one
         assert lock.held is False             # …but we own nothing to release
         await lock.release()
-        locks.delete_one.assert_not_awaited()
+        locks.find_one_and_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_release_failure_never_raises(self):
         db, locks = _db()
-        locks.delete_one = AsyncMock(side_effect=RuntimeError("mongo down"))
+        locks.find_one_and_delete = AsyncMock(side_effect=RuntimeError("mongo down"))
         lock = SelfReviewLock(db, REPO, 42, "conv-5", "n" * 40)
         assert await lock.acquire() is True
         await lock.release()  # must not raise
@@ -131,6 +132,58 @@ class TestAcquireRelease:
         await lock.release()
         assert lock._heartbeat_task is None
 
+    @pytest.mark.asyncio
+    async def test_request_rerun_flags_the_live_holder_only(self):
+        # An explicit re-review that lost the claim asks the holder for one
+        # more run instead of racing it. The flag is a plain update on the
+        # (repo, pr) key — no upsert, so a vanished holder is NOT resurrected.
+        db, locks = _db(update_one=AsyncMock(side_effect=DuplicateKeyError("dup")))
+        lock = SelfReviewLock(db, REPO, 42, "conv-8", "n" * 40)
+        assert await lock.acquire() is False
+        locks.update_one = AsyncMock(return_value=MagicMock(matched_count=1))
+        assert await lock.request_rerun() is True
+        filt, update = locks.update_one.call_args.args
+        assert filt == {"repo_full_name": REPO, "pr_number": 42}
+        assert "upsert" not in locks.update_one.call_args.kwargs
+        assert update["$set"]["rerun_requested"] is True
+        assert update["$set"]["rerun_requested_by"] == "conv-8"
+        # Holder finished between the claim and the flag → nothing to flag
+        locks.update_one = AsyncMock(return_value=MagicMock(matched_count=0))
+        assert await lock.request_rerun() is False
+        # Mongo error → never raises, reports "not flagged"
+        locks.update_one = AsyncMock(side_effect=RuntimeError("mongo down"))
+        assert await lock.request_rerun() is False
+
+    @pytest.mark.asyncio
+    async def test_release_reports_rerun_requested_and_a_claim_resets_it(self):
+        db, locks = _db()
+        locks.find_one_and_delete = AsyncMock(
+            return_value={"conversation_id": "conv-9", "rerun_requested": True}
+        )
+        lock = SelfReviewLock(db, REPO, 42, "conv-9", "n" * 40)
+        assert await lock.acquire() is True
+        # A takeover of a stale doc clears the dead holder's flag: this run IS
+        # the fresh review that flag asked for.
+        assert locks.update_one.call_args.args[1]["$set"]["rerun_requested"] is False
+        assert lock.rerun_requested is False
+        await lock.release()
+        assert lock.rerun_requested is True
+        released_filter = locks.find_one_and_delete.call_args.args[0]
+        assert released_filter["conversation_id"] == "conv-9"
+
+        db2, _ = _db()
+        lock2 = SelfReviewLock(db2, REPO, 42, "conv-10", "n" * 40)
+        await lock2.acquire()
+        await lock2.release()
+        assert lock2.rerun_requested is False
+
+    def test_lock_cadence_is_not_derived_from_the_observer_heartbeat(self):
+        # Tuning how often conversations heartbeat for the deploy drain must
+        # not silently change how long a crashed run can block a PR.
+        source = Path("webhooks/self_review_lock.py").read_text()
+        assert "from observability.observer import" not in source
+        assert LOCK_STALE_SECONDS == 60
+
 
 MONGO_URI = os.environ.get("LOMA_TEST_MONGODB_URI", "")
 
@@ -160,8 +213,13 @@ async def test_lock_is_atomic_against_real_mongo():
         # Live holder keeps winning; release hands over
         late = SelfReviewLock(db, REPO, 7, "conv-late", "l" * 40)
         assert await late.acquire() is False
+        # A forced re-review that lost the claim flags the holder...
+        assert await late.request_rerun() is True
         await winner.release()
+        assert winner.rerun_requested is True  # ...who sees it on release
         assert await late.acquire() is True
+        # A fresh claim never inherits the flag
+        assert (await db[COLLECTION].find_one({"repo_full_name": REPO, "pr_number": 7}))["rerun_requested"] is False
 
         # Crashed holder: heartbeat stops (simulate by back-dating), next run takes over
         late._heartbeat_task.cancel()

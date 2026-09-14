@@ -436,6 +436,9 @@ async def _process_linear_issue(
     if trigger_comment:
         prompt_parts.append(f"- Comment text: {trigger_comment}")
 
+    # Pins tools/github_pr_notify.py's origin check to THIS conversation: the
+    # tool refuses a Linear issue that is not the verified origin of the run.
+    register_scope = f" --conversation-id {conversation_id}" if conversation_id else ""
     prompt_parts.extend([
         "",
         "## Intent Detection",
@@ -467,7 +470,7 @@ async def _process_linear_issue(
         "   - After creating the draft PR, extract the PR URL from the result",
         "4. After creating the PR, register the self-review follow-up target so the",
         "   fresh-context self-review verdict is threaded back to this ticket. Run via Bash:",
-        f"   `python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> --linear-issue-id {issue_id}`",
+        f"   `python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> --linear-issue-id {issue_id}{register_scope}`",
         f"5. Comment on the Linear ticket {issue_identifier} with the PR details",
         f"   Use the Linear MCP tool `mcp__linear__create_comment` with the issue ID",
         "   The comment body MUST:",
@@ -622,6 +625,9 @@ async def _process_linear_comment_on_existing(
     conversation_context = _build_conversation_context(prior_messages)
 
     # Build the prompt with intent detection
+    # Pins tools/github_pr_notify.py's origin check to THIS conversation: the
+    # tool refuses a Linear issue that is not the verified origin of the run.
+    register_scope = f" --conversation-id {existing_conversation_id}" if existing_conversation_id else ""
     prompt_parts = [
         f"A follow-up comment was posted on Linear ticket {issue_identifier}.",
         f"- Linear Issue ID: {issue_identifier}",
@@ -673,7 +679,7 @@ async def _process_linear_comment_on_existing(
         "     - After creating the draft PR, extract the PR URL from the result",
         "6. Register the self-review follow-up target so the fresh-context",
         "   self-review verdict for the new commits is threaded back to this ticket. Run via Bash:",
-        f"   `python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> --linear-issue-id {issue_id}`",
+        f"   `python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number> --linear-issue-id {issue_id}{register_scope}`",
         f"7. Comment on the Linear ticket {issue_identifier} confirming the changes were made",
         f"   Use `mcp__linear__create_comment` with the issue ID",
         "   The comment body MUST:",

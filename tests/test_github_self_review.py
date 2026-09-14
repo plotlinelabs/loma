@@ -149,6 +149,23 @@ class TestSelfReviewRouting:
         review_mock.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_agent_pr_label_does_not_override_on_a_ready_pr(self):
+        # A human PR that merely carries the label, once ready for review,
+        # gets a NORMAL review — not COMMENT-only "you wrote this" framing.
+        raw, sig = _signed(_pr_event("some-human", draft=False, action="ready_for_review",
+                                     labels=[AGENT_PR_LABEL]))
+        request = _request(raw, sig)
+        with patch("webhooks.github.GITHUB_WEBHOOK_SECRET", SECRET), \
+             patch("webhooks.github.SELF_REVIEW_ENABLED", True), \
+             patch("webhooks.github.ingest_github_event", new_callable=AsyncMock), \
+             patch("webhooks.github._process_pr_review", new_callable=AsyncMock) as review_mock:
+            response = await handle_github_webhook(request)
+        body = json.loads(response.body)
+        assert body["status"] == "accepted"
+        assert body["mode"] == "review"
+        assert review_mock.call_args.kwargs["self_review"] is False
+
+    @pytest.mark.asyncio
     async def test_other_bot_pr_still_skipped(self):
         raw, sig = _signed(_pr_event("dependabot[bot]", draft=False))
         request = _request(raw, sig)
@@ -218,7 +235,7 @@ class TestSelfReviewPromptSource:
         # deploy's /rereview into normal mode (APPROVE on its own PR → 422).
         assert self.source.count(
             'self_review=_is_agent_authored(pr_details.get("user", {}).get("login", ""), '
-            'pr_details.get("labels"))'
+            'pr_details.get("labels"), draft=pr_details.get("draft"))'
         ) == 2
         assert 'get("login", "") == AGENT_GITHUB_LOGIN' not in self.source
 
@@ -241,6 +258,17 @@ class TestIsAgentAuthored:
 
     def test_label_never_overrides_other_bots(self):
         assert _is_agent_authored("dependabot[bot]", [{"name": AGENT_PR_LABEL}]) is False
+
+    def test_label_backstop_is_scoped_to_drafts(self):
+        # Agent PRs are draft-by-policy; once ready for review a human owns
+        # the PR, so the label alone must not flip it into self-review mode.
+        with patch("webhooks.github.logger") as logger_mock:
+            assert _is_agent_authored("some-other-login", [AGENT_PR_LABEL], draft=False) is False
+        assert any("ready for review" in str(c) for c in logger_mock.warning.call_args_list)
+        assert _is_agent_authored("some-other-login", [AGENT_PR_LABEL], draft=True) is True
+        assert _is_agent_authored("some-other-login", [AGENT_PR_LABEL], draft=None) is True
+        # The login match never depends on draft state
+        assert _is_agent_authored(AGENT_GITHUB_LOGIN, [], draft=False) is True
 
     def test_human_without_label(self):
         assert _is_agent_authored("human", [{"name": "preview"}, None]) is False
@@ -269,7 +297,7 @@ def _lock_db(update_one=None):
     locks = MagicMock()
     result = MagicMock(matched_count=0, upserted_id="new")
     locks.update_one = update_one or AsyncMock(return_value=result)
-    locks.delete_one = AsyncMock()
+    locks.find_one_and_delete = AsyncMock(return_value=None)
     locks.find_one = AsyncMock(return_value=None)
     db = MagicMock()
     db.__getitem__ = MagicMock(return_value=locks)
@@ -358,6 +386,7 @@ class TestSelfReviewPipeline:
         followup = mocks["post_self_review_followup"].call_args.kwargs
         assert followup["succeeded"] is True
         assert followup["verdict"] is None
+        assert followup["review_posted"] is False
         check = mocks["_update_check_run"].call_args.kwargs
         assert check["conclusion"] == "failure"
         assert "Incomplete" in check["title"]
@@ -447,7 +476,7 @@ class TestSelfReviewPipeline:
             await _process_pr_review(**_review_kwargs(action="synchronize", head_sha="n" * 40))
         stats_mock.assert_not_awaited()      # skipped before doing any work
         details_mock.assert_not_awaited()    # a loser never schedules a re-run
-        locks.delete_one.assert_not_awaited()  # and never releases someone else's lock
+        locks.find_one_and_delete.assert_not_awaited()  # and never releases someone else's lock
         claim = locks.update_one.call_args
         assert claim.kwargs["upsert"] is True
         assert "$lt" in claim.args[0]["last_heartbeat"]  # stale holders are taken over
@@ -456,7 +485,7 @@ class TestSelfReviewPipeline:
     async def test_lock_holder_releases_then_checks_for_newer_head(self):
         db, locks = _lock_db()
         order: list[str] = []
-        locks.delete_one = AsyncMock(side_effect=lambda *a, **k: order.append("release"))
+        locks.find_one_and_delete = AsyncMock(side_effect=lambda *a, **k: order.append("release"))
 
         async def _details(*_a, **_k):
             order.append("head_check")
@@ -476,7 +505,7 @@ class TestSelfReviewPipeline:
             for p in patches:
                 p.stop()
         assert order == ["release", "head_check"]  # release first so the re-run can claim it
-        release_filter = locks.delete_one.call_args.args[0]
+        release_filter = locks.find_one_and_delete.call_args.args[0]
         assert release_filter["conversation_id"] == "conv-1"
 
     @pytest.mark.asyncio
@@ -492,7 +521,7 @@ class TestSelfReviewPipeline:
              patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=None):
             with pytest.raises(RuntimeError):
                 await _process_pr_review(**_review_kwargs())
-        locks.delete_one.assert_awaited_once()
+        locks.find_one_and_delete.assert_awaited_once()
         followup_mock.assert_awaited_once()
         followup = followup_mock.call_args.kwargs
         assert followup["succeeded"] is False and followup["verdict"] is None
@@ -547,16 +576,149 @@ class TestSelfReviewPipeline:
         mocks["get_pr_reviews"].assert_not_awaited()  # never reached the snapshot or the verdict lookup
 
     @pytest.mark.asyncio
-    async def test_force_review_proceeds_when_lock_is_held(self):
-        db, locks = _lock_db(update_one=AsyncMock(side_effect=DuplicateKeyError("dup")))
+    async def test_force_review_queues_behind_the_in_flight_run(self):
+        # /rereview while a self-review is in flight must NOT start a second
+        # reviewer (two live reviewers minimize each other's comments and
+        # double-post follow-ups): it flags the holder's lock and tells the
+        # human on the PR that a fresh run will follow.
+        db, locks = _lock_db()
         locks.find_one = AsyncMock(return_value={"conversation_id": "running-1"})
+        flags: list[tuple] = []
+
+        async def _update_one(filt, update, **kwargs):
+            if kwargs.get("upsert"):
+                raise DuplicateKeyError("dup")  # live holder
+            flags.append((filt, update))
+            return MagicMock(matched_count=1)
+
+        locks.update_one = _update_one
+        with patch("webhooks.github.get_db", return_value=db), \
+             patch("webhooks.github._get_pr_stats", new_callable=AsyncMock) as stats_mock, \
+             patch("webhooks.github._create_pr_comment", new_callable=AsyncMock) as comment_mock, \
+             patch("webhooks.github._get_pr_details", new_callable=AsyncMock) as details_mock:
+            await _process_pr_review(**_review_kwargs(force_review=True, action="slash_command"))
+        stats_mock.assert_not_awaited()  # no second reviewer
+        assert flags and flags[0][1]["$set"]["rerun_requested"] is True
+        assert flags[0][1]["$set"]["rerun_requested_by"] == "conv-1"
+        assert "already running" in comment_mock.call_args.args[3]
+        details_mock.assert_not_awaited()  # not the holder → no re-run duty
+        locks.find_one_and_delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_force_review_claims_the_lock_when_the_holder_vanished(self):
+        # The holder finished between our failed claim and the flag: nobody is
+        # left to honour a request, so the forced run claims the lock itself
+        # instead of proceeding unlocked.
+        db, locks = _lock_db()
+        attempts = {"n": 0}
+
+        async def _update_one(filt, update, **kwargs):
+            attempts["n"] += 1
+            if kwargs.get("upsert"):
+                if attempts["n"] == 1:
+                    raise DuplicateKeyError("dup")
+                return MagicMock(matched_count=0, upserted_id="new")
+            return MagicMock(matched_count=0)  # flag found no live lock
+
+        locks.update_one = _update_one
         with patch("webhooks.github.get_db", return_value=db), \
              patch("webhooks.github._get_pr_stats", new_callable=AsyncMock, side_effect=RuntimeError("stop here")), \
-             patch("webhooks.github._get_pr_details", new_callable=AsyncMock) as details_mock:
+             patch("webhooks.github.post_self_review_followup", new_callable=AsyncMock), \
+             patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=None):
             with pytest.raises(RuntimeError):
                 await _process_pr_review(**_review_kwargs(force_review=True))
-        details_mock.assert_not_awaited()  # not the holder → no re-run duty
-        locks.delete_one.assert_not_awaited()
+        assert attempts["n"] == 3  # claim (lost), flag (no holder), claim (won)
+        locks.find_one_and_delete.assert_awaited_once()  # we held it → we released it
+
+    @pytest.mark.asyncio
+    async def test_holder_honours_a_queued_rerun_on_release(self):
+        db, locks = _lock_db()
+        locks.find_one_and_delete = AsyncMock(
+            return_value={"conversation_id": "conv-1", "rerun_requested": True}
+        )
+        patches = self._patches([{"id": "R2", "author": AGENT_GITHUB_LOGIN,
+                                  "created_at": _ts(datetime.now(timezone.utc)),
+                                  "body": "✅ Self-review: no blocking issues found"}],
+                                reviews_before=[])
+        patches[0] = patch("webhooks.github.get_db", return_value=db)
+        patches.append(patch("webhooks.github._rerun_self_review_if_head_moved", new_callable=AsyncMock))
+        mocks = {}
+        for p in patches:
+            mocks[p.attribute] = p.start()
+        try:
+            await _process_pr_review(**_review_kwargs())
+        finally:
+            for p in patches:
+                p.stop()
+        rerun = mocks["_rerun_self_review_if_head_moved"]
+        rerun.assert_awaited_once()
+        assert rerun.call_args.kwargs["rerun_requested"] is True
+        assert rerun.call_args.kwargs["reviewed_head_sha"] == "h" * 40
+
+    @pytest.mark.asyncio
+    async def test_cleanup_failure_does_not_downgrade_a_posted_review(self):
+        # The agent posted a valid review; deleting the status comment and
+        # completing the check run then hit a GitHub 5xx. That must stay
+        # inside the finally: the follow-up still carries the real verdict,
+        # and the outer handler never gets to tell the human "unreviewed".
+        fresh = _ts(datetime.now(timezone.utc) + timedelta(minutes=1))
+        reviews = [{"id": "R2", "author": AGENT_GITHUB_LOGIN, "created_at": fresh,
+                    "body": "✅ Self-review: no blocking issues found"}]
+        patches = self._patches(reviews, reviews_before=[])
+        patches[7] = patch("webhooks.github._delete_pr_comment", new_callable=AsyncMock,
+                           side_effect=RuntimeError("github 502"))
+        patches[9] = patch("webhooks.github._update_check_run", new_callable=AsyncMock,
+                           side_effect=RuntimeError("github 502"))
+        mocks = {}
+        for p in patches:
+            mocks[p.attribute] = p.start()
+        try:
+            await _process_pr_review(**_review_kwargs())  # must not raise
+        finally:
+            for p in patches:
+                p.stop()
+        mocks["_delete_pr_comment"].assert_awaited_once()
+        mocks["_update_check_run"].assert_awaited_once()
+        followup = mocks["post_self_review_followup"]
+        followup.assert_awaited_once()
+        assert followup.call_args.kwargs["succeeded"] is True
+        assert followup.call_args.kwargs["verdict"].startswith("✅ Self-review")
+
+    @pytest.mark.asyncio
+    async def test_review_without_verdict_line_is_reported_as_posted_not_unreviewed(self):
+        # The agent DID post a review this run, just without the verdict line.
+        # Findings are on the PR: point the human at them (neutral check run,
+        # "read the review" follow-up), do not call the PR unreviewed.
+        fresh = _ts(datetime.now(timezone.utc) + timedelta(minutes=1))
+        reviews = [{"id": "R2", "author": AGENT_GITHUB_LOGIN, "created_at": fresh,
+                    "body": "Looks fine overall.\n\n- nit: rename foo"}]
+        mocks = await self._run(reviews, reviews_before=[])
+        followup = mocks["post_self_review_followup"].call_args.kwargs
+        assert followup["succeeded"] is True
+        assert followup["verdict"] is None
+        assert followup["review_posted"] is True
+        check = mocks["_update_check_run"].call_args.kwargs
+        assert check["conclusion"] == "neutral"
+        assert "Without Verdict" in check["title"]
+        mocks["_delete_pr_comment"].assert_awaited_once()  # a review exists → no handoff
+        mocks["_update_pr_comment"].assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_run_releases_the_lock_but_schedules_nothing(self):
+        # Deploy restart cancels the task: release the lock so the PR is not
+        # blocked for LOCK_STALE_SECONDS, but never spawn a fresh multi-minute
+        # reviewer from a dying process.
+        db, locks = _lock_db()
+        with patch("webhooks.github.get_db", return_value=db), \
+             patch("webhooks.github._run_pr_review", new_callable=AsyncMock,
+                   side_effect=asyncio.CancelledError()), \
+             patch("webhooks.github._rerun_self_review_if_head_moved", new_callable=AsyncMock) as rerun_mock, \
+             patch("webhooks.github.post_self_review_followup", new_callable=AsyncMock) as followup_mock:
+            with pytest.raises(asyncio.CancelledError):
+                await _process_pr_review(**_review_kwargs())
+        locks.find_one_and_delete.assert_awaited_once()
+        rerun_mock.assert_not_awaited()
+        followup_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_lock_only_applies_to_self_reviews(self):
@@ -605,6 +767,53 @@ class TestCoalescedRerun:
                     reviewed_head_sha="h" * 40,
                 ) is False
             review_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rerun_requested_forces_a_run_on_an_unchanged_head(self):
+        same = {
+            "state": "open", "title": "feat: something", "html_url": "u",
+            "base": {"sha": "b" * 40, "ref": "main"},
+            "head": {"sha": "h" * 40, "ref": "feat/something"},
+            "user": {"login": AGENT_GITHUB_LOGIN},
+        }
+        with patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=same), \
+             patch("webhooks.github._process_pr_review", new_callable=AsyncMock) as review_mock:
+            scheduled = await _rerun_self_review_if_head_moved(
+                repo_owner="example-org", repo_name="example-repo",
+                repo_full_name="example-org/example-repo", pr_number=42,
+                reviewed_head_sha="h" * 40, rerun_requested=True,
+            )
+            await asyncio.sleep(0)
+        assert scheduled is True
+        kwargs = review_mock.call_args.kwargs
+        assert kwargs["head_sha"] == "h" * 40
+        assert kwargs["force_review"] is True  # must get past SHA-keyed dedup
+        assert kwargs["action"] == "rereview_coalesced"
+        assert kwargs["self_review"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_rerun_while_draining_but_the_human_is_told(self):
+        # A deploy is waiting for in-flight runs: never spawn a fresh
+        # multi-minute reviewer that the restart would kill (or that would
+        # hold the deploy), and say so on the PR instead of dropping it.
+        latest = {
+            "state": "open", "title": "t", "html_url": "u",
+            "base": {"sha": "b" * 40, "ref": "main"},
+            "head": {"sha": "n" * 40, "ref": "feat/something"},
+            "user": {"login": AGENT_GITHUB_LOGIN},
+        }
+        with patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=latest), \
+             patch("webhooks.github.is_draining", return_value=True), \
+             patch("webhooks.github._create_pr_comment", new_callable=AsyncMock) as comment_mock, \
+             patch("webhooks.github._process_pr_review", new_callable=AsyncMock) as review_mock:
+            assert await _rerun_self_review_if_head_moved(
+                repo_owner="example-org", repo_name="example-repo",
+                repo_full_name="example-org/example-repo", pr_number=42,
+                reviewed_head_sha="h" * 40,
+            ) is False
+        review_mock.assert_not_called()
+        body = comment_mock.call_args.args[3]
+        assert "nnnnnnn" in body and "restarting" in body and "@loma-agent /rereview" in body
 
     @pytest.mark.asyncio
     async def test_lookup_failure_never_raises(self):

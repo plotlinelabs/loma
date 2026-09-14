@@ -11,8 +11,13 @@ conversation-based check inside that window and run N parallel reviewers.
 The lock is claimed as the very first thing `_process_pr_review` does, in a
 single atomic Mongo op, and carries its own heartbeat so a crashed holder
 (deploy restart, OOM) never blocks the PR forever: a lock whose heartbeat is
-older than ``LOCK_STALE_SECONDS`` is taken over by the next run, mirroring
-``api.drain.running_query`` / ``recovery.HEARTBEAT_STALE_SECONDS``.
+older than ``LOCK_STALE_SECONDS`` is taken over by the next run.
+
+An explicit re-review (`/rereview`, `@mention`) that arrives while a run is
+in flight does not start a second reviewer: it flags the held lock with
+``request_rerun()`` and the holder honours the flag when it releases, by
+scheduling one fresh run on the newest head. See
+``webhooks.github._process_pr_review``.
 
 Requires the unique ``(repo_full_name, pr_number)`` index created in
 ``observability.db.ensure_indexes`` — the upsert relies on it to reject a
@@ -25,16 +30,18 @@ from datetime import datetime, timedelta, timezone
 
 from pymongo.errors import DuplicateKeyError
 
-from observability.observer import HEARTBEAT_INTERVAL_SECONDS
-
 logger = logging.getLogger(__name__)
 
 COLLECTION = "pr_self_review_locks"
 
-LOCK_HEARTBEAT_SECONDS = HEARTBEAT_INTERVAL_SECONDS
-# Same window the drain endpoint and the recovery sweeper use for "genuinely
-# running": two missed heartbeats means the holder is gone.
-LOCK_STALE_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 2
+# Lock cadence. Numerically the same as the observer's conversation heartbeat
+# (observability.observer.HEARTBEAT_INTERVAL_SECONDS = 30) and the "two missed
+# beats" stale window used by api.drain / recovery, but deliberately NOT
+# derived from them: the lock's semantics ("how long after a crash may a PR
+# stay unreviewable") must not silently change when someone tunes how often
+# conversations heartbeat for the deploy drain.
+LOCK_HEARTBEAT_SECONDS = 30
+LOCK_STALE_SECONDS = LOCK_HEARTBEAT_SECONDS * 2
 
 
 class SelfReviewLock:
@@ -49,8 +56,10 @@ class SelfReviewLock:
             ...
         finally:
             await lock.release()
+            if lock.rerun_requested:
+                ...  # someone asked for a re-review while we held the lock
 
-    ``acquire`` never raises; ``release`` never raises.
+    ``acquire``, ``release`` and ``request_rerun`` never raise.
     """
 
     def __init__(
@@ -68,6 +77,10 @@ class SelfReviewLock:
         self.head_sha = head_sha
         self.held = False
         self.holder: dict | None = None  # populated when acquire() loses
+        # Set by release(): True if a forced re-review was requested while we
+        # held the lock (see request_rerun). The holder owes that requester a
+        # fresh run on the newest head.
+        self.rerun_requested = False
         self._heartbeat_task: asyncio.Task | None = None
 
     @property
@@ -89,6 +102,11 @@ class SelfReviewLock:
             "head_sha": self.head_sha,
             "acquired_at": now,
             "last_heartbeat": now,
+            # A stale doc we take over may carry a previous holder's flag; the
+            # request was aimed at a run that is now dead, and THIS run is the
+            # fresh review it asked for.
+            "rerun_requested": False,
+            "rerun_requested_by": None,
         }
         try:
             result = await self.db[COLLECTION].update_one(
@@ -129,8 +147,47 @@ class SelfReviewLock:
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         return True
 
+    async def request_rerun(self) -> bool:
+        """Ask the live holder to run one more self-review when it finishes.
+
+        Used by an explicit re-review that lost ``acquire``: instead of running
+        a second reviewer in parallel (both minimizing each other's comments,
+        two verdict follow-ups in one thread), it flags the holder's lock. The
+        holder reads the flag in ``release`` and schedules a forced run on the
+        newest head. Returns False if no live lock exists any more (the holder
+        finished or expired between our claim and this call) — the caller
+        should then claim the lock itself.
+        """
+        try:
+            result = await self.db[COLLECTION].update_one(
+                self._key,
+                {"$set": {
+                    "rerun_requested": True,
+                    "rerun_requested_by": self.conversation_id,
+                    "rerun_requested_at": datetime.now(timezone.utc),
+                }},
+            )
+        except Exception:
+            logger.exception(
+                "[SELF-REVIEW-LOCK] Could not flag the in-flight self-review of %s#%d "
+                "for a re-run", self.repo_full_name, self.pr_number,
+            )
+            return False
+        flagged = bool(getattr(result, "matched_count", 0))
+        if flagged:
+            logger.info(
+                "[SELF-REVIEW-LOCK] Re-review of %s#%d queued behind the in-flight run "
+                "(conversation %s)", self.repo_full_name, self.pr_number,
+                (self.holder or {}).get("conversation_id"),
+            )
+        return flagged
+
     async def release(self) -> None:
-        """Drop the lock if we hold it. Safe to call when acquire() lost or was never called."""
+        """Drop the lock if we hold it. Safe to call when acquire() lost or was never called.
+
+        Sets ``rerun_requested`` from the released doc so the holder can honour
+        a re-review that was requested while it ran.
+        """
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
@@ -139,10 +196,14 @@ class SelfReviewLock:
         self.held = False
         try:
             # Filtered by conversation_id so we never delete a lock that was
-            # taken over from us while we were stalled.
-            await self.db[COLLECTION].delete_one(
+            # taken over from us while we were stalled. find_one_and_delete so
+            # the flag read and the release are one atomic step: a
+            # request_rerun that lands after this cannot be lost, it simply
+            # finds no lock and claims one itself.
+            released = await self.db[COLLECTION].find_one_and_delete(
                 {**self._key, "conversation_id": self.conversation_id}
             )
+            self.rerun_requested = bool((released or {}).get("rerun_requested"))
         except Exception:
             logger.warning(
                 "[SELF-REVIEW-LOCK] Failed to release lock for %s#%d (conversation %s); "

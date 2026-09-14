@@ -21,6 +21,7 @@ Targets are stored in the `pr_notification_targets` collection keyed by
 
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -128,13 +129,27 @@ VERDICT_PREFIXES = ("✅ Self-review:", "🔴 Self-review:")
 VERDICT_MAX_CHARS = 300
 
 
-def extract_self_review_verdict(
+@dataclass(frozen=True)
+class SelfReviewLookup:
+    """Outcome of looking for THIS run's self-review on the PR.
+
+    ``review_found`` and ``verdict`` are deliberately separate: "the agent
+    posted nothing" and "the agent posted a review that lacks the verdict
+    line" need different follow-up copy. In the second case findings ARE on
+    the PR and the human should read them, not treat the PR as unreviewed.
+    """
+
+    review_found: bool
+    verdict: str | None = None
+
+
+def find_self_review(
     reviews: list[dict],
     agent_login: str,
     started_at: datetime | None = None,
     exclude_review_ids: set[str] | list[str] | None = None,
-) -> str | None:
-    """Pull the verdict line out of the agent's self-review for THIS run.
+) -> SelfReviewLookup:
+    """Find the agent's self-review for THIS run and its verdict line, if any.
 
     The self-review prompt requires the review body to START with a single
     verdict line (`✅ Self-review: …` or `🔴 Self-review: …`). Reviews come
@@ -154,9 +169,14 @@ def extract_self_review_verdict(
     - ``started_at`` (fallback, temporal): only reviews created at or after
       that instant minus ``_RUN_SCOPE_SKEW``. Used when the pipeline could not
       take the ID snapshot; both filters apply when both are given.
+
+    Returns ``review_found=True`` as soon as any review passes the run scoping,
+    with ``verdict`` set from the newest such review that carries a verdict
+    line (``None`` if none of them does).
     """
     cutoff = started_at - _RUN_SCOPE_SKEW if started_at else None
     excluded = set(exclude_review_ids) if exclude_review_ids is not None else None
+    review_found = False
     for review in reversed(reviews or []):
         if review.get("author") != agent_login:
             continue
@@ -170,6 +190,7 @@ def extract_self_review_verdict(
             # Unparseable timestamp → cannot prove it belongs to this run → skip.
             if created_at is None or created_at < cutoff:
                 continue
+        review_found = True
         body = (review.get("body") or "").strip()
         for line in body.splitlines():
             # Anchor to a line that STARTS with the verdict (after any markdown
@@ -179,9 +200,22 @@ def extract_self_review_verdict(
             # promoted to the verdict, and a runaway line is capped.
             candidate = line.strip().strip("*_`#> ").strip()
             if candidate.startswith(VERDICT_PREFIXES):
-                return candidate[:VERDICT_MAX_CHARS]
-        # Agent review without a verdict line — keep looking at older reviews
-    return None
+                return SelfReviewLookup(review_found=True, verdict=candidate[:VERDICT_MAX_CHARS])
+        # This run's review has no verdict line — keep looking at any other
+        # review from this run, but remember that one WAS posted.
+    return SelfReviewLookup(review_found=review_found, verdict=None)
+
+
+def extract_self_review_verdict(
+    reviews: list[dict],
+    agent_login: str,
+    started_at: datetime | None = None,
+    exclude_review_ids: set[str] | list[str] | None = None,
+) -> str | None:
+    """Verdict line of this run's self-review, or ``None``. See ``find_self_review``."""
+    return find_self_review(
+        reviews, agent_login, started_at=started_at, exclude_review_ids=exclude_review_ids,
+    ).verdict
 
 
 def _build_messages(
@@ -190,14 +224,17 @@ def _build_messages(
     verdict: str | None,
     succeeded: bool,
     disabled: bool = False,
+    review_posted: bool = False,
 ) -> tuple[str, str, str]:
     """Return (title, plain_body, slack_text) for the follow-up.
 
-    Four outcomes, so the Stage-1 "verdict will follow" promise is always
+    Five outcomes, so the Stage-1 "verdict will follow" promise is always
     answered with something a human can act on:
       - disabled: the deploy has LOMA_ENABLE_SELF_REVIEW off — no review will come
       - succeeded + verdict: the normal case
-      - succeeded, no verdict: the agent finished but posted nothing this run
+      - succeeded + review_posted, no verdict: the agent posted a review this
+        run but it lacks the verdict line — findings ARE on the PR, read them
+      - succeeded, nothing posted: the agent finished but posted nothing this run
       - failed: the review pipeline errored
     """
     if disabled:
@@ -216,6 +253,19 @@ def _build_messages(
         body = f"{verdict}\n\n[View PR]({pr_url})"
         slack_text = (
             f"🔍 *Self-review complete* for PR #{pr_number}: {verdict}\n{pr_url}"
+        )
+    elif succeeded and review_posted:
+        title = f"Self-review posted without a verdict: PR #{pr_number}"
+        body = (
+            "The fresh-context self-review **posted a review on the PR**, but it "
+            "does not start with the required verdict line, so the outcome could "
+            "not be summarised here. **Read the review on the PR directly** — do "
+            f"not treat the PR as unreviewed.\n\n[View PR]({pr_url})"
+        )
+        slack_text = (
+            f"⚠️ *Self-review posted without a verdict* for PR #{pr_number} — the "
+            f"agent posted a review but no verdict line, so it is not summarised "
+            f"here. Read the review on the PR directly.\n{pr_url}"
         )
     elif succeeded:
         title = f"Self-review incomplete: PR #{pr_number}"
@@ -294,11 +344,15 @@ async def post_self_review_followup(
     verdict: str | None,
     succeeded: bool,
     disabled: bool = False,
+    review_posted: bool = False,
 ) -> bool:
     """Stage 2: thread the self-review outcome back to where the PR was announced.
 
     ``disabled=True`` posts the "self-review is off on this deploy" outcome
     instead of a verdict, so Stage 1's promise is never left dangling.
+    ``review_posted=True`` with ``verdict=None`` means the agent DID post a
+    review this run but without a verdict line; the copy then points the human
+    at the review instead of calling the PR unreviewed.
 
     Returns True if a follow-up was delivered, False if no target was
     registered or delivery failed. Never raises — this runs in the review
@@ -345,7 +399,7 @@ async def post_self_review_followup(
             return False
 
     title, body, slack_text = _build_messages(
-        pr_number, pr_url, verdict, succeeded, disabled=disabled
+        pr_number, pr_url, verdict, succeeded, disabled=disabled, review_posted=review_posted,
     )
 
     try:
@@ -376,6 +430,7 @@ async def post_self_review_followup(
                     "last_followup_succeeded": succeeded,
                     "last_followup_verdict": verdict,
                     "last_followup_disabled": disabled,
+                    "last_followup_review_posted": review_posted,
                 }},
             )
         except Exception:
