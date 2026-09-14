@@ -40,8 +40,8 @@ export function useToolsPicker(initial?: ToolConfig | null) {
     [],
   );
   // A conversation loaded asynchronously replaces the composer configuration.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     reset(initial);
   }, [initial, reset]);
 
