@@ -41,7 +41,19 @@ COLLECTION = "pr_self_review_locks"
 # stay unreviewable") must not silently change when someone tunes how often
 # conversations heartbeat for the deploy drain.
 LOCK_HEARTBEAT_SECONDS = 30
-LOCK_STALE_SECONDS = LOCK_HEARTBEAT_SECONDS * 2
+# Stale window is THREE intervals, not two, and the heartbeat write below is
+# bounded (LOCK_HEARTBEAT_WRITE_TIMEOUT_SECONDS) so a single failed beat cannot
+# push the next good beat past the stale cutoff. Worst case with one blip:
+# sleep (30) + bounded failed write (10) + sleep (30) = 70s between good beats,
+# comfortably inside the 90s stale window. With the old 2x window and Mongo's
+# default 30s serverSelectionTimeoutMS, one blip pushed the next beat to ~t+90s
+# while the doc went stale at t+60s — a 30s window in which a concurrent
+# `synchronize` took the live holder's lock over and two reviewers raced.
+LOCK_STALE_SECONDS = LOCK_HEARTBEAT_SECONDS * 3
+# A single heartbeat write may not block longer than this; if Mongo is
+# unreachable the write is abandoned and retried on the next tick rather than
+# hanging for the client's full server-selection timeout.
+LOCK_HEARTBEAT_WRITE_TIMEOUT_SECONDS = 10
 
 # `release()` retries the delete once after this delay before giving up. A
 # failed release does not just leave the lock to expire: it also drops a
@@ -242,9 +254,14 @@ class SelfReviewLock:
         while True:
             try:
                 await asyncio.sleep(LOCK_HEARTBEAT_SECONDS)
-                await self.db[COLLECTION].update_one(
-                    {**self._key, "conversation_id": self.conversation_id},
-                    {"$set": {"last_heartbeat": datetime.now(timezone.utc)}},
+                # Bound the write so an unreachable primary cannot block for the
+                # full server-selection timeout and starve the next beat.
+                await asyncio.wait_for(
+                    self.db[COLLECTION].update_one(
+                        {**self._key, "conversation_id": self.conversation_id},
+                        {"$set": {"last_heartbeat": datetime.now(timezone.utc)}},
+                    ),
+                    timeout=LOCK_HEARTBEAT_WRITE_TIMEOUT_SECONDS,
                 )
             except asyncio.CancelledError:
                 return

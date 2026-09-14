@@ -16,7 +16,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pymongo.errors import DuplicateKeyError
 
-from webhooks.self_review_lock import COLLECTION, LOCK_STALE_SECONDS, SelfReviewLock
+from webhooks.self_review_lock import (
+    COLLECTION,
+    LOCK_HEARTBEAT_SECONDS,
+    LOCK_HEARTBEAT_WRITE_TIMEOUT_SECONDS,
+    LOCK_STALE_SECONDS,
+    SelfReviewLock,
+)
 
 REPO = "example-org/example-repo"
 
@@ -133,6 +139,32 @@ class TestAcquireRelease:
         assert lock._heartbeat_task is None
 
     @pytest.mark.asyncio
+    async def test_heartbeat_write_is_bounded(self, monkeypatch):
+        # A hung Mongo write must not block the loop for the full server-selection
+        # timeout: wait_for abandons it and the loop retries on the next tick, so
+        # a slow primary cannot starve the heartbeat and let the lock go stale.
+        monkeypatch.setattr("webhooks.self_review_lock.LOCK_HEARTBEAT_SECONDS", 0.01)
+        monkeypatch.setattr("webhooks.self_review_lock.LOCK_HEARTBEAT_WRITE_TIMEOUT_SECONDS", 0.02)
+        attempts = {"n": 0}
+
+        async def _hang(*_a, **_k):
+            attempts["n"] += 1
+            await asyncio.sleep(10)  # never completes; wait_for must abandon it
+
+        db, locks = _db()
+        locks.update_one = AsyncMock(side_effect=_hang)
+        lock = SelfReviewLock(db, REPO, 42, "conv-hb", "h" * 40)
+        task = asyncio.create_task(lock._heartbeat_loop())
+        await asyncio.sleep(0.15)
+        assert not task.done(), "loop died instead of bounding the hung write"
+        assert attempts["n"] >= 2, "each hung write should be abandoned and retried"
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    @pytest.mark.asyncio
     async def test_request_rerun_flags_the_live_holder_only(self):
         # An explicit re-review that lost the claim asks the holder for one
         # more run instead of racing it. The flag is a plain update on the
@@ -213,7 +245,17 @@ class TestAcquireRelease:
         # not silently change how long a crashed run can block a PR.
         source = Path("webhooks/self_review_lock.py").read_text()
         assert "from observability.observer import" not in source
-        assert LOCK_STALE_SECONDS == 60
+        # Stale window is THREE intervals (not two): with a bounded heartbeat
+        # write, one failed beat cannot push the next good beat past the cutoff.
+        assert LOCK_HEARTBEAT_SECONDS == 30
+        assert LOCK_STALE_SECONDS == 90
+        assert LOCK_STALE_SECONDS == LOCK_HEARTBEAT_SECONDS * 3
+        # Worst-case gap between good beats (sleep + bounded failed write + sleep)
+        # must stay inside the stale window.
+        assert (
+            LOCK_HEARTBEAT_SECONDS + LOCK_HEARTBEAT_WRITE_TIMEOUT_SECONDS
+            + LOCK_HEARTBEAT_SECONDS
+        ) < LOCK_STALE_SECONDS
 
 
 MONGO_URI = os.environ.get("LOMA_TEST_MONGODB_URI", "")

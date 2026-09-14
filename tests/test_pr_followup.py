@@ -20,9 +20,12 @@ from utils.pr_followup import (
     VERDICT_MAX_CHARS,
     SelfReviewLookup,
     _build_messages,
+    _escape_slack,
+    _normalize_repo,
     extract_self_review_verdict,
     find_self_review,
     get_pr_notification_target,
+    mark_self_review_disabled,
     post_self_review_followup,
     register_pr_notification_target,
 )
@@ -93,6 +96,66 @@ class TestRegistration:
         collection.find_one.assert_awaited_once_with(
             {"repo_full_name": REPO, "pr_number": 42}
         )
+
+    def test_normalize_repo_lowercases_and_strips(self):
+        assert _normalize_repo("ExampleOrg/Repo") == "exampleorg/repo"
+        assert _normalize_repo("  Org/Name  ") == "org/name"
+        assert _normalize_repo("") == ""
+
+    @pytest.mark.asyncio
+    async def test_repo_full_name_is_case_normalized_on_both_paths(self):
+        # GitHub repo names are case-insensitive but Mongo equality is not; a
+        # `ExampleOrg/Repo` registration must match a `exampleorg/repo`
+        # webhook lookup or the follow-up is silently dropped.
+        db, collection = _fake_db()
+        await register_pr_notification_target(
+            db, "ExampleOrg/Repo", 7, {"type": "linear", "issue_id": "u"}
+        )
+        stored_key = collection.update_one.call_args_list[0].args[0]
+        assert stored_key["repo_full_name"] == "exampleorg/repo"
+        await get_pr_notification_target(db, "EXAMPLEORG/REPO", 7)
+        assert collection.find_one.call_args.args[0]["repo_full_name"] == "exampleorg/repo"
+
+    @pytest.mark.asyncio
+    async def test_mark_self_review_disabled_upserts_marker(self):
+        db, collection = _fake_db()
+        await mark_self_review_disabled(db, "Org/Repo", 9, PR_URL)
+        args, kwargs = collection.update_one.call_args
+        assert args[0] == {"repo_full_name": "org/repo", "pr_number": 9}
+        assert args[1]["$set"]["disabled_pending"] is True
+        assert args[1]["$set"]["disabled_pending_pr_url"] == PR_URL
+        assert kwargs.get("upsert") is True
+
+    @pytest.mark.asyncio
+    async def test_register_delivers_pending_disabled_notice(self):
+        # The webhook set `disabled_pending` on `opened` before a target had
+        # registered (single-push PR, no later synchronize). Registration must
+        # now answer the Stage-1 promise and clear the marker.
+        record = {
+            "repo_full_name": REPO, "pr_number": 42,
+            "target": {"type": "loma", "user_email": "a@b.co"},
+            "registered_at": datetime.now(timezone.utc),
+            "disabled_pending": True,
+            "disabled_pending_pr_url": PR_URL,
+        }
+        db, collection = _fake_db(existing_record=record)
+        with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=True) as loma:
+            await register_pr_notification_target(
+                db, REPO, 42, {"type": "loma", "user_email": "a@b.co"}
+            )
+        loma.assert_awaited_once()
+        unsets = [c for c in collection.update_one.call_args_list
+                  if isinstance(c.args[1], dict) and "$unset" in c.args[1]]
+        assert any("disabled_pending" in c.args[1]["$unset"] for c in unsets)
+
+    @pytest.mark.asyncio
+    async def test_register_without_pending_marker_delivers_nothing(self):
+        db, collection = _fake_db(existing_record=None)
+        with patch("utils.pr_followup.post_self_review_followup", new_callable=AsyncMock) as pf:
+            await register_pr_notification_target(
+                db, REPO, 42, {"type": "linear", "issue_id": "u"}
+            )
+        pf.assert_not_awaited()
 
 
 class TestVerdictExtraction:
@@ -236,6 +299,28 @@ class TestVerdictExtraction:
             SelfReviewLookup(review_found=True, verdict="✅ Self-review: ok")
         assert extract_self_review_verdict(both, "loma-insights", exclude_review_ids=set()) == "✅ Self-review: ok"
 
+    def test_quoted_or_non_first_line_verdict_is_not_promoted(self):
+        # The prompt requires the body to START with the verdict; only the first
+        # non-empty line counts. A blockquoted prior verdict (a re-run quoting
+        # the previous run while explaining what changed) or a fenced template
+        # line must never override the real verdict — the line is relayed
+        # verbatim, so a red verdict must not be turned green by quoted text.
+        quoted = [{"id": "R1", "author": "loma-insights",
+                   "body": "> ✅ Self-review: no blocking issues (quoting the previous run)"
+                           "\n\n🔴 Self-review: 2 blocking issue(s)"}]
+        lk = find_self_review(quoted, "loma-insights", exclude_review_ids=set())
+        assert lk.review_found is True and lk.verdict is None
+        later = [{"id": "R2", "author": "loma-insights",
+                  "body": "Here is my review.\n\n✅ Self-review: ok"}]
+        assert extract_self_review_verdict(later, "loma-insights", exclude_review_ids=set()) is None
+        fenced = [{"id": "R3", "author": "loma-insights",
+                   "body": "```\n✅ Self-review: template line\n```\n\n🔴 Self-review: real"}]
+        assert extract_self_review_verdict(fenced, "loma-insights", exclude_review_ids=set()) is None
+        # A genuine first-line verdict still works when a `>` appears LATER.
+        ok = [{"id": "R4", "author": "loma-insights",
+               "body": "✅ Self-review: clean\n\n> quoting something else"}]
+        assert extract_self_review_verdict(ok, "loma-insights", exclude_review_ids=set()) == "✅ Self-review: clean"
+
 
 class TestMessageOutcomes:
     def test_retry_instruction_uses_mention_form(self):
@@ -274,6 +359,26 @@ class TestMessageOutcomes:
         assert "skipped" in title.lower()
         assert "LOMA_ENABLE_SELF_REVIEW" in body
         assert "disabled" in slack and "unreviewed" in slack
+
+    def test_verdict_unknown_outcome(self):
+        # A transient GitHub failure during the verdict lookup means we do not
+        # know the outcome — it must NOT be reported as "unreviewed".
+        title, body, slack = _build_messages(42, PR_URL, None, True, verdict_unknown=True)
+        assert "unknown" in title.lower()
+        assert "could not read" in body.lower()
+        assert REREVIEW_COMMAND in body and REREVIEW_COMMAND in slack
+        # Not the "finished without posting / unreviewed" copy.
+        assert "no review from this run was found" not in body
+
+    def test_verdict_is_slack_escaped(self):
+        # The verdict is agent-controlled; Slack control chars must be escaped so
+        # it cannot @-mention the channel or inject a link from the bot.
+        assert _escape_slack("<!channel> & <@U1> <http://x|y>") == \
+            "&lt;!channel&gt; &amp; &lt;@U1&gt; &lt;http://x|y&gt;"
+        verdict = "✅ Self-review: ok <!channel>"
+        _, body, slack = _build_messages(42, PR_URL, verdict, True)
+        assert "<!channel>" not in slack
+        assert "&lt;!channel&gt;" in slack
 
 
 class TestFollowupDispatch:

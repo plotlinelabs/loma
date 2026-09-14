@@ -49,6 +49,31 @@ TARGET_REQUIRED_FIELDS = {
 }
 
 
+def _normalize_repo(repo_full_name: str) -> str:
+    """Normalize a repo full name for storage and lookup.
+
+    GitHub repo full names are case-insensitive (`ExampleOrg/Repo` and
+    `exampleorg/repo` are the same repo) but Mongo string equality is not.
+    The CLI stores whatever the agent typed while the webhook looks up the
+    canonical casing GitHub sends, so without normalising on BOTH the write
+    (register) and read (lookup) paths a casing mismatch silently drops the
+    follow-up. Applied to every key touching the collection.
+    """
+    return (repo_full_name or "").strip().lower()
+
+
+def _escape_slack(text: str) -> str:
+    """Escape the three characters Slack parses as control sequences in `text`.
+
+    The verdict line is agent-controlled (it comes from the PR review body) and
+    is relayed verbatim into a Slack message. Without this a verdict containing
+    `<!channel>`, `<@U…>` or `<url|label>` would ping the whole channel / users
+    or inject a link from the bot. Order matters: `&` first, so the `&lt;`/`&gt;`
+    entities produced for `<`/`>` are not double-escaped.
+    """
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _validate_target(target: dict) -> str | None:
     """Return an error string if the target dict is invalid, else None."""
     if not isinstance(target, dict):
@@ -82,6 +107,7 @@ async def register_pr_notification_target(
     if not pr_number or pr_number <= 0:
         raise ValueError("pr_number must be a positive integer")
 
+    repo_full_name = _normalize_repo(repo_full_name)
     doc = {
         "repo_full_name": repo_full_name,
         "pr_number": pr_number,
@@ -97,7 +123,75 @@ async def register_pr_notification_target(
         "[PR-FOLLOWUP] Registered %s target for %s#%d",
         target.get("type"), repo_full_name, pr_number,
     )
+
+    # If self-review was found disabled on this deploy BEFORE a target had
+    # registered, the webhook's `opened` handler could not deliver the
+    # "self-review skipped" notice (no target yet) and left a `disabled_pending`
+    # marker instead. Now that a target exists, answer the Stage-1 promise. For
+    # a single-push PR there is no later `synchronize` to trigger it otherwise.
+    try:
+        stored = await db[COLLECTION].find_one(
+            {"repo_full_name": repo_full_name, "pr_number": pr_number}
+        )
+    except Exception:
+        stored = None
+    if stored and stored.get("disabled_pending"):
+        delivered = await post_self_review_followup(
+            db,
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            pr_url=stored.get("disabled_pending_pr_url", ""),
+            verdict=None,
+            succeeded=False,
+            disabled=True,
+        )
+        # Only clear the marker once the notice actually went out. If delivery
+        # failed here (e.g. this process lacks the channel's credentials), leave
+        # the marker so a later event — a `synchronize` in the server process,
+        # or a re-registration — can retry it instead of losing it silently.
+        if delivered:
+            try:
+                await db[COLLECTION].update_one(
+                    {"repo_full_name": repo_full_name, "pr_number": pr_number},
+                    {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}},
+                )
+            except Exception:
+                logger.warning(
+                    "[PR-FOLLOWUP] Could not clear disabled_pending marker for %s#%d",
+                    repo_full_name, pr_number,
+                )
     return doc
+
+
+async def mark_self_review_disabled(
+    db,
+    repo_full_name: str,
+    pr_number: int,
+    pr_url: str,
+) -> None:
+    """Record that self-review is disabled for this PR (Stage-1 promise pending).
+
+    Called by the webhook on a reviewable event when ``LOMA_ENABLE_SELF_REVIEW``
+    is off. On ``opened`` the announcing flow has usually not registered its
+    target yet (skill Step 6c runs after PR creation), so a direct
+    ``post_self_review_followup`` finds nothing and the "verdict coming" promise
+    dangles forever for a single-push PR. Persisting the intent lets
+    ``register_pr_notification_target`` deliver the notice once a target lands.
+    """
+    if db is None:
+        return
+    repo_full_name = _normalize_repo(repo_full_name)
+    try:
+        await db[COLLECTION].update_one(
+            {"repo_full_name": repo_full_name, "pr_number": pr_number},
+            {"$set": {"disabled_pending": True, "disabled_pending_pr_url": pr_url}},
+            upsert=True,
+        )
+    except Exception:
+        logger.warning(
+            "[PR-FOLLOWUP] Could not record disabled_pending marker for %s#%d",
+            repo_full_name, pr_number,
+        )
 
 
 async def get_pr_notification_target(
@@ -107,7 +201,7 @@ async def get_pr_notification_target(
 ) -> dict | None:
     """Fetch the registered notification target for a PR, or None."""
     return await db[COLLECTION].find_one(
-        {"repo_full_name": repo_full_name, "pr_number": pr_number}
+        {"repo_full_name": _normalize_repo(repo_full_name), "pr_number": pr_number}
     )
 
 
@@ -200,15 +294,18 @@ def find_self_review(
                 continue
         review_found = True
         body = (review.get("body") or "").strip()
-        for line in body.splitlines():
-            # Anchor to a line that STARTS with the verdict (after any markdown
-            # emphasis/heading noise). The review body is agent-controlled and
-            # this line is relayed verbatim to Slack / Linear / the inbox, so a
-            # "Self-review:" buried in prose or a quoted diff must not be
-            # promoted to the verdict, and a runaway line is capped.
-            candidate = line.strip().strip("*_`#> ").strip()
-            if candidate.startswith(VERDICT_PREFIXES):
-                return SelfReviewLookup(review_found=True, verdict=candidate[:VERDICT_MAX_CHARS])
+        # The prompt requires the body to START with the verdict line, so only
+        # the FIRST non-empty line can be the verdict. Scanning every line would
+        # let a quoted prior verdict (a `>` blockquote while explaining what
+        # changed) or a fenced template line anywhere in the body override the
+        # real verdict — and this line is relayed verbatim to Slack / Linear /
+        # the inbox, so a red verdict must not be turned green by quoted text.
+        # Strip leading markdown emphasis/heading noise only; do NOT strip `>`
+        # (a blockquoted line is not this run's verdict), and cap a runaway line.
+        first_line = next((ln for ln in body.splitlines() if ln.strip()), "")
+        candidate = first_line.strip().strip("*_`# ").strip()
+        if candidate.startswith(VERDICT_PREFIXES):
+            return SelfReviewLookup(review_found=True, verdict=candidate[:VERDICT_MAX_CHARS])
         # This run's review has no verdict line — keep looking at any other
         # review from this run, but remember that one WAS posted.
     return SelfReviewLookup(review_found=review_found, verdict=None)
@@ -233,6 +330,7 @@ def _build_messages(
     succeeded: bool,
     disabled: bool = False,
     review_posted: bool = False,
+    verdict_unknown: bool = False,
 ) -> tuple[str, str, str]:
     """Return (title, plain_body, slack_text) for the follow-up.
 
@@ -256,11 +354,28 @@ def _build_messages(
             f"ℹ️ *Self-review skipped* for PR #{pr_number} — self-review is "
             f"disabled on this deployment; treat the PR as unreviewed.\n{pr_url}"
         )
+    elif verdict_unknown:
+        title = f"Self-review verdict unknown: PR #{pr_number}"
+        body = (
+            "The fresh-context self-review **completed**, but Loma could not read "
+            "the review back from GitHub (a transient error), so the verdict could "
+            "not be summarised here. **Read the PR directly** — most likely it was "
+            f"reviewed — or comment `{REREVIEW_COMMAND}` on it to retry.\n\n"
+            f"[View PR]({pr_url})"
+        )
+        slack_text = (
+            f"❓ *Self-review verdict unknown* for PR #{pr_number} — the review "
+            f"completed but Loma could not read it back from GitHub. Read the PR "
+            f"directly or comment `{REREVIEW_COMMAND}` to retry.\n{pr_url}"
+        )
     elif succeeded and verdict:
         title = f"Self-review complete: PR #{pr_number}"
         body = f"{verdict}\n\n[View PR]({pr_url})"
+        # The verdict is agent-controlled — escape Slack control chars so it
+        # cannot @-mention the channel or inject a link from the bot.
         slack_text = (
-            f"🔍 *Self-review complete* for PR #{pr_number}: {verdict}\n{pr_url}"
+            f"🔍 *Self-review complete* for PR #{pr_number}: "
+            f"{_escape_slack(verdict)}\n{pr_url}"
         )
     elif succeeded and review_posted:
         title = f"Self-review posted without a verdict: PR #{pr_number}"
@@ -353,6 +468,7 @@ async def post_self_review_followup(
     succeeded: bool,
     disabled: bool = False,
     review_posted: bool = False,
+    verdict_unknown: bool = False,
 ) -> bool:
     """Stage 2: thread the self-review outcome back to where the PR was announced.
 
@@ -371,6 +487,9 @@ async def post_self_review_followup(
                     repo_full_name, pr_number)
         return False
 
+    # Normalize once so the lookup AND every subsequent key/update below match
+    # the casing the doc was stored under (see _normalize_repo).
+    repo_full_name = _normalize_repo(repo_full_name)
     try:
         record = await get_pr_notification_target(db, repo_full_name, pr_number)
     except Exception:
@@ -432,7 +551,8 @@ async def post_self_review_followup(
             return False
 
     title, body, slack_text = _build_messages(
-        pr_number, pr_url, verdict, succeeded, disabled=disabled, review_posted=review_posted,
+        pr_number, pr_url, verdict, succeeded, disabled=disabled,
+        review_posted=review_posted, verdict_unknown=verdict_unknown,
     )
 
     try:
@@ -467,8 +587,11 @@ async def post_self_review_followup(
 
     if delivered:
         try:
+            # Condition on the registration we actually delivered to: if the flow
+            # re-registered (new announcement) between our read and this write,
+            # the newer registration must not be marked as already-notified.
             await db[COLLECTION].update_one(
-                key,
+                {**key, "registered_at": record.get("registered_at")},
                 {"$set": {
                     "last_followup_at": datetime.now(timezone.utc),
                     "last_followup_succeeded": succeeded,

@@ -40,6 +40,7 @@ from api.drain import is_draining
 from utils.pr_followup import (
     REREVIEW_COMMAND,
     find_self_review,
+    mark_self_review_disabled,
     post_self_review_followup,
 )
 
@@ -706,6 +707,29 @@ def _verify_signature(signature_header: str | None, raw_body: bytes) -> bool:
     return hmac.compare_digest(computed_sig, header_sig)
 
 
+async def _announce_self_review_disabled(
+    repo_full_name: str, pr_number, pr_url: str,
+) -> None:
+    """Record the disabled intent, then try to deliver the notice now.
+
+    The marker survives the opened↔register race: whichever of the two runs
+    second delivers the notice (registration reads the marker; a later
+    `synchronize` reads the target). Both delivery paths dedupe via the
+    per-registration atomic claim in `post_self_review_followup`.
+    """
+    db = get_db()
+    await mark_self_review_disabled(db, repo_full_name, pr_number, pr_url)
+    await post_self_review_followup(
+        db,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        pr_url=pr_url,
+        verdict=None,
+        succeeded=False,
+        disabled=True,
+    )
+
+
 async def handle_github_webhook(request: web.Request) -> web.Response:
     """Handle incoming GitHub webhook notifications."""
     raw_body = await request.read()
@@ -771,16 +795,16 @@ async def handle_github_webhook(request: web.Request) -> web.Response:
                 # The creating flow already promised a verdict ("self-review
                 # running…") to whoever it announced the PR to. Answer that
                 # promise with an explicit "disabled" follow-up instead of
-                # leaving it dangling forever.
+                # leaving it dangling forever. On `opened` the flow has usually
+                # not registered its target yet (skill Step 6c runs after PR
+                # creation), so record the intent first; registration delivers
+                # it once a target lands, and this direct attempt covers the
+                # case where registration already happened.
                 asyncio.create_task(
-                    post_self_review_followup(
-                        get_db(),
-                        repo_full_name=repo.get("full_name", ""),
-                        pr_number=pr.get("number"),
-                        pr_url=pr.get("html_url", ""),
-                        verdict=None,
-                        succeeded=False,
-                        disabled=True,
+                    _announce_self_review_disabled(
+                        repo.get("full_name", ""),
+                        pr.get("number"),
+                        pr.get("html_url", ""),
                     )
                 )
                 return web.json_response({"status": "ignored", "reason": "self_review_disabled"})
@@ -1429,6 +1453,26 @@ async def _process_pr_review(
                     reviewed_head_sha=head_sha,
                     rerun_requested=lock.rerun_requested,
                 )
+            elif lock.rerun_requested:
+                # The process is shutting down (deploy restart) so a fresh
+                # multi-minute reviewer cannot be spawned — but a human's
+                # /rereview was queued behind this run and they were told "no
+                # need to ask again". `release()` already consumed the flag with
+                # the lock doc, so nobody else will honour it. Do not drop it
+                # silently: tell them to retry once Loma is back.
+                try:
+                    await _create_pr_comment(
+                        repo_owner, repo_name, pr_number,
+                        "⚠️ A re-review you requested was queued behind the running "
+                        "self-review, but Loma is restarting for a deploy before it "
+                        f"could start. Comment `{REREVIEW_COMMAND}` once it is back "
+                        f"to run it.\n\n{AGENT_REVIEW_MARKER}",
+                    )
+                except Exception:
+                    logger.warning(
+                        "[GITHUB-WEBHOOK] Could not post the cancelled re-review "
+                        "notice on %s#%d", repo_full_name, pr_number,
+                    )
 
 
 async def _run_pr_review(
@@ -1761,6 +1805,13 @@ async def _run_pr_review(
     pre_run_review_ids: set[str] | None = None
     started_at = datetime.now(timezone.utc)
 
+    # The self-review is posted with the same token that authored the PR, so the
+    # review author is the PR author. When the run reached here via the `Agent PR`
+    # label backstop (AGENT_GITHUB_LOGIN misconfigured), that is NOT the env login
+    # — scoping the snapshot and lookup to AGENT_GITHUB_LOGIN would then find no
+    # review and misreport every run as "Incomplete". Defined before the try so
+    # the verdict lookup in the finally can always reference it.
+    review_author_login = pr_author or AGENT_GITHUB_LOGIN
     review_succeeded = True
     interrupted = False
     try:
@@ -1774,7 +1825,7 @@ async def _run_pr_review(
             await observer.start()
         if self_review:
             pre_run_review_ids = await _snapshot_agent_review_ids(
-                repo_owner, repo_name, pr_number
+                repo_owner, repo_name, pr_number, agent_login=review_author_login,
             )
         started_at = datetime.now(timezone.utc)
 
@@ -1837,13 +1888,14 @@ async def _run_pr_review(
         # follow-up alike.
         verdict = None
         review_posted = False
+        lookup_failed = False
         self_review_posted = True
         if self_review and review_succeeded:
             try:
                 reviews = await get_pr_reviews(repo_owner, repo_name, pr_number)
                 if pre_run_review_ids is not None:
                     lookup = find_self_review(
-                        reviews, AGENT_GITHUB_LOGIN,
+                        reviews, review_author_login,
                         exclude_review_ids=pre_run_review_ids,
                     )
                 else:
@@ -1853,27 +1905,40 @@ async def _run_pr_review(
                         repo_full_name, pr_number,
                     )
                     lookup = find_self_review(
-                        reviews, AGENT_GITHUB_LOGIN, started_at=started_at
+                        reviews, review_author_login, started_at=started_at
                     )
                 verdict, review_posted = lookup.verdict, lookup.review_found
             except Exception:
+                # A transient GitHub failure here (5xx, rate limit) means we do
+                # NOT know whether a review was posted — the pipeline itself
+                # succeeded. Reporting "unreviewed" would falsely tell the human
+                # to /rereview a PR that was very likely reviewed. Report the
+                # verdict as UNKNOWN instead (neutral check run + follow-up).
+                lookup_failed = True
                 logger.warning(
-                    "[GITHUB-WEBHOOK] Could not extract self-review verdict on %s#%d",
+                    "[GITHUB-WEBHOOK] Could not read reviews to extract the self-review "
+                    "verdict on %s#%d — reporting the verdict as unknown",
                     repo_full_name, pr_number,
                 )
-            self_review_posted = review_posted
-            if not review_posted:
-                logger.error(
-                    "[GITHUB-WEBHOOK] Self-review agent finished on PR %s#%d but no "
-                    "review from this run (started %s) was found on the PR",
-                    repo_full_name, pr_number, started_at.isoformat(),
-                )
-            elif verdict is None:
-                logger.warning(
-                    "[GITHUB-WEBHOOK] Self-review agent posted a review on PR %s#%d "
-                    "without the required verdict line",
-                    repo_full_name, pr_number,
-                )
+            if lookup_failed:
+                # Unknown, not unreviewed: keep this out of the failure/handoff
+                # path so the status comment is cleaned up rather than turned
+                # into an "unreviewed" handoff.
+                self_review_posted = True
+            else:
+                self_review_posted = review_posted
+                if not review_posted:
+                    logger.error(
+                        "[GITHUB-WEBHOOK] Self-review agent finished on PR %s#%d but no "
+                        "review from this run (started %s) was found on the PR",
+                        repo_full_name, pr_number, started_at.isoformat(),
+                    )
+                elif verdict is None:
+                    logger.warning(
+                        "[GITHUB-WEBHOOK] Self-review agent posted a review on PR %s#%d "
+                        "without the required verdict line",
+                        repo_full_name, pr_number,
+                    )
         review_complete = review_succeeded and self_review_posted
 
         # Everything below is cleanup and reporting. Each step is isolated so a
@@ -1908,7 +1973,14 @@ async def _run_pr_review(
 
         # Update check run to show completion in PR UI
         if check_run_id:
-            if review_complete and (verdict or not self_review):
+            if lookup_failed:
+                conclusion, title, summary = (
+                    "neutral", "Self-Review Verdict Unknown",
+                    "The self-review agent completed, but Loma could not read the PR "
+                    "reviews from GitHub (transient error), so the outcome is unknown. "
+                    f"Read the PR directly or comment `{REREVIEW_COMMAND}` to retry.",
+                )
+            elif review_complete and (verdict or not self_review):
                 conclusion, title, summary = (
                     "success", "Review Complete", f"Reviewed PR #{pr_number}: {pr_title}",
                 )
@@ -1967,6 +2039,7 @@ async def _run_pr_review(
                     verdict=verdict,
                     succeeded=review_succeeded,
                     review_posted=review_posted,
+                    verdict_unknown=lookup_failed,
                 )
             except Exception:
                 logger.exception(
@@ -1990,23 +2063,43 @@ async def _rerun_self_review_if_head_moved(
     Returns True if a re-run was scheduled. Never raises — this is a
     best-effort tail step in the review pipeline's cleanup path.
     """
-    try:
-        latest = await _get_pr_details(repo_owner, repo_name, pr_number)
-    except Exception:
-        logger.warning(
-            "[GITHUB-WEBHOOK] Could not check for newer commits on %s#%d after self-review",
-            repo_full_name, pr_number,
-        )
-        return False
+    # Retry once: this is the coalescing safety net. A `synchronize` that lost
+    # the lock returned silently trusting THIS holder to review the newest head;
+    # if the check fails, that push is never reviewed and the thread only ever
+    # saw the previous head's verdict. A transient blip must not cause that.
+    latest = None
+    for attempt in (1, 2):
+        try:
+            latest = await _get_pr_details(repo_owner, repo_name, pr_number)
+        except Exception:
+            latest = None
+        if latest:
+            break
+        if attempt == 1:
+            await asyncio.sleep(1.0)
     if not latest:
         # `_get_pr_details` returns None when GITHUB_API_KEY is unset or the
-        # request fails. Say so — otherwise "at most two runs, last on the
-        # final head" silently degrades to "one run on a stale head".
+        # request fails. Do NOT degrade silently to "one run on a stale head":
+        # a push that lost the lock is relying on this check. Post a fail-visible
+        # notice so a genuinely-skipped newest commit is never invisible.
         logger.warning(
             "[GITHUB-WEBHOOK] Could not fetch %s#%d after self-review "
-            "(GITHUB_API_KEY unset or API error) — skipping the newest-head check",
+            "(GITHUB_API_KEY unset or API error) — cannot confirm the newest head",
             repo_full_name, pr_number,
         )
+        try:
+            await _create_pr_comment(
+                repo_owner, repo_name, pr_number,
+                "⚠️ The self-review completed, but Loma could not check GitHub for "
+                "newer commits afterwards (API error). If more commits were pushed "
+                f"while the review ran, comment `{REREVIEW_COMMAND}` to review the "
+                f"latest.\n\n{AGENT_REVIEW_MARKER}",
+            )
+        except Exception:
+            logger.warning(
+                "[GITHUB-WEBHOOK] Could not post the newest-head-unknown notice on %s#%d",
+                repo_full_name, pr_number,
+            )
         return False
     if latest.get("state") != "open":
         return False
