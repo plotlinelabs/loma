@@ -505,6 +505,7 @@ export interface SlackConfig {
 }
 
 export interface Flow {
+  can_manage?: boolean;
   flow_id: string;
   name: string;
   description: string;
@@ -592,7 +593,10 @@ export async function updateFlow(id: string, updates: Partial<Flow>): Promise<{ 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
-  if (!res.ok) throw new Error(`Failed to update flow: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Flow was not saved. Please try again.");
+  }
   return res.json();
 }
 
