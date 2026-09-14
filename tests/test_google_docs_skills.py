@@ -4,6 +4,7 @@ from copy import deepcopy
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from mongomock_motor import AsyncMongoMockClient
 
 from api import skill_service as skills, skill_sync_service as sync
@@ -55,7 +56,7 @@ class FakeGoogle:
         self.doc["revisionId"] = "rev" + str(len(self.writes)+1)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def env(monkeypatch):
     db = AsyncMongoMockClient().test
     fake = FakeGoogle()
@@ -338,6 +339,7 @@ async def test_suspended_owner_can_disconnect(env):
     assert "source" not in result
 
 
+@pytest.mark.asyncio
 async def test_folder_list_preserves_unique_names(env):
     db, _ = env
     await db.skills.insert_many([
