@@ -121,7 +121,7 @@ Python 3.12, isolated virtualenv only:
 ```bash
 uv venv --python python3.12 .venv
 uv pip install --python .venv/bin/python -r requirements.txt \
-  pytest pytest-asyncio pytest-aiohttp mongomock-motor
+  pytest pytest-asyncio
 .venv/bin/python -m pytest tests/test_history_recall.py tests/test_conversation_sharing.py -q
 .venv/bin/python -m pytest tests -q
 ```
@@ -182,7 +182,7 @@ without a valid answer is **not** a passing agent test.
 LOMA_CHAT_E2E=1 \
 LOMA_CHAT_BASE_URL=http://localhost:13001 \
 LOMA_CHAT_MODEL="$TEST_MODEL" \
-LOMA_EMAIL="$TEST_EMAIL" LOMA_PASSWORD="$TEST_PASSWORD" LOMA_TOKEN="$TEST_SETUP_TOKEN" \
+LOMA_EMAIL="$TEST_EMAIL" LOMA_PASSWORD="$TEST_PASSWORD" LOMA_TOKEN="${TEST_SETUP_TOKEN}" \
 LOMA_CHAT_EVIDENCE=/tmp/loma-chat-evidence \
 node scripts/browser/chat-smoke.cjs
 ```
@@ -206,3 +206,15 @@ chat **and task** execution, search/fetch tool invocation, citations, isolation,
 revocation, error recovery and runtime-budget tests. Passing the baseline does
 not prove autonomous recall or cover every provider/model. Run the baseline for
 each runtime affected by a PR; explicitly mark unavailable runtimes as unverified.
+
+## CI dependency and local environment parity
+
+CI installs `requirements.txt` plus `pytest` and `pytest-asyncio`. The Mongo
+mock and aiohttp test fixtures are pinned in that shared requirements file so test collection works without
+changing the workflow. This also installs these test packages in runtime environments; they
+are not used by production code. A separate test dependency file can be introduced
+later with a workflow update.
+
+The default-model test assumes `AGENT_DEFAULT_MODEL` is unset, as on GitHub
+Actions. When running from a deployed Loma environment, use
+`env -u AGENT_DEFAULT_MODEL .venv/bin/python -m pytest -q` for CI parity.
