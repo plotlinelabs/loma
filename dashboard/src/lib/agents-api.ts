@@ -12,6 +12,24 @@ export interface AgentAvatarSpec {
   motif: AgentMotif;
 }
 
+export interface AgentSharedWith {
+  users: string[];
+  teams: string[];
+}
+
+export interface DirectoryUser {
+  email: string;
+  name: string;
+  avatar: string;
+}
+
+export interface DirectoryTeam {
+  team_id: string;
+  name: string;
+  color?: string;
+  bg_color?: string;
+}
+
 export interface AgentIdentity {
   agent_id: string;
   name: string;
@@ -21,6 +39,7 @@ export interface AgentIdentity {
   tools: string[];
   auth_mode: "requester";
   visibility: AgentVisibility;
+  shared_with?: AgentSharedWith;
   default_model: string | null;
   avatar: AgentAvatarSpec;
   status: "active" | "disabled";
@@ -37,6 +56,7 @@ export interface AgentIdentityInput {
   skills?: string[];
   tools?: string[];
   visibility?: AgentVisibility;
+  shared_with?: AgentSharedWith;
   default_model?: string | null;
   avatar?: AgentAvatarSpec;
   status?: "active" | "disabled";
@@ -45,6 +65,12 @@ export interface AgentIdentityInput {
 async function parseError(res: Response, fallback: string): Promise<never> {
   const err = await res.json().catch(() => ({}));
   throw new Error(err.error || `${fallback}: ${res.status}`);
+}
+
+export async function fetchShareDirectory(): Promise<{ users: DirectoryUser[]; teams: DirectoryTeam[] }> {
+  const res = await fetch(`${API_BASE}/api/agent-identities/directory`);
+  if (!res.ok) return parseError(res, "Failed to fetch share directory");
+  return res.json();
 }
 
 export async function fetchAgentIdentities(): Promise<{ agents: AgentIdentity[] }> {

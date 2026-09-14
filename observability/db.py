@@ -126,6 +126,8 @@ async def init_observability():
     await _db.agent_identities.create_index("agent_id", unique=True)
     await _db.agent_identities.create_index("created_by")
     await _db.agent_identities.create_index("visibility")
+    await _db.agent_identities.create_index("shared_with.users")
+    await _db.agent_identities.create_index("shared_with.teams")
     await _db.conversations.create_index("metadata.agent_id")
 
     # Org integrations (dynamic MCP config)
