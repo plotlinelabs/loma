@@ -1,4 +1,5 @@
 "use client";
+import type { ToolConfig } from "@/lib/api";
 
 import PetCompanion from "@/components/PetCompanion";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -139,7 +140,7 @@ export default function TasksPage() {
   }, [sessionStatus, refresh]);
 
   const handleTaskSubmit = async (
-    values: { title: string; prompt: string; lane: string; model: string },
+    values: { title: string; prompt: string; lane: string; model: string; tool_config: ToolConfig },
     start: boolean,
   ) => {
     busyRef.current = true;
@@ -151,6 +152,7 @@ export default function TasksPage() {
           prompt: values.prompt,
           task_lane: values.lane,
           model: values.model,
+          tool_config: values.tool_config,
         });
         conversationId = editingTask.conversation_id;
       } else {
@@ -159,6 +161,7 @@ export default function TasksPage() {
           title: values.title || undefined,
           lane: values.lane,
           model: values.model || undefined,
+          tool_config: values.tool_config,
         });
         conversationId = task.conversation_id;
       }

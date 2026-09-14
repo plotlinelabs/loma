@@ -288,6 +288,8 @@ export interface AvailableSkill {
   name: string;
   description: string;
   tags?: string[];
+  scope?: "workspace" | "personal" | "system";
+  folder?: string | null;
 }
 
 export interface AvailableToolsResponse {
@@ -1091,6 +1093,7 @@ export interface TaskTag {
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 
 export interface Task {
+  tool_config?: ToolConfig | null;
   conversation_id: string;
   title: string | null;
   prompt: string;
@@ -1175,6 +1178,7 @@ export async function updateTask(
     prompt?: string;
     title?: string;
     model?: string;
+    tool_config?: ToolConfig | null;
     task_tag_ids?: string[];
     task_priority?: TaskPriority | null;
     task_deadline?: string | null;
