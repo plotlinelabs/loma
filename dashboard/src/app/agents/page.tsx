@@ -39,6 +39,7 @@ import {
   RiRobot2Line,
 } from "@remixicon/react";
 
+import { AgentWork } from "./AgentWork";
 import { SelectionTree } from "./SelectionTree";
 import { skillOptions, toolOptions } from "./selection-options";
 
@@ -110,6 +111,7 @@ function ChipToggle({
 export default function AgentsPage() {
   const router = useRouter();
   const { user, hasRole } = useUser();
+  const [workAgent, setWorkAgent] = useState<AgentIdentity | null>(null);
   const [agents, setAgents] = useState<AgentIdentity[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [skillsError, setSkillsError] = useState<string>();
@@ -126,6 +128,8 @@ export default function AgentsPage() {
     try {
       const data = await fetchAgentIdentities();
       setAgents(data.agents || []);
+      const workId = new URL(window.location.href).searchParams.get("work");
+      if (workId) setWorkAgent(data.agents.find((agent) => agent.agent_id === workId) || null);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load agents");
@@ -209,7 +213,7 @@ export default function AgentsPage() {
         <div>
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Agents</h1>
           <p className="text-[13px] text-muted-foreground">
-            Create and share agents with their own persona, skills, and tool scope.
+            Choose a specialist to chat with or give it scheduled work.
           </p>
         </div>
         <Button
@@ -222,6 +226,7 @@ export default function AgentsPage() {
         </Button>
       </div>
 
+      {workAgent && <AgentWork agent={workAgent} onClose={() => setWorkAgent(null)} />}
       <div className="flex-1 overflow-y-auto p-3 lg:p-4">
         {error && (
           <Alert variant="destructive" className="mb-3">
@@ -254,6 +259,11 @@ export default function AgentsPage() {
                     <p className="text-xs text-muted-foreground line-clamp-2">{agent.description}</p>
                   </div>
                 </div>
+                {hasRole("analyst") && (
+                  <Button variant="outline" size="sm" onClick={() => setWorkAgent(agent)}>
+                    Scheduled work
+                  </Button>
+                )}
                 <div className="mt-auto flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="inline-flex items-center gap-1.5">
                     <span
