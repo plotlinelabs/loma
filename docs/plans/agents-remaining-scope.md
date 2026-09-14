@@ -1,11 +1,58 @@
 # Agents completion checklist
 
-## Status and delivery constraint
+## Current delivery status
 
-PRs #187 and #190 are merged. This change implements **legacy identity compatibility only**.
-The items below are a design/acceptance checklist, **not implemented functionality**.
-The requested all-in-one implementation exceeds the automated implementation playbook's
-scope limit (10+ files or a large refactor). Deliver these as bounded, reviewed changes.
+PRs #187 and #190 are merged. This single draft PR retains the legacy migration
+and adds an experimental bounded-work vertical slice across the eight areas below.
+It is **not yet the entire roadmap or a production release**. Unchecked checklist
+items below remain release targets, not claims of completion.
+
+Implemented in this branch:
+- Text-only planner with no SDK tools, shell or supplied credentials. A fixed broker
+  supports Gmail search/read/send, exact recipient allowlists and allow/ask/deny.
+- Signed human control plane; owner-scoped jobs, runs, approvals and notes.
+- Versioned approval edits with prior payload audit, 24-hour expiry, explicit decisions,
+  single execution claim and receipts. Unknown outcomes are not retried automatically.
+- Agent work page, Work and Needs you views, question/approval distinction, saved
+  permission details, run history, desktop/mobile review dialogs and setup templates.
+- Separate jobs/runs, checkpointed decisions, 120-second leases, one active run per job,
+  shared model-call limits, delayed wake-ups and cancelled child propagation.
+- Private recurring schedules, explicit enable/pause, schedule editing that pauses before
+  re-enablement, next-run/error visibility, and no fallback to unrestricted execution.
+- One-level delegation to selected agents under the same principal and parent grant.
+- Up to ten private, editable notes per agent, including small text/Markdown attachments.
+
+Important limitations requiring follow-up before broad rollout:
+- Gmail-only actions. This does not retrofit the legacy chat/SDK/shell runtime with
+  enforcement. Those runtimes must not be described as protected by these policies.
+- Broker and legacy runtimes still share infrastructure. Isolating their secrets and
+  operating-system authority is required against a compromised legacy runtime.
+- Planner calls use a separately configured Anthropic model. No live model or Gmail
+  delivery was exercised in QA; the planner and delivery adapter were stubbed.
+- Model-call/output limits are not dollar budgets, full token accounting, job deadlines,
+  or configurable transient-error retry policies.
+- Event keys provide deduplicated enqueue via the signed API; external ticket/webhook
+  subscription wiring and a general event outbox are not implemented.
+- Unknown delivery outcomes require manual investigation; no reconciliation UI yet.
+- Private notes are a small knowledge store, not a Drive/PDF retrieval system or separate
+  workspace knowledge and long-term memory services.
+- Agent work has its own focused card view. The existing personal taskboard and chats
+  have not been migrated or unified with it.
+
+## Enablement and trust boundary
+
+Default: off. Set `LOMA_BOUNDED_WORK_ENABLED=true` in the backend, a matching
+`LOMA_WORK_GATEWAY_SECRET` (at least 32 random characters) in backend/dashboard,
+`LOMA_WORK_MODEL`, `ANTHROPIC_API_KEY`, and enable the scheduler only after review.
+Never put the gateway secret in a `NEXT_PUBLIC_*` variable. The planner receives only
+job context, permitted private notes and prior results; it has no arbitrary tool API.
+The broker mints the existing personal CLI token only at dispatch, not in model context.
+Use a separately isolated worker deployment before enabling for sensitive workloads.
+
+Generic Flows API mutations cannot detach or manage bounded schedules. Manage these
+through Agent work. Approval waiting does not require an active worker lease; execution
+still requires a fresh lease and authority check. Approval is never a guarantee of send:
+provider timeouts are visibly uncertain, and cancellation cannot undo an in-flight send.
 
 ## Legacy identity compatibility (implemented here)
 

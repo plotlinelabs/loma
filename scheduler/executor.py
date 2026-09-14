@@ -62,6 +62,26 @@ async def execute_flow(flow_id: str):
         logger.info("[SCHEDULER] Flow %s not active or not found, skipping", flow_id)
         return
 
+    if flow.get("bounded_work_id"):
+        from api.bounded_work_routes import enabled
+        from autonomy.core import enqueue
+        if not enabled():
+            return  # Never fall through to the unrestricted SDK runtime.
+        work = await db.agent_work.find_one({"work_id": flow["bounded_work_id"]})
+        if work and not work.get("paused") and not work.get("revoked"):
+            try:
+                await require_execution_account(db, flow)
+                if flow.get("run_as") != work["owner"]:
+                    raise ValueError("Work and schedule execution accounts differ")
+                key = "schedule:" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+                run = await enqueue(db, work, key)
+                await db.flows.update_one({"flow_id": flow_id}, {"$set": {
+                    "last_run_at": datetime.now(timezone.utc), "last_error": None,
+                    "last_bounded_run_id": run["run_id"], "next_run_at": get_next_run_time(flow_id)}})
+            except ValueError as exc:
+                await db.flows.update_one({"flow_id": flow_id}, {"$set": {"last_error": str(exc)}})
+        return
+
     # A deploy is draining: don't start a run the restart would kill. Flag the
     # flow so the new server runs it on boot (see engine._run_deferred_flows).
     if is_draining():

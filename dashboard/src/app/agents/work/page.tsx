@@ -1,0 +1,141 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { basePath } from "@/lib/api";
+import { fetchAgentIdentities, type AgentIdentity } from "@/lib/agents-api";
+import { useUser } from "@/lib/UserContext";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+
+type Mode = "allow" | "ask" | "deny";
+type Policy = { actions: Record<string, Mode>; recipients: string[] };
+type Work = { work_id: string; title: string; agent_id: string; owner: string; instructions: string; success: string; paused: boolean; revoked?: boolean; max_steps: number; policy: Policy; cron?: string; timezone?: string; flow_id?: string; next_run_at?: string; schedule_error?: string };
+type Run = { run_id: string; work_id: string; status: string; dry_run: boolean; step: number; max_steps: number; calls_used: number; result: string; question?: string; wake_at: string; parent_id?: string; history: Record<string, unknown>[] };
+type Approval = { approval_id: string; work_id: string; run_id: string; action: string; args: Record<string,string>; reason: string; owner: string; status: string; version: number; expires_at: string; receipt?: unknown };
+type Note = { note_id: string; title: string; content: string };
+type Overview = { work: Work[]; runs: Run[]; approvals: Approval[]; model_ready: boolean; google_connected: boolean; worker_enabled: boolean };
+const actions = { "gmail.search": "Search my Gmail", "gmail.read": "Read my Gmail", "gmail.send": "Send email" };
+const select = "h-10 w-full rounded-md border bg-background px-3 text-sm";
+const initialPolicy: Policy = { actions: { "gmail.search": "deny", "gmail.read": "deny", "gmail.send": "ask" }, recipients: [] };
+const statusLabel = (status: string) => ({ waiting_approval: "Needs approval", needs_input: "Needs your input", waiting_child: "Waiting for delegate", queued: "Waiting to wake", executing: "Executing", uncertain: "Outcome unknown", preview: "Preview only" }[status] || status.replaceAll("_", " "));
+
+async function api<T>(path: string, body?: unknown, method = body ? "POST" : "GET"): Promise<T> {
+  const result = await fetch(`${basePath}/work-api/${path}`, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const data = await result.json();
+  if (!result.ok) throw new Error(data.error || "Request failed. Refresh before trying again.");
+  return data as T;
+}
+
+export default function AgentWorkPage() {
+  const { user } = useUser();
+  const [data, setData] = useState<Overview | null>(null);
+  const [agents, setAgents] = useState<AgentIdentity[]>([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [tab, setTab] = useState("work");
+  const [creating, setCreating] = useState(false);
+  const [title, setTitle] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [success, setSuccess] = useState("");
+  const [policy, setPolicy] = useState<Policy>(initialPolicy);
+  const [recipients, setRecipients] = useState("");
+  const [delegates, setDelegates] = useState<string[]>([]);
+  const [budget, setBudget] = useState(10);
+  const [review, setReview] = useState<Approval | null>(null);
+  const [editArgs, setEditArgs] = useState<Record<string,string> | null>(null);
+  const [detail, setDetail] = useState<Run | null>(null);
+  const [answer, setAnswer] = useState("");
+  const [schedule, setSchedule] = useState<Work | null>(null);
+  const [cron, setCron] = useState("0 9 * * 1-5");
+  const [zone, setZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [notesAgent, setNotesAgent] = useState("");
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [note, setNote] = useState<Note>({ note_id: "", title: "", content: "" });
+
+  const load = useCallback(async () => {
+    const [overview, list] = await Promise.all([api<Overview>("overview"), fetchAgentIdentities()]);
+    setData(overview); setAgents(list.agents); setError("");
+  }, []);
+  useEffect(() => { void load().catch(e => setError(e.message)); }, [load]);
+  useEffect(() => { const timer = setInterval(() => { if (!busy && !review && !creating && !notesAgent && !schedule) void load().catch(e => setError(e.message)); }, 10000); return () => clearInterval(timer); }, [busy, review, creating, notesAgent, schedule, load]);
+  const act = async (fn: () => Promise<unknown>, message = "Saved") => {
+    if (busy) return;
+    setBusy(true); setError(""); setNotice("");
+    try { await fn(); await load(); setNotice(message); }
+    catch (e) { setError(e instanceof Error ? e.message : "Request failed"); }
+    finally { setBusy(false); }
+  };
+  const pending = data?.approvals.filter(a => a.status === "pending" && new Date(a.expires_at) > new Date()) || [];
+  const questions = data?.runs.filter(r => r.status === "needs_input") || [];
+  const jobName = (id: string) => data?.work.find(w => w.work_id === id)?.title || "Delegated work";
+  const decide = (decision: string) => act(async () => {
+    if (!review) return;
+    await api(`approvals/${review.approval_id}`, { decision, version: review.version, ...(decision === "edit" ? { args: editArgs } : {}) });
+    setReview(null); setEditArgs(null);
+  }, decision === "approve" ? "Approved. Execution is checked separately; watch for a delivery receipt." : decision === "edit" ? "New version saved. Review it again before approving." : "Decision saved");
+  const openNotes = async (id: string) => { setNotesAgent(id); setNotes([]); setNote({ note_id: "", title: "", content: "" }); try { setNotes((await api<{notes: Note[]}>(`notes/${id}`)).notes); } catch(e) { setError((e as Error).message); } };
+
+  return <main className="mx-auto h-full w-full max-w-6xl space-y-6 overflow-y-auto p-4 pb-28 md:p-8 md:pb-12">
+    <header className="flex flex-wrap items-start justify-between gap-4">
+      <div><Link className="text-sm text-muted-foreground underline" href={`${basePath}/agents`}>Agents</Link><h1 className="mt-2 text-2xl font-semibold">Agent work</h1><p className="mt-1 text-sm text-muted-foreground">Give a job. Review what needs you. See what got done.</p></div>
+      <Button onClick={() => setCreating(true)} disabled={!data}>New work</Button>
+    </header>
+    {error && <div role="alert" className="rounded-xl border border-destructive p-3 text-sm">{error}<Button variant="ghost" size="sm" onClick={() => void load().catch(e => setError(e.message))}>Retry</Button></div>}
+    {notice && <div role="status" className="flex items-center justify-between gap-3 rounded-xl bg-muted p-3 text-sm">{notice}<Button variant="ghost" size="sm" onClick={() => setNotice("")}>Dismiss</Button></div>}
+    {data && (!data.model_ready || !data.worker_enabled) && <p role="status" className="rounded-xl border border-amber-300 p-3 text-sm">{!data.model_ready ? "Setup needed: ask an admin to connect the bounded-work model. You can save work, but it cannot run yet." : "Worker is off. Runs stay queued until the scheduler is enabled."}</p>}
+    <nav aria-label="Work views" className="flex flex-wrap gap-2 border-b pb-3">{[["work", "Work"], ["needs", `Needs you (${pending.length + questions.length})`], ["history", "Run history"]].map(([id, label]) => <Button key={id} variant={tab === id ? "default" : "ghost"} aria-pressed={tab === id} onClick={() => setTab(id)}>{label}</Button>)}</nav>
+    {!data && !error && <p role="status">Loading work…</p>}
+    {tab === "work" && data && <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">{data.work.length === 0 && <section className="col-span-full rounded-xl border border-dashed p-10 text-center"><h2 className="font-medium">Your agents have no work yet</h2><p className="mt-2 text-sm text-muted-foreground">Start with one small job and test it without accessing connected accounts.</p><Button className="mt-4" onClick={() => setCreating(true)}>Create your first job</Button></section>}{data.work.map(w => {
+      const runs = data.runs.filter(r => r.work_id === w.work_id);
+      const count = pending.filter(a => a.work_id === w.work_id).length;
+      return <section key={w.work_id} aria-label={w.title} className="min-w-0 space-y-3 rounded-xl border p-4">
+        <div className="flex justify-between gap-2 text-xs"><span className="font-semibold uppercase tracking-wide">⚙ Work</span><span>{w.revoked ? "Revoked" : w.paused ? "Paused" : "Enabled"}</span></div>
+        <h2 className="break-words font-semibold">{w.title}</h2><p className="break-words text-sm text-muted-foreground">{w.success}</p>
+        <p className="break-all text-xs">Account: {w.owner}</p><p className="text-xs">{w.cron ? `Schedule: ${w.cron} · ${w.timezone}` : "Manual or event-triggered"}</p>
+        <p className="text-xs">Next wake-up: {w.paused ? "Paused" : w.next_run_at ? new Date(w.next_run_at).toLocaleString() : w.cron ? "Waiting for scheduler" : "When you start a run"}</p>{w.schedule_error && <p className="text-xs text-destructive">Schedule needs attention: {w.schedule_error}</p>}
+        <p className="text-xs text-muted-foreground">{w.max_steps} model calls shared with delegates. Saved agent instructions.</p><details className="text-xs"><summary className="cursor-pointer underline">Review saved job and permissions</summary><p className="mt-2 whitespace-pre-wrap break-words">{w.instructions}</p>{Object.entries(w.policy.actions).map(([action,mode]) => <p key={action}>{actions[action as keyof typeof actions]}: {mode === "ask" ? "Ask me each time" : mode === "allow" ? "Allowed automatically" : "Never"}</p>)}<p className="mt-2 break-all">Recipients: {w.policy.recipients.join(", ") || "None (sending blocked)"}</p><p className="mt-2">To change the grant, create a new job. Existing runs keep the saved version.</p></details>
+        {count > 0 && <Button variant="outline" className="border-amber-400" onClick={() => setTab("needs")}>{count} approvals need you</Button>}
+        {runs[0] && <button className="block text-left text-sm underline" onClick={() => {setDetail(runs[0]); setAnswer("");}}>Latest: {statusLabel(runs[0].status)}{runs[0].dry_run ? " (safe test)" : ""}</button>}
+        {!w.revoked && <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={busy || !data.model_ready} onClick={() => void act(() => api(`work/${w.work_id}/test`, { event_key: crypto.randomUUID() }), "Safe test queued. No connected-account reads or writes will execute.")}>Safe test</Button>
+          <Button size="sm" disabled={busy || !data.model_ready} onClick={() => void act(() => api(`work/${w.work_id}/${w.paused ? "enable" : "pause"}`, {}), w.paused ? "Work enabled. Run it now or add a schedule." : "Future triggers paused. Running work is not stopped.")}>{w.paused ? "Enable work" : "Pause triggers"}</Button>
+          {!w.paused && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api(`work/${w.work_id}/run`, { event_key: crypto.randomUUID() }), "Run queued")}>Run now</Button>}
+          <Button size="sm" variant="ghost" onClick={() => {setCron(w.cron || "0 9 * * 1-5"); setZone(w.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone); setSchedule(w);}}>{w.flow_id ? "Edit schedule" : "Add schedule"}</Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void openNotes(w.agent_id)}>Knowledge &amp; memory</Button>
+        </div>}
+      </section>;
+    })}</div>}
+    {tab === "needs" && <div className="space-y-4">{pending.length + questions.length === 0 && <p className="py-12 text-center text-muted-foreground">Nothing needs your attention.</p>}{questions.map(r => <section key={r.run_id} className="rounded-xl border p-4"><p className="text-xs font-semibold uppercase">Question · Not an approval</p><h2 className="mt-2 font-medium">{r.question}</h2><p className="text-sm text-muted-foreground">{jobName(r.work_id)}</p><Button className="mt-3" onClick={() => {setDetail(r); setAnswer("");}}>Answer question</Button></section>)}{pending.map(a => <section key={a.approval_id} className="min-w-0 space-y-2 rounded-xl border border-amber-400 bg-amber-50/40 p-4 dark:bg-amber-950/10"><p className="text-xs font-semibold uppercase tracking-wide">✋ Approval · Needs you</p><h2 className="break-words font-medium">{a.action === "gmail.send" ? `Send email to ${a.args.to}` : `Authorize ${a.action}`}</h2><p className="text-sm">{a.args.subject || a.reason}</p><p className="text-xs text-muted-foreground">From work: {jobName(a.work_id)} · Expires {new Date(a.expires_at).toLocaleString()}</p><Button variant="outline" onClick={() => {setReview(a); setEditArgs(null);}}>Review exact action</Button></section>)}</div>}
+    {tab === "history" && <div className="space-y-3">{data?.approvals.filter(a => ["executed", "uncertain", "executing", "rejected", "expired"].includes(a.status)).map(a => <details key={a.approval_id} className="rounded-xl border p-3 text-sm"><summary className="cursor-pointer">✋ {a.action} · {statusLabel(a.status)}</summary><p className="mt-2 break-all">Account: {a.owner}</p><pre className="mt-2 whitespace-pre-wrap break-words text-xs">{JSON.stringify(a.receipt || {status:a.status},null,2)}</pre>{a.status === "uncertain" && <p className="mt-2 text-destructive">Do not resend. Check the provider and contact an admin to reconcile this outcome.</p>}</details>)}{!data?.runs.length && <p className="py-12 text-center text-muted-foreground">Completed work and safe tests appear here.</p>}{data?.runs.map(r => <button key={r.run_id} onClick={() => {setDetail(r); setAnswer("");}} className="flex w-full flex-wrap items-center justify-between gap-2 rounded-xl border p-4 text-left hover:bg-muted"><span className="break-words font-medium">{jobName(r.work_id)}{r.dry_run && " · Safe test"}{r.parent_id && " · Delegate"}</span><span className="text-sm">{statusLabel(r.status)} · {r.step}/{r.max_steps} steps</span></button>)}</div>}
+    <Dialog open={creating} onOpenChange={v => { if (!busy) setCreating(v); }}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>Give an agent a job</DialogTitle><DialogDescription>Start small. Permissions are enforced by a bounded runner, not prompt instructions.</DialogDescription></DialogHeader>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <form className="space-y-4" onSubmit={e => {e.preventDefault(); void act(async () => { await api("work", { title, agent_id: agentId, instructions, success, policy: { ...policy, recipients: recipients.split(/[\n,]/).map(s => s.trim()).filter(Boolean) }, delegates, max_steps: budget }); setCreating(false); setTitle(""); setInstructions(""); setSuccess(""); }, "Work saved paused. Run a safe test, then enable it when ready.");}}>
+        <div><Label htmlFor="template">Start from a template</Label><select id="template" className={select} defaultValue="" onChange={e => {if (e.target.value) {setTitle(e.target.value); setSuccess("A concise summary and proposed next actions for my review."); setInstructions(e.target.value === "Invoice follow-up" ? "Review the invoice information in my notes and recent Gmail messages. Draft a polite reminder only for explicitly allowed recipients. Ask for missing invoice details." : "Review my attached notes and report the key facts, open questions and recommended next steps. Ask for missing source information.");}}}><option value="">Custom job</option><option>Invoice follow-up</option><option>Meeting preparation</option><option>Support triage</option></select></div>
+        <div><Label htmlFor="agent">Who should do it?</Label><select id="agent" className={select} required value={agentId} onChange={e => setAgentId(e.target.value)}><option value="">Select agent</option>{agents.map(a => <option key={a.agent_id} value={a.agent_id}>{a.name}</option>)}</select></div>
+        <div><Label htmlFor="job-title">Job</Label><Input id="job-title" required maxLength={120} value={title} onChange={e => setTitle(e.target.value)} /></div>
+        <div><Label htmlFor="instructions">Instructions and sources</Label><Textarea id="instructions" required maxLength={8000} value={instructions} onChange={e => setInstructions(e.target.value)} /></div>
+        <div><Label htmlFor="success">What should a good result look like?</Label><Textarea id="success" required maxLength={2000} value={success} onChange={e => setSuccess(e.target.value)} /></div>
+        <p className="text-xs">Google: {data?.google_connected ? "Connected (permissions rechecked on execution)" : "Not connected. Connect Google in Integrations before live Gmail work."}</p><fieldset className="space-y-3 rounded-xl border p-3"><legend className="px-1 text-sm font-semibold">Permissions</legend><p className="text-xs text-muted-foreground">Unknown actions, shell commands, arbitrary URLs and other accounts are blocked. Gmail reads cover your mailbox.</p>{Object.entries(actions).map(([key,label]) => <div key={key} className="grid grid-cols-2 items-center gap-3"><Label htmlFor={key}>{label}</Label><select id={key} className={select} value={policy.actions[key]} onChange={e => setPolicy({...policy, actions: {...policy.actions, [key]: e.target.value as Mode}})}><option value="deny">Never</option><option value="ask">Ask me each time</option><option value="allow">Allow automatically</option></select></div>)}<Label htmlFor="recipients">Allowed email recipients (exact addresses)</Label><Textarea id="recipients" value={recipients} onChange={e => setRecipients(e.target.value)} placeholder="One address per line. Empty means no sending." /><p className="break-all text-xs">Uses {user?.email}. Nothing inherits the agent creator’s credentials.</p></fieldset>
+        <fieldset className="space-y-2"><legend className="text-sm font-medium">Allowed delegates (optional)</legend><p className="text-xs text-muted-foreground">One level only. Same account and shared budget. No extra permissions.</p>{agents.filter(a => a.agent_id !== agentId).map(a => <label key={a.agent_id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={delegates.includes(a.agent_id)} onChange={e => setDelegates(e.target.checked ? [...delegates,a.agent_id] : delegates.filter(id => id !== a.agent_id))} />{a.name}</label>)}</fieldset>
+        <div><Label htmlFor="budget">Maximum model calls (including delegates)</Label><Input id="budget" type="number" min={1} max={30} required value={budget} onChange={e => setBudget(Number(e.target.value))} /><p className="mt-1 text-xs text-muted-foreground">Up to 2,048 output tokens per call. Not a dollar budget.</p></div>
+        <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => setCreating(false)}>Cancel</Button><Button disabled={busy}>{busy ? "Saving…" : "Save paused work"}</Button></div>
+      </form>
+    </DialogContent></Dialog>
+    <Dialog open={!!review} onOpenChange={v => {if (!v && !busy) {setReview(null); setEditArgs(null);}}}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>Review before authorizing</DialogTitle><DialogDescription>Approval applies only to this version. It does not mean the action has executed.</DialogDescription></DialogHeader>{review && <div className="space-y-4">
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <p className="text-sm">{review.reason}</p><dl className="space-y-2 text-sm"><div><dt className="font-medium">Account</dt><dd className="break-all">{review.owner}</dd></div><div><dt className="font-medium">Action</dt><dd>{review.action} · Version {review.version}</dd></div></dl>
+      {Object.entries(editArgs || review.args).map(([key,value]) => <div key={key}><Label htmlFor={`review-${key}`}>{{to:"Recipient",subject:"Subject",body:"Message",query:"Search query",message_id:"Message ID"}[key] || key}</Label>{editArgs ? <Textarea id={`review-${key}`} value={value} onChange={e => setEditArgs({...editArgs,[key]:e.target.value})} rows={key === "body" ? 8 : 2} /> : <p id={`review-${key}`} className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-sm">{value}</p>}</div>)}
+      <p className="text-xs text-muted-foreground">Expires {new Date(review.expires_at).toLocaleString()}. Editing creates a new version that must be reviewed again.</p>
+      <div className="flex flex-wrap gap-2">{editArgs ? <><Button disabled={busy} onClick={() => void decide("edit")}>Save new version</Button><Button variant="outline" disabled={busy} onClick={() => setEditArgs(null)}>Cancel edit</Button></> : <><Button disabled={busy} onClick={() => void decide("approve")}>{review.action === "gmail.send" ? "Approve & send" : "Approve this action"}</Button><Button variant="outline" disabled={busy} onClick={() => setEditArgs({...review.args})}>Edit proposal</Button><Button variant="ghost" disabled={busy} onClick={() => void decide("reject")}>Reject</Button></>}</div>
+    </div>}</DialogContent></Dialog>
+    <Dialog open={!!detail} onOpenChange={v => {if (!v) setDetail(null);}}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{detail ? jobName(detail.work_id) : "Run"}</DialogTitle><DialogDescription>Progress and receipts. Chat or board movement cannot authorize actions.</DialogDescription></DialogHeader>{detail && <div className="space-y-4"><p>{statusLabel(detail.status)}{detail.dry_run && " · No external actions"}</p>{detail.result && <p className="whitespace-pre-wrap break-words text-sm">{detail.result}</p>}{detail.status === "needs_input" && <form onSubmit={e => {e.preventDefault(); void act(async () => {await api(`runs/${detail.run_id}/answer`, {answer}); setDetail(null);}, "Answer saved. No extra permissions granted.");}} className="space-y-3"><Label htmlFor="answer">{detail.question}</Label><Textarea id="answer" value={answer} required onChange={e => setAnswer(e.target.value)} /><Button disabled={busy}>Answer &amp; resume</Button></form>}<p className="text-xs">Next eligible wake: {new Date(detail.wake_at).toLocaleString()}</p>{detail.history.map((h,i) => <pre key={i} className="whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-xs">{JSON.stringify(h,null,2)}</pre>)}{!["done","failed","cancelled"].includes(detail.status) && <Button variant="outline" disabled={busy} onClick={() => void act(async () => {await api(`runs/${detail.run_id}/cancel`, {}); setDetail(null);}, "Stop requested. An external action already in progress may still complete.")}>Stop this run and delegates</Button>}</div>}</DialogContent></Dialog>
+    <Dialog open={!!schedule} onOpenChange={v => {if (!v && !busy) setSchedule(null);}}><DialogContent><DialogHeader><DialogTitle>{schedule?.flow_id ? "Edit schedule" : "Add a schedule"}</DialogTitle><DialogDescription>Uses Flows. Saved paused; enable work after reviewing it.</DialogDescription></DialogHeader>{error && <p role="alert" className="text-destructive">{error}</p>}<form className="space-y-4" onSubmit={e => {e.preventDefault(); void act(async () => {await api(`work/${schedule!.work_id}/schedule`, {cron, timezone:zone}); setSchedule(null);}, "Schedule saved paused. Enable the job to start future wake-ups.");}}><Label htmlFor="schedule-preset">Repeat</Label><select id="schedule-preset" className={select} value={["0 9 * * 1-5","0 9 * * *","0 * * * *"].includes(cron) ? cron : "custom"} onChange={e => setCron(e.target.value === "custom" ? "30 9 * * 1-5" : e.target.value)}><option value="0 9 * * 1-5">Weekdays at 9:00 AM</option><option value="0 9 * * *">Every day at 9:00 AM</option><option value="0 * * * *">Every hour</option><option value="custom">Custom schedule</option></select><Label htmlFor="cron">Cron expression (advanced)</Label><Input id="cron" value={cron} onChange={e => setCron(e.target.value)} required /><p className="text-xs">Default: Monday to Friday at 9:00. Missed executions coalesce; no replay storm.</p><Label htmlFor="timezone">Timezone</Label><Input id="timezone" value={zone} onChange={e => setZone(e.target.value)} required /><Button disabled={busy}>Save paused schedule</Button></form></DialogContent></Dialog>
+    <Dialog open={!!notesAgent} onOpenChange={v => {if (!v) setNotesAgent("");}}><DialogContent className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>Knowledge &amp; memory</DialogTitle><DialogDescription>Private to your account and this agent. Review, edit or delete notes. Deletion does not erase earlier run history. Shared agents do not share your notes.</DialogDescription></DialogHeader>{error && <p role="alert" className="text-destructive">{error}</p>}{notes.map(n => <div key={n.note_id} className="flex items-center justify-between gap-2 rounded-lg border p-2"><button className="text-left text-sm underline" onClick={() => setNote(n)}>{n.title}</button><Button variant="ghost" size="sm" disabled={busy} onClick={() => void act(async () => {await api(`notes/${notesAgent}/${n.note_id}`, undefined,"DELETE"); setNotes(notes.filter(x => x.note_id !== n.note_id)); if (note.note_id === n.note_id) setNote({note_id:"",title:"",content:""});}, "Note deleted; future retrievals cannot read it.")}>Delete</Button></div>)}<form className="space-y-3" onSubmit={e => {e.preventDefault(); void act(async () => {await api(`notes/${notesAgent}`, {...note,note_id:note.note_id || crypto.randomUUID()}); setNotes((await api<{notes:Note[]}>(`notes/${notesAgent}`)).notes); setNote({note_id:"",title:"",content:""});}, "Note saved");}}><Label htmlFor="note-file">Attach a playbook (.txt or .md, up to 6 KB)</Label><Input id="note-file" type="file" accept=".txt,.md" onChange={async e => {const file=e.target.files?.[0]; if (!file) return; if (file.size > 6000 || !/\.(txt|md)$/i.test(file.name)) {setError("Choose a text or Markdown file up to 6 KB."); return;} try {setNote({note_id:"", title:file.name, content:await file.text()});} catch {setError("Could not read this file. Try pasting its contents.");}}} /><Label htmlFor="note-title">Note title</Label><Input id="note-title" required value={note.title} onChange={e => setNote({...note,title:e.target.value})} /><Label htmlFor="note-content">Approved context or preference</Label><Textarea id="note-content" required maxLength={6000} rows={8} value={note.content} onChange={e => setNote({...note,content:e.target.value})} /><Button disabled={busy}>{note.note_id ? "Update note" : "Save note"}</Button></form></DialogContent></Dialog>
+  </main>;
+}

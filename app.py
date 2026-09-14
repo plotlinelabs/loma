@@ -147,6 +147,8 @@ async def main():
     setup_integration_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
     setup_agent_identity_routes(webhook_app)
+    from api.bounded_work_routes import setup_bounded_work_routes
+    setup_bounded_work_routes(webhook_app)
     setup_telegram_routes(webhook_app)
     setup_drain_routes(webhook_app)
 

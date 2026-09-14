@@ -101,6 +101,8 @@ def _check_flow_access(flow: dict, request) -> bool:
 
 def _can_manage_flow(flow: dict, request) -> bool:
     """Shared visibility grants reading, never use of someone else's account."""
+    if flow.get("bounded_work_id"):
+        return False  # Manage only through the signed bounded-work control plane.
     email = get_user_email(request).strip().lower()
     return get_system_role(request) == "admin" or (
         get_system_role(request) in ("operator", "maintainer")
@@ -111,6 +113,9 @@ def _can_manage_flow(flow: dict, request) -> bool:
 
 def _require_flow_manager(flow: dict, request):
     if not _can_manage_flow(flow, request):
+        if flow.get('bounded_work_id'):
+            raise web.HTTPForbidden(text='{"error": "Manage this schedule in Agents > Agent work"}',
+                                    content_type='application/json')
         raise web.HTTPForbidden(
             text='{"error": "Only the owner running as themselves or an admin can manage this flow"}',
             content_type="application/json",
@@ -221,6 +226,9 @@ async def handle_create_flow(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"error": f"Invalid JSON: {e}"}, status=400)
 
+    if "bounded_work_id" in body:
+        return web.json_response({"error": "Use Agent work to create bounded schedules"}, status=400)
+
     trigger_type = body.get("trigger_type", "scheduled")
 
     # Validate required fields based on trigger type
@@ -307,6 +315,9 @@ async def handle_update_flow(request: web.Request) -> web.Response:
     if existing is None or not _check_flow_access(existing, request):
         return web.json_response({"error": "Flow not found"}, status=404)
     _require_flow_manager(existing, request)
+
+    if "bounded_work_id" in body:
+        return web.json_response({"error": "The execution boundary cannot be changed"}, status=400)
 
     # Linked schedules pin their identity. Create a new schedule to adopt agent changes.
     if "agent_id" in body or "agent_snapshot" in body:
