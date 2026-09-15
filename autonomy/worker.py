@@ -79,27 +79,15 @@ async def adapter(action, args, owner, action_id):
     No shell and no caller-supplied executable/path/flags. The signed identity is
     minted here, never given to the model. No test run calls this adapter.
     """
-    import sys
-    from pathlib import Path
-    from tools._auth_token import create_user_auth_token
+    from autonomy.connector import gmail
+    from autonomy.reconciliation import message_id
     command = {'gmail.search': ['search', '--query', args.get('query', ''), '--limit', '5'],
                'gmail.read': ['read-email', '--message-id', args.get('message_id', '')],
-               'gmail.send': ['send-email', '--to', args.get('to', ''), '--subject', args.get('subject', ''), '--body', args.get('body', '')]}[action]
-    command = [sys.executable, str(Path(__file__).parents[1] / 'tools/gmail.py'),
-               '--auth-token', create_user_auth_token(owner), *command, '--user-email', owner]
-    proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), 45)
-    except BaseException:
-        proc.kill()
-        await proc.wait()
-        raise
-    if proc.returncode:
-        raise ValueError('Personal Gmail action failed. Check your Google connection.')
-    value = json.loads(out)
-    if isinstance(value, dict) and value.get('error'):
-        raise ValueError('Personal Gmail action failed')
-    # Store a bounded receipt, never stderr or process arguments (contain token).
+               'gmail.send': ['send-email', '--to', args.get('to', ''), '--subject', args.get('subject', ''),
+                              '--body', args.get('body', ''), '--rfc-message-id', message_id(action_id)]}[action]
+    value = await gmail(command, owner)
+    if action == 'gmail.send' and (value.get('sent') is not True or not value.get('messageId')):
+        raise ValueError('No provider send receipt was returned')
     return {'output': json.dumps(value)[:16000], 'action_id': action_id}
 
 

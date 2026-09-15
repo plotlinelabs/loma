@@ -73,6 +73,18 @@ async def main():
         assert a['receipt']['message'].startswith('Delivery outcome unknown')
         assert (await db.agent_runs.find_one({'run_id': a['run_id']}))['status'] == 'failed'
         print('Owner report saved; uncertain barrier and original receipt unchanged')
+    elif sys.argv[1] == 'provider-check':
+        from autonomy import reconciliation as recon
+        a = await db.agent_approvals.find_one({'owner': owner, 'status': 'uncertain'})
+        provider = AsyncMock(return_value={'outcome': 'candidate', 'rfc_message_id': a['provider_message_id'],
+            'message_id': 'SIMULATED-GMAIL-MATCH', 'cc': '', 'bcc': '', **a['args']})
+        await recon.sweep(db, provider)
+        provider.assert_awaited_once()
+        updated = await db.agent_approvals.find_one({'approval_id': a['approval_id']})
+        assert updated['provider_check']['outcome'] == 'sent'
+        assert updated['status'] == 'uncertain'
+        assert updated['receipt'] == a['receipt']
+        assert (await db.agent_runs.find_one({'run_id': a['run_id']}))['status'] == 'failed'
     elif sys.argv[1] == 'expire':
         from datetime import timedelta
         from autonomy.core import now

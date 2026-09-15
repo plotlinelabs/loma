@@ -44,7 +44,8 @@ Important limitations requiring follow-up before broad rollout:
   subscription wiring and a general event outbox are not implemented.
 - Unknown email outcomes now have an owner investigation UI and versioned audit.
   Reports are not provider-verified receipts and cannot clear the replay barrier;
-  automated provider reconciliation and controlled retry authorization remain open.
+  provider-backed Gmail Sent checks are now implemented for new correlated actions;
+  controlled retry authorization and held-charge reconciliation remain open.
 - Private notes are a small knowledge store, not a Drive/PDF retrieval system or separate
   workspace knowledge and long-term memory services.
 - Agent work has its own focused card view. The existing personal taskboard and chats
@@ -258,3 +259,54 @@ duplicates, worker failure and unknown send outcome in an isolated local stack.
 Attach real-browser desktop/mobile screenshots and test outputs. Keep new autonomous
 capabilities behind feature flags until the boundary and full workflow pass.
 Do not mark this checklist complete based only on unit tests or mocked UI endpoints.
+
+
+## Continuation: provider-backed Sent checks and connector hygiene
+
+New bounded Gmail sends receive a deterministic RFC Message-ID derived from the
+approval ID, persisted atomically with the execution claim before dispatch. This
+is a lookup correlation key, **not Gmail idempotency support**. Older uncertain
+sends without this marker remain manual; never synthesize evidence for them.
+
+A separate bounded worker loop checks uncertain sends without waking the model.
+It uses the owner's personal Gmail CLI, searches by exact RFC Message-ID under
+`SENT`, and compares recipient, subject, body and absence of CC/BCC. Only one exact
+candidate becomes "Verified in Gmail Sent". That confirms a matching Sent entry,
+not recipient delivery. Missing, ambiguous, changed or unavailable results remain
+unresolved. No negative result can authorize retry, no model cost hold is refunded,
+and no stopped run is resumed. Original receipt, uncertain replay barrier and human
+investigation history remain intact. Concurrent checks use a claim CAS and stale
+responses cannot overwrite newer evidence.
+
+Both saved and current Gmail search/read policies must be `allow`. Active owner,
+agent visibility and work revocation are checked before and after lookup; previews
+never call the provider. Checks can continue after the run ends, but revoke blocks
+future calls. Each action permits at most five automatic attempts at five-minute
+intervals. A failed worker attempt consumes its slot and is recoverable after the
+claim interval. Ten candidates per sweep keep memory bounded; ineligible entries
+are deferred so they do not monopolize the queue. No account read permission is
+implicitly upgraded from `ask` to `allow`.
+
+The personal connector bridge now starts Python in isolated import mode (`-I`),
+with a private temporary working directory, explicit OAuth/DB environment allowlist,
+dotenv loading disabled, stdin/stderr discarded, 45-second timeout and bounded stdout.
+Timeouts and oversized responses kill/reap the child. No inherited model, GitHub,
+proxy or Python injection environment is passed. **This is subprocess hygiene, not
+OS/runtime isolation**: the helper still needs DB/OAuth authority and shares the OS
+user/filesystem with legacy execution. Separate deployment, secret authority and
+network/filesystem restrictions remain release blockers.
+
+UI separates provider evidence from owner notes, moves positively verified entries
+out of Needs you, and keeps the original unknown receipt collapsed and labeled as
+historical so it does not contradict the current verified status.
+
+Verification: 667 backend tests, 131 opt-in policy/database checks, TypeScript, and
+real local backend/Next.js browser checks at desktop/mobile widths. Provider/model
+calls were simulated. No real account read, send, delivery or production deployment
+was tested. Gmail behavior follows the official message-list API:
+https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list
+
+Still outstanding: full runtime isolation; additional connectors and external event
+subscriptions; held model-charge reconciliation and safe retry authorization; full
+personal taskboard and workspace knowledge integration. Do not mark the full Agents
+roadmap completed.

@@ -275,10 +275,12 @@ async def execute_proposal(db, proposal, run, adapter):
     expected = digest({'action': proposal['action'], 'args': proposal['args'], 'owner': run['owner']})
     if expected != proposal.get('approved_digest'):
         raise ValueError('Approval does not match the exact action')
+    from autonomy.reconciliation import message_id
+    correlation = {'provider_message_id': message_id(proposal['approval_id'])} if proposal['action'] == 'gmail.send' else {}
     claimed = await db.agent_approvals.find_one_and_update(
         {'approval_id': proposal['approval_id'], 'status': 'approved',
          'expires_at': {'$gt': now()}, 'digest': expected, 'approved_digest': expected},
-        {'$set': {'status': 'executing', 'execution_started_at': now()}},
+        {'$set': {'status': 'executing', 'execution_started_at': now(), **correlation}},
         return_document=ReturnDocument.AFTER)
     if not claimed:
         return None

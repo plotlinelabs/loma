@@ -81,7 +81,7 @@ async def handle(request):
                         run['shared_cost'] = {k: root.get(k, 0) for k in ('cost_committed_nusd', 'cost_recorded_nusd', 'input_tokens_used', 'output_tokens_used')}
                         run['shared_cost']['max_cost_microusd'] = root['snapshot'].get('max_cost_microusd', costs.DEFAULT_BUDGET_MICROUSD)
             attention = {'$or': [{'status': 'pending'}, {'status': 'uncertain', 'action': 'gmail.send',
-                         'reconciliation.outcome': {'$nin': ['sent', 'not_sent']}}]}
+                         'reconciliation.outcome': {'$nin': ['sent', 'not_sent']}, 'provider_check.outcome': {'$ne': 'sent'}}]}
             pending = await db.agent_approvals.find({'owner': owner, **attention}).sort('created_at', 1).limit(200).to_list(200)
             recent = await db.agent_approvals.find({'owner': owner, '$nor': [attention]}).sort('created_at', -1).limit(100).to_list(100)
             approvals = pending + recent
@@ -198,6 +198,7 @@ def response(value, status=200):
 
 async def lifecycle(app):
     task = None
+    reconciliation_task = None
     if enabled():
         db = get_db()
         if db is not None:
@@ -212,13 +213,24 @@ async def lifecycle(app):
                         logger.exception('Bounded worker tick failed')
                     await asyncio.sleep(2)
             task = asyncio.create_task(work_loop())
+            async def reconciliation_loop():
+                from autonomy.reconciliation import sweep
+                while True:
+                    try:
+                        if db is not None:
+                            await sweep(db)
+                    except Exception:
+                        logger.warning('Provider reconciliation sweep failed')
+                    await asyncio.sleep(60)
+            reconciliation_task = asyncio.create_task(reconciliation_loop())
     yield
-    if task:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    for background in (task, reconciliation_task):
+        if background:
+            background.cancel()
+            try:
+                await background
+            except asyncio.CancelledError:
+                pass
 
 
 def setup_bounded_work_routes(app):
