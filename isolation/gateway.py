@@ -24,12 +24,15 @@ class GatewayDenied(ValueError):
 
 
 class ToolGateway:
-    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None):
+    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None, models=None):
         if artifacts.authority != authority or not callable(authorize) or not callable(audit):
             raise ValueError('A matching server-owned artifact scope and policy are required')
         self.authority, self.authorize, self.audit = authority, authorize, audit
         self.artifacts = artifacts
         self.connector = connector
+        if models is not None and models.authority != authority:
+            raise ValueError('A matching server-owned model relay is required')
+        self.models = models
         self.lock = asyncio.Lock()
         self.calls = 0
 
@@ -44,6 +47,10 @@ class ToolGateway:
             self.calls += 1
             if not isinstance(tool, str) or tool not in authority.allowed_tools:
                 raise GatewayDenied('Tool is not allowed')
+            if tool.startswith('model.'):
+                if self.models is None:
+                    raise GatewayDenied('Model relay is unavailable')
+                return await self.models(authority, tool, arguments)
             schema = FILE_SCHEMAS.get(tool, READ_SCHEMAS.get(tool))
             if schema is None or not isinstance(arguments, dict) or set(arguments) != schema:
                 raise GatewayDenied('Unknown tool or invalid arguments')

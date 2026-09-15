@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from aiohttp import web, WSMsgType
 from isolation.protocol import MAX_FRAME, MAX_INPUT, ProtocolError, decode, response_frame, worker_frame
 
-LABEL = 'so.plotline.loma.isolated-worker=1'
+LABEL = 'io.loma.isolated-worker=1'
 
 
 @dataclass(frozen=True)

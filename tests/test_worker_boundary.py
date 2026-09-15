@@ -2,6 +2,7 @@
 import asyncio
 import json
 import ssl
+import secrets
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -15,7 +16,7 @@ from isolation.client import stream_worker, WorkerUnavailable, transport_context
 from isolation.protocol import RunAuthority, ProtocolError, MAX_FRAME, worker_frame, response_frame
 
 IMAGE = 'registry.example.test/worker@sha256:' + 'a' * 64
-TOKEN = 'synthetic-control-token-only-for-tests'
+TOKEN = secrets.token_urlsafe(32)
 
 
 def settings(**kw):

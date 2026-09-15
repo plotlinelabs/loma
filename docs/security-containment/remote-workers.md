@@ -164,3 +164,47 @@ backend CLI warmup, credential-free provider/model streaming proxies, all three
 worker CLI adapters, current tool/skill/recall adapters, trusted output download
 registration, then interactive/scheduled/recovery routing and rollout. Do not
 mark the PR ready on the strength of data-plane tests alone.
+
+## Streaming model data plane (current continuation)
+
+`isolation/models.py` adds a backend-only `ModelRelay`; `model_bridge.py` adds
+its worker-only loopback HTTP adapter. The bridge supports the Responses,
+Messages and Chat Completions wire paths. **This is wire-protocol coverage, not
+Claude/Codex/OpenCode runtime or subscription-account parity. Chat is still not
+routed through it.**
+
+- A server-created `ModelGrant` fixes the exact HTTPS endpoint, model, headers,
+  output ceiling and call ceiling. Worker frames contain only request bodies or
+  opaque stream IDs. No worker-supplied destination, credentials or HTTP headers.
+- A private, cookie-free backend HTTP session does not inherit environment proxy
+  settings or follow redirects. Provider response/error headers and error bodies
+  are not forwarded. Worker HTTP headers never become provider headers.
+- Requests force streaming and bounded output. Responses storage is disabled;
+  cross-response references, remote file/image URLs and hosted tool definitions
+  are denied. Local function descriptions are allowed, but their execution still
+  requires the independently authorized tool gateway. New provider features must
+  be explicitly reviewed rather than enabling a generic HTTP tunnel.
+- Backend authorization is rechecked before dispatch and after each response read.
+  Mandatory audit and durable budget reservation precede dispatch. HTTP failures,
+  cancellation, stream limits and revocation close the stream without retrying.
+- Settlement callbacks receive transport status only. **EOF is not a usage or
+  billing receipt, and must never release a reservation.** Provider-specific usage
+  parsing, subscription-account selection/refresh and existing cost accounting
+  adapters remain required before cutover. Closed/failed accounting stops further
+  use of the relay.
+- Run owners must call `ModelRelay.close()` in their teardown, independently of
+  whether the worker sent a close request. The loopback bridge closes its stream
+  when a runtime disconnects/errors or the bridge shuts down. Neither component
+  can start a legacy backend runtime as fallback.
+
+Tests exercise real local HTTP streams for all three wire protocols, and a real
+Python child through the existing supervisor WebSocket, gateway and synthetic
+provider. They check credentials, owner revocation, budget denial, header/redirect
+restrictions and cleanup. Docker/gVisor is substituted; provider responses are
+synthetic. These results are not proof of runtime, browser or deployment parity.
+
+The public-content scanner now uses the neutral `io.loma.isolated-worker` label;
+synthetic supervisor credentials are generated afresh per test process rather
+than embedded constants. No scanner rules or exemptions were relaxed. This change does not deploy or start the supervisor. Operators who have
+tested an earlier supervisor must drain its old-labelled containers before
+upgrading; the new label does not discover those containers automatically.
