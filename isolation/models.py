@@ -26,7 +26,7 @@ FIELDS = {
     'messages': {'model', 'messages', 'system', 'tools', 'tool_choice', 'stream',
                  'max_tokens', 'temperature', 'top_p', 'stop_sequences', 'thinking'},
     'chat': {'model', 'messages', 'tools', 'tool_choice', 'stream', 'max_tokens',
-             'max_completion_tokens', 'temperature', 'top_p', 'stop', 'parallel_tool_calls'},
+             'max_completion_tokens', 'temperature', 'top_p', 'stop', 'parallel_tool_calls', 'stream_options'},
 }
 # Never allow the model service to become an alternate connector, remote-MCP,
 # file-store or cross-conversation retrieval path. Text inside tool results is
@@ -34,7 +34,7 @@ FIELDS = {
 CONTENT_TYPES = {
     'responses': {'message', 'input_text', 'output_text', 'function_call', 'function_call_output'},
     'messages': {'text', 'tool_use', 'tool_result', 'thinking', 'redacted_thinking'},
-    'chat': {'text'},
+    'chat': {'text', 'function'},
 }
 
 
@@ -51,10 +51,28 @@ class ModelGrant:
     max_output_tokens: int = 8192
     max_calls: int = 32
     native_codex: bool = False
+    native_claude: bool = False
+    history: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
     def __post_init__(self):
         if type(self.native_codex) is not bool or (self.native_codex and self.protocol != 'responses'):
             raise ValueError('Native Codex requires the Responses protocol')
+        if type(self.native_claude) is not bool or (self.native_claude and self.protocol != 'messages'):
+            raise ValueError('Native Claude requires the Messages protocol')
+        # Only authenticated backend code may select conversation history.
+        # Never restore a native HOME, account file, model-side conversation ID
+        # or untrusted serialized tool call to resume a disposable worker.
+        if not isinstance(self.history, (list, tuple)) or len(self.history) > 100:
+            raise ValueError('Invalid conversation history')
+        history = []
+        for item in self.history:
+            if (not isinstance(item, (list, tuple)) or len(item) != 2
+                    or item[0] not in ('user', 'assistant') or not isinstance(item[1], str)):
+                raise ValueError('Only text conversation history is supported')
+            history.append(tuple(item))
+        if sum(len(text.encode()) for _, text in history) > 256 * 1024:
+            raise ValueError('Conversation history is too large')
+        object.__setattr__(self, 'history', tuple(history))
         target = urlsplit(self.endpoint)
         if (self.protocol not in FIELDS or target.scheme != 'https' or not target.hostname
                 or target.username or target.password or target.query or target.fragment):
@@ -91,7 +109,32 @@ def _content(value, protocol, depth=0):
                 _content(child, protocol, depth + 1)
 
 
+def _without_cache(value, depth=0):
+    if depth > 32:
+        raise ModelDenied('Model content is too deeply nested')
+    if isinstance(value, list):
+        return [_without_cache(item, depth + 1) for item in value]
+    if isinstance(value, dict):
+        # Tool inputs are data, not provider fields; do not rewrite user data.
+        return {key: child if key in {'input', 'arguments', 'input_schema'} else _without_cache(child, depth + 1)
+                for key, child in value.items() if key != 'cache_control'}
+    return value
+
+
 def request_body(grant, body):
+    if grant.native_claude and isinstance(body, dict):
+        body = {key: value for key, value in body.items() if key != 'metadata'}
+        output_config = body.get('output_config', {})
+        if (not isinstance(output_config, dict) or set(output_config) - {'effort'}
+                or output_config.get('effort', 'high') not in ('low', 'medium', 'high', 'max')):
+            raise ModelDenied('Unsupported native effort configuration')
+        # No provider session/cache namespaces supplied by a native runtime.
+        body = {key: _without_cache(value) if key in {'messages', 'system', 'tools'} else value
+                for key, value in body.items()}
+        # The current worker API has no effort selection. Do not let a CLI
+        # default silently change the backend model grant's spending contract.
+        body.pop('output_config', None)
+
     if grant.native_codex and isinstance(body, dict):
         # Native clients attach local cache/session diagnostics. Do not forward
         # those as provider conversation identifiers or cache namespaces. No
@@ -130,6 +173,8 @@ def request_body(grant, body):
         raise ModelDenied('Invalid model request') from None
     if body.get('model') != grant.model or body.get('stream') is not True:
         raise ModelDenied('Model and streaming mode are fixed for this run')
+    if 'stream_options' in body and body['stream_options'] != {'include_usage': True}:
+        raise ModelDenied('Only final usage may be requested')
     if grant.protocol == 'responses':
         if 'input' not in body:
             raise ModelDenied('Model input is required')
@@ -139,6 +184,9 @@ def request_body(grant, body):
     else:
         if not isinstance(body.get('messages'), list) or not body['messages']:
             raise ModelDenied('Messages are required')
+        roles = ('user', 'assistant') if grant.protocol == 'messages' else ('system', 'developer', 'user', 'assistant', 'tool')
+        if any(not isinstance(message, dict) or message.get('role') not in roles for message in body['messages']):
+            raise ModelDenied('Invalid message role or structure')
         _content(body['messages'], grant.protocol)
         if grant.protocol == 'messages':
             _content(body.get('system'), grant.protocol)
@@ -173,6 +221,26 @@ def request_body(grant, body):
             name = tool['function'].get('name')
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', name):
             raise ModelDenied('Invalid local function name')
+    if grant.history:
+        if grant.protocol == 'responses':
+            current = body['input']
+            if isinstance(current, str):
+                current = [{'role': 'user', 'content': [{'type': 'input_text', 'text': current}]}]
+            if not isinstance(current, list):
+                raise ModelDenied('Unsupported response history input')
+            prior = [{'role': role, 'content': [{'type': 'input_text' if role == 'user' else 'output_text',
+                                               'text': text}]} for role, text in grant.history]
+            body['input'] = prior + current
+        else:
+            current = body['messages']
+            leading = 0
+            if grant.protocol == 'chat':
+                while leading < len(current) and current[leading].get('role') == 'system':
+                    leading += 1
+            body['messages'] = (current[:leading] + [{'role': role, 'content': text}
+                               for role, text in grant.history] + current[leading:])
+        if len(json.dumps(body, allow_nan=False).encode()) > MAX_FRAME - 1024:
+            raise ModelDenied('Model request including history exceeds the limit')
     return body
 
 

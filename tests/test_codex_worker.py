@@ -106,7 +106,7 @@ async def test_broker_bad_response_poisoned_not_retried():
     assert len(writes) == 1
 
 
-@pytest.mark.parametrize('update', [{'runtime': 'claude'}, {'argv': ['sh']}, {'auth_token': 'secret'},
+@pytest.mark.parametrize('update', [{'runtime': 'unknown'}, {'argv': ['sh']}, {'auth_token': 'secret'},
                                     {'resume_path': '/app/accounts'}, {'prompt': None}])
 def test_no_identity_executable_or_backend_resume_path_in_input(update):
     with pytest.raises(ProtocolError):

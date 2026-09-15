@@ -1,10 +1,10 @@
 # Remote chat worker migration
 
-## Status: partial native runtime adapter, NOT a production cutover
+## Status: three native runtime adapters, NOT a production cutover
 
 The approved direction is to retain chat while moving its workers off the
 backend. `isolation/` now contains the supervisor, backend transport, narrow
-wire protocol and an initial Codex adapter (see the latest section below). **Existing chat is not routed through them yet.** This is not
+wire protocol and native Codex, Claude Code and OpenCode adapters (see the latest section below). **Existing chat is not routed through them yet.** This is not
 completion of runtime isolation and must not be used to mark PR #191 ready.
 No existing backend, chat, scheduler, model account or production deployment is
 changed by adding these modules. Chat still has its previously documented risk.
@@ -210,7 +210,7 @@ tested an earlier supervisor must drain its old-labelled containers before
 upgrading; the new label does not discover those containers automatically.
 
 
-## Native Codex adapter (latest continuation)
+## Native Codex adapter (earlier continuation)
 
 `codex_worker.py` and `worker_entry.py` now run the **actual Codex app-server**
 through the model relay and framed tool gateway. This is no longer only a
@@ -264,3 +264,90 @@ chat remains on the legacy execution path and the PR must remain draft.
 Configuration follows the [official custom-provider reference](https://developers.openai.com/codex/config-reference),
 with app-server request/response fields verified from the pinned native binary's
 generated experimental JSON schema and actual protocol exchanges.
+
+
+## Claude/OpenCode adapters and backend-selected history (latest continuation)
+
+The worker entrypoint now selects the fixed Codex, Claude Code or OpenCode binary
+from its image. No executable path, account, environment, native session directory
+or arbitrary MCP configuration is accepted from the wire. **This completes these
+native adapter components, not the live-chat migration or the PR merge gate.**
+
+- Claude Code **2.1.261** runs in bare, nonpersistent mode with built-in tools,
+  skills, automatic memory and inherited settings disabled. Its Messages API and
+  fixed MCP catalog go through worker-local bridges. The API-key placeholder has
+  no provider authority and is discarded by the model bridge. The real provider
+  credential remains in the backend `ModelGrant`.
+- OpenCode **1.18.28** uses a fresh HOME and XDG directories, one custom Chat
+  Completions provider, no inherited plugins, no project/Claude configuration,
+  and a deny-by-default permission policy. Only the fixed gateway MCP catalog is
+  enabled. This is **not** parity for all existing OpenCode providers, coding
+  tools or runtime features. The native CLIs currently use an 8,192-token output
+  ceiling; construct a matching backend grant or the request is denied.
+- The local `MCPBridge` exposes only initialize/ping/list/call. Tool names map to
+  the server-supplied catalog. Duplicate MCP call IDs never dispatch twice; failed
+  results contain no provider diagnostics. Backend resource/approval checks are
+  still mandatory. It is not an alternative privileged tool-execution layer.
+- A model-bridge failure now poisons that bridge. Native retries receive a
+  terminal 400 without another broker/provider dispatch. Cancellation shuts down
+  the native process group and closes both loopback bridges. Native success is
+  accepted only after a terminal success event and a zero process exit.
+- Native Claude compatibility is explicitly enabled on the backend grant. Local
+  metadata and cache hints are removed, without rewriting tool schemas or tool
+  input data. Unsupported hosted tools and remote references remain denied. Its
+  local `?beta=true` query is accepted only in the Messages bridge and never
+  forwarded as a worker-chosen upstream query. The current adapter does not
+  preserve effort selection; the CLI's default effort field is stripped.
+- A backend-selected immutable text transcript may be attached to a model grant
+  for a fresh worker. Only user/assistant text is accepted, with message/byte
+  limits. It is inserted once per provider request without native account/session
+  restore or historical tool re-execution. Chat system instructions keep their
+  leading position. **The conversation API must still load and authorize this
+  transcript before constructing the grant.** Claude/OpenCode adapter instances
+  are single-use, so a second turn cannot silently run without its prior history.
+- `deploy/worker/native.Dockerfile` is a pinned-CLI, explicit source-allowlist
+  recipe for the three native runtimes. It is not built, deployed or referenced
+  by production here. It must be built and containment-tested on the dedicated
+  worker host, then addressed by its immutable output digest.
+- `scripts/test_native_worker.sh` now requires all three pinned CLIs and fails
+  rather than quietly skipping if any is missing. The existing workflow still
+  needs a maintainer to install those CLIs before invoking it; no workflow
+  permissions were bypassed by moving installation into ordinary unit tests.
+
+### Verification for this continuation
+
+Fresh full-suite result: **1,101 passed, 108 skipped**, with the session model
+override unset. Public-content and secret scans pass.
+
+Fresh native tests use actual CLIs against synthetic local HTTP providers. They
+cover tool calls and tool-result continuation, unregistered tool rejection,
+provider failure without upstream retry, cancellation, real worker subprocesses
+through the supervisor transport, and fresh-worker text-history replay for all
+three runtimes. Additional tests cover the MCP catalog, duplicate/concurrent IDs,
+malformed messages, safe diagnostics and history/cache/schema validation.
+
+No paid provider calls, personal-account operations, browser parity checks or
+Docker/gVisor containment validation were performed for this continuation.
+The native image recipe has not been built here. These are not substitutes for
+those checks, and no old UI screenshots establish the new chat path.
+
+### Remaining migration, not just testing
+
+1. Backend subscription-account selection/refresh and authoritative model usage
+   settlement must construct and service the new grants.
+2. The existing chat tool/skill/recall surface still needs typed, current-access
+   gateway adapters; no generic backend-shell escape hatch is acceptable.
+3. Chat attachments and generated-file download events still need to be connected
+   to the artifact broker. File component tests are not dashboard integration.
+4. Interactive chat, scheduled flows, recovery/resume, utility calls and pool
+   prewarming must be routed to remote workers, with no local fallback and a
+   tested drain/cutover procedure that preserves existing chat functionality.
+5. Then run the integrated desktop/mobile chat suite and hostile-worker checks
+   using the built images on a dedicated Docker/gVisor host.
+
+The PR remains draft. No deployment or production chat routing was changed.
+
+Native configuration references: [Claude Code CLI](https://code.claude.com/docs/en/cli-reference),
+[Claude MCP](https://code.claude.com/docs/en/mcp),
+[OpenCode configuration](https://opencode.ai/docs/config/) and
+[OpenCode MCP](https://opencode.ai/docs/mcp-servers/).

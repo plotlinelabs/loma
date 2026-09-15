@@ -17,13 +17,16 @@ PATHS = {'responses': '/v1/responses', 'messages': '/v1/messages', 'chat': '/v1/
 
 
 class ModelBridge:
-    def __init__(self, protocol, rpc):
-        if protocol not in PATHS or not callable(rpc):
+    def __init__(self, protocol, rpc, *, native_messages=False):
+        if (protocol not in PATHS or not callable(rpc) or type(native_messages) is not bool
+                or (native_messages and protocol != 'messages')):
             raise ValueError('A supported protocol and broker RPC are required')
         self.protocol, self.rpc = protocol, rpc
+        self.native_messages = native_messages and protocol == "messages"
         self.runner = None
         self.origin = None
         self.busy = False
+        self.failed = False
         self.tasks = set()
 
     async def serve(self):
@@ -45,8 +48,11 @@ class ModelBridge:
             raise
 
     async def handle(self, request):
-        if request.query_string or request.headers.get('Content-Encoding', 'identity') != 'identity':
+        if ((request.query_string and not (self.native_messages and request.query_string == 'beta=true'))
+                or request.headers.get('Content-Encoding', 'identity') != 'identity'):
             raise web.HTTPBadRequest(text='Unsupported model request')
+        if self.failed:
+            raise web.HTTPBadRequest(text="Model gateway failed; start a new authorized run")
         if self.busy:
             raise web.HTTPConflict(text='Only one model request may be active')
         self.busy = True
@@ -89,8 +95,10 @@ class ModelBridge:
         except web.HTTPException:
             raise
         except asyncio.CancelledError:
+            self.failed = True
             raise
         except Exception:
+            self.failed = True
             # Provider or broker error text can include privileged diagnostics.
             # After headers have gone out, abort the HTTP connection rather than
             # produce an apparently successful, truncated SSE response.
@@ -98,7 +106,7 @@ class ModelBridge:
                 if request.transport is not None:
                     request.transport.close()
                 return response
-            raise web.HTTPBadGateway(text='Model gateway unavailable; not retried') from None
+            raise web.HTTPBadRequest(text='Model gateway unavailable; not retried') from None
         finally:
             try:
                 if stream_id is not None:

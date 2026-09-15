@@ -285,7 +285,7 @@ async def test_worker_http_bridge_denies_proxy_paths_queries_and_hides_errors():
                     assert response.status in (400, 404)
             assert rpc.await_count == 0
             async with session.post(origin + '/v1/responses', json=body()) as response:
-                assert response.status == 502
+                assert response.status == 400
                 assert CANARY not in await response.text()
             assert rpc.await_count == 1
     finally:

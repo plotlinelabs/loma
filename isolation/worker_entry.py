@@ -56,14 +56,14 @@ class Broker:
 def validate_input(value):
     if (not isinstance(value, dict)
             or set(value) != {'runtime', 'model', 'instructions', 'prompt', 'tools'}
-            or value['runtime'] != 'codex'
+            or value['runtime'] not in ('codex', 'claude', 'opencode')
             or not isinstance(value['prompt'], str)
             or len(value['prompt'].encode()) > 512 * 1024):
         raise ProtocolError('Unsupported worker input')
     return value
 
 
-async def run(reader, write, *, root=Path('/workspace'), executable='/usr/local/bin/codex'):
+async def run(reader, write, *, root=Path('/workspace'), executable=None):
     raw = await asyncio.wait_for(reader.readline(), 15)
     first = decode(raw, limit=MAX_INPUT)
     if set(first) != {'type', 'input'} or first['type'] != 'start':
@@ -71,7 +71,18 @@ async def run(reader, write, *, root=Path('/workspace'), executable='/usr/local/
     value = validate_input(first['input'])
     broker = Broker(reader, write)
     with tempfile.TemporaryDirectory(dir=root, prefix='chat-') as work:
-        runtime = CodexRuntime(Path(work) / 'runtime', broker.rpc, broker.emit, executable=executable)
+        if value['runtime'] == 'claude':
+            from isolation.claude_worker import ClaudeRuntime
+            runtime_class = ClaudeRuntime
+        elif value['runtime'] == 'opencode':
+            from isolation.opencode_worker import OpenCodeRuntime
+            runtime_class = OpenCodeRuntime
+        else:
+            runtime_class = CodexRuntime
+        # Fixed image locations. The optional executable override is for trusted
+        # local tests, never a wire field or a fallback to backend execution.
+        executable = executable or '/usr/local/bin/' + value['runtime']
+        runtime = runtime_class(Path(work) / 'runtime', broker.rpc, broker.emit, executable=executable)
         try:
             await runtime.start(value['model'], value['instructions'], value['tools'])
             await runtime.turn(value['prompt'])

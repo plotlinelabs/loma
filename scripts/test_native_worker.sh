@@ -10,5 +10,20 @@ if ! codex --version 2>/dev/null | grep -qx 'codex-cli 0.153.3'; then
   echo 'Native worker tests require codex-cli 0.153.3.' >&2
   exit 1
 fi
+for native in claude opencode; do
+  if ! command -v "$native" >/dev/null 2>&1; then
+    echo "Install the pinned $native CLI before running native worker tests." >&2
+    exit 1
+  fi
+done
+if ! claude --version 2>/dev/null | grep -qx '2.1.261 (Claude Code)'; then
+  echo 'Native worker tests require Claude Code 2.1.261.' >&2
+  exit 1
+fi
+if ! opencode --version 2>/dev/null | grep -qx '1.18.28'; then
+  echo 'Native worker tests require OpenCode 1.18.28.' >&2
+  exit 1
+fi
 exec "${PYTHON:-python3}" -m pytest tests/test_codex_worker.py tests/test_worker_models.py \
-  tests/test_worker_boundary.py tests/test_worker_artifacts.py -q
+  tests/test_worker_boundary.py tests/test_worker_artifacts.py tests/test_claude_worker.py \
+  tests/test_opencode_worker.py tests/test_native_gateway_runtimes.py tests/test_mcp_bridge.py -q
