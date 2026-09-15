@@ -351,3 +351,31 @@ Native configuration references: [Claude Code CLI](https://code.claude.com/docs/
 [Claude MCP](https://code.claude.com/docs/en/mcp),
 [OpenCode configuration](https://opencode.ai/docs/config/) and
 [OpenCode MCP](https://opencode.ai/docs/mcp-servers/).
+
+## Provider-side usage evidence
+
+`isolation/usage.py` incrementally inspects the trusted upstream SSE bytes for
+Responses, Messages and Chat Completions. It does not accept a worker's usage
+claim. The optional `ModelRelay.record_usage` callback receives an immutable
+receipt bound to the backend-generated call ID before transport settlement, or
+`None` when the stream is interrupted, truncated, malformed or lacks terminal
+usage. Accounting failure closes the relay without replay. Receipts carry the
+provider-returned model and response ID, input/output counts and cache counts;
+no content, credentials or dollar-price assumptions are retained.
+
+Messages output counts are cumulative, not summed across deltas. OpenAI cached
+input is a subset of total input; Messages cache creation/read counts remain
+separate. Input/output totals, nonnegative integer ranges, event size and
+protocol completion are validated. The accounting adapter must still validate
+model/rate compatibility and perform durable idempotent settlement. A token
+receipt is not a provider invoice and transport EOF alone never refunds a hold.
+
+References: [Messages streaming usage](https://platform.claude.com/docs/en/build-with-claude/streaming),
+[Chat stream usage](https://developers.openai.com/api/reference/resources/chat),
+and the installed OpenAI SDK's `ResponseCompletedEvent` / `ResponseUsage` types.
+
+**This does not complete account integration or route chat to isolated workers.**
+Those migration and deployment gates above remain open. Tests use synthetic
+provider streams, including real HTTP relay calls, arbitrary chunk boundaries,
+missing or contradictory usage and accounting failures. No new browser or
+container-isolation evidence is claimed for this backend-only component.

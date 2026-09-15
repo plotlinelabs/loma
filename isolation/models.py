@@ -16,6 +16,7 @@ import uuid
 import aiohttp
 
 from isolation.protocol import MAX_FRAME
+from isolation.usage import UsageCollector
 
 CHUNK = 32 * 1024
 MAX_RESPONSE = 16 * 1024 * 1024
@@ -245,16 +246,23 @@ def request_body(grant, body):
 
 
 class ModelRelay:
-    def __init__(self, authority, grant, *, session, authorize, audit, reserve, settle):
+    def __init__(self, authority, grant, *, session, authorize, audit, reserve, settle, record_usage=None):
         """Callbacks are trusted backend adapters, never selected by the worker.
 
         reserve(authority, call_id, grant, body) durably reserves spend BEFORE
         dispatch. settle(authority, call_id, outcome) persists completion metadata;
         outcome is NOT a billing receipt and must never itself release a hold.
-        Authoritative usage reconciliation remains the budget adapter's job.
+        record_usage(authority, call_id, receipt_or_none), when configured,
+        persists provider-side token evidence before settlement. Missing evidence
+        must retain the reservation. Neither callback receives worker usage claims.
+        Pricing and durable idempotent settlement remain the budget adapter's job.
         """
         if any(not callable(f) for f in (authorize, audit, reserve, settle)):
             raise ValueError('Model policy, audit and budget callbacks are required')
+        if record_usage is not None and not callable(record_usage):
+            raise ValueError("Usage recorder must be a trusted callback")
+        self.record_usage = record_usage
+        self.usage = None
         self.authority, self.grant, self.session = authority, grant, session
         self.authorize, self.audit, self.reserve, self.settle = authorize, audit, reserve, settle
         self.lock = asyncio.Lock()
@@ -269,7 +277,8 @@ class ModelRelay:
             raise ModelDenied('Model access is no longer valid')
 
     async def _finish(self, outcome):
-        response, stream_id = self.response, self.stream_id
+        response, stream_id, usage = self.response, self.stream_id, self.usage
+        self.usage = None
         self.response, self.stream_id = None, None
         if response is not None:
             response.close()
@@ -277,6 +286,9 @@ class ModelRelay:
             # Clear first: failed accounting blocks this relay rather than
             # settling twice or replaying a potentially billable request.
             try:
+                if self.record_usage is not None:
+                    receipt = usage.finish() if usage is not None and outcome == "stream_ended" else None
+                    await self.record_usage(self.authority, stream_id, receipt)
                 await self.settle(self.authority, stream_id, outcome)
             except BaseException:
                 self.closed = True
@@ -299,6 +311,7 @@ class ModelRelay:
                     await self.reserve(authority, call_id, self.grant, body)
                     self.calls += 1
                     self.stream_id, self.bytes_read = call_id, 0
+                    self.usage = UsageCollector(self.grant.protocol)
                     await self._authorized(authority)
                     # Do not inherit ambient proxies, cookies or redirect to a
                     # worker-chosen destination. The caller owns session lifetime.
@@ -321,6 +334,8 @@ class ModelRelay:
                 if self.bytes_read > MAX_RESPONSE:
                     raise ModelDenied('Model response exceeds the limit')
                 await self._authorized(authority)
+                if chunk:
+                    self.usage.feed(chunk)
                 if not chunk:
                     await self._finish('stream_ended')
                 return {'data': base64.b64encode(chunk).decode(), 'eof': not chunk}
