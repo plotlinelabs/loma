@@ -13,7 +13,7 @@ class ProtocolError(ValueError):
 
 
 def decode(raw, *, limit=MAX_FRAME):
-    if not isinstance(raw, (str, bytes)) or len(raw) > limit:
+    if not isinstance(raw, (str, bytes)) or len(raw.encode('utf-8') if isinstance(raw, str) else raw) > limit:
         raise ProtocolError('Worker frame exceeds the limit')
     try:
         value = json.loads(raw)

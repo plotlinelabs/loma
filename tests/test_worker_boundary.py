@@ -330,3 +330,10 @@ async def test_cancelled_client_removes_named_worker(monkeypatch, tmp_path):
         assert cmd.call_args.args[:3] == ('docker', 'rm', '-f')
     finally:
         await client.close()
+
+
+def test_frame_limit_counts_utf8_bytes_not_characters():
+    raw = json.dumps({'type': 'text', 'text': 'é' * (MAX_FRAME // 2)}, ensure_ascii=False)
+    assert len(raw) < MAX_FRAME
+    with pytest.raises(ProtocolError):
+        worker_frame(raw)

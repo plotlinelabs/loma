@@ -104,3 +104,63 @@ Do not reuse earlier browser screenshots as proof of isolated chat.
 
 References for the selected primitives: [gVisor Docker runtime](https://gvisor.dev/docs/user_guide/quick_start/docker/)
 and [Docker execution controls](https://docs.docker.com/engine/containers/run/).
+
+## File and read-tool data plane (subsequent implementation)
+
+`isolation/artifacts.py`, `workspace.py` and `gateway.py` implement the byte-only
+file transfer and typed read-tool boundary. They **do not route existing chat**
+and do not add Claude/Codex/OpenCode model-transport adapters. The cutover gate
+above is unchanged. No deployment setting or running pool was changed.
+
+- Construct `ArtifactScope` on the backend with authenticated `RunAuthority`,
+  the authorized conversation ID, and a **server-selected** list of attached
+  artifact IDs. IDs from worker frames are not grants. Namespace hashes bind
+  persisted bytes to both the current owner and conversation. A later run may
+  reuse an artifact only after the backend attaches it to that run's input set.
+- Ingest attachment **bytes**, never a path supplied by a worker. Give the
+  worker the manifest (opaque ID, display name, size, SHA-256). The store is a
+  private backend directory, never a worker mount. Its operator-managed volume
+  and retention policy are required for cross-redeploy persistence; this patch
+  does not configure either or promise persistence on an ephemeral volume.
+- `Workspace.stage` downloads those inputs into the worker's disposable local
+  directory. Duplicate names have different ID directories. `Workspace.publish`
+  opens only regular files beneath that directory, rejecting symlinks, traversal
+  and FIFOs, then uploads bytes with exact offsets and a final checksum.
+- Uploads reserve quota before writing (20 MiB/file, 64 MiB/run, 20 files).
+  Metadata is published only after complete bytes are flushed. Incomplete files
+  are unavailable to reads. Always close the scope in the run's `finally` block;
+  closing removes incomplete uploads and retains successfully committed files.
+  Host loss may leave unindexed orphan bytes, which a retention job must remove.
+- Use `ToolGateway` as `stream_worker(execute_tool=...)`. Its authorization
+  callback must recheck the **current** account, cancellation, conversation and
+  grants, not merely echo the immutable run grant. Audit failures block dispatch.
+  Reads are rechecked after provider completion so revocation during a read
+  prevents returning its contents. Schema checks forbid identity overrides,
+  arbitrary argv, URLs and backend paths. Upload mutation is serialized per run.
+- The only connector adapters here are `gmail.search`, `gmail.read` and
+  `calendar.list`, with bounded arguments and result counts. Credentials stay
+  in the existing trusted backend connector. No generic CLI or send fallback is
+  registered. Writes need the existing durable action/approval engine, not a new
+  immediate-send path. Skills, recall and the other connectors still require
+  typed adapters and current resource checks before migration is complete.
+
+The artifact commit receipt currently stays in this internal protocol. Existing
+chat download registration and the dashboard's file events have **not** been
+switched to the new store. Do not treat worker text naming an artifact or backend
+path as a download grant or a provider receipt.
+
+### Fresh verification
+
+`tests/test_worker_artifacts.py` includes a real Python worker subprocess talking
+through the supervisor WebSocket to the backend gateway: stage an attachment,
+create an output, upload it, and verify its bytes. It also covers cross-owner and
+cross-conversation denials, stale grants, audit outages, malformed/oversized
+uploads, concurrent offsets, checksums, persistence across scope recreation,
+symlinks, FIFOs and cancellation. These are synthetic provider/transport tests,
+not real CLI parity, browser parity, or gVisor isolation evidence.
+
+Remaining runtime work is substantial: subscription-account selection without
+backend CLI warmup, credential-free provider/model streaming proxies, all three
+worker CLI adapters, current tool/skill/recall adapters, trusted output download
+registration, then interactive/scheduled/recovery routing and rollout. Do not
+mark the PR ready on the strength of data-plane tests alone.
