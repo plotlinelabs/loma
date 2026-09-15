@@ -141,6 +141,10 @@ async def handle(request):
                 await core.cancel(db, owner, run_id)
                 return response({'ok': True})
             if action == 'answer':
+                run = await db.agent_runs.find_one({'run_id': run_id, 'owner': owner})
+                if not run:
+                    raise ValueError('Run not found')
+                await core.current_authority(db, run, check_lease=False)
                 answer = core.text(body.get('answer'), 'Answer', 4000)
                 result = await db.agent_runs.find_one_and_update({'run_id': run_id, 'owner': owner, 'status': 'needs_input'},
                     {'$set': {'status': 'queued', 'wake_at': core.now(), 'decision': None, 'question': None},

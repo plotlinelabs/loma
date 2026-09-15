@@ -20,6 +20,8 @@ ACTIONS = {'gmail.search', 'gmail.read', 'gmail.send'}
 TERMINAL = ('done', 'cancelled', 'failed')
 MODES = ('allow', 'ask', 'deny')
 MAX_STEPS = 30
+DEFAULT_RUNTIME_MINUTES = 1440
+DEADLINE_MESSAGE = "Run deadline reached. Waiting approvals and delegates cannot extend it."
 
 
 def now():
@@ -38,6 +40,24 @@ def text(value, name, limit=8000):
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         raise ValueError(f'{name} must contain 1 to {limit} characters')
     return value.strip()
+
+
+def deadline(run):
+    """Older queued runs also receive a finite deadline, anchored to creation."""
+    value = run.get("deadline_at")
+    if value is None:
+        value = run["created_at"] + timedelta(minutes=run["snapshot"].get("max_runtime_minutes", DEFAULT_RUNTIME_MINUTES))
+    return value.replace(tzinfo=timezone.utc)
+
+
+def validate_limits(data):
+    minutes = data.get("max_runtime_minutes", DEFAULT_RUNTIME_MINUTES)
+    retries = data.get("max_planner_retries", 2)
+    if type(minutes) is not int or not 1 <= minutes <= 43200:
+        raise ValueError("Run deadline must be between 1 and 43200 minutes")
+    if type(retries) is not int or not 0 <= retries <= 3:
+        raise ValueError("Model retries must be between 0 and 3")
+    return minutes, retries
 
 
 def validate_policy(value):
@@ -87,6 +107,7 @@ async def indexes(db):
     await db.agent_runs.create_index('run_id', unique=True)
     await db.agent_runs.create_index([('work_id', 1), ('event_key', 1)], unique=True)
     await db.agent_runs.create_index([('status', 1), ('wake_at', 1)])
+    await db.agent_runs.create_index([('status', 1), ('deadline_at', 1)])
     await db.agent_approvals.create_index('approval_id', unique=True)
     await db.agent_approvals.create_index([('run_id', 1), ('step', 1)], unique=True)
     await db.agent_notes.create_index([('owner', 1), ('agent_id', 1), ('note_id', 1)], unique=True)
@@ -115,11 +136,13 @@ async def create_work(db, owner, data):
     budget = data.get('max_steps', 10)
     if type(budget) is not int or not 1 <= budget <= MAX_STEPS:
         raise ValueError('Step budget must be between 1 and 30')
+    minutes, retries = validate_limits(data)
     work = {'work_id': ident(), 'owner': owner, 'agent_id': agent['agent_id'],
             'title': text(data.get('title'), 'Job title', 120),
             'instructions': text(data.get('instructions'), 'Instructions'),
             'success': text(data.get('success'), 'Expected result', 2000),
             'policy': policy, 'delegates': list(set(peers)), 'max_steps': budget,
+            'max_runtime_minutes': minutes, 'max_planner_retries': retries,
             'agent_snapshot': {'name': agent['name'], 'instructions': agent.get('identity_prompt', ''),
                                'version': str(agent.get('updated_at', ''))},
             'created_at': now(), 'paused': True, 'version': 1}
@@ -139,6 +162,12 @@ async def enqueue(db, work, event_key, *, dry_run=False, parent=None):
            'calls_used': 0, 'max_steps': work['max_steps'], 'parent_id': parent,
            'root_id': None, 'result': '', 'lease': None, 'lease_until': now()}
     run['root_id'] = parent or run['run_id']
+    run['deadline_at'] = deadline(run)
+    if parent:
+        root = await db.agent_runs.find_one({'run_id': parent, 'owner': work['owner']})
+        if not root or root['status'] in TERMINAL or deadline(root) <= now():
+            raise ValueError('Parent work is no longer active')
+        run['deadline_at'] = min(run['deadline_at'], deadline(root))
     existing = await db.agent_runs.find_one({'work_id': work['work_id'], 'event_key': event_key})
     if existing:
         return existing
@@ -157,6 +186,8 @@ async def current_authority(db, run, *, check_lease=True):
     current = await db.agent_runs.find_one({'run_id': run['run_id'], 'owner': run['owner']})
     if not current or current['status'] in TERMINAL:
         raise ValueError('Run is no longer active')
+    if deadline(current) <= now():
+        raise ValueError(DEADLINE_MESSAGE)
     if check_lease and run.get('lease') and (current.get('lease') != run['lease'] or current['lease_until'].replace(tzinfo=timezone.utc) <= now()):
         raise ValueError('Worker lease was lost')
     work = await db.agent_work.find_one({'work_id': run['work_id'], 'owner': run['owner']})
@@ -166,6 +197,8 @@ async def current_authority(db, run, *, check_lease=True):
     root = await db.agent_runs.find_one({'run_id': run['root_id']})
     if not root or root['status'] in ('cancelled', 'failed'):
         raise ValueError('Parent work was cancelled or failed')
+    if deadline(root) <= now():
+        raise ValueError(DEADLINE_MESSAGE)
     return work
 
 
@@ -184,7 +217,7 @@ async def propose(db, run, action, args, reason):
     proposal = {'approval_id': ident(), 'run_id': run['run_id'], 'work_id': run['work_id'],
                 'owner': run['owner'], 'step': run['step'], 'action': action, 'args': args,
                 'reason': text(reason, 'Reason', 2000), 'version': 1,
-                'status': 'pending', 'created_at': now(), 'expires_at': now() + timedelta(hours=24)}
+                'status': 'pending', 'created_at': now(), 'expires_at': min(now() + timedelta(hours=24), deadline(run))}
     proposal['digest'] = digest({'action': action, 'args': args, 'owner': run['owner']})
     repeated = await db.agent_approvals.find_one({'run_id': run['run_id'], 'step': {'$ne': run['step']},
         'digest': proposal['digest'], 'status': {'$in': ['rejected', 'executed', 'uncertain', 'executing']}})
@@ -214,7 +247,7 @@ async def decide(db, owner, approval_id, version, decision, args=None):
         args = validate_action(proposal['action'], args, run['snapshot']['policy'])
         changes.update(args=args, version=version + 1, status='pending',
                        digest=digest({'action': proposal['action'], 'args': args, 'owner': owner}),
-                       expires_at=now() + timedelta(hours=24))
+                       expires_at=min(now() + timedelta(hours=24), deadline(run)))
     else:
         changes['status'] = {'approve': 'approved', 'reject': 'rejected', 'cancel': 'cancelled'}[decision]
         if decision == 'approve':

@@ -376,3 +376,153 @@ async def test_crash_after_action_claim_is_visible_as_uncertain(db):
     broker.assert_not_called()
     assert (await db.agent_approvals.find_one({'approval_id': a['approval_id']}))['status'] == 'uncertain'
     assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+
+
+@pytest.mark.parametrize('value', [0, -1, 43201, True, 1.5, '60'])
+def test_deadline_limits_reject_invalid(value):
+    with pytest.raises(ValueError, match='deadline'):
+        core.validate_limits({'max_runtime_minutes': value})
+
+
+@pytest.mark.parametrize('value', [-1, 4, True, 1.5, '2'])
+def test_retry_limits_reject_invalid(value):
+    with pytest.raises(ValueError, match='retries'):
+        core.validate_limits({'max_planner_retries': value})
+
+
+@pytest.mark.asyncio
+async def test_deadline_expires_approval_without_model_or_delivery(db):
+    _, run = await setup(db)
+    await tick(db, AsyncMock(return_value=SEND), AsyncMock())
+    a = await db.agent_approvals.find_one({'run_id': run['run_id']})
+    await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'deadline_at': core.now() - timedelta(seconds=1)}})
+    with pytest.raises(ValueError, match='deadline'):
+        await core.decide(db, OWNER, a['approval_id'], 1, 'approve')
+    planner, broker = AsyncMock(), AsyncMock()
+    await tick(db, planner, broker)
+    planner.assert_not_called(); broker.assert_not_called()
+    assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+    assert (await db.agent_approvals.find_one({'approval_id': a['approval_id']}))['status'] == 'expired'
+
+
+@pytest.mark.asyncio
+async def test_delegate_inherits_deadline_and_root_failure_stops_child(db):
+    _, run = await setup(db, delegates=['agent-b'])
+    await tick(db, AsyncMock(return_value={'op': 'delegate', 'agent_id': 'agent-b', 'instructions': 'Research', 'success': 'Summary'}), AsyncMock())
+    child = await db.agent_runs.find_one({'parent_id': run['run_id']})
+    assert child['deadline_at'] == run['deadline_at']
+    # Root can fail independently of the child's lease/deadline.
+    await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'status': 'failed'}})
+    planner = AsyncMock()
+    await tick(db, planner, AsyncMock())
+    planner.assert_not_called()
+    assert (await db.agent_runs.find_one({'run_id': child['run_id']}))['status'] == 'cancelled'
+
+
+@pytest.mark.asyncio
+async def test_approval_edit_cannot_extend_deadline(db):
+    _, run = await setup(db)
+    end = core.now() + timedelta(minutes=5)
+    await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'deadline_at': end}})
+    await tick(db, AsyncMock(return_value=SEND), AsyncMock())
+    a = await db.agent_approvals.find_one({'run_id': run['run_id']})
+    saved_end = (await db.agent_runs.find_one({'run_id': run['run_id']}))['deadline_at']
+    assert a['expires_at'] == saved_end
+    a = await core.decide(db, OWNER, a['approval_id'], 1, 'edit', {**SEND['args'], 'body': 'Revised'})
+    assert a['expires_at'] == saved_end
+
+
+@pytest.mark.asyncio
+async def test_deadline_rechecked_after_planning(db):
+    _, run = await setup(db)
+    async def slow_model(_):
+        await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'deadline_at': core.now() - timedelta(seconds=1)}})
+        return SEND
+    broker = AsyncMock()
+    await tick(db, slow_model, broker)
+    broker.assert_not_called()
+    assert await db.agent_approvals.count_documents({}) == 0
+    assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_model_retry_is_delayed_bounded_and_charged(db):
+    from autonomy.worker import RetryablePlannerError
+    _, run = await setup(db)
+    planner = AsyncMock(side_effect=[RetryablePlannerError(), DONE])
+    broker = AsyncMock()
+    await tick(db, planner, broker)
+    saved = await db.agent_runs.find_one({'run_id': run['run_id']})
+    assert saved['status'] == 'queued' and saved['wake_at'] > core.now()
+    assert saved['calls_used'] == 1 and saved['planner_retries'] == 1
+    await tick(db, planner, broker)
+    assert planner.call_count == 1  # no busy-loop retry
+    await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'wake_at': core.now()}})
+    await tick(db, planner, broker)
+    saved = await db.agent_runs.find_one({'run_id': run['run_id']})
+    assert saved['status'] == 'done' and saved['calls_used'] == 2
+    broker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_retries_exhaust_without_connector_execution(db):
+    from autonomy.worker import RetryablePlannerError
+    _, run = await setup(db)
+    planner, broker = AsyncMock(side_effect=RetryablePlannerError()), AsyncMock()
+    for _ in range(4):
+        await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'wake_at': core.now()}})
+        await tick(db, planner, broker)
+    saved = await db.agent_runs.find_one({'run_id': run['run_id']})
+    assert saved['status'] == 'failed' and saved['calls_used'] == 3
+    assert planner.call_count == 3
+    broker.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('decision', [{'op': 'sleep', 'seconds': 86401, 'reason': 'Too late'}, {'op': 'bogus'}])
+async def test_invalid_decisions_are_not_retried(db, decision):
+    _, run = await setup(db)
+    planner = AsyncMock(return_value=decision)
+    await tick(db, planner, AsyncMock())
+    saved = await db.agent_runs.find_one({'run_id': run['run_id']})
+    assert saved['status'] == 'failed' and not saved.get('planner_retries')
+
+
+@pytest.mark.asyncio
+async def test_legacy_run_gets_deadline_and_stale_action_becomes_uncertain(db):
+    _, run = await setup(db)
+    await db.agent_runs.update_one({'run_id': run['run_id']}, {'$unset': {'deadline_at': ''}, '$set': {'created_at': core.now() - timedelta(days=2)}})
+    await db.agent_approvals.insert_one({'approval_id': 'lost-receipt', 'run_id': run['run_id'], 'step': 0, 'status': 'executing', 'execution_started_at': core.now() - timedelta(minutes=3)})
+    planner, broker = AsyncMock(), AsyncMock()
+    await tick(db, planner, broker)
+    planner.assert_not_called(); broker.assert_not_called()
+    assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+    assert (await db.agent_approvals.find_one({'approval_id': 'lost-receipt'}))['status'] == 'uncertain'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('restriction', ['disabled', 'calls', 'deadline'])
+async def test_model_retry_respects_every_budget(db, restriction):
+    from autonomy.worker import RetryablePlannerError
+    _, run = await setup(db)
+    changes = {'disabled': {'snapshot.max_planner_retries': 0},
+               'calls': {'max_steps': 1},
+               'deadline': {'deadline_at': core.now() + timedelta(seconds=10)}}[restriction]
+    await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': changes})
+    planner, broker = AsyncMock(side_effect=RetryablePlannerError()), AsyncMock()
+    await tick(db, planner, broker)
+    assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+    assert planner.call_count == 1
+    broker.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('state', ['queued', 'needs_input', 'waiting_child', 'running'])
+async def test_deadline_expires_all_wait_states(db, state):
+    _, run = await setup(db)
+    await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {
+        'status': state, 'deadline_at': core.now() - timedelta(seconds=1)}})
+    planner, broker = AsyncMock(), AsyncMock()
+    await tick(db, planner, broker)
+    assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+    planner.assert_not_called(); broker.assert_not_called()

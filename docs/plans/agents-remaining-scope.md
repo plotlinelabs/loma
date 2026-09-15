@@ -17,6 +17,12 @@ Implemented in this branch:
   permission details, run history, desktop/mobile review dialogs and setup templates.
 - Separate jobs/runs, checkpointed decisions, 120-second leases, one active run per job,
   shared model-call limits, delayed wake-ups and cancelled child propagation.
+- Configurable run deadlines (1 minute to 30 days; default 24 hours), inherited by
+  delegates and capped approval expiry. Waiting, sleeping and retries do not reset time.
+- Configurable text-planner transport retries (0 to 3; default 2), using 30/60/120-second
+  durable backoff, charged against shared model-call limits. No connector replay.
+- Periodic deadline/terminal cleanup repairs partial writes, closes pending approvals
+  and stops descendants; stale claimed actions remain visibly uncertain.
 - Private recurring schedules, explicit enable/pause, schedule editing that pauses before
   re-enablement, next-run/error visibility, and no fallback to unrestricted execution.
 - One-level delegation to selected agents under the same principal and parent grant.
@@ -29,8 +35,8 @@ Important limitations requiring follow-up before broad rollout:
   operating-system authority is required against a compromised legacy runtime.
 - Planner calls use a separately configured Anthropic model. No live model or Gmail
   delivery was exercised in QA; the planner and delivery adapter were stubbed.
-- Model-call/output limits are not dollar budgets, full token accounting, job deadlines,
-  or configurable transient-error retry policies.
+- Model-call/output limits are not dollar budgets or full token accounting.
+  Connector calls with unknown outcomes are never automatically retried.
 - Event keys provide deduplicated enqueue via the signed API; external ticket/webhook
   subscription wiring and a general event outbox are not implemented.
 - Unknown delivery outcomes require manual investigation; no reconciliation UI yet.
@@ -53,6 +59,31 @@ Generic Flows API mutations cannot detach or manage bounded schedules. Manage th
 through Agent work. Approval waiting does not require an active worker lease; execution
 still requires a fresh lease and authority check. Approval is never a guarantee of send:
 provider timeouts are visibly uncertain, and cancellation cannot undo an in-flight send.
+
+## Deadline and retry semantics
+
+Limits are pinned when saving a job. Each new root run gets a deadline from enqueue
+(including time queued), not from the first model call. Delegates inherit the earlier
+of their own limit and their parent's exact deadline. Existing bounded runs without
+this field derive it from their original creation time, never from worker restart.
+This changes only bounded work, not the legacy creator-identity migration.
+
+The broker rechecks the deadline immediately before dispatch. Approval edits cannot
+extend it. Expiry blocks future dispatch but cannot recall an already in-flight external
+action. A claimed action without a receipt after 120 seconds becomes outcome unknown;
+no automatic retry is allowed. Cleanup uses repeatable, bounded sweeps so a crash
+between marking a run terminal and closing its approvals is repaired on later ticks.
+
+Retry policy applies **only** to model transport errors, HTTP 429 and provider 5xx.
+Invalid model output, policy errors and authentication failures are not retried.
+Every attempted call, including a failed one, consumes the root call budget. Retries
+are capped per run and require both remaining calls and enough time before the deadline.
+Parent and child calls share the existing root budget. Waiting for retry has no model
+process. Provider charges for failed calls are unknown; this is not a currency cap.
+
+UI: creation exposes deadline and retry limits with conservative defaults; Work cards
+show the saved limits, and run details show deadline, attempts and retry history. Open
+run details refresh with the overview instead of displaying a stale running state.
 
 ## Legacy identity compatibility (implemented here)
 

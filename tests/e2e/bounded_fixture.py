@@ -48,6 +48,16 @@ async def main():
         if broker.call_count:
             assert broker.call_args.args[2] == owner
         print('Simulated adapter calls:', broker.call_count)
+    elif sys.argv[1] == 'expire':
+        from datetime import timedelta
+        from autonomy.core import now
+        run = await db.agent_runs.find_one({'owner': owner, 'status': 'queued', 'dry_run': True})
+        assert run is not None
+        await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'deadline_at': now() - timedelta(seconds=1)}})
+        planner, broker = AsyncMock(), AsyncMock()
+        await tick(db, planner, broker)
+        planner.assert_not_called(); broker.assert_not_called()
+        assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
     elif sys.argv[1] == 'verify':
         assert await db.agent_runs.count_documents({'owner': owner, 'status': 'done', 'dry_run': True}) == 1
         assert await db.agent_runs.count_documents({'owner': owner, 'status': 'done', 'dry_run': False}) == 1

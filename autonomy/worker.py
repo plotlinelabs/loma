@@ -9,7 +9,7 @@ from datetime import timedelta
 from pymongo import ReturnDocument
 from autonomy.core import (
     now, ident, digest, text, authority, current_authority, advance, propose,
-    execute_proposal, enqueue, TERMINAL,
+    execute_proposal, enqueue, TERMINAL, deadline, DEADLINE_MESSAGE,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,10 @@ Do not store new personal memories yourself. The user manages notes explicitly.
 '''
 
 
+class RetryablePlannerError(Exception):
+    """Only text-planner transport errors qualify, never a connector action."""
+
+
 def planner_ready():
     return bool(os.getenv('LOMA_WORK_MODEL') and os.getenv('ANTHROPIC_API_KEY'))
 
@@ -42,13 +46,20 @@ async def plan(context):
     """
     if not planner_ready():
         raise ValueError('Ask an admin to configure LOMA_WORK_MODEL and ANTHROPIC_API_KEY')
-    from anthropic import AsyncAnthropic
+    from anthropic import AsyncAnthropic, APIConnectionError, APIStatusError
     content = json.dumps(context, default=str)
     if len(content) > 100000:
         raise ValueError('Work context is too large. Shorten notes or split this job.')
-    async with AsyncAnthropic(api_key=os.environ['ANTHROPIC_API_KEY'], max_retries=0, timeout=45) as client:
-        message = await client.messages.create(model=os.environ['LOMA_WORK_MODEL'], max_tokens=2048,
-            system=PLANNER_RULES, messages=[{'role': 'user', 'content': content}])
+    try:
+        async with AsyncAnthropic(api_key=os.environ['ANTHROPIC_API_KEY'], max_retries=0, timeout=45) as client:
+            message = await client.messages.create(model=os.environ['LOMA_WORK_MODEL'], max_tokens=2048,
+                system=PLANNER_RULES, messages=[{'role': 'user', 'content': content}])
+    except APIConnectionError:
+        raise RetryablePlannerError() from None
+    except APIStatusError as exc:
+        if exc.status_code == 429 or exc.status_code >= 500:
+            raise RetryablePlannerError() from None
+        raise ValueError('Model access failed. Ask an admin to check the configured model.') from None
     result = json.loads(''.join(b.text for b in message.content if b.type == 'text'))
     if not isinstance(result, dict):
         raise ValueError('Planner must return one structured step')
@@ -100,8 +111,13 @@ async def step(db, run, planner=plan, broker=adapter):
         # are not embedded in shared agent identities or delegated context.
         notes = await db.agent_notes.find({'owner': run['owner'], 'agent_id': run['snapshot']['agent_id']},
                                          {'_id': 0, 'title': 1, 'content': 1}).limit(10).to_list(10)
-        decision = await asyncio.wait_for(planner({'job': run['snapshot'], 'history': run['history'],
-                                                   'notes': notes, 'dry_run': run['dry_run']}), 50)
+        try:
+            decision = await asyncio.wait_for(planner({'job': run['snapshot'], 'history': run['history'],
+                                                       'notes': notes, 'dry_run': run['dry_run']}), 50)
+        except TimeoutError:
+            raise RetryablePlannerError() from None
+        # A model call may finish after cancellation, revocation or the deadline.
+        await current_authority(db, run)
         if not isinstance(decision, dict):
             raise ValueError('Invalid planner response')
         # Persist BEFORE doing anything, including a read, delegation or delay.
@@ -118,6 +134,8 @@ async def step(db, run, planner=plan, broker=adapter):
         seconds = decision.get('seconds')
         if type(seconds) is not int or not 60 <= seconds <= 30 * 86400:
             raise ValueError('Follow-up delay must be 1 minute to 30 days')
+        if now() + timedelta(seconds=seconds) >= deadline(run):
+            raise ValueError('Follow-up exceeds the run deadline. Start new work with a longer deadline.')
         await advance(db, run, {'status': 'queued', 'wake_at': now() + timedelta(seconds=seconds),
                                'decision': None, 'step': run['step'] + 1},
                       {'kind': 'sleep', 'reason': text(decision.get('reason'), 'Reason', 2000)})
@@ -195,6 +213,7 @@ async def tick(db, planner=plan, broker=adapter):
     saved decision, not a write. An executing action stays uncertain forever
     rather than risking a second send.
     """
+    await expire_runs(db)
     # Release terminal reservations; recover a crash between work reservation
     # and inserting the run only after the reservation grace period.
     # Idempotent notification outbox: replaying a tick cannot duplicate an item.
@@ -240,6 +259,20 @@ async def tick(db, planner=plan, broker=adapter):
         return False
     try:
         await step(db, run, planner, broker)
+    except RetryablePlannerError:
+        retries = run.get('planner_retries', 0)
+        wake_at = now() + timedelta(seconds=30 * (2 ** retries))
+        root = await db.agent_runs.find_one({'run_id': run['root_id']})
+        if (retries < run['snapshot'].get('max_planner_retries', 2)
+                and root and root['status'] not in TERMINAL
+                and root.get('calls_used', 0) < run['max_steps']
+                and wake_at < deadline(run)):
+            await advance(db, run, {'status': 'queued', 'wake_at': wake_at, 'planner_retries': retries + 1},
+                          {'kind': 'model_retry', 'attempt': retries + 1, 'wake_at': wake_at,
+                           'reason': 'Temporary model connection failure. No connector action attempted.'})
+        else:
+            await db.agent_runs.update_one({'run_id': run['run_id'], 'lease': run['lease'], 'status': 'running'},
+                {'$set': {'status': 'failed', 'result': 'Model unavailable. Retry or deadline budget exhausted; no action was attempted.', 'finished_at': now()}})
     except Exception as exc:
         logger.warning('Bounded work step failed (%s): %s', run['run_id'], type(exc).__name__)
         # Only our validation messages are safe to expose, not provider/SDK errors.
@@ -247,3 +280,34 @@ async def tick(db, planner=plan, broker=adapter):
         await db.agent_runs.update_one({'run_id': run['run_id'], 'lease': run['lease'], 'status': 'running'},
             {'$set': {'status': 'failed', 'result': reason, 'finished_at': now()}})
     return True
+
+
+async def expire_runs(db):
+    """Expire dormant roots as well as active steps, then sweep their children.
+
+    Bounded batches keep ticks responsive. Repeat sweeps repair partial writes
+    after a crash. Dispatch checks the deadline independently of this sweep.
+    In-flight provider calls cannot be undone and are never blindly retried.
+    """
+    expired = await db.agent_runs.find({'status': {'$nin': list(TERMINAL)},
+        '$or': [{'deadline_at': {'$lte': now()}}, {'deadline_at': {'$exists': False}}]}).limit(100).to_list(100)
+    for run in expired:
+        if deadline(run) > now():
+            await db.agent_runs.update_one({'run_id': run['run_id'], 'deadline_at': {'$exists': False}},
+                                          {'$set': {'deadline_at': deadline(run)}})
+            continue
+        await db.agent_runs.update_one({'run_id': run['run_id'], 'status': {'$nin': list(TERMINAL)}},
+            {'$set': {'status': 'failed', 'result': DEADLINE_MESSAGE, 'finished_at': now(), 'lease': None}})
+    # Repeated cleanup also handles a crash after marking the parent terminal.
+    terminal = await db.agent_runs.find({'status': {'$in': list(TERMINAL)}, 'cleanup_done': {'$ne': True}}).limit(100).to_list(100)
+    for run in terminal:
+        await db.agent_runs.update_many({'parent_id': run['run_id'], 'status': {'$nin': list(TERMINAL)}},
+            {'$set': {'status': 'cancelled', 'result': 'Parent run ended.', 'finished_at': now(), 'lease': None}})
+        await db.agent_approvals.update_many({'run_id': run['run_id'], 'status': {'$in': ['pending', 'approved']}},
+            {'$set': {'status': 'expired' if run.get('result') == DEADLINE_MESSAGE else 'cancelled'}})
+        await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {'cleanup_done': True}})
+    # If a worker died while calling a provider, expose uncertainty even if
+    # its parent has already timed out (and will never be leased again).
+    await db.agent_approvals.update_many({'status': 'executing',
+        'execution_started_at': {'$lte': now() - timedelta(seconds=120)}},
+        {'$set': {'status': 'uncertain', 'receipt': {'message': 'No receipt before execution lease expired. Check the provider before resending.'}}})
