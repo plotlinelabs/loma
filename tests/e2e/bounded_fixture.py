@@ -48,6 +48,31 @@ async def main():
         if broker.call_count:
             assert broker.call_args.args[2] == owner
         print('Simulated adapter calls:', broker.call_count)
+    elif sys.argv[1] == 'uncertain':
+        from autonomy import core
+        work = await db.agent_work.find_one({'owner': owner, 'parent_only': {'$ne': True}})
+        assert work
+        await tick(db, AsyncMock(), AsyncMock())  # Release terminal reservation.
+        await db.agent_work.update_one({'work_id': work['work_id']}, {'$set': {'paused': False}})
+        work['paused'] = False
+        run = await core.enqueue(db, work, 'uncertain-browser-fixture')
+        decision = {'op': 'action', 'action': 'gmail.send', 'args': {
+            'to': 'recipient@example.com', 'subject': 'Delivery investigation QA',
+            'body': 'Simulated timeout. No external email is sent by this fixture.'}, 'reason': 'Test uncertainty'}
+        await tick(db, AsyncMock(return_value=decision), AsyncMock())
+        a = await db.agent_approvals.find_one({'run_id': run['run_id']})
+        await core.decide(db, owner, a['approval_id'], 1, 'approve')
+        broker = AsyncMock(side_effect=TimeoutError('Simulated'))
+        await tick(db, AsyncMock(), broker)
+        broker.assert_called_once()
+        assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+    elif sys.argv[1] == 'verify-investigation':
+        a = await db.agent_approvals.find_one({'owner': owner, 'status': 'uncertain'})
+        assert a['reconciliation']['outcome'] == 'sent'
+        assert [r['outcome'] for r in a['reconciliation_history']] == ['unknown', 'sent']
+        assert a['receipt']['message'].startswith('Delivery outcome unknown')
+        assert (await db.agent_runs.find_one({'run_id': a['run_id']}))['status'] == 'failed'
+        print('Owner report saved; uncertain barrier and original receipt unchanged')
     elif sys.argv[1] == 'expire':
         from datetime import timedelta
         from autonomy.core import now

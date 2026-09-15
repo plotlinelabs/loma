@@ -294,6 +294,35 @@ async def execute_proposal(db, proposal, run, adapter):
     return {'status': status, 'receipt': receipt}
 
 
+async def reconcile(db, owner, approval_id, version, outcome, evidence):
+    """Record a human investigation, never infer delivery or authorize a retry.
+
+    The uncertain status and original receipt stay intact as the replay barrier.
+    Only the authenticated owner may attest, even after run expiry/revocation or
+    agent deletion. No agent authority or connector grant is needed for this
+    local audit write. Later corrections append history under a version CAS.
+    """
+    await authority_account(db, owner)
+    if type(version) is not int or version < 0 or outcome not in ('sent', 'not_sent', 'unknown'):
+        raise ValueError('Choose a valid investigation outcome and review version')
+    evidence = text(evidence, 'Provider evidence or investigation notes', 2000)
+    proposal = await db.agent_approvals.find_one({'approval_id': approval_id, 'owner': owner})
+    if not proposal or proposal['action'] != 'gmail.send':
+        raise ValueError('Unknown email action not found')
+    record = {'outcome': outcome, 'evidence': evidence, 'actor': owner, 'at': now(),
+              'source': 'owner_report', 'version': version + 1, 'digest': proposal['digest']}
+    # One-document commit: never lose the receipt or a competing review. Do not
+    # change run state, proposal version, approval digest or execution status.
+    result = await db.agent_approvals.find_one_and_update(
+        {'approval_id': approval_id, 'owner': owner, 'status': 'uncertain',
+         '$expr': {'$eq': [{'$ifNull': ['$reconciliation.version', 0]}, version]}},
+        {'$set': {'reconciliation': record}, '$push': {'reconciliation_history': record}},
+        return_document=ReturnDocument.AFTER)
+    if not result:
+        raise ValueError('Outcome changed or is not awaiting investigation. Close and review again.')
+    return result
+
+
 async def cancel(db, owner, run_id):
     run = await db.agent_runs.find_one({'run_id': run_id, 'owner': owner})
     if not run:

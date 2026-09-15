@@ -73,8 +73,10 @@ async def handle(request):
                 job['next_run_at'] = scheduled.get('next_run_at')
                 job['schedule_error'] = scheduled.get('last_error')
             runs = await db.agent_runs.find({'owner': owner}).sort('created_at', -1).limit(100).to_list(100)
-            pending = await db.agent_approvals.find({'owner': owner, 'status': 'pending'}).sort('created_at', 1).limit(200).to_list(200)
-            recent = await db.agent_approvals.find({'owner': owner, 'status': {'$ne': 'pending'}}).sort('created_at', -1).limit(100).to_list(100)
+            attention = {'$or': [{'status': 'pending'}, {'status': 'uncertain', 'action': 'gmail.send',
+                         'reconciliation.outcome': {'$nin': ['sent', 'not_sent']}}]}
+            pending = await db.agent_approvals.find({'owner': owner, **attention}).sort('created_at', 1).limit(200).to_list(200)
+            recent = await db.agent_approvals.find({'owner': owner, '$nor': [attention]}).sort('created_at', -1).limit(100).to_list(100)
             approvals = pending + recent
             return response({'work': work, 'runs': runs, 'approvals': approvals, 'model_ready': planner_ready(),
                              'google_connected': bool(await db.oauth_tokens.find_one({'user_email': owner, 'provider': 'google'}, {'_id': 1})),
@@ -155,6 +157,9 @@ async def handle(request):
                 return response(result)
         if len(parts) == 2 and parts[0] == 'approvals' and method == 'POST':
             return response(await core.decide(db, owner, parts[1], body.get('version'), body.get('decision'), body.get('args')))
+        if len(parts) == 3 and parts[0] == 'approvals' and parts[2] == 'reconcile' and method == 'POST':
+            return response(await core.reconcile(db, owner, parts[1], body.get('version'),
+                                                 body.get('outcome'), body.get('evidence')))
         if len(parts) >= 2 and parts[0] == 'notes':
             agent_id = parts[1]
             await core.authority(db, owner, agent_id)

@@ -526,3 +526,130 @@ async def test_deadline_expires_all_wait_states(db, state):
     await tick(db, planner, broker)
     assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
     planner.assert_not_called(); broker.assert_not_called()
+
+
+async def uncertain_email(db):
+    work, run = await setup(db)
+    await tick(db, AsyncMock(return_value=SEND), AsyncMock())
+    approval = await db.agent_approvals.find_one({'run_id': run['run_id']})
+    await core.decide(db, OWNER, approval['approval_id'], 1, 'approve')
+    broker = AsyncMock(side_effect=TimeoutError('Simulated delivery timeout'))
+    await tick(db, AsyncMock(), broker)
+    broker.assert_called_once()
+    return work, run, await db.agent_approvals.find_one({'approval_id': approval['approval_id']})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['sent', 'not_sent', 'unknown'])
+async def test_investigation_never_resends_or_resumes(db, outcome):
+    work, run, a = await uncertain_email(db)
+    before = await db.agent_runs.find_one({'run_id': run['run_id']})
+    # Recording history remains possible after the source is deleted or revoked.
+    await db.agent_identities.delete_one({'agent_id': 'agent-a'})
+    await db.agent_work.update_one({'work_id': work['work_id']}, {'$set': {'revoked': True}})
+    result = await core.reconcile(db, OWNER, a['approval_id'], 0, outcome, 'Checked provider, synthetic evidence only')
+    assert result['status'] == 'uncertain'  # Replay barrier is unchanged.
+    assert result['receipt'] == a['receipt']
+    assert result['approved_digest'] == a['approved_digest']
+    assert result['version'] == a['version']
+    assert result['reconciliation']['source'] == 'owner_report'
+    assert result['reconciliation']['actor'] == OWNER
+    assert result['reconciliation_history'] == [result['reconciliation']]
+    assert await db.agent_runs.find_one({'run_id': run['run_id']}) == before
+    planner, broker = AsyncMock(), AsyncMock()
+    await tick(db, planner, broker)
+    planner.assert_not_called(); broker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_investigation_corrections_are_atomic_and_audited(db):
+    _, _, a = await uncertain_email(db)
+    results = await asyncio.gather(*[
+        core.reconcile(db, OWNER, a['approval_id'], 0, outcome, 'Evidence')
+        for outcome in ('sent', 'not_sent', 'unknown')], return_exceptions=True)
+    assert sum(isinstance(r, dict) for r in results) == 1
+    first = next(r['reconciliation'] for r in results if isinstance(r, dict))
+    second = await core.reconcile(db, OWNER, a['approval_id'], 1, 'unknown', 'Earlier evidence was inconclusive')
+    assert second['reconciliation_history'][0] == first
+    assert second['reconciliation']['version'] == 2
+    assert second['reconciliation']['outcome'] == 'unknown'
+    assert second['status'] == 'uncertain'
+
+
+@pytest.mark.asyncio
+async def test_investigation_cannot_clear_duplicate_send_barrier(db):
+    work, run, a = await uncertain_email(db)
+    await core.reconcile(db, OWNER, a['approval_id'], 0, 'not_sent', 'Synthetic provider evidence')
+    await tick(db, AsyncMock(), AsyncMock())  # Release terminal reservation.
+    next_run = await core.enqueue(db, work, 'next-trigger')
+    broker = AsyncMock()
+    await tick(db, AsyncMock(return_value=SEND), broker)
+    broker.assert_not_called()
+    saved = await db.agent_runs.find_one({'run_id': next_run['run_id']})
+    assert saved['status'] == 'failed'
+    assert 'unknown outcome' in saved['result']
+
+
+@pytest.mark.asyncio
+async def test_investigation_requires_active_owner(db):
+    _, _, a = await uncertain_email(db)
+    with pytest.raises(ValueError, match='not found'):
+        await core.reconcile(db, OTHER, a['approval_id'], 0, 'sent', 'Evidence')
+    await db.users.update_one({'email': OWNER}, {'$set': {'status': 'inactive'}})
+    with pytest.raises(ValueError):
+        await core.reconcile(db, OWNER, a['approval_id'], 0, 'sent', 'Evidence')
+    saved = await db.agent_approvals.find_one({'approval_id': a['approval_id']})
+    assert 'reconciliation' not in saved
+
+
+@pytest.mark.asyncio
+async def test_investigation_rejects_invalid_states_and_payloads(db):
+    _, run, a = await uncertain_email(db)
+    for version, outcome, evidence in [(True, 'sent', 'x'), (-1, 'sent', 'x'), (0, 'retry', 'x'), (0, 'sent', ''), (0, 'sent', 'x' * 2001)]:
+        with pytest.raises(ValueError):
+            await core.reconcile(db, OWNER, a['approval_id'], version, outcome, evidence)
+    for state in ('executing', 'approved', 'pending', 'executed', 'preview', 'cancelled', 'rejected', 'expired'):
+        await db.agent_approvals.update_one({'approval_id': a['approval_id']}, {'$set': {'status': state}})
+        with pytest.raises(ValueError, match='not awaiting investigation'):
+            await core.reconcile(db, OWNER, a['approval_id'], 0, 'sent', 'Evidence')
+    await db.agent_approvals.update_one({'approval_id': a['approval_id']}, {'$set': {'status': 'uncertain', 'action': 'gmail.read'}})
+    with pytest.raises(ValueError, match='not found'):
+        await core.reconcile(db, OWNER, a['approval_id'], 0, 'sent', 'Evidence')
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_api_and_attention_survive_recent_history(db, monkeypatch):
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+    from api import bounded_work_routes as routes
+    _, _, a = await uncertain_email(db)
+    # An old unresolved send must not disappear behind the recent history cap.
+    await db.agent_approvals.insert_many([
+        {'approval_id': f'recent-{i}', 'run_id': f'recent-{i}', 'step': 0,
+         'owner': OWNER, 'status': 'executed', 'created_at': core.now()} for i in range(105)])
+    monkeypatch.setenv('LOMA_BOUNDED_WORK_ENABLED', 'true')
+    monkeypatch.setenv('LOMA_WORK_GATEWAY_SECRET', 'k' * 32)
+    monkeypatch.setattr(routes, 'get_db', lambda: db)
+    @web.middleware
+    async def identity(request, handler):
+        request['user_email'] = request.headers.get('X-User-Email', '')
+        request['system_role'] = 'operator'
+        return await handler(request)
+    app = web.Application(middlewares=[identity])
+    app.router.add_route('*', '/api/bounded-work/{tail:.*}', routes.handle)
+    async with TestClient(TestServer(app)) as client:
+        async def call(path, body=None, owner=OWNER):
+            raw = json.dumps(body).encode() if body else b''
+            method = 'POST' if body else 'GET'
+            stamp = str(int(time.time()))
+            signature = hmac.new(b'k' * 32, '\n'.join([stamp, method, path, owner, hashlib.sha256(raw).hexdigest()]).encode(), hashlib.sha256).hexdigest()
+            return await client.request(method, path, data=raw, headers={'X-User-Email': owner, 'X-Work-Time': stamp, 'X-Work-Signature': signature})
+        path = f"/api/bounded-work/approvals/{a['approval_id']}/reconcile"
+        body = {'version': 0, 'outcome': 'unknown', 'evidence': 'Still investigating'}
+        assert (await client.post(path, json=body, headers={'X-User-Email': OWNER})).status == 401
+        assert (await call(path, body, OTHER)).status == 400
+        assert (await call(path, body)).status == 200
+        assert (await call(path, body)).status == 400  # Stale review, not a second write.
+        result = await (await call('/api/bounded-work/overview')).json()
+        ids = [v['approval_id'] for v in result['approvals']]
+        assert a['approval_id'] in ids and len(ids) == len(set(ids)) == 101

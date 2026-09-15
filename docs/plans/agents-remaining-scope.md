@@ -39,7 +39,9 @@ Important limitations requiring follow-up before broad rollout:
   Connector calls with unknown outcomes are never automatically retried.
 - Event keys provide deduplicated enqueue via the signed API; external ticket/webhook
   subscription wiring and a general event outbox are not implemented.
-- Unknown delivery outcomes require manual investigation; no reconciliation UI yet.
+- Unknown email outcomes now have an owner investigation UI and versioned audit.
+  Reports are not provider-verified receipts and cannot clear the replay barrier;
+  automated provider reconciliation and controlled retry authorization remain open.
 - Private notes are a small knowledge store, not a Drive/PDF retrieval system or separate
   workspace knowledge and long-term memory services.
 - Agent work has its own focused card view. The existing personal taskboard and chats
@@ -84,6 +86,26 @@ process. Provider charges for failed calls are unknown; this is not a currency c
 UI: creation exposes deadline and retry limits with conservative defaults; Work cards
 show the saved limits, and run details show deadline, attempts and retry history. Open
 run details refresh with the overview instead of displaying a stale running state.
+
+## Unknown email investigation (manual, no retry authority)
+
+Unknown Gmail send outcomes appear in Needs you and on Work-card badges, even when
+older than the recent-history window. The owner reviews the account, exact recipient,
+subject, message and original receipt, then records sent / not sent / still unknown
+with evidence. The UI explicitly labels this an **owner report**, not a provider receipt.
+Missing search results alone are not proof of a failed send. Still-unknown reports stay
+in Needs you; conclusive reports remain accessible in Run history.
+
+The signed API accepts only active owners and uncertain Gmail-send records. Investigation
+remains possible after agent deletion, work revocation or run expiry because this is an
+owner audit write, not execution. Competing reports use a separate review-version CAS;
+corrections preserve the entire earlier audit. The provider receipt, proposal version,
+execution status, approval digest and terminal run state are never overwritten.
+
+**No resend, auto-resume or retry permission is granted, including for “not sent”.** The
+uncertain status remains the replay barrier. A future provider-backed reconciliation
+and separately authorized retry mechanism is still required before clearing it. This
+change does not call Gmail or trust owner notes as machine-verified delivery evidence.
 
 ## Legacy identity compatibility (implemented here)
 
