@@ -32,6 +32,7 @@ async def test_create_ignores_forged_creator_and_binds_default_account():
     flow = json.loads(response.text)["flow"]
     assert response.status == 201
     assert flow["run_as"] == "owner@example.com"
+    assert flow["identity_version"] == 1
     assert set(flow["created_by"].values()) == {"owner@example.com"}
 
 

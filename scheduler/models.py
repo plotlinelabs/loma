@@ -35,6 +35,7 @@ async def create_flow(db, data: dict) -> dict:
         "model": data.get("model"),
         "agent_id": data.get("agent_id"),
         "agent_snapshot": data.get("agent_snapshot"),
+        "bounded_work_id": data.get("bounded_work_id"),
 
         # Trigger type: "scheduled" (cron/one-time), "webhook" (event-driven),
         # or "slack" (responds to top-level messages in a Slack channel)
@@ -73,6 +74,7 @@ async def create_flow(db, data: dict) -> dict:
         # Metadata
         "created_by": data.get("created_by", {}),
         "run_as": data.get("run_as"),
+        "identity_version": 1,  # Never eligible for legacy creator backfill.
         "created_at": now,
         "updated_at": now,
 

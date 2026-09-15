@@ -43,6 +43,7 @@ import { AddChatDialog } from "@/components/tasks/AddChatDialog";
 import { TaskChatDrawer } from "@/components/tasks/TaskChatDrawer";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
+import { AgentAttention } from "@/components/tasks/AgentAttention";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 const POLL_INTERVAL_MS = 5000;
@@ -309,6 +310,8 @@ export default function TasksPage() {
       </div>
 
       <InstallHint />
+
+      <AgentAttention />
 
       <div className="relative w-full sm:max-w-sm">
         <RiSearchLine className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

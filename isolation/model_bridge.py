@@ -1,0 +1,124 @@
+"""Worker-side loopback HTTP bridge, with no upstream network or credentials.
+
+Runtime adapters can point their model base URL at this disposable server. Only
+three exact POST paths are supported. Request headers, URL query parameters,
+credentials, redirects and arbitrary HTTP targets never enter broker frames.
+All authority remains in the backend ModelRelay. This is not a forward proxy.
+"""
+import asyncio
+import base64
+import binascii
+
+from aiohttp import web
+
+from isolation.protocol import MAX_FRAME
+
+PATHS = {'responses': '/v1/responses', 'messages': '/v1/messages', 'chat': '/v1/chat/completions'}
+
+
+class ModelBridge:
+    def __init__(self, protocol, rpc):
+        if protocol not in PATHS or not callable(rpc):
+            raise ValueError('A supported protocol and broker RPC are required')
+        self.protocol, self.rpc = protocol, rpc
+        self.runner = None
+        self.origin = None
+        self.busy = False
+        self.tasks = set()
+
+    async def serve(self):
+        if self.runner is not None:
+            raise RuntimeError('Model bridge already started')
+        app = web.Application(client_max_size=MAX_FRAME - 1024)
+        app.router.add_post(PATHS[self.protocol], self.handle)
+        self.runner = web.AppRunner(app, access_log=None, shutdown_timeout=5)
+        await self.runner.setup()
+        try:
+            # This listener exists only inside the disposable worker's private
+            # network namespace. Never bind to all interfaces or publish a port.
+            site = web.TCPSite(self.runner, '127.0.0.1', 0)
+            await site.start()
+            self.origin = 'http://127.0.0.1:' + str(self.runner.addresses[0][1])
+            return self.origin
+        except BaseException:
+            await self.close()
+            raise
+
+    async def handle(self, request):
+        if request.query_string or request.headers.get('Content-Encoding', 'identity') != 'identity':
+            raise web.HTTPBadRequest(text='Unsupported model request')
+        if self.busy:
+            raise web.HTTPConflict(text='Only one model request may be active')
+        self.busy = True
+        task = asyncio.current_task()
+        self.tasks.add(task)
+        stream_id = None
+        response = None
+        try:
+            try:
+                body = await request.json()
+            except (ValueError, UnicodeError):
+                raise web.HTTPBadRequest(text='Invalid JSON') from None
+            started = await self.rpc('model.start', {'body': body})
+            if (not isinstance(started, dict) or not isinstance(started.get('stream_id'), str)
+                    or started.get('content_type') != 'text/event-stream'):
+                raise RuntimeError('Model stream unavailable')
+            stream_id = started['stream_id']
+            response = web.StreamResponse(headers={'Content-Type': 'text/event-stream',
+                                                    'Cache-Control': 'no-store'})
+            await response.prepare(request)
+            while True:
+                chunk = await self.rpc('model.read', {'stream_id': stream_id})
+                if (not isinstance(chunk, dict) or set(chunk) != {'data', 'eof'}
+                        or not isinstance(chunk['data'], str) or type(chunk['eof']) is not bool
+                        or len(chunk['data']) > 45000):
+                    raise RuntimeError('Invalid model chunk')
+                try:
+                    data = base64.b64decode(chunk['data'], validate=True)
+                except (ValueError, binascii.Error):
+                    raise RuntimeError('Invalid model bytes') from None
+                if chunk['eof']:
+                    if data:
+                        raise RuntimeError('Invalid model end marker')
+                    stream_id = None  # backend has already closed the stream
+                    await response.write_eof()
+                    return response
+                if not data:
+                    raise RuntimeError('Empty model chunk')
+                await response.write(data)
+        except web.HTTPException:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Provider or broker error text can include privileged diagnostics.
+            # After headers have gone out, abort the HTTP connection rather than
+            # produce an apparently successful, truncated SSE response.
+            if response is not None and response.prepared:
+                if request.transport is not None:
+                    request.transport.close()
+                return response
+            raise web.HTTPBadGateway(text='Model gateway unavailable; not retried') from None
+        finally:
+            try:
+                if stream_id is not None:
+                    # Bounded cleanup. Full-run teardown also closes ModelRelay;
+                    # this HTTP request cannot keep privileged streams alive.
+                    async with asyncio.timeout(5):
+                        await self.rpc('model.close', {'stream_id': stream_id})
+            except Exception:
+                pass
+            finally:
+                self.busy = False
+                self.tasks.discard(task)
+
+    async def close(self):
+        current = asyncio.current_task()
+        tasks = [t for t in self.tasks if t != current]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if self.runner is not None:
+            runner, self.runner = self.runner, None
+            self.origin = None
+            await runner.cleanup()
