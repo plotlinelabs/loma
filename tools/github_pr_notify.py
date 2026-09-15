@@ -231,14 +231,29 @@ async def _cmd_register(args: argparse.Namespace) -> int:
             target = await _resolve_target_from_conversation(db, args.conversation_id)
         else:
             await _verify_target_origin(db, target, args.conversation_id)
-        await register_pr_notification_target(db, args.repo, args.pr, target)
+        result = await register_pr_notification_target(db, args.repo, args.pr, target)
     finally:
         client.close()
+    # Self-review was disabled on this deploy before a target existed, so the
+    # "self-review skipped" notice was delivered (or attempted) from THIS
+    # process during registration. "failed" means the target has NOT been told
+    # and, for a single-push PR, nothing will retry — say so instead of
+    # printing an unqualified `registered: true`.
+    disabled_notice = result.get("disabled_notice")
+    if disabled_notice == "failed":
+        print(
+            "warning: self-review is disabled on this deploy and the 'self-review "
+            "skipped' notice could not be delivered to the registered target from "
+            "this process (missing channel credentials?). Tell the requester "
+            "directly that no verdict will follow.",
+            file=sys.stderr,
+        )
     print(json.dumps({
         "registered": True,
         "repo": args.repo,
         "pr_number": args.pr,
         "target": target,
+        "disabled_notice": disabled_notice,
     }))
     return 0
 

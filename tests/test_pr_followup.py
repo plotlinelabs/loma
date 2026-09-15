@@ -6,6 +6,7 @@ Stage 2: the self-review pipeline threads the verdict back to that target.
 
 import importlib
 import importlib.util
+import json
 import os
 from argparse import Namespace
 from datetime import datetime, timedelta, timezone
@@ -114,7 +115,9 @@ class TestRegistration:
         stored_key = collection.update_one.call_args_list[0].args[0]
         assert stored_key["repo_full_name"] == "exampleorg/repo"
         await get_pr_notification_target(db, "EXAMPLEORG/REPO", 7)
-        assert collection.find_one.call_args.args[0]["repo_full_name"] == "exampleorg/repo"
+        # First read is the exact (normalised) key; the fake returns None so a
+        # case-insensitive fallback read follows — see the dedicated test.
+        assert collection.find_one.call_args_list[0].args[0]["repo_full_name"] == "exampleorg/repo"
 
     @pytest.mark.asyncio
     async def test_mark_self_review_disabled_upserts_marker(self):
@@ -140,13 +143,104 @@ class TestRegistration:
         }
         db, collection = _fake_db(existing_record=record)
         with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=True) as loma:
-            await register_pr_notification_target(
+            doc = await register_pr_notification_target(
                 db, REPO, 42, {"type": "loma", "user_email": "a@b.co"}
             )
         loma.assert_awaited_once()
         unsets = [c for c in collection.update_one.call_args_list
                   if isinstance(c.args[1], dict) and "$unset" in c.args[1]]
         assert any("disabled_pending" in c.args[1]["$unset"] for c in unsets)
+        assert doc["disabled_notice"] == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_register_reports_an_undelivered_pending_notice_and_keeps_the_marker(self):
+        record = {
+            "repo_full_name": REPO, "pr_number": 42,
+            "target": {"type": "loma", "user_email": "a@b.co"},
+            "registered_at": datetime.now(timezone.utc),
+            "disabled_pending": True,
+            "disabled_pending_pr_url": PR_URL,
+        }
+        db, collection = _fake_db(existing_record=record)
+        with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=False):
+            doc = await register_pr_notification_target(
+                db, REPO, 42, {"type": "loma", "user_email": "a@b.co"}
+            )
+        assert doc["disabled_notice"] == "failed"
+        unsets = [c for c in collection.update_one.call_args_list
+                  if isinstance(c.args[1], dict) and "$unset" in c.args[1]]
+        assert not any("disabled_pending" in c.args[1]["$unset"] for c in unsets)
+
+    @pytest.mark.asyncio
+    async def test_stale_disabled_marker_is_cleared_once_the_registration_was_told(self):
+        # The webhook re-arms `disabled_pending` on every reviewable event. After
+        # the notice went out for this registration, a later `synchronize` must
+        # clear the re-armed marker; otherwise flipping the deploy to enabled and
+        # re-registering would replay a spurious "self-review skipped" notice.
+        registered_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        told = {
+            "repo_full_name": REPO, "pr_number": 42,
+            "target": {"type": "loma", "user_email": "a@b.co"},
+            "registered_at": registered_at,
+            "last_followup_disabled": True,
+            "last_followup_at": registered_at + timedelta(minutes=1),
+            "disabled_pending": True, "disabled_pending_pr_url": PR_URL,
+        }
+        # (a) pre-check says "already told"
+        db, collection = _fake_db(existing_record=told)
+        with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock) as loma:
+            assert await post_self_review_followup(
+                db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+                verdict=None, succeeded=False, disabled=True,
+            ) is False
+        loma.assert_not_awaited()
+        assert collection.update_one.call_args.args[1] == \
+            {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}}
+        # (b) lost the atomic claim to a concurrent event
+        fresh = {k: v for k, v in told.items() if not k.startswith("last_followup")}
+        db, collection = _fake_db(existing_record=fresh)
+        collection.find_one_and_update = AsyncMock(return_value=None)
+        assert await post_self_review_followup(
+            db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+            verdict=None, succeeded=False, disabled=True,
+        ) is False
+        assert collection.update_one.call_args.args[1] == \
+            {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}}
+        # (c) delivered now → cleared too, and the delivery record still written
+        db, collection = _fake_db(existing_record=fresh)
+        with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=True):
+            assert await post_self_review_followup(
+                db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+                verdict=None, succeeded=False, disabled=True,
+            ) is True
+        updates = [c.args[1] for c in collection.update_one.call_args_list]
+        assert {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}} in updates
+        assert any("$set" in u and u["$set"].get("last_followup_disabled") is True for u in updates)
+        # (d) no marker on the record → nothing to clear, no extra write
+        db, collection = _fake_db(existing_record={k: v for k, v in told.items()
+                                                   if not k.startswith("disabled_pending")})
+        assert await post_self_review_followup(
+            db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
+            verdict=None, succeeded=False, disabled=True,
+        ) is False
+        collection.update_one.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_target_falls_back_to_a_case_insensitive_read(self):
+        # A doc registered before keys were lowercased must stay reachable
+        # during the deploy window (init_observability folds them at boot).
+        legacy = {"repo_full_name": "Example-Org/Example-Repo", "pr_number": 42,
+                  "target": {"type": "linear", "issue_id": "u"}}
+        db, collection = _fake_db()
+        collection.find_one = AsyncMock(side_effect=[None, legacy])
+        assert await get_pr_notification_target(db, "example-org/example-repo", 42) == legacy
+        fallback_filter = collection.find_one.call_args_list[1].args[0]
+        assert fallback_filter["repo_full_name"]["$options"] == "i"
+        assert fallback_filter["repo_full_name"]["$regex"] == "^example\\-org/example\\-repo$"
+        # Exact hit → no second read
+        db, collection = _fake_db(existing_record=legacy)
+        await get_pr_notification_target(db, REPO, 42)
+        collection.find_one.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_register_without_pending_marker_delivers_nothing(self):
@@ -309,6 +403,9 @@ class TestVerdictExtraction:
                    "body": "> ✅ Self-review: no blocking issues (quoting the previous run)"
                            "\n\n🔴 Self-review: 2 blocking issue(s)"}]
         lk = find_self_review(quoted, "loma-insights", exclude_review_ids=set())
+        # Either candidate login counts (label-backstop cases); unknown ones do not.
+        assert find_self_review(quoted, {"human-dev", "loma-insights"}, exclude_review_ids=set()) == lk
+        assert find_self_review(quoted, {"human-dev", ""}, exclude_review_ids=set()).review_found is False
         assert lk.review_found is True and lk.verdict is None
         later = [{"id": "R2", "author": "loma-insights",
                   "body": "Here is my review.\n\n✅ Self-review: ok"}]
@@ -852,7 +949,8 @@ class TestNotifyCliOriginCheck:
                          linear_issue_id=None, user_email=None, auth_token=None,
                          conversation_id="c1")
         with patch.object(cli, "_get_db", return_value=(client, db)), \
-             patch.object(cli, "register_pr_notification_target", new_callable=AsyncMock) as reg:
+             patch.object(cli, "register_pr_notification_target", new_callable=AsyncMock,
+                          return_value={"disabled_notice": None}) as reg:
             assert await cli._cmd_register(args) == 0
         assert reg.call_args.args[1:] == (
             "o/r", 7, {"type": "slack", "channel": "C1", "thread_ts": "1.2", "conversation_id": "c1"},
@@ -883,7 +981,28 @@ class TestNotifyCliOriginCheck:
 
         db = self._db({"conversation_id": "c1"})
         with patch.object(cli, "_get_db", return_value=(client, db)), \
-             patch.object(cli, "register_pr_notification_target", new_callable=AsyncMock) as reg:
+             patch.object(cli, "register_pr_notification_target", new_callable=AsyncMock,
+                          return_value={"disabled_notice": None}) as reg:
             assert await cli._cmd_register(args) == 0
         reg.assert_awaited_once()
         assert reg.call_args.args[1:] == ("o/r", 7, {"type": "slack", "channel": "C1", "thread_ts": "1.2"})
+
+    @pytest.mark.asyncio
+    async def test_register_surfaces_a_failed_disabled_notice(self, capsys):
+        # Single-push PR on a disabled deploy: the notice is delivered from the
+        # CLI process at registration time. If that fails there is no later
+        # webhook event to retry, so `registered: true` alone must not be the
+        # whole story — the agent has to hear that the target was NOT told.
+        cli = _load_notify_cli()
+        client = MagicMock()
+        args = Namespace(repo="o/r", pr=7, slack_channel="C1", thread_ts="1.2",
+                         linear_issue_id=None, user_email=None, auth_token=None,
+                         conversation_id=None)
+        db = self._db({"conversation_id": "c1"})
+        with patch.object(cli, "_get_db", return_value=(client, db)), \
+             patch.object(cli, "register_pr_notification_target", new_callable=AsyncMock,
+                          return_value={"disabled_notice": "failed"}):
+            assert await cli._cmd_register(args) == 0
+        out, err = capsys.readouterr()
+        assert json.loads(out.strip().splitlines()[-1])["disabled_notice"] == "failed"
+        assert "could not be delivered" in err

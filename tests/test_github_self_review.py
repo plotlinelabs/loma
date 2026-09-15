@@ -431,6 +431,24 @@ class TestSelfReviewPipeline:
         assert check["conclusion"] == "success"
 
     @pytest.mark.asyncio
+    async def test_verdict_lookup_still_finds_the_agent_login_on_a_labelled_human_draft(self):
+        # The other label-backstop case: AGENT_GITHUB_LOGIN is correct and a
+        # human's draft carries the `Agent PR` label. The review is posted by the
+        # agent token, NOT the PR author — scoping to the author alone would
+        # misreport a reviewed PR as "Incomplete".
+        reviews = [{"id": "R2", "author": AGENT_GITHUB_LOGIN, "created_at": _ts(datetime.now(timezone.utc)),
+                    "body": "🔴 Self-review: 1 blocking issue(s)"}]
+        mocks = await self._run(reviews, reviews_before=[], pr_author="human-dev")
+        followup = mocks["post_self_review_followup"].call_args.kwargs
+        assert followup["succeeded"] is True
+        assert followup["verdict"].startswith("🔴 Self-review: 1 blocking")
+        # A previous run's review under EITHER login is still excluded structurally.
+        mocks = await self._run(reviews, reviews_before=reviews, pr_author="human-dev",
+                                action="synchronize")
+        followup = mocks["post_self_review_followup"].call_args.kwargs
+        assert followup["verdict"] is None and followup["review_posted"] is False
+
+    @pytest.mark.asyncio
     async def test_agent_error_posts_failed_followup(self):
         mocks = await self._run([], stream=_agent_stream("Sorry, I encountered an error: boom"))
         followup = mocks["post_self_review_followup"].call_args.kwargs
@@ -892,6 +910,7 @@ class TestCoalescedRerun:
         closed = {"state": "closed", "head": {"sha": "n" * 40}}
         for details in (same, closed, None):
             with patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=details), \
+                 patch("webhooks.github._HEAD_CHECK_RETRY_SECONDS", 0), \
                  patch("webhooks.github._create_pr_comment", new_callable=AsyncMock), \
                  patch("webhooks.github._process_pr_review", new_callable=AsyncMock) as review_mock:
                 assert await _rerun_self_review_if_head_moved(
@@ -951,6 +970,7 @@ class TestCoalescedRerun:
     @pytest.mark.asyncio
     async def test_lookup_failure_never_raises(self):
         with patch("webhooks.github._get_pr_details", new_callable=AsyncMock, side_effect=RuntimeError("api")), \
+             patch("webhooks.github._HEAD_CHECK_RETRY_SECONDS", 0), \
              patch("webhooks.github._create_pr_comment", new_callable=AsyncMock):
             assert await _rerun_self_review_if_head_moved(
                 repo_owner="o", repo_name="r", repo_full_name="o/r", pr_number=1,
@@ -962,7 +982,8 @@ class TestCoalescedRerun:
         # A `synchronize` that lost the lock is relying on THIS holder to review
         # the newest head. If the holder cannot even fetch the PR afterwards, the
         # skipped push must not vanish silently — post a notice.
-        with patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=None), \
+        with patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=None) as details_mock, \
+             patch("webhooks.github._HEAD_CHECK_RETRY_SECONDS", 0), \
              patch("webhooks.github._create_pr_comment", new_callable=AsyncMock) as comment_mock, \
              patch("webhooks.github._process_pr_review", new_callable=AsyncMock) as review_mock:
             assert await _rerun_self_review_if_head_moved(
@@ -971,6 +992,7 @@ class TestCoalescedRerun:
                 reviewed_head_sha="h" * 40,
             ) is False
         review_mock.assert_not_called()
+        assert details_mock.await_count == 2  # one retry before giving up
         comment_mock.assert_awaited_once()
         body = comment_mock.call_args.args[3]
         assert "@loma-agent /rereview" in body and "newer commits" in body

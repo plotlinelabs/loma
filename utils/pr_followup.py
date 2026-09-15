@@ -21,6 +21,7 @@ Targets are stored in the `pr_notification_targets` collection keyed by
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -135,6 +136,7 @@ async def register_pr_notification_target(
         )
     except Exception:
         stored = None
+    disabled_notice = None
     if stored and stored.get("disabled_pending"):
         delivered = await post_self_review_followup(
             db,
@@ -145,22 +147,21 @@ async def register_pr_notification_target(
             succeeded=False,
             disabled=True,
         )
-        # Only clear the marker once the notice actually went out. If delivery
-        # failed here (e.g. this process lacks the channel's credentials), leave
-        # the marker so a later event — a `synchronize` in the server process,
-        # or a re-registration — can retry it instead of losing it silently.
-        if delivered:
-            try:
-                await db[COLLECTION].update_one(
-                    {"repo_full_name": repo_full_name, "pr_number": pr_number},
-                    {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}},
-                )
-            except Exception:
-                logger.warning(
-                    "[PR-FOLLOWUP] Could not clear disabled_pending marker for %s#%d",
-                    repo_full_name, pr_number,
-                )
-    return doc
+        # `post_self_review_followup` clears the marker itself once the notice
+        # is out (or found already delivered). If delivery failed here — this
+        # is usually the agent-side CLI process, which may lack the channel's
+        # credentials — the marker stays so a later event can retry, and the
+        # caller is told: for a single-push PR there may be no later event, so
+        # "registered: true" alone would hide that the Stage-1 promise dangles.
+        disabled_notice = "delivered" if delivered else "failed"
+        if not delivered:
+            logger.warning(
+                "[PR-FOLLOWUP] Self-review is disabled for %s#%d but the notice could "
+                "not be delivered from this process — the registered target has NOT "
+                "been told; a later webhook event will retry",
+                repo_full_name, pr_number,
+            )
+    return {**doc, "disabled_notice": disabled_notice}
 
 
 async def mark_self_review_disabled(
@@ -199,10 +200,24 @@ async def get_pr_notification_target(
     repo_full_name: str,
     pr_number: int,
 ) -> dict | None:
-    """Fetch the registered notification target for a PR, or None."""
-    return await db[COLLECTION].find_one(
-        {"repo_full_name": _normalize_repo(repo_full_name), "pr_number": pr_number}
+    """Fetch the registered notification target for a PR, or None.
+
+    Keys are stored lowercased (see ``_normalize_repo``). Docs registered
+    before that normalisation shipped may still carry GitHub's mixed casing;
+    ``init_observability`` folds them at boot, but a target registered by an
+    older CLI against a newer server (or vice-versa) during the deploy window
+    would otherwise be unreachable, so miss → one case-insensitive retry.
+    """
+    normalized = _normalize_repo(repo_full_name)
+    record = await db[COLLECTION].find_one(
+        {"repo_full_name": normalized, "pr_number": pr_number}
     )
+    if record is not None or not normalized:
+        return record
+    return await db[COLLECTION].find_one({
+        "repo_full_name": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"},
+        "pr_number": pr_number,
+    })
 
 
 def _parse_github_timestamp(value) -> datetime | None:
@@ -237,13 +252,26 @@ class SelfReviewLookup:
     verdict: str | None = None
 
 
+def _login_set(agent_login) -> set[str]:
+    """One login or a collection of logins → set (empty strings dropped)."""
+    logins = {agent_login} if isinstance(agent_login, str) else set(agent_login or ())
+    return {login for login in logins if login}
+
+
 def find_self_review(
     reviews: list[dict],
-    agent_login: str,
+    agent_login,
     started_at: datetime | None = None,
     exclude_review_ids: set[str] | list[str] | None = None,
 ) -> SelfReviewLookup:
     """Find the agent's self-review for THIS run and its verdict line, if any.
+
+    ``agent_login`` is the login that posted the review, or a collection of
+    candidate logins: the pipeline passes both the PR author and
+    ``AGENT_GITHUB_LOGIN`` because the two differ when the run reached
+    self-review via the ``Agent PR`` label backstop (either the env login is
+    misconfigured and the PR author IS the posting token, or a human's
+    labelled draft is being reviewed by the correctly configured agent token).
 
     The self-review prompt requires the review body to START with a single
     verdict line (`✅ Self-review: …` or `🔴 Self-review: …`). Reviews come
@@ -276,9 +304,10 @@ def find_self_review(
     """
     cutoff = started_at - _RUN_SCOPE_SKEW if started_at else None
     excluded = set(exclude_review_ids) if exclude_review_ids is not None else None
+    logins = _login_set(agent_login)
     review_found = False
     for review in reversed(reviews or []):
-        if review.get("author") != agent_login:
+        if review.get("author") not in logins:
             continue
         if (review.get("state") or "").upper() == "PENDING":
             continue
@@ -313,7 +342,7 @@ def find_self_review(
 
 def extract_self_review_verdict(
     reviews: list[dict],
-    agent_login: str,
+    agent_login,
     started_at: datetime | None = None,
     exclude_review_ids: set[str] | list[str] | None = None,
 ) -> str | None:
@@ -334,9 +363,11 @@ def _build_messages(
 ) -> tuple[str, str, str]:
     """Return (title, plain_body, slack_text) for the follow-up.
 
-    Five outcomes, so the Stage-1 "verdict will follow" promise is always
+    Six outcomes, so the Stage-1 "verdict will follow" promise is always
     answered with something a human can act on:
       - disabled: the deploy has LOMA_ENABLE_SELF_REVIEW off — no review will come
+      - verdict_unknown: the review ran but GitHub could not be queried for the
+        verdict afterwards — read the PR; do NOT treat it as unreviewed
       - succeeded + verdict: the normal case
       - succeeded + review_posted, no verdict: the agent posted a review this
         run but it lacks the verdict line — findings ARE on the PR, read them
@@ -505,12 +536,29 @@ async def post_self_review_followup(
         return False
 
     target = record["target"]
+    key = {"repo_full_name": repo_full_name, "pr_number": pr_number}
+
+    async def _clear_disabled_pending() -> None:
+        # The webhook re-arms `disabled_pending` on EVERY reviewable event
+        # (opened, each synchronize). Once this registration has been told —
+        # delivered now, or found already delivered — the marker must go, or
+        # it goes stale: flip the deploy to enabled later and any
+        # re-registration for this PR would replay a spurious "self-review
+        # skipped, treat as unreviewed" notice while a real review runs.
+        if not record.get("disabled_pending"):
+            return
+        try:
+            await db[COLLECTION].update_one(
+                key, {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}},
+            )
+        except Exception:
+            logger.warning("[PR-FOLLOWUP] Could not clear disabled_pending marker for %s#%d",
+                           repo_full_name, pr_number)
 
     # "Disabled" is answered once per registration: every reviewable
     # pull_request event (opened, each synchronize, …) re-enters this path,
     # but the human only needs to hear "no verdict is coming" once per
     # announcement, not once per push.
-    key = {"repo_full_name": repo_full_name, "pr_number": pr_number}
     disabled_notice_key = None
     if disabled:
         last_at = record.get("last_followup_at")
@@ -525,6 +573,7 @@ async def post_self_review_followup(
                 "[PR-FOLLOWUP] Already told %s#%d's target that self-review is "
                 "disabled — skipping repeat", repo_full_name, pr_number,
             )
+            await _clear_disabled_pending()
             return False
         # The read above is not enough on its own: `opened` and the first
         # `synchronize` land within seconds and both read the doc before
@@ -548,6 +597,7 @@ async def post_self_review_followup(
                 "[PR-FOLLOWUP] Another event already claimed %s#%d's disabled "
                 "notice — skipping repeat", repo_full_name, pr_number,
             )
+            await _clear_disabled_pending()
             return False
 
     title, body, slack_text = _build_messages(
@@ -586,6 +636,8 @@ async def post_self_review_followup(
                            repo_full_name, pr_number)
 
     if delivered:
+        if disabled:
+            await _clear_disabled_pending()
         try:
             # Condition on the registration we actually delivered to: if the flow
             # re-registered (new announcement) between our read and this write,
@@ -598,6 +650,7 @@ async def post_self_review_followup(
                     "last_followup_verdict": verdict,
                     "last_followup_disabled": disabled,
                     "last_followup_review_posted": review_posted,
+                    "last_followup_verdict_unknown": verdict_unknown,
                 }},
             )
         except Exception:

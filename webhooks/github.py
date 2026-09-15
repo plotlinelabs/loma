@@ -39,6 +39,7 @@ from webhooks.self_review_lock import SelfReviewLock
 from api.drain import is_draining
 from utils.pr_followup import (
     REREVIEW_COMMAND,
+    _login_set,
     find_self_review,
     mark_self_review_disabled,
     post_self_review_followup,
@@ -50,6 +51,9 @@ logger = logging.getLogger(__name__)
 
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 GITHUB_API_KEY = os.environ.get("GITHUB_API_KEY", "")
+# Back-off before the single retry of the post-review "did the head move?"
+# check (tests shrink it to 0).
+_HEAD_CHECK_RETRY_SECONDS = 1.0
 
 # GitHub login of the bot account whose token we use. Historically this was
 # hardcoded to "loma-agent" in multiple places, but the production token
@@ -1151,9 +1155,11 @@ async def _snapshot_agent_review_ids(
     repo_owner: str,
     repo_name: str,
     pr_number: int,
-    agent_login: str = AGENT_GITHUB_LOGIN,
+    agent_login=AGENT_GITHUB_LOGIN,
 ) -> set[str] | None:
     """Return the node IDs of EVERY agent review on the PR right now, or None on failure.
+
+    ``agent_login`` is a login or a collection of logins (see ``find_self_review``).
 
     Taken immediately before the self-review agent starts so the verdict lookup
     afterwards can be scoped structurally: a review whose ID is in this set
@@ -1174,10 +1180,11 @@ async def _snapshot_agent_review_ids(
             repo_owner, repo_name, pr_number, e,
         )
         return None
+    logins = _login_set(agent_login)
     return {
         review["id"]
         for review in reviews
-        if review.get("author") == agent_login and review.get("id")
+        if review.get("author") in logins and review.get("id")
     }
 
 
@@ -1805,13 +1812,18 @@ async def _run_pr_review(
     pre_run_review_ids: set[str] | None = None
     started_at = datetime.now(timezone.utc)
 
-    # The self-review is posted with the same token that authored the PR, so the
-    # review author is the PR author. When the run reached here via the `Agent PR`
-    # label backstop (AGENT_GITHUB_LOGIN misconfigured), that is NOT the env login
-    # — scoping the snapshot and lookup to AGENT_GITHUB_LOGIN would then find no
-    # review and misreport every run as "Incomplete". Defined before the try so
-    # the verdict lookup in the finally can always reference it.
-    review_author_login = pr_author or AGENT_GITHUB_LOGIN
+    # Which login posts the self-review depends on WHY this is a self-review:
+    #   - agent-authored PR: the agent token, which is the PR author == env login;
+    #   - `Agent PR` label backstop with AGENT_GITHUB_LOGIN misconfigured: the PR
+    #     author is the real token, the env login never posts anything;
+    #   - `Agent PR` label on a human's draft with a correct env login: the agent
+    #     token posts, and it is NOT the PR author.
+    # Scoping the snapshot and lookup to only one of the two misreports the other
+    # case as "Incomplete" on every run, so accept either. Run scoping stays
+    # structural (pre-run review IDs, taken for the same set), so a previous run's
+    # review under either login is still excluded. Defined before the try so the
+    # verdict lookup in the finally can always reference it.
+    review_author_logins = _login_set((pr_author, AGENT_GITHUB_LOGIN))
     review_succeeded = True
     interrupted = False
     try:
@@ -1825,7 +1837,7 @@ async def _run_pr_review(
             await observer.start()
         if self_review:
             pre_run_review_ids = await _snapshot_agent_review_ids(
-                repo_owner, repo_name, pr_number, agent_login=review_author_login,
+                repo_owner, repo_name, pr_number, agent_login=review_author_logins,
             )
         started_at = datetime.now(timezone.utc)
 
@@ -1895,7 +1907,7 @@ async def _run_pr_review(
                 reviews = await get_pr_reviews(repo_owner, repo_name, pr_number)
                 if pre_run_review_ids is not None:
                     lookup = find_self_review(
-                        reviews, review_author_login,
+                        reviews, review_author_logins,
                         exclude_review_ids=pre_run_review_ids,
                     )
                 else:
@@ -1905,7 +1917,7 @@ async def _run_pr_review(
                         repo_full_name, pr_number,
                     )
                     lookup = find_self_review(
-                        reviews, review_author_login, started_at=started_at
+                        reviews, review_author_logins, started_at=started_at
                     )
                 verdict, review_posted = lookup.verdict, lookup.review_found
             except Exception:
@@ -2075,8 +2087,10 @@ async def _rerun_self_review_if_head_moved(
             latest = None
         if latest:
             break
-        if attempt == 1:
-            await asyncio.sleep(1.0)
+        if attempt == 1 and GITHUB_API_KEY:
+            # Without a key `_get_pr_details` returns None immediately and a
+            # retry cannot succeed; do not pay the back-off for nothing.
+            await asyncio.sleep(_HEAD_CHECK_RETRY_SECONDS)
     if not latest:
         # `_get_pr_details` returns None when GITHUB_API_KEY is unset or the
         # request fails. Do NOT degrade silently to "one run on a stale head":

@@ -155,7 +155,11 @@ class TestAcquireRelease:
         locks.update_one = AsyncMock(side_effect=_hang)
         lock = SelfReviewLock(db, REPO, 42, "conv-hb", "h" * 40)
         task = asyncio.create_task(lock._heartbeat_loop())
-        await asyncio.sleep(0.15)
+        # Poll rather than sleep a fixed interval: a loaded CI box must not turn
+        # "two abandoned writes within 0.15s" into a flake. Generous ceiling.
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while attempts["n"] < 2 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
         assert not task.done(), "loop died instead of bounding the hung write"
         assert attempts["n"] >= 2, "each hung write should be abandoned and retried"
         task.cancel()
