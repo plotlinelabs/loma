@@ -20,7 +20,7 @@ async def main():
     owner = front['USER_NAME'].lower()
     await indexes(db)
     if sys.argv[1] == 'seed':
-        for collection in ('agent_work', 'agent_runs', 'agent_approvals', 'agent_notes'):
+        for collection in ('agent_work', 'agent_runs', 'agent_approvals', 'agent_notes', 'agent_knowledge'):
             await db[collection].delete_many({'owner': owner})
         await db.flows.delete_many({'bounded_work_id': {'$type': 'string'}})
 
@@ -108,6 +108,32 @@ async def main():
         await costs.reserve(db, run, rates)
         await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {
             'status': 'failed', 'calls_used': 2, 'result': 'Synthetic billing uncertainty. No provider call was made.'}})
+    elif sys.argv[1] == 'slack-proposal':
+        from autonomy import core
+        work = await core.create_work(db, owner, {'agent_id': 'bounded-qa', 'title': 'Slack delivery QA',
+            'instructions': 'Propose a test Slack message', 'success': 'A receipt or an explicit unknown result',
+            'policy': {'actions': {'slack.send': 'ask'}, 'channels': ['C0123ABCD']}})
+        work['paused'] = False
+        await db.agent_work.update_one({'work_id': work['work_id']}, {'$set': {'paused': False}})
+        run = await core.enqueue(db, work, 'slack-browser')
+        broker = AsyncMock()
+        await tick(db, AsyncMock(return_value={'op': 'action', 'action': 'slack.send', 'args': {
+            'channel': 'C0123ABCD', 'text': 'Synthetic Slack test. No real message is sent.'}, 'reason': 'Local browser QA'}), broker)
+        broker.assert_not_called()
+        assert await db.agent_approvals.count_documents({'run_id': run['run_id'], 'status': 'pending'}) == 1
+    elif sys.argv[1] == 'slack-timeout':
+        broker = AsyncMock(side_effect=TimeoutError('Synthetic Slack delivery timeout'))
+        await tick(db, AsyncMock(), broker)
+        broker.assert_awaited_once()
+        assert broker.call_args.args[0] == 'slack.send'
+        assert await db.agent_approvals.count_documents({'owner': owner, 'action': 'slack.send', 'status': 'uncertain'}) == 1
+    elif sys.argv[1] == 'release-slots':
+        from autonomy import core
+        for run in await db.agent_runs.find({'owner': owner, 'status': {'$nin': list(core.TERMINAL)}}).to_list(100):
+            await core.cancel(db, owner, run['run_id'])
+        planner, broker = AsyncMock(), AsyncMock()
+        await tick(db, planner, broker)
+        planner.assert_not_called(); broker.assert_not_called()
     elif sys.argv[1] == 'verify':
         assert await db.agent_runs.count_documents({'owner': owner, 'status': 'done', 'dry_run': True}) == 1
         assert await db.agent_runs.count_documents({'owner': owner, 'status': 'done', 'dry_run': False}) == 1

@@ -127,6 +127,7 @@ async def indexes(db):
     await db.agent_runs.create_index([('status', 1), ('deadline_at', 1)])
     await db.agent_approvals.create_index('approval_id', unique=True)
     await db.agent_approvals.create_index([('run_id', 1), ('step', 1)], unique=True)
+    await db.agent_knowledge.create_index('source_id', unique=True)
     await db.agent_notes.create_index([('owner', 1), ('agent_id', 1), ('note_id', 1)], unique=True)
 
 
@@ -144,6 +145,9 @@ async def authority(db, owner, agent_id):
 
 async def create_work(db, owner, data):
     agent = await authority(db, owner, text(data.get('agent_id'), 'Agent', 100))
+    from autonomy import knowledge
+    sources = knowledge.references(data.get('knowledge_ids', []))
+    await knowledge.resolve(db, owner, sources)
     policy = validate_policy(data.get('policy', {}))
     peers = data.get('delegates', [])
     if not isinstance(peers, list) or len(peers) > 5 or not all(isinstance(p, str) for p in peers):
@@ -160,7 +164,7 @@ async def create_work(db, owner, data):
             'title': text(data.get('title'), 'Job title', 120),
             'instructions': text(data.get('instructions'), 'Instructions'),
             'success': text(data.get('success'), 'Expected result', 2000),
-            'policy': policy, 'delegates': list(set(peers)), 'max_steps': budget,
+            'knowledge_ids': sources, 'policy': policy, 'delegates': list(set(peers)), 'max_steps': budget,
             'max_runtime_minutes': minutes, 'max_planner_retries': retries, 'max_cost_microusd': cost_budget,
             'agent_snapshot': {'name': agent['name'], 'instructions': agent.get('identity_prompt', ''),
                                'version': str(agent.get('updated_at', ''))},
@@ -230,6 +234,8 @@ async def current_authority(db, run, *, check_lease=True):
         if not root_work or root_work.get('revoked') or root['status'] in TERMINAL:
             raise ValueError('Parent work is no longer active')
         await authority(db, run['owner'], root['snapshot']['agent_id'])
+    from autonomy import knowledge
+    await knowledge.resolve(db, run['owner'], run['snapshot'].get('knowledge_ids', []))
     return work
 
 

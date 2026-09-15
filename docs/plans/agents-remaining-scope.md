@@ -31,7 +31,7 @@ Implemented in this branch:
 - Up to ten private, editable notes per agent, including small text/Markdown attachments.
 
 Important limitations requiring follow-up before broad rollout:
-- Gmail-only actions. This does not retrofit the legacy chat/SDK/shell runtime with
+- Bounded Gmail, Slack send and read-only Calendar actions. This does not retrofit the legacy chat/SDK/shell runtime with
   enforcement. Those runtimes must not be described as protected by these policies.
 - Broker and legacy runtimes still share infrastructure. Isolating their secrets and
   operating-system authority is required against a compromised legacy runtime.
@@ -45,11 +45,13 @@ Important limitations requiring follow-up before broad rollout:
 - Unknown email outcomes now have an owner investigation UI and versioned audit.
   Reports are not provider-verified receipts and cannot clear the replay barrier;
   provider-backed Gmail Sent checks are now implemented for new correlated actions;
-  controlled retry authorization and held-charge reconciliation remain open.
-- Private notes are a small knowledge store, not a Drive/PDF retrieval system or separate
-  workspace knowledge and long-term memory services.
-- Agent work has its own focused card view. The existing personal taskboard and chats
-  have not been migrated or unified with it.
+  controlled retry authorization remains intentionally unavailable. Held-charge owner reviews are implemented; they do not release funds.
+- Private notes and an author-controlled, explicitly attached playbook library are implemented.
+  The library supports text/Markdown, named active readers, revision checks and access revocation;
+  it is not a Drive/PDF retrieval system.
+- Agent work cards now appear on the personal taskboard in read-only status lanes,
+  linked to the original work records. Existing chat tasks remain a separate object type;
+  dragging a chat card never authorizes or executes work.
 
 ## Enablement and trust boundary
 
@@ -371,5 +373,36 @@ The four items previously tracked as open are now implemented on this branch:
    legacy shell runtime's shared OS authority is unchanged.
 
 Still outstanding before release: isolation verification, a browser/UX pass
-over the new surfaces, live-provider validation, and workspace-level knowledge
-beyond per-agent notes.
+over the new surfaces and live-provider validation. See the follow-up below for
+the completed browser checks and shared playbook implementation.
+
+
+## Shared knowledge and board follow-up (2026-09-15)
+
+Implemented and verified in the isolated local stack:
+- Playbook library with private-by-default text/Markdown sources, sharing to up to
+  20 named active accounts, author-only writes and optimistic revision checks.
+- Up to ten explicit source attachments per job. Sources are fetched under the same
+  execution principal on every planner step, not copied into a shared agent definition.
+  Current source access is checked again before dispatch, including after approval
+  waits and on delegated work. Deleted/revoked sources block dependent actions.
+- Source IDs and revisions are recorded in run history without copying source bodies.
+  Personal notes stay distinct; source deletion cannot erase already-generated results.
+- Live agent-work cards on the personal taskboard, grouped by status, with deep links
+  to the original records. Expansion is height-limited on mobile. No drag-to-approve,
+  copied work records, implicit permissions or credential changes.
+- Needs-you retrieval includes older unresolved Slack sends, questions and held-charge
+  reviews outside the recent-history window. Unknown outcomes stay blocked from replay.
+- Fixed the real-app auth middleware path for external event POSTs. Only the exact
+  hook shape bypasses session auth; the handler still enforces its per-job secret.
+  The signed control plane and non-POST paths retain their normal authentication.
+- Browser checks include source save-error preservation, attachment/deletion, desktop
+  and mobile layouts, board links, charge-review recovery, token rotation/revocation,
+  duplicate event enqueue, Slack approval and manual unknown-delivery investigation.
+  Model and delivery boundaries remain simulated; there are no live sends.
+
+Still not established: a separately deployed OS/credential boundary isolating legacy
+shell runners from the broker and its database. Resource limits and an optional sandbox
+prefix are not a substitute. Do not mark this PR production-ready on the strength of
+these functional tests. Live-provider smoke validation also remains outstanding.
+Manual billing evidence is not provider accounting: unknown model charges stay reserved.

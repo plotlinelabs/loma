@@ -114,9 +114,11 @@ async def step(db, run, planner=plan, broker=adapter):
         # are not embedded in shared agent identities or delegated context.
         notes = await db.agent_notes.find({'owner': run['owner'], 'agent_id': run['snapshot']['agent_id']},
                                          {'_id': 0, 'title': 1, 'content': 1}).limit(10).to_list(10)
+        from autonomy import knowledge
+        sources = await knowledge.resolve(db, run['owner'], run['snapshot'].get('knowledge_ids', []))
         try:
             context = {'job': run['snapshot'], 'history': run['history'],
-                       'notes': notes, 'dry_run': run['dry_run']}
+                       'playbooks': sources, 'notes': notes, 'dry_run': run['dry_run']}
             if run.get('event_note'):
                 context['event'] = {'untrusted_external_note': run['event_note']}
             # The production planner cannot run without its broker-side meter.
@@ -130,7 +132,8 @@ async def step(db, run, planner=plan, broker=adapter):
         if not isinstance(decision, dict):
             raise ValueError('Invalid planner response')
         # Persist BEFORE doing anything, including a read, delegation or delay.
-        await advance(db, run, {'decision': decision})
+        await advance(db, run, {'decision': decision},
+                      {'kind': 'knowledge', 'sources': [{'source_id': s['source_id'], 'version': s['version']} for s in sources]} if sources else None)
         run['decision'] = decision
     operation = decision.get('op')
     if operation == 'done':

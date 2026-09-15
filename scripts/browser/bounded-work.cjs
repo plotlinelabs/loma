@@ -90,8 +90,8 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await page.screenshot({animations:'disabled',path:'/tmp/bounded-history-mobile.png',fullPage:true});
   await page.getByRole('button',{name:'Work',exact:true}).click();
-  await card.getByRole('button',{name:'Knowledge & memory'}).click();
-  const notes = page.getByRole('dialog',{name:'Knowledge & memory'});
+  await card.getByRole('button',{name:'Private notes'}).click();
+  const notes = page.getByRole('dialog',{name:'Private notes'});
   await notes.locator('#note-title').fill('Approved invoice context');
   await notes.locator('#note-content').fill('Use a courteous tone. Test data only.');
   await notes.getByRole('button',{name:'Save note',exact:true}).click();
@@ -134,7 +134,7 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   await page.getByText('Delivery review · Not an approval',{exact:false}).waitFor();
   await page.getByRole('button',{name:'Investigate delivery',exact:true}).click();
   const investigation = page.getByRole('dialog',{name:'Investigate email delivery',exact:true});
-  assert.match(await investigation.innerText(),/does not send an email/);
+  assert.match(await investigation.innerText(),/does not send anything/);
   const saveInvestigation = investigation.getByRole('button',{name:'Record investigation',exact:true});
   assert(await saveInvestigation.isDisabled());
   await investigation.locator('#delivery-outcome').selectOption('unknown');

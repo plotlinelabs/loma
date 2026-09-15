@@ -16,7 +16,7 @@ from pymongo import ReturnDocument
 from api.auth_helpers import get_user_email, require_operator_or_above
 from api.agent_identity_routes import _serialize
 from observability.db import get_db
-from autonomy import core, costs
+from autonomy import core, costs, knowledge
 from autonomy.worker import tick, planner_ready
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,16 @@ async def handle(request):
         route = request.match_info.get('tail', '')
         parts = route.split('/')
         method = request.method
+        if route == 'knowledge' and method == 'GET':
+            return response({'sources': await knowledge.listing(db, owner)})
+        if route == 'knowledge' and method == 'POST':
+            return response(await knowledge.save(db, owner, body), 201)
+        if len(parts) == 2 and parts[0] == 'knowledge':
+            if method == 'POST':
+                return response(await knowledge.save(db, owner, body, parts[1]))
+            if method == 'DELETE':
+                await knowledge.delete(db, owner, parts[1], body.get('version'))
+                return response({'ok': True})
         if method == 'GET' and route == 'overview':
             work = await db.agent_work.find({'owner': owner, 'parent_only': {'$ne': True}}).sort('created_at', -1).limit(100).to_list(100)
             schedules = await db.flows.find({'bounded_work_id': {'$in': [w['work_id'] for w in work]}},
@@ -73,6 +83,12 @@ async def handle(request):
                 job['next_run_at'] = scheduled.get('next_run_at')
                 job['schedule_error'] = scheduled.get('last_error')
             runs = await db.agent_runs.find({'owner': owner}).sort('created_at', -1).limit(100).to_list(100)
+            # Needs-you work cannot disappear merely because newer runs exist.
+            attention_runs = await db.agent_runs.find({'owner': owner, '$or': [
+                {'status': 'needs_input'}, {'parent_id': None, 'status': {'$in': list(core.TERMINAL)},
+                 'cost_ledger': {'$elemMatch': {'status': 'held'}},
+                 'cost_review.outcome': {'$nin': ['billed', 'not_billed']}}]}).sort('created_at', 1).limit(200).to_list(200)
+            runs = list({r['run_id']: r for r in runs + attention_runs}.values())
             roots = {r['run_id']: r for r in runs if not r.get('parent_id')}
             for run in runs:
                 if run.get('parent_id'):
@@ -80,16 +96,31 @@ async def handle(request):
                     if root:
                         run['shared_cost'] = {k: root.get(k, 0) for k in ('cost_committed_nusd', 'cost_recorded_nusd', 'input_tokens_used', 'output_tokens_used')}
                         run['shared_cost']['max_cost_microusd'] = root['snapshot'].get('max_cost_microusd', costs.DEFAULT_BUDGET_MICROUSD)
-            attention = {'$or': [{'status': 'pending'}, {'status': 'uncertain', 'action': 'gmail.send',
+            attention = {'$or': [{'status': 'pending', 'expires_at': {'$gt': core.now()}}, {'status': 'uncertain', 'action': {'$in': sorted(core.WRITE_ACTIONS)},
                          'reconciliation.outcome': {'$nin': ['sent', 'not_sent']}, 'provider_check.outcome': {'$ne': 'sent'}}]}
             pending = await db.agent_approvals.find({'owner': owner, **attention}).sort('created_at', 1).limit(200).to_list(200)
             recent = await db.agent_approvals.find({'owner': owner, '$nor': [attention]}).sort('created_at', -1).limit(100).to_list(100)
             approvals = pending + recent
-            return response({'work': work, 'runs': runs, 'approvals': approvals, 'model_ready': planner_ready(),
+            return response({'attention_limited': len(pending) == 200 or len(attention_runs) == 200, 'work': work, 'runs': runs, 'approvals': approvals, 'model_ready': planner_ready(),
                              'pricing_ready': costs.ready(),
                              'google_connected': bool(await db.oauth_tokens.find_one({'user_email': owner, 'provider': 'google'}, {'_id': 1})),
                              'slack_connected': bool(await db.oauth_tokens.find_one({'user_email': owner, 'provider': 'slack'}, {'_id': 1})),
                              'worker_enabled': os.getenv('LOMA_ENABLE_SCHEDULER', 'true').lower() == 'true'})
+        if method == 'GET' and route == 'board':
+            jobs = await db.agent_work.find({'owner': owner, 'parent_only': {'$ne': True}},
+                {'_id': 0, 'work_id': 1, 'title': 1, 'paused': 1, 'revoked': 1, 'cron': 1,
+                 'timezone': 1, 'agent_snapshot.name': 1}).sort('created_at', -1).limit(100).to_list(100)
+            latest = await db.agent_runs.aggregate([
+                {'$match': {'owner': owner, 'work_id': {'$in': [j['work_id'] for j in jobs]}}},
+                {'$sort': {'created_at': -1}},
+                {'$group': {'_id': '$work_id', 'status': {'$first': '$status'}, 'dry_run': {'$first': '$dry_run'}}},
+            ]).to_list(100)
+            by_job = {r['_id']: r for r in latest}
+            for job in jobs:
+                run = by_job.get(job['work_id'], {})
+                job['run_status'] = run.get('status')
+                job['dry_run'] = run.get('dry_run', False)
+            return response({'work': jobs})
         if method == 'GET' and route == 'attention':
             approvals = await db.agent_approvals.count_documents({'owner': owner, 'status': 'pending', 'expires_at': {'$gt': core.now()}})
             questions = await db.agent_runs.count_documents({'owner': owner, 'status': 'needs_input'})
