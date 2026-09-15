@@ -6,6 +6,8 @@ from agent.pool import ClientPool
 from api.drain import is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
+from scheduler.agent_work import validate_agent_work
+from scheduler.run_identity import require_execution_account
 from scheduler.engine import get_next_run_time, remove_flow_from_scheduler
 
 logger = logging.getLogger(__name__)
@@ -18,6 +20,18 @@ FLOW_PREAMBLE = """You are executing a scheduled flow. IMPORTANT:
   then take the actions the flow describes.
 
 Flow name: {flow_name}
+---
+
+"""
+
+
+AGENT_WORK_PREAMBLE = """You are executing scheduled agent work.
+Your final response is saved in this job's private run history for its owner
+and workspace admins. Return the requested result there. Do not send messages
+or publish results elsewhere unless the job instructions explicitly request it.
+Use only the execution account supplied for this run.
+
+Job name: {flow_name}
 ---
 
 """
@@ -67,18 +81,14 @@ async def execute_flow(flow_id: str):
         flow.get("created_by", {}).get("source", "")
         or flow.get("created_by", {}).get("user_name", "")
     )
-    run_as_email = flow.get("run_as") or creator_email
-
-    # Only pass user email for personal tool auth if the account is still active.
-    # Prevents orphaned flows from using deactivated users' OAuth tokens.
-    effective_user_email = None
-    if run_as_email and "@" in run_as_email:
-        run_as_user = await db.users.find_one({"email": run_as_email}, {"status": 1})
-        if run_as_user and run_as_user.get("status", "active") == "active":
-            effective_user_email = run_as_email
-        else:
-            logger.warning("[SCHEDULER] Flow %s run_as user %s is inactive; running without personal tools",
-                           flow_id, run_as_email)
+    try:
+        effective_user_email = await require_execution_account(db, flow)
+        if flow.get("agent_id"):
+            await validate_agent_work(db, flow)
+    except ValueError as exc:
+        await db.flows.update_one({"flow_id": flow_id}, {"$set": {"last_error": str(exc)}})
+        logger.warning("[SCHEDULER] Flow %s: %s", flow_id, exc)
+        return
 
     selected_model = _flow_model(flow)
 
@@ -89,7 +99,11 @@ async def execute_flow(flow_id: str):
         "flow_id": flow_id,
         "flow_name": flow["name"],
         "visibility": visibility,
+        "run_as": effective_user_email,
     }
+    if flow.get("agent_id"):
+        metadata["agent_id"] = flow["agent_id"]
+        metadata["agent_snapshot"] = flow["agent_snapshot"]
     if visibility == "private" and creator_email:
         metadata["user_name"] = creator_email
 
@@ -97,9 +111,12 @@ async def execute_flow(flow_id: str):
     await observer.start()
 
     full_prompt = (
-        FLOW_PREAMBLE.format(flow_name=flow["name"])
+        (AGENT_WORK_PREAMBLE if flow.get("agent_id") else FLOW_PREAMBLE).format(flow_name=flow["name"])
         + flow["prompt"]
     )
+
+    if flow.get("agent_id"):
+        full_prompt = flow["agent_snapshot"]["context"] + "\n\n" + full_prompt
 
     last_text = ""
     try:

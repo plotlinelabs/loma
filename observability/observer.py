@@ -446,22 +446,40 @@ class ConversationObserver:
             prompt = self.metadata.get("prompt", "")
             response_snippet = (final_response or "")[:300]
 
-            title, topic = await asyncio.gather(
-                _generate_title_llm(prompt, response_snippet),
-                _classify_topic_llm(prompt, response_snippet),
-            )
-
-            # Never clobber a user-provided title (rename PATCH / task drafts
-            # set title_edited) — only enrich the topic in that case.
             existing = await self.db.conversations.find_one(
-                {"conversation_id": self.conversation_id}, {"title_edited": 1})
-            update_fields = {"topic": topic}
-            if not (existing or {}).get("title_edited"):
-                update_fields["title"] = title
+                {"conversation_id": self.conversation_id},
+                {"title_edited": 1, "messages.role": 1},
+            )
+            user_message_count = sum(
+                message.get("role") == "user"
+                for message in (existing or {}).get("messages", [])
+            )
+            # Refresh after user messages 1, 6, 11, ...; agent/tool turns don't count.
+            refresh_title = (
+                not (existing or {}).get("title_edited")
+                and user_message_count > 0
+                and (user_message_count - 1) % 5 == 0
+            )
+            title = None
+            if refresh_title:
+                title, topic = await asyncio.gather(
+                    _generate_title_llm(prompt, response_snippet),
+                    _classify_topic_llm(prompt, response_snippet),
+                )
+            else:
+                topic = await _classify_topic_llm(prompt, response_snippet)
+
             await self.db.conversations.update_one(
                 {"conversation_id": self.conversation_id},
-                {"$set": update_fields},
+                {"$set": {"topic": topic}},
             )
+            if refresh_title:
+                # Check at write time too: a rename may happen during the LLM call.
+                await self.db.conversations.update_one(
+                    {"conversation_id": self.conversation_id,
+                     "title_edited": {"$ne": True}},
+                    {"$set": {"title": title}},
+                )
             logger.info("Observability: enrichment complete for %s: title=%r topic=%s",
                          self.conversation_id, title, topic)
         except Exception as e:

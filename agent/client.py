@@ -30,6 +30,7 @@ from claude_agent_sdk import (
 )
 
 from agent.pool import get_pool
+from agent.prompt import build_reply_format_reminder
 
 logger = logging.getLogger(__name__)
 
@@ -522,12 +523,7 @@ _FILE_WRITE_PATTERNS = [
 ]
 
 
-def _encode_file_id(file_path: str) -> str:
-    """Encode an absolute file path as a URL-safe base64 file ID."""
-    return base64.urlsafe_b64encode(file_path.encode()).decode().rstrip("=")
-
-
-def _detect_file_artifact(file_path: str) -> dict | None:
+def _detect_file_artifact(file_path: str, *, owner_email: str | None = None) -> dict | None:
     """
     Check if a file path corresponds to a binary file artifact.
     Registers the file for serving via /api/files/ and returns an artifact dict.
@@ -549,14 +545,12 @@ def _detect_file_artifact(file_path: str) -> dict | None:
     # and adds it to the in-memory registry so /api/files/{id} can serve it.
     try:
         from api.routes import register_served_file
-        file_info = register_served_file(file_path)
+        file_info = register_served_file(file_path, owner_email=owner_email)
         file_url = file_info["url"]
         logger.info("[FILE ARTIFACT] Registered %s -> %s", file_path, file_url)
     except Exception as e:
         logger.warning("[FILE ARTIFACT] Failed to register %s: %s", file_path, e)
-        # Fallback: use base64-encoded path (won't serve without registration)
-        file_id = _encode_file_id(file_path)
-        file_url = f"/api/files/{file_id}"
+        return None
 
     return {
         "type": "file_artifact",
@@ -937,6 +931,12 @@ async def _stream_agent(
                         f"`python3 -c \"import openpyxl; ...\"` for Excel files)."
                     )
                 logger.info("[AGENT] Binary file saved to temp: %s -> %s", f["name"], tmp.name)
+
+    # Slack replies: repeat the format essentials right next to the message so
+    # they are not outweighed by the long system prompt or earlier long replies.
+    reminder = build_reply_format_reminder(source, has_thread_context=bool(conversation_context))
+    if reminder:
+        text_parts.append(reminder)
 
     full_prompt = "\n\n".join(text_parts)
 
@@ -1330,7 +1330,7 @@ async def _stream_agent(
                                             emitted_file_paths.add(fpath)
                                             try:
                                                 from api.routes import register_served_file
-                                                file_info = register_served_file(fpath)
+                                                file_info = register_served_file(fpath, owner_email=user_email)
                                                 logger.info(
                                                     "[FILE] Registered %s as %s (%s, %d bytes)",
                                                     fpath, file_info["file_id"],
@@ -1472,7 +1472,7 @@ async def _stream_agent(
                                     for fpath in file_paths:
                                         if fpath in emitted_file_paths:
                                             continue
-                                        artifact = _detect_file_artifact(fpath)
+                                        artifact = _detect_file_artifact(fpath, owner_email=user_email)
                                         if artifact:
                                             emitted_file_paths.add(fpath)
                                             logger.info(

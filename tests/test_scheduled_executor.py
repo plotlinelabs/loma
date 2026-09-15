@@ -23,12 +23,14 @@ def _make_flow(flow_id="flow-1", name="Test Flow", status="active",
         "schedule_type": schedule_type,
         "visibility": "shared",
         "created_by": {},
+        "run_as": "owner@example.com",
         "labels": labels or [],
     }
 
 
 def _make_db_mock(flow):
     db = MagicMock()
+    db.users.find_one = AsyncMock(return_value={"status": "active"})
     db.flows.find_one = AsyncMock(return_value=flow)
     db.flows.update_one = AsyncMock()
     db.conversations.update_one = AsyncMock()

@@ -77,6 +77,10 @@ async def init_scheduler():
     )
     logger.info("Usage check job registered (hourly at :00)")
 
+    from scheduler.skill_sync import sync_due_skills
+    _scheduler.add_job(sync_due_skills, "interval", seconds=30,
+                       id="google_docs_skill_sync", replace_existing=True, max_instances=1)
+
     # --- Skill auto-organization (daily at 03:00 UTC) ---
     _scheduler.add_job(
         _run_skill_auto_organize,

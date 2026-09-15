@@ -5,6 +5,7 @@ import mimetypes
 import os
 import re
 import shutil
+import stat
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -38,20 +39,24 @@ CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 SERVED_FILES_DIR = Path(os.environ.get("SERVED_FILES_DIR", "/tmp/loma-served-files"))
 SERVED_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
-# In-memory registry: file_id -> {path, original_name, mime_type, size}
+# Process-local registry. Legacy/unowned entries fail closed; no path-based recovery.
 _served_files: dict[str, dict] = {}
 
 
-def register_served_file(source_path: str, original_name: str | None = None) -> dict:
+def register_served_file(
+    source_path: str, original_name: str | None = None, *, owner_email: str,
+) -> dict:
     """Copy a file to the served directory and register it for download.
 
     Returns a dict with file_id, url, name, mime_type, size.
     """
+    if not owner_email or not owner_email.strip():
+        raise ValueError("Authenticated file owner required")
     src = Path(source_path)
     if not src.exists() or not src.is_file():
         raise FileNotFoundError(f"File not found: {source_path}")
 
-    file_id = uuid.uuid4().hex[:16]
+    file_id = uuid.uuid4().hex
     name = original_name or src.name
     ext = src.suffix
     dest = SERVED_FILES_DIR / f"{file_id}{ext}"
@@ -63,6 +68,7 @@ def register_served_file(source_path: str, original_name: str | None = None) -> 
 
     entry = {
         "path": str(dest),
+        "owner_email": owner_email,
         "original_name": name,
         "mime_type": mime_type,
         "size": size,
@@ -86,52 +92,82 @@ _INLINE_MIME_TYPES = {
 }
 
 
-async def handle_serve_file(request: web.Request) -> web.Response:
+async def handle_serve_file(request: web.Request) -> web.StreamResponse:
     """GET /api/files/{file_id} — serve a registered file for download or inline preview."""
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
     file_id = request.match_info["file_id"]
     entry = _served_files.get(file_id)
-
-    # Fallback: try decoding file_id as a base64-encoded file path
-    # (backward compat for any persisted file artifact URLs)
-    if not entry:
-        import base64
-        try:
-            # Re-add padding stripped during encoding
-            padded = file_id + "=" * (-len(file_id) % 4)
-            decoded_path = base64.urlsafe_b64decode(padded).decode()
-            if os.path.isfile(decoded_path):
-                # Register the file so subsequent requests use the fast path
-                file_info = register_served_file(decoded_path)
-                entry = _served_files.get(file_info["file_id"])
-        except Exception:
-            pass
-
-    if not entry:
+    # Do not disclose whether another user's file exists. No admin/share bypass
+    # in containment: sharing requires a separate, explicit artifact policy.
+    if not entry or entry.get("owner_email") != user_email:
         return web.json_response({"error": "File not found"}, status=404)
 
     file_path = Path(entry["path"])
-    if not file_path.exists():
-        del _served_files[file_id]
+    if file_path.parent != SERVED_FILES_DIR:
+        return web.json_response({"error": "File not found"}, status=404)
+
+    # Open relative to a pinned directory, without following symlinks. Stream
+    # the same descriptor that was checked, never reopen a mutable path.
+    try:
+        dir_fd = os.open(SERVED_FILES_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fd = os.open(file_path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
         return web.json_response({"error": "File expired"}, status=410)
 
-    mime_type = entry["mime_type"]
-    filename = entry["original_name"]
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        return web.json_response({"error": "File not found"}, status=404)
+    with os.fdopen(fd, "rb") as file:
+        size = info.st_size
+        start, stop = 0, size
+        status = 200
+        if "Range" in request.headers:
+            try:
+                byte_range = request.http_range
+                start = byte_range.start or 0
+                if start < 0:
+                    start = max(0, size + start)
+                stop = min(byte_range.stop if byte_range.stop is not None else size, size)
+                if start >= size or stop <= start:
+                    raise ValueError("Unsatisfiable range")
+            except ValueError:
+                return web.Response(status=416, headers={"Content-Range": f"bytes */{size}"})
+            status = 206
 
-    # Use inline disposition for previewable types (PDF, images)
-    # so they can be rendered in iframes; attachment for everything else
-    if mime_type in _INLINE_MIME_TYPES:
-        disposition = f'inline; filename="{filename}"'
-    else:
-        disposition = f'attachment; filename="{filename}"'
-
-    return web.FileResponse(
-        file_path,
-        headers={
-            "Content-Disposition": disposition,
+        mime_type = entry["mime_type"]
+        filename = re.sub(r'[\x00-\x1f\x7f"\\]', "_", entry["original_name"])
+        disposition = "inline" if mime_type in _INLINE_MIME_TYPES else "attachment"
+        response = web.StreamResponse(status=status, headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
             "Content-Type": mime_type,
-            "Access-Control-Allow-Origin": "*",
-        },
-    )
+            "Content-Length": str(stop - start),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            # Generated HTML/SVG must not execute with dashboard privileges.
+            "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        })
+        if status == 206:
+            response.headers["Content-Range"] = f"bytes {start}-{stop - 1}/{size}"
+        await response.prepare(request)
+        if request.method != "HEAD":
+            file.seek(start)
+            remaining = stop - start
+            while remaining:
+                chunk = file.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                await response.write(chunk)
+                remaining -= len(chunk)
+        await response.write_eof()
+        return response
+
 
 logger = logging.getLogger(__name__)
 
@@ -1220,10 +1256,10 @@ async def handle_list_skills(request: web.Request) -> web.Response:
 
 
 def _skill_error_response(exc: skill_service.SkillError) -> web.Response:
-    return web.json_response({"error": str(exc)}, status=exc.status)
+    return web.json_response({"error": str(exc), "code": getattr(exc, "code", "skill_error")}, status=exc.status)
 
 
-async def _refresh_skill_prompt_cache() -> None:
+async def _refresh_skill_prompt_cache() -> bool:
     """Best-effort refresh for system prompts after DB-backed skill mutations."""
     try:
         await refresh_loma_skill_index_from_db()
@@ -1236,8 +1272,10 @@ async def _refresh_skill_prompt_cache() -> None:
             await get_codex_pool().reload_prompt()
         except RuntimeError:
             pass
+        return True
     except Exception:
         logger.exception("Failed to refresh Loma skill prompt cache")
+        return False
 
 
 async def handle_create_skill(request: web.Request) -> web.Response:
@@ -1279,6 +1317,13 @@ async def handle_update_skill(request: web.Request) -> web.Response:
     try:
         body = await request.json()
         current = await skill_service.get_skill(db, name)
+        if (current.get("source") or {}).get("type") == "google_doc":
+            if body.get("files") or not isinstance(body.get("content"), str):
+                raise skill_service.SkillError("Edit linked instructions and supporting files separately")
+            result = await skill_service.update_skill_file(db, slug=name,
+                file_doc=skill_service.validate_text_file("SKILL.md", body["content"]),
+                actor=get_user_email(request), base_hash=body.get("base_hash"))
+            return web.json_response(result)
         by_path = {f["path"]: f for f in current["files"]}
         if "content" in body:
             by_path["SKILL.md"] = skill_service.validate_text_file("SKILL.md", body.get("content") or "")
@@ -1329,6 +1374,7 @@ async def handle_update_skill_file(request: web.Request) -> web.Response:
             file_doc=file_doc,
             actor=get_user_email(request),
             source="dashboard",
+            base_hash=body.get("base_hash"),
         )
         await _refresh_skill_prompt_cache()
         return web.json_response(skill)
@@ -1783,6 +1829,8 @@ async def handle_available_tools(request: web.Request) -> web.Response:
                     "name": s.get("name") or s["slug"],
                     "description": s.get("description", ""),
                     "tags": s.get("tags", []),
+                    "scope": s.get("scope", "workspace"),
+                    "folder": s.get("folder"),
                 })
         except Exception as e:
             logger.warning("Failed to read skills for available tools: %s", e)
@@ -2119,7 +2167,6 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/mcp-servers", handle_list_mcp_servers)
     app.router.add_get("/api/available-tools", handle_available_tools)
     app.router.add_get("/api/pool-status", handle_pool_status)
-    app.router.add_get("/api/files/{file_id}", handle_serve_file)
 
     # Flow routes (scheduled/recurring automations)
     from api.flow_routes import setup_flow_routes

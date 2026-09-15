@@ -32,3 +32,5 @@ pytest-aiohttp==1.1.1
 
 # Execution-local history recall MCP adapter.
 mcp>=2,<3
+
+markdown-it-py>=3.0,<5

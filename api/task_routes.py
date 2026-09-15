@@ -249,6 +249,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "title": task.get("title") or None,
         "prompt": prompt[:200],
         "model": task.get("model") or None,
+        "tool_config": task.get("tool_config"),
         "status": task.get("status"),
         "task_status": task.get("task_status"),
         "task_lane": task.get("task_lane"),
@@ -269,7 +270,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
 
 
 _TASK_PROJECTION = {
-    "conversation_id": 1, "title": 1, "prompt": 1, "model": 1, "status": 1,
+    "conversation_id": 1, "title": 1, "prompt": 1, "model": 1, "status": 1, "tool_config": 1,
     "task_status": 1, "task_lane": 1, "task_rank": 1,
     "total_turns": 1, "started_at": 1, "finished_at": 1,
     "task_created_at": 1, "task_staged_at": 1, "task_started_at": 1,

@@ -15,6 +15,7 @@ import asyncio
 
 from agent.client import stream_agent
 from agent.pool import ClientPool
+from scheduler.run_identity import require_execution_account
 from observability.db import get_db
 from observability.observer import ConversationObserver
 from api.dashboard_ingestion import ingest_dashboard_chat
@@ -136,6 +137,19 @@ async def execute_webhook_flow(
 
     flow_id = flow["flow_id"]
 
+    # Re-read at execution time: queued events must not use stale account/config.
+    flow = await db.flows.find_one({"flow_id": flow_id})
+    if flow is None:
+        return None
+    try:
+        run_as_email = await require_execution_account(db, flow)
+    except ValueError as exc:
+        await db.flows.update_one({"flow_id": flow_id}, {"$set": {"last_error": str(exc)}})
+        await db.webhook_logs.update_one({"log_id": log_id}, {"$set": {
+            "execution_status": "failed", "error": str(exc),
+        }})
+        return None
+
     if flow["status"] != "active":
         logger.info("[WEBHOOK-EXEC] Flow %s is %s, skipping", flow_id, flow["status"])
         return None
@@ -169,7 +183,6 @@ async def execute_webhook_flow(
         flow.get("created_by", {}).get("source", "")
         or flow.get("created_by", {}).get("user_name", "")
     )
-    run_as_email = flow.get("run_as") or creator_email
 
     selected_model = _flow_model(flow)
 
@@ -182,6 +195,7 @@ async def execute_webhook_flow(
         "trigger_type": "webhook",
         "webhook_log_id": log_id,
         "visibility": visibility,
+        "run_as": run_as_email,
     }
     if visibility == "private" and creator_email:
         metadata["user_name"] = creator_email
@@ -244,7 +258,7 @@ async def execute_webhook_flow(
             source="slack",
             selected_model=selected_model,
             raise_on_opencode_error=True,
-            user_email=run_as_email if "@" in run_as_email else None,
+            user_email=run_as_email,
         ):
             if isinstance(chunk, str):
                 last_text = chunk

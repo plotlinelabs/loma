@@ -232,6 +232,7 @@ def _make_flow(flow_id="flow-1", name="Test Flow", status="active",
         "prompt_template": prompt_template,
         "visibility": "shared",
         "created_by": {},
+        "run_as": "owner@example.com",
     }
     if webhook_config:
         flow["webhook_config"] = webhook_config
@@ -249,6 +250,8 @@ def _make_payload(issue_id=None, extra=None):
 def _make_db_mock(existing_convo=None):
     """Create a mock DB with configurable conversation lookup."""
     db = MagicMock()
+    db.users.find_one = AsyncMock(return_value={"status": "active"})
+    db.flows.find_one = AsyncMock(return_value=_make_flow())
     # conversations.find_one
     db.conversations.find_one = AsyncMock(return_value=existing_convo)
     # conversations.insert_one
@@ -516,6 +519,7 @@ class TestExecuteWebhookFlowThreadContinuity:
         """Inactive flows should return None without any DB operations."""
         db = _make_db_mock()
         flow = _make_flow(status="paused")
+        db.flows.find_one.return_value = flow
         payload = _make_payload(issue_id="pylon-skip")
 
         with patch("scheduler.webhook_executor.get_db", return_value=db):
@@ -665,6 +669,7 @@ async def _empty_async_gen():
 async def _import_and_run(flow, payload, db, log_id):
     """Import and run execute_webhook_flow with the given params."""
     from scheduler.webhook_executor import execute_webhook_flow
+    db.flows.find_one.return_value = flow
     return await execute_webhook_flow(
         flow, json.dumps(payload).encode(), {}, log_id
     )

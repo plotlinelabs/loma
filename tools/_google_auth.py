@@ -55,7 +55,8 @@ async def _get_db():
     if not uri:
         raise ValueError("OBSERVABILITY_MONGODB_URI environment variable is not set")
     client = AsyncIOMotorClient(uri)
-    return client, client.loma_observability
+    from config.app_config import OBSERVABILITY_DB_NAME
+    return client, client[OBSERVABILITY_DB_NAME]
 
 
 async def _refresh_token(refresh_token: str) -> dict | None:

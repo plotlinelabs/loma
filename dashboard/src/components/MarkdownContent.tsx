@@ -277,6 +277,8 @@ interface Block {
   rows?: string[][];
 }
 
+const HEADING_PATTERN = /^(#{1,6})\s+(.+)/;
+
 function parseBlocks(md: string): Block[] {
   const lines = md.split("\n");
   const blocks: Block[] = [];
@@ -301,7 +303,7 @@ function parseBlocks(md: string): Block[] {
     }
 
     // Heading
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
+    const headingMatch = line.match(HEADING_PATTERN);
     if (headingMatch) {
       blocks.push({
         type: "heading",
@@ -365,7 +367,7 @@ function parseBlocks(md: string): Block[] {
       i < lines.length &&
       lines[i].trim() !== "" &&
       !lines[i].match(/^```/) &&
-      !lines[i].match(/^#{1,6}\s/) &&
+      !HEADING_PATTERN.test(lines[i]) &&
       !lines[i].match(/^[\-•]\s+/) &&
       !lines[i].match(/^\d+\.\s+/) &&
       // Don't swallow table rows into paragraphs
@@ -376,6 +378,10 @@ function parseBlocks(md: string): Block[] {
     }
     if (paraLines.length > 0) {
       blocks.push({ type: "paragraph", text: paraLines.join("\n") });
+    } else {
+      // Always advance if block detection and paragraph boundaries disagree.
+      blocks.push({ type: "paragraph", text: line });
+      i++;
     }
   }
 

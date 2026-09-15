@@ -127,6 +127,10 @@ def verify_webhook_auth(
         signature = request.headers.get(sig_header, "")
         if not signature or not secret:
             return False
+        # GitHub-style headers prefix the hex digest with the algorithm
+        # (e.g. "X-Hub-Signature-256: sha256=<hex>"); accept both forms.
+        if signature.startswith("sha256="):
+            signature = signature[len("sha256="):]
         try:
             header_sig = bytes.fromhex(signature)
         except ValueError:
