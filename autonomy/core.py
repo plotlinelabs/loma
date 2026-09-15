@@ -7,8 +7,10 @@ checkpoint and its audit event commit together without a multi-doc transaction.
 """
 import copy
 import hashlib
+import hmac
 import json
 import re
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +18,8 @@ from pymongo import ReturnDocument
 from api.agent_identity_routes import resolve_agent_for_chat
 from scheduler.run_identity import require_execution_account
 
-ACTIONS = {'gmail.search', 'gmail.read', 'gmail.send'}
+ACTIONS = {'gmail.search', 'gmail.read', 'gmail.send', 'slack.send', 'calendar.list'}
+WRITE_ACTIONS = {'gmail.send', 'slack.send'}
 TERMINAL = ('done', 'cancelled', 'failed')
 MODES = ('allow', 'ask', 'deny')
 MAX_STEPS = 30
@@ -61,7 +64,7 @@ def validate_limits(data):
 
 
 def validate_policy(value):
-    if not isinstance(value, dict) or set(value) - {'actions', 'recipients'}:
+    if not isinstance(value, dict) or set(value) - {'actions', 'recipients', 'channels'}:
         raise ValueError('Invalid permission policy')
     actions = value.get('actions', {})
     if not isinstance(actions, dict) or set(actions) - ACTIONS or any(v not in MODES for v in actions.values()):
@@ -72,13 +75,21 @@ def validate_policy(value):
     recipients = sorted(set(text(r, 'Recipient', 254).lower() for r in recipients))
     if any('*' in r or not re.fullmatch(r'[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+', r) for r in recipients):
         raise ValueError('Use exact email addresses, not names or wildcards')
-    return {'actions': {a: actions.get(a, 'deny') for a in sorted(ACTIONS)}, 'recipients': recipients}
+    channels = value.get('channels', [])
+    if not isinstance(channels, list) or len(channels) > 20:
+        raise ValueError('Choose up to 20 exact Slack channel IDs')
+    channels = sorted(set(text(c, 'Channel', 30) for c in channels))
+    if any(not re.fullmatch(r'[CDG][A-Z0-9]{4,25}', c) for c in channels):
+        raise ValueError('Use exact Slack channel IDs (like C0123ABCD), not names or wildcards')
+    return {'actions': {a: actions.get(a, 'deny') for a in sorted(ACTIONS)}, 'recipients': recipients,
+            'channels': channels}
 
 
 def intersect(left, right):
     rank = {'allow': 0, 'ask': 1, 'deny': 2}
     return {'actions': {a: max(left['actions'][a], right['actions'][a], key=rank.get) for a in ACTIONS},
-            'recipients': sorted(set(left['recipients']) & set(right['recipients']))}
+            'recipients': sorted(set(left['recipients']) & set(right['recipients'])),
+            'channels': sorted(set(left.get('channels', [])) & set(right.get('channels', [])))}
 
 
 def validate_action(action, args, policy):
@@ -86,16 +97,22 @@ def validate_action(action, args, policy):
         raise ValueError('This action is not permitted')
     if not isinstance(args, dict):
         raise ValueError('Action arguments must be an object')
-    keys = {'gmail.send': {'to', 'subject', 'body'}, 'gmail.read': {'message_id'}, 'gmail.search': {'query'}}[action]
+    keys = {'gmail.send': {'to', 'subject', 'body'}, 'gmail.read': {'message_id'}, 'gmail.search': {'query'},
+            'slack.send': {'channel', 'text'}, 'calendar.list': set()}[action]
     if set(args) != keys:
         raise ValueError('Unexpected or missing action arguments')
-    args = {k: text(v, k, 12000 if k == 'body' else 1000) for k, v in args.items()}
+    args = {k: text(v, k, 12000 if k in ('body', 'text') else 1000) for k, v in args.items()}
     if action == 'gmail.send':
         args['to'] = args['to'].lower()
         if args['to'] not in policy['recipients']:
             raise ValueError('Recipient is outside the approved recipient list')
         if any(c in args['subject'] for c in '\r\n'):
             raise ValueError('Subject cannot contain line breaks')
+    if action == 'slack.send':
+        if len(args['text']) > 4000:
+            raise ValueError('Slack messages are limited to 4000 characters')
+        if args['channel'] not in policy.get('channels', []):
+            raise ValueError('Channel is outside the approved channel list')
     return args
 
 
@@ -152,19 +169,24 @@ async def create_work(db, owner, data):
     return work
 
 
-async def enqueue(db, work, event_key, *, dry_run=False, parent=None):
+async def enqueue(db, work, event_key, *, dry_run=False, parent=None, note=None):
     await authority(db, work['owner'], work['agent_id'])
     if work.get('revoked'):
         raise ValueError('Work access has been revoked')
     event_key = text(event_key, 'Event ID', 200)
+    if note is not None:
+        note = text(note, 'Event note', 2000)
     if work.get('paused') and not dry_run and parent is None:
         raise ValueError('Enable this work before starting a run')
     # One stable identity per trigger; database unique index handles races.
+    snapshot = copy.deepcopy(work)
+    for secret_field in ('event_token_hash', 'event_token_rotated_at'):
+        snapshot.pop(secret_field, None)
     run = {'run_id': str(uuid.uuid5(uuid.NAMESPACE_URL, work['work_id'] + ':' + event_key)), 'work_id': work['work_id'], 'owner': work['owner'],
-           'event_key': event_key, 'snapshot': copy.deepcopy(work), 'status': 'queued',
+           'event_key': event_key, 'snapshot': snapshot, 'status': 'queued',
            'dry_run': dry_run, 'step': 0, 'history': [], 'created_at': now(), 'wake_at': now(),
            'calls_used': 0, 'max_steps': work['max_steps'], 'parent_id': parent,
-           'root_id': None, 'result': '', 'lease': None, 'lease_until': now()}
+           'event_note': note, 'root_id': None, 'result': '', 'lease': None, 'lease_until': now()}
     run['root_id'] = parent or run['run_id']
     run['deadline_at'] = deadline(run)
     if parent:
@@ -344,8 +366,8 @@ async def reconcile(db, owner, approval_id, version, outcome, evidence):
         raise ValueError('Choose a valid investigation outcome and review version')
     evidence = text(evidence, 'Provider evidence or investigation notes', 2000)
     proposal = await db.agent_approvals.find_one({'approval_id': approval_id, 'owner': owner})
-    if not proposal or proposal['action'] != 'gmail.send':
-        raise ValueError('Unknown email action not found')
+    if not proposal or proposal['action'] not in WRITE_ACTIONS:
+        raise ValueError('Unknown external write action not found')
     record = {'outcome': outcome, 'evidence': evidence, 'actor': owner, 'at': now(),
               'source': 'owner_report', 'version': version + 1, 'digest': proposal['digest']}
     # One-document commit: never lose the receipt or a competing review. Do not
@@ -357,6 +379,71 @@ async def reconcile(db, owner, approval_id, version, outcome, evidence):
         return_document=ReturnDocument.AFTER)
     if not result:
         raise ValueError('Outcome changed or is not awaiting investigation. Close and review again.')
+    return result
+
+
+def token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def rotate_event_token(db, owner, work_id):
+    """One secret per job; rotation invalidates the old one immediately.
+
+    Only the hash is stored. The plaintext is shown once to the owner and is
+    scoped to waking THIS job under its saved grant - it is not a session, an
+    approval or any other authority.
+    """
+    work = await db.agent_work.find_one({'work_id': work_id, 'owner': owner})
+    if not work or work.get('revoked') or work.get('parent_only'):
+        raise ValueError('Work not found or revoked')
+    await authority(db, owner, work['agent_id'])
+    token = secrets.token_urlsafe(32)
+    await db.agent_work.update_one({'work_id': work_id, 'owner': owner},
+        {'$set': {'event_token_hash': token_hash(token), 'event_token_rotated_at': now()}})
+    return token
+
+
+async def event_wake(db, work_id, token, event_key, note=None):
+    """External wake-up. The payload is untrusted data, never instructions.
+
+    Fails uniformly (not-found) for unknown work, missing tokens and bad
+    tokens so callers cannot probe which jobs exist. The event cannot change
+    the grant, instructions or budgets; it only queues one deduplicated run.
+    """
+    work = await db.agent_work.find_one({'work_id': work_id})
+    stored = (work or {}).get('event_token_hash') or ''
+    supplied = token_hash(token) if isinstance(token, str) and token else ''
+    if not work or not stored or not hmac.compare_digest(stored, supplied):
+        raise LookupError('Unknown work or event token')
+    if work.get('revoked') or work.get('paused'):
+        raise ValueError('This job is paused or revoked. Enable it before sending events.')
+    return await enqueue(db, work, 'hook:' + text(event_key, 'Event ID', 150), note=note)
+
+
+async def review_cost(db, owner, run_id, version, outcome, notes):
+    """Owner attestation for model charges still reserved after a run ended.
+
+    Audit-only: never releases funds, changes budget math, unblocks a
+    provider-violation stop or restarts work. Corrections append history.
+    """
+    await authority_account(db, owner)
+    if type(version) is not int or version < 0 or outcome not in ('billed', 'not_billed', 'unknown'):
+        raise ValueError('Choose a valid charge outcome and review version')
+    notes = text(notes, 'Billing evidence or investigation notes', 2000)
+    run = await db.agent_runs.find_one({'run_id': run_id, 'owner': owner})
+    if not run or run.get('parent_id') or run['status'] not in TERMINAL:
+        raise ValueError('Charge review applies to ended top-level runs only')
+    if not any(e.get('status') == 'held' for e in run.get('cost_ledger', [])):
+        raise ValueError('This run has no unresolved model charge reservations')
+    record = {'outcome': outcome, 'notes': notes, 'actor': owner, 'at': now(),
+              'source': 'owner_report', 'version': version + 1}
+    result = await db.agent_runs.find_one_and_update(
+        {'run_id': run_id, 'owner': owner, 'status': {'$in': list(TERMINAL)},
+         '$expr': {'$eq': [{'$ifNull': ['$cost_review.version', 0]}, version]}},
+        {'$set': {'cost_review': record}, '$push': {'cost_review_history': record}},
+        return_document=ReturnDocument.AFTER)
+    if not result:
+        raise ValueError('Charge review changed. Close and review again.')
     return result
 
 

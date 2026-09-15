@@ -88,7 +88,19 @@ async def handle(request):
             return response({'work': work, 'runs': runs, 'approvals': approvals, 'model_ready': planner_ready(),
                              'pricing_ready': costs.ready(),
                              'google_connected': bool(await db.oauth_tokens.find_one({'user_email': owner, 'provider': 'google'}, {'_id': 1})),
+                             'slack_connected': bool(await db.oauth_tokens.find_one({'user_email': owner, 'provider': 'slack'}, {'_id': 1})),
                              'worker_enabled': os.getenv('LOMA_ENABLE_SCHEDULER', 'true').lower() == 'true'})
+        if method == 'GET' and route == 'attention':
+            approvals = await db.agent_approvals.count_documents({'owner': owner, 'status': 'pending', 'expires_at': {'$gt': core.now()}})
+            questions = await db.agent_runs.count_documents({'owner': owner, 'status': 'needs_input'})
+            deliveries = await db.agent_approvals.count_documents({'owner': owner, 'status': 'uncertain',
+                'action': {'$in': sorted(core.WRITE_ACTIONS)},
+                'reconciliation.outcome': {'$nin': ['sent', 'not_sent']}, 'provider_check.outcome': {'$ne': 'sent'}})
+            charges = await db.agent_runs.count_documents({'owner': owner, 'parent_id': None,
+                'status': {'$in': list(core.TERMINAL)}, 'cost_ledger': {'$elemMatch': {'status': 'held'}},
+                'cost_review.outcome': {'$nin': ['billed', 'not_billed']}})
+            return response({'approvals': approvals, 'questions': questions, 'deliveries': deliveries,
+                             'charges': charges, 'total': approvals + questions + deliveries + charges})
         if route == 'work' and method == 'POST':
             return response(await core.create_work(db, owner, body), 201)
         if len(parts) == 3 and parts[0] == 'work' and method == 'POST':
@@ -140,6 +152,10 @@ async def handle(request):
                     flow = await create_flow(db, data)
                 await db.agent_work.update_one({'work_id': work['work_id']}, {'$set': {'flow_id': flow['flow_id'], 'cron': flow['cron'], 'timezone': flow['timezone'], 'paused': True}})
                 return response(flow, 201)
+            if action == 'event-token':
+                token = await core.rotate_event_token(db, owner, work['work_id'])
+                return response({'token': token, 'path': f"/api/bounded-work-hooks/{work['work_id']}",
+                                 'note': 'Shown once. Rotating replaces any previous token immediately.'})
             if action in ('run', 'test', 'event'):
                 if not planner_ready():
                     raise ValueError('Model connection is missing. Ask an admin to configure bounded work.')
@@ -150,6 +166,9 @@ async def handle(request):
             if action == 'cancel':
                 await core.cancel(db, owner, run_id)
                 return response({'ok': True})
+            if action == 'cost-review':
+                return response(await core.review_cost(db, owner, run_id, body.get('version'),
+                                                       body.get('outcome'), body.get('notes')))
             if action == 'answer':
                 run = await db.agent_runs.find_one({'run_id': run_id, 'owner': owner})
                 if not run:
@@ -196,6 +215,43 @@ def response(value, status=200):
     return web.json_response(_serialize(value), status=status)
 
 
+async def handle_hook(request):
+    """External event wake-up. Token-scoped to one job; no session identity.
+
+    Uniform 404 for unknown job/missing/bad token so callers cannot probe.
+    The payload never carries instructions, approvals or identity - only a
+    dedup key and an optional bounded note stored as untrusted data.
+    """
+    if not enabled():
+        raise web.HTTPNotFound(text='Bounded work is not enabled')
+    db = get_db()
+    if db is None:
+        raise web.HTTPServiceUnavailable(text='Database unavailable')
+    if request.content_length and request.content_length > 10000:
+        raise web.HTTPRequestEntityTooLarge(max_size=10000, actual_size=request.content_length)
+    raw = await request.read()
+    if len(raw) > 10000:
+        raise web.HTTPRequestEntityTooLarge(max_size=10000, actual_size=len(raw))
+    try:
+        body = json.loads(raw) if raw else {}
+        if not isinstance(body, dict):
+            raise ValueError()
+    except ValueError:
+        return web.json_response({'error': 'Send a JSON object with event_key and an optional note'}, status=400)
+    if not planner_ready():
+        return web.json_response({'error': 'Bounded work model is not configured'}, status=503)
+    try:
+        run = await core.event_wake(db, request.match_info['work_id'],
+                                    request.headers.get('X-Work-Event-Token', ''),
+                                    body.get('event_key'), body.get('note'))
+        return web.json_response({'accepted': True, 'run_id': run['run_id']})
+    except LookupError:
+        raise web.HTTPNotFound(text='Not found')
+    except ValueError as exc:
+        status = 409 if 'already has active' in str(exc) else 400
+        return web.json_response({'error': str(exc)}, status=status)
+
+
 async def lifecycle(app):
     task = None
     reconciliation_task = None
@@ -235,4 +291,5 @@ async def lifecycle(app):
 
 def setup_bounded_work_routes(app):
     app.router.add_route('*', '/api/bounded-work/{tail:.*}', handle)
+    app.router.add_post('/api/bounded-work-hooks/{work_id}', handle_hook)
     app.cleanup_ctx.append(lifecycle)
