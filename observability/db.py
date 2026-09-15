@@ -90,6 +90,34 @@ async def init_observability():
         [("pr_number", 1), ("repo_full_name", 1)], unique=True,
     )
 
+    # PR notification targets (self-review follow-up routing, utils/pr_followup.py).
+    # Unique so concurrent registrations upsert the same doc instead of duplicating.
+    await _db.pr_notification_targets.create_index(
+        [("pr_number", 1), ("repo_full_name", 1)], unique=True,
+    )
+    # One-off fold: `repo_full_name` is now stored lowercased on every write and
+    # looked up lowercased (utils/pr_followup._normalize_repo). Targets registered
+    # before that shipped keep GitHub's mixed casing and would be unreachable, so
+    # their in-flight PRs' follow-ups would silently drop. Best-effort: a
+    # conflict (both casings already present) or an old server must not block boot.
+    try:
+        folded = await _db.pr_notification_targets.update_many(
+            {"repo_full_name": {"$regex": "[A-Z]"}},
+            [{"$set": {"repo_full_name": {"$toLower": "$repo_full_name"}}}],
+        )
+        if folded.modified_count:
+            logger.info("Lowercased repo_full_name on %d pr_notification_targets doc(s)",
+                        folded.modified_count)
+    except Exception as e:
+        logger.warning("Could not fold mixed-case pr_notification_targets.repo_full_name: %s", e)
+
+    # Self-review locks (webhooks/self_review_lock.py). The unique index is
+    # load-bearing: SelfReviewLock.acquire() upserts against it so that two
+    # near-simultaneous `synchronize` events cannot both claim a PR.
+    await _db.pr_self_review_locks.create_index(
+        [("repo_full_name", 1), ("pr_number", 1)], unique=True,
+    )
+
     # Preexisting issues (for maintenance flow)
     await _db.preexisting_issues.create_index("issue_id", unique=True)
     await _db.preexisting_issues.create_index([("repo_full_name", 1), ("file_path", 1)])

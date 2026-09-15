@@ -288,14 +288,15 @@ async def process_human_review_for_quality(
         The quality_id if assessment was created, None otherwise.
     """
     # Find the most recent agent review conversation for this PR
-    # Only match actual PR reviews (trigger_type: "pr_review"), not slash commands or replies
+    # Only match actual PR reviews (human-PR reviews and fresh-context
+    # self-reviews of agent PRs), not slash commands or replies
     agent_conversation = await db.conversations.find_one(
         {
             "metadata.github_repo": repo_full_name,
             "metadata.github_pr_number": pr_number,
             "source": "github_webhook",
             "status": "completed",
-            "metadata.trigger_type": "pr_review",
+            "metadata.trigger_type": {"$in": ["pr_review", "pr_self_review"]},
         },
         sort=[("started_at", -1)],
     )

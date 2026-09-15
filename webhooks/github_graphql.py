@@ -420,12 +420,16 @@ async def get_pr_reviews(
         - body: review summary text
         - author: GitHub login
         - created_at: ISO timestamp
+        - commit_oid: SHA of the PR head the review was submitted against
+
+    Fetches the NEWEST 50 reviews (``last: 50``) so long-lived PRs never drop
+    the most recent agent review — every caller cares about the latest state.
     """
     query = """
     query GetPRReviews($owner: String!, $repo: String!, $prNumber: Int!) {
         repository(owner: $owner, name: $repo) {
             pullRequest(number: $prNumber) {
-                reviews(first: 50) {
+                reviews(last: 50) {
                     nodes {
                         id
                         state
@@ -434,6 +438,9 @@ async def get_pr_reviews(
                             login
                         }
                         createdAt
+                        commit {
+                            oid
+                        }
                     }
                 }
             }
@@ -464,6 +471,7 @@ async def get_pr_reviews(
             "body": r.get("body", ""),
             "author": (r.get("author") or {}).get("login", ""),
             "created_at": r.get("createdAt"),
+            "commit_oid": (r.get("commit") or {}).get("oid", ""),
         })
 
     logger.info(
