@@ -406,3 +406,22 @@ shell runners from the broker and its database. Resource limits and an optional 
 prefix are not a substitute. Do not mark this PR production-ready on the strength of
 these functional tests. Live-provider smoke validation also remains outstanding.
 Manual billing evidence is not provider accounting: unknown model charges stay reserved.
+
+## Chat-preserving isolation decision and transport foundation (2026-09-15)
+
+The user chose to keep existing chat and move its workers to a separately
+restricted environment, rather than disable chat. Added `isolation/` with a
+trusted dedicated-host supervisor, backend transport and strict worker protocol.
+This is **not yet connected to the three chat runtimes**; current chat and
+production deployment are unchanged. See
+[remote worker migration](../security-containment/remote-workers.md) for exact
+implemented boundaries, remaining adapters and rollout gates.
+
+Verification in this change: 36 new protocol/real subprocess tests pass; the full
+backend suite passes 922 tests with 108 skipped. Docker execution is substituted
+in these tests. No Docker/gVisor runtime containment, browser parity, model or
+live-provider validation is claimed. No new UI was added.
+
+Still open: runtime/model adapters, typed credential gateway parity, owner-scoped
+file/recall bridges, all entrypoint routing and staging containment verification.
+Do not mark isolation complete or this PR merge-ready based on transport tests.
