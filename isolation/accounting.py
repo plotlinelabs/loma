@@ -164,7 +164,21 @@ class ModelBudget:
     async def stop(self):
         await self.collection.update_one(self.key, {'$set': {'active': False}})
 
-    def relay(self, grant, *, session, authorize, audit):
-        """Bind only on the trusted backend; account selection remains external."""
+    def relay(self, grant, *, session, authorize, audit, resolve_account_headers=None):
+        """Bind refresh to the durable account ID, never a worker-selected account.
+
+        resolve_account_headers(authority, account_id) must check the current
+        account grant and return refreshed headers. No automatic account failover:
+        switching accounts requires a new authorized run and budget contract.
+        """
+        if resolve_account_headers is not None and not callable(resolve_account_headers):
+            raise ValueError('Account credential resolver must be callable')
+
+        async def resolve_headers(authority):
+            if authority != self.authority:
+                raise ModelDenied('Invalid account scope')
+            return await resolve_account_headers(authority, self.spec.account_id)
+
         return ModelRelay(self.authority, grant, session=session, authorize=authorize, audit=audit,
-                          reserve=self.reserve, settle=self.settle, record_usage=self.record_usage)
+                          reserve=self.reserve, settle=self.settle, record_usage=self.record_usage,
+                          resolve_headers=resolve_headers if resolve_account_headers is not None else None)

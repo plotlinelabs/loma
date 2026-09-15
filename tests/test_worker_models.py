@@ -396,3 +396,96 @@ asyncio.run(main())
         await client.close()
         scope.close()
         await close(relay, server, session)
+
+
+@pytest.mark.asyncio
+async def test_account_credentials_refresh_each_call_without_changing_grant():
+    seen = []
+    async def provider(request):
+        seen.append(request.headers['Authorization'])
+        return web.Response(body=b'data: hello\n\n', content_type='text/event-stream')
+    resolver = AsyncMock(side_effect=[{'Authorization': 'Bearer fresh-one'},
+                                      {'Authorization': 'Bearer fresh-two'}])
+    relay, server, session, callbacks = await fixture(provider, resolve_headers=resolver)
+    original = relay.grant
+    try:
+        for _ in range(2):
+            started = await relay(AUTH, 'model.start', {'body': body()})
+            while not (await relay(AUTH, 'model.read', {'stream_id': started['stream_id']}))['eof']:
+                pass
+        assert seen == ['Bearer fresh-one', 'Bearer fresh-two']
+        assert relay.grant is original and relay.grant.headers['Authorization'] == 'Bearer ' + CANARY
+        assert resolver.await_args_list[0].args == (AUTH,)
+        assert callbacks['reserve'].await_count == 2
+        assert 'fresh-' not in repr(callbacks['audit'].await_args_list)
+    finally:
+        await close(relay, server, session)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('result', [None, {}, [], {'Authorization': 'bad\r\nheader'}, {'Authorization': 123}])
+async def test_invalid_refreshed_credentials_never_fall_back_or_reserve(result):
+    relay, server, session, callbacks = await fixture(AsyncMock(), resolve_headers=AsyncMock(return_value=result))
+    try:
+        with pytest.raises(ModelDenied, match='Account credentials unavailable'):
+            await relay(AUTH, 'model.start', {'body': body()})
+        assert not relay.session.requests and not callbacks['reserve'].await_count
+        assert relay.closed
+    finally:
+        await close(relay, server, session)
+
+
+@pytest.mark.asyncio
+async def test_account_refresh_error_is_sanitized_and_terminal():
+    resolver = AsyncMock(side_effect=RuntimeError(CANARY))
+    relay, server, session, callbacks = await fixture(AsyncMock(), resolve_headers=resolver)
+    try:
+        with pytest.raises(ModelDenied) as error:
+            await relay(AUTH, 'model.start', {'body': body()})
+        assert CANARY not in str(error.value)
+        with pytest.raises(ModelDenied, match='closed'):
+            await relay(AUTH, 'model.start', {'body': body()})
+        assert resolver.await_count == 1
+        assert not relay.session.requests and not callbacks['reserve'].await_count
+    finally:
+        await close(relay, server, session)
+
+
+@pytest.mark.asyncio
+async def test_revocation_during_refresh_prevents_budget_and_provider_call():
+    resolver = AsyncMock(return_value={'Authorization': 'Bearer fresh'})
+    relay, server, session, callbacks = await fixture(AsyncMock(), resolve_headers=resolver)
+    async def revoke(authority):
+        callbacks['authorize'].return_value = False
+        return {'Authorization': 'Bearer fresh'}
+    resolver.side_effect = revoke
+    try:
+        with pytest.raises(ModelDenied, match='no longer valid'):
+            await relay(AUTH, 'model.start', {'body': body()})
+        assert not relay.session.requests and not callbacks['reserve'].await_count
+    finally:
+        await close(relay, server, session)
+
+
+@pytest.mark.asyncio
+async def test_refresh_cancel_does_not_reserve_or_dispatch():
+    entered = asyncio.Event()
+    async def resolver(authority):
+        entered.set()
+        await asyncio.Event().wait()
+    relay, server, session, callbacks = await fixture(AsyncMock(), resolve_headers=resolver)
+    try:
+        task = asyncio.create_task(relay(AUTH, 'model.start', {'body': body()}))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not relay.session.requests and not callbacks['reserve'].await_count
+    finally:
+        await close(relay, server, session)
+
+
+def test_credential_resolver_requires_callable():
+    with pytest.raises(ValueError, match='Credential resolver'):
+        ModelRelay(AUTH, grant(), session=None, authorize=AsyncMock(), audit=AsyncMock(),
+                   reserve=AsyncMock(), settle=AsyncMock(), resolve_headers='worker-chosen')

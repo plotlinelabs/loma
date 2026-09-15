@@ -170,6 +170,7 @@ def test_claude_model_selection_detection():
 
 @pytest.mark.asyncio
 async def test_stream_agent_uses_opencode_runtime_by_default(monkeypatch):
+    monkeypatch.delenv("AGENT_DEFAULT_MODEL", raising=False)
     import agent.opencode_runtime as opencode_runtime
     from agent.client import stream_agent
 

@@ -223,3 +223,19 @@ async def test_accounting_outage_closes_relay_without_replay(db, monkeypatch):
             await relay(AUTH, 'model.start', {'body': body()})
     finally:
         await close(relay, server, session)
+
+
+@pytest.mark.asyncio
+async def test_refresh_uses_durable_account_and_rejects_foreign_authority(db):
+    from unittest.mock import AsyncMock
+    from dataclasses import replace
+    from tests.test_worker_models import grant
+    budget = ModelBudget(db, AUTH, SPEC)
+    resolver = AsyncMock(return_value={'Authorization': 'Bearer synthetic'})
+    relay = budget.relay(grant(), session=None, authorize=AsyncMock(), audit=AsyncMock(),
+                         resolve_account_headers=resolver)
+    assert await relay.resolve_headers(AUTH) == {'Authorization': 'Bearer synthetic'}
+    resolver.assert_awaited_once_with(AUTH, SPEC.account_id)
+    with pytest.raises(ModelDenied, match='Invalid account scope'):
+        await relay.resolve_headers(replace(AUTH, user_email='foreign@example.test'))
+    assert resolver.await_count == 1

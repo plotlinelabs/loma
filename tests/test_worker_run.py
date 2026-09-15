@@ -430,3 +430,19 @@ async def test_native_followup_waits_for_durable_settlement(fail_settlement):
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
         await bridge.close()
+
+
+@pytest.mark.asyncio
+async def test_run_passes_account_resolver_only_to_trusted_relay(db, tmp_path, monkeypatch):
+    await seed(db)
+    resolver = AsyncMock(return_value={'Authorization': 'Bearer backend-only-synthetic'})
+    async def worker(**kw):
+        relay = kw['execute_tool'].models
+        headers = await relay.resolve_headers(kw['authority'])
+        assert headers == {'Authorization': 'Bearer backend-only-synthetic'}
+        resolver.assert_awaited_once_with(kw['authority'], SPEC.account_id)
+        assert 'backend-only-synthetic' not in json.dumps(kw['input'])
+        yield 'Account callback verified'
+    monkeypatch.setattr(mod, 'stream_worker', worker)
+    result = [e async for e in mod.stream_run(**args(db, tmp_path, resolve_account_headers=resolver))]
+    assert result == ['Account callback verified']

@@ -535,3 +535,32 @@ connector/action adapters and native feature parity; authenticated production
 prompt/attachment callers; interactive/scheduled/recovery/utility/prewarm routing;
 reviewed deployment configuration; workflow-capable native CI setup; dedicated-host
 image/hostile-worker and live-provider certification. PR #191 remains draft.
+
+## Pinned-account credential refresh hook
+
+`stream_run(..., resolve_account_headers=...)` now passes an optional trusted
+backend resolver through `ModelBudget` to `ModelRelay`. This is one bounded
+account-integration step, not completed subscription-account integration.
+
+- The callback receives the run authority and the account ID from the durable
+  budget contract. Workers cannot select an account or replace the callback.
+- Each new model call resolves credentials before budget admission, with a
+  30-second timeout. The relay lock serializes refresh and provider dispatch.
+  Endpoint, model, limits, history and pricing stay pinned to the existing grant.
+- Refreshed headers are validated and copied. Invalid/empty headers or refresh
+  failures close the relay without dispatch, reservation, retry, or stale-header
+  fallback. Callback error details are not returned to the worker.
+- Authorization is checked before and after refresh and again after budget
+  reservation. Cancellation during refresh cannot dispatch a provider request.
+  Existing live policy checks still govern stream reads and output.
+- The resolver must enforce the current account grant, manage any provider token
+  refresh/rotation safely, and return only headers for that same account. With no
+  resolver, existing static-grant behavior remains unchanged. Switching accounts
+  requires a new authorized run and budget contract.
+
+Tests cover successive credential rotation, invalid headers, revocation during
+refresh, cancellation, secret-safe errors, no stale fallback, durable account-ID
+binding, foreign-authority denial and trusted run-assembly wiring. No real
+subscription credential is used. Still pending: concrete subscription resolvers,
+account selection/cooldown policy and reporting, other adapters, entrypoint
+migration and dedicated-host/live-provider verification.

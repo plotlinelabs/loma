@@ -91,14 +91,15 @@ async def test_forwarded_or_missing_identity_is_rejected(rig, headers):
 
 
 @pytest.mark.parametrize('change', [
-    {'aud': 'loma:other'}, {'iat': int(time.time()) + 100}, {'exp': int(time.time()) - 1},
-    {'exp': int(time.time()) + 3600}, {'iat': True}, {'exp': '999999999999'},
+    {'aud': 'loma:other'}, lambda: {'iat': int(time.time()) + 100}, lambda: {'exp': int(time.time()) - 1},
+    lambda: {'exp': int(time.time()) + 3600}, {'iat': True}, {'exp': '999999999999'},
     {'email': ''}, {'sub': []}, {'execution_id': ''}, {'project_id': {}}, {'agent_id': 7},
     {'role': 'admin'},
 ])
 def test_reject_invalid_signed_claims(capability, change):
     key, claims = capability
-    claims.update(change)
+    # Compute relative timestamps at execution, not during test collection.
+    claims.update(change() if callable(change) else change)
     with pytest.raises(ValueError):
         verify_recall_token(signed(key, claims))
 

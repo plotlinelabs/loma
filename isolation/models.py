@@ -7,7 +7,7 @@ budget and authorization callbacks and close the relay at the end of the run.
 """
 import asyncio
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import re
 from urllib.parse import urlsplit
@@ -246,7 +246,7 @@ def request_body(grant, body):
 
 
 class ModelRelay:
-    def __init__(self, authority, grant, *, session, authorize, audit, reserve, settle, record_usage=None):
+    def __init__(self, authority, grant, *, session, authorize, audit, reserve, settle, record_usage=None, resolve_headers=None):
         """Callbacks are trusted backend adapters, never selected by the worker.
 
         reserve(authority, call_id, grant, body) durably reserves spend BEFORE
@@ -256,11 +256,17 @@ class ModelRelay:
         persists provider-side token evidence before settlement. Missing evidence
         must retain the reservation. Neither callback receives worker usage claims.
         Pricing and durable idempotent settlement remain the budget adapter's job.
+        resolve_headers(authority), if supplied, refreshes credentials for the
+        pinned account before EACH call. It cannot change model, endpoint, budget
+        or history. Errors never fall back to the grant's original credentials.
         """
         if any(not callable(f) for f in (authorize, audit, reserve, settle)):
             raise ValueError('Model policy, audit and budget callbacks are required')
         if record_usage is not None and not callable(record_usage):
             raise ValueError("Usage recorder must be a trusted callback")
+        if resolve_headers is not None and not callable(resolve_headers):
+            raise ValueError("Credential resolver must be a trusted callback")
+        self.resolve_headers = resolve_headers
         self.record_usage = record_usage
         self.usage = None
         self.authority, self.grant, self.session = authority, grant, session
@@ -306,6 +312,21 @@ class ModelRelay:
                     if self.stream_id is not None or self.calls >= self.grant.max_calls:
                         raise ModelDenied('Model call limit reached or stream still active')
                     body = request_body(self.grant, arguments['body'])
+                    headers = self.grant.headers
+                    if self.resolve_headers is not None:
+                        try:
+                            async with asyncio.timeout(30):
+                                headers = await self.resolve_headers(authority)
+                            # Reuse grant validation without persisting refreshed
+                            # secrets on the grant or serializing them to workers.
+                            headers = replace(self.grant, headers=headers).headers
+                            if not headers:
+                                raise ValueError('Empty account credentials')
+                        except Exception:
+                            self.closed = True
+                            raise ModelDenied('Account credentials unavailable') from None
+                        # Refresh may yield while an account/user is revoked.
+                        await self._authorized(authority)
                     call_id = uuid.uuid4().hex
                     await self.audit(authority, {'tool': tool, 'stage': 'requested', 'call_id': call_id})
                     await self.reserve(authority, call_id, self.grant, body)
@@ -318,7 +339,7 @@ class ModelRelay:
                     if self.session.trust_env or not isinstance(self.session.cookie_jar, aiohttp.DummyCookieJar):
                         raise ModelDenied('Model relay requires a private cookie-free session')
                     self.response = await self.session.post(self.grant.endpoint, json=body,
-                        headers=self.grant.headers, allow_redirects=False,
+                        headers=headers, allow_redirects=False,
                         timeout=aiohttp.ClientTimeout(total=300, sock_read=60))
                     if self.response.status != 200 or self.response.content_type != 'text/event-stream':
                         raise ModelDenied('Model provider did not return a valid stream')

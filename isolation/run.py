@@ -29,15 +29,19 @@ from isolation.workspace_tools import TOOLS as WORKSPACE_TOOLS
 async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtime,
                      grant, budget_spec, allowed_tools, check_access, cancelled,
                      url, token, tls, artifact_root, attachments=(), input_ids=(),
-                     allowed_skills=None, max_seconds=3600):
+                     allowed_skills=None, max_seconds=3600, resolve_account_headers=None):
     """Yield text and trusted file events; own all resources until generator close.
 
     Caller owns the run consumer and MUST close it when abandoning a stream.
     check_access checks current account/grants on every dispatch, not a cached
     admission decision. These keyword arguments come from authenticated backend
     state, never a worker frame. The model grant's old history is never reused.
-    Account selection/refresh and public entrypoint cutover remain separate.
+    resolve_account_headers(authority, account_id) is a trusted credential
+    refresh callback, bound to budget_spec.account_id on each provider call.
+    Selection and public entrypoint cutover remain separate.
     """
+    if resolve_account_headers is not None and not callable(resolve_account_headers):
+        raise ValueError("Account credential resolver must be callable")
     expected = {'codex': 'responses', 'claude': 'messages', 'opencode': 'chat'}
     if (runtime not in expected or grant.protocol != expected[runtime]
             or (runtime == 'codex' and not grant.native_codex)
@@ -83,7 +87,8 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         await budget.initialize()
         session = await stack.enter_async_context(aiohttp.ClientSession(
             cookie_jar=aiohttp.DummyCookieJar(), trust_env=False))
-        relay = budget.relay(grant, session=session, authorize=context.authorize, audit=audit)
+        relay = budget.relay(grant, session=session, authorize=context.authorize, audit=audit,
+            resolve_account_headers=resolve_account_headers)
         stack.push_async_callback(relay.close)
         registry = DownloadRegistry(db, artifacts, emit=events.put)
         knowledge = KnowledgeGateway(db, authority, conversation_id,
