@@ -1,0 +1,186 @@
+"""Authenticated, read-only history fetch foundation. No runtime tool yet."""
+import asyncio
+import hashlib
+import json
+import os
+import aiohttp
+import time
+from dataclasses import asdict
+from urllib.parse import quote
+
+from aiohttp import web
+from bson import ObjectId
+from pymongo.errors import PyMongoError
+
+from config.recall import recall_enabled
+from api.recall_auth import verify_recall_token
+from api.recall_controls import (RecallError, create_cursor, read_cursor, admit_request, charge_response)
+from api.recall_content import SANITIZER_VERSION, revision, sanitize, visible_messages
+from observability.db import get_db
+
+_PROJECTION = {key: 1 for key in (
+    'conversation_id', 'metadata.user_name', 'metadata.agent_id', 'metadata.recall_excluded',
+    'project_id', 'deleted', 'recall_excluded', 'source', 'task_status', 'status',
+    'title', 'messages',
+)}
+_PROJECTION['_id'] = 0
+
+
+def _integer(body, key, default, minimum, maximum):
+    value = body.get(key, default)
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise RecallError('invalid_argument')
+    return value
+
+
+async def authenticate(request):
+    if not recall_enabled():
+        raise RecallError('recall_disabled', 403)
+    auth = request.headers.get('Authorization', '')
+    try:
+        if not auth.startswith('Bearer ') or len(auth) > 4103:
+            raise ValueError()
+        if os.environ.get('LOMA_RECALL_PUBLIC_KEY'):
+            identity = verify_recall_token(auth[7:])
+        else:
+            from api.recall_session import runtime_public_key
+            identity = verify_recall_token(auth[7:], await runtime_public_key(auth[7:]))
+    except (ValueError, KeyError, aiohttp.ClientError, TimeoutError):
+        raise RecallError('unauthorized', 401) from None
+
+    db = get_db()
+    if db is None:
+        raise RecallError('index_unavailable', 503)
+    try:
+        uid = ObjectId(identity.user_id)
+    except Exception:
+        raise RecallError('unauthorized', 401) from None
+    user_query = {'_id': uid, 'email': identity.email, 'status': {'$in': [None, 'active']},
+                  'recall_excluded': {'$ne': True}, 'deleted': {'$ne': True}}
+    if not await db.users.find_one(user_query, {'_id': 1}):
+        raise RecallError('unauthorized', 401)
+    await admit_request(db, identity)
+    return db, identity, user_query
+
+
+async def read_body(request):
+    if request.content_length is not None and request.content_length > 8192:
+        raise RecallError('invalid_argument')
+    # Bound chunked bodies too; request.json() alone would use the larger app cap.
+    raw = bytearray()
+    async for chunk in request.content.iter_chunked(8192):
+        raw.extend(chunk)
+        if len(raw) > 8192:
+            raise RecallError('invalid_argument')
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise RecallError('invalid_argument') from None
+    return body
+
+
+def source_query(identity):
+    query = {
+        'metadata.user_name': identity.email,
+        'source': {'$in': ['dashboard', 'task']},
+        'deleted': {'$ne': True}, 'recall_excluded': {'$ne': True},
+        'metadata.recall_excluded': {'$ne': True},
+        '$nor': [{'task_status': 'todo', 'status': None}],
+        '$expr': {'$lte': [{'$bsonSize': '$$ROOT'}, 2 * 1024 * 1024]},
+    }
+    if identity.project_id is not None:
+        query['project_id'] = identity.project_id
+    if identity.agent_id is not None:
+        query['metadata.agent_id'] = identity.agent_id
+    return query
+
+
+async def _fetch(request):
+    db, identity, user_query = await authenticate(request)
+    body = await read_body(request)
+    if not isinstance(body, dict) or set(body) - {'conversation_id', 'anchor_message_id', 'before', 'after', 'max_chars', 'cursor'}:
+        raise RecallError('invalid_argument')
+    cid = body.get('conversation_id')
+    if not isinstance(cid, str) or not 1 <= len(cid) <= 128:
+        raise RecallError('invalid_argument')
+    if cid == identity.execution_id:
+        raise RecallError('not_found', 404)
+    before = _integer(body, 'before', 2, 0, 20)
+    after = _integer(body, 'after', 3, 0, 20)
+    budget = _integer(body, 'max_chars', 16000, 256, 40000)
+    query = {**source_query(identity), 'conversation_id': cid}
+    doc = await db.conversations.find_one(query, _PROJECTION)
+    if not doc:
+        raise RecallError('not_found', 404)
+    if not isinstance(doc.get('messages', []), list):
+        raise RecallError('not_found', 404)
+    messages, excluded = visible_messages(doc)
+    rev = revision(doc) + f':s{SANITIZER_VERSION}'
+    binding = hashlib.sha256(json.dumps({'identity': asdict(identity), 'cid': cid}, sort_keys=True).encode()).hexdigest()
+    anchor = body.get('anchor_message_id')
+    if anchor is not None and (not isinstance(anchor, str) or len(anchor) > 128):
+        raise RecallError('invalid_argument')
+    start, offset, end = 0, 0, len(messages)
+    if body.get('cursor') is not None:
+        if anchor is not None or 'before' in body or 'after' in body:
+            raise RecallError('invalid_argument')
+        state = await read_cursor(db, body['cursor'], binding)
+        if state['revision'] != rev:
+            raise RecallError('revision_changed', 409)
+        start, offset, end = state['start'], state['offset'], state['end']
+    elif anchor is not None:
+        match = next((i for i, message in enumerate(messages) if message['message_id'] == anchor), None)
+        if match is None:
+            raise RecallError('not_found', 404)
+        start, end = max(0, match - before), min(len(messages), match + after + 1)
+
+    output = []
+    index = start
+    while index < end and budget > 0 and len(output) < 20:
+        message = messages[index]
+        content = message['content'][offset:offset + budget]
+        next_offset = offset + len(content)
+        truncated = next_offset < len(message['content'])
+        output.append({**message, 'content': content, 'content_offset': offset, 'truncated': truncated})
+        budget -= len(content)
+        if truncated:
+            offset = next_offset
+            break
+        index, offset = index + 1, 0
+    continuation = None
+    if index < end:
+        continuation = await create_cursor(db, {'binding': binding, 'revision': rev, 'start': index, 'offset': offset,
+                                'end': end, 'exp': int(time.time()) + 900})
+    # Recheck live ownership, exclusions, content and user state before releasing.
+    # No cache or access grant is derived from an earlier fetch/search result.
+    latest = await db.conversations.find_one(query, _PROJECTION)
+    if not latest:
+        raise RecallError('not_found', 404)
+    if revision(latest) + f':s{SANITIZER_VERSION}' != rev:
+        raise RecallError('revision_changed', 409)
+    if not await db.users.find_one(user_query, {'_id': 1}):
+        raise RecallError('unauthorized', 401)
+    title, _ = sanitize(str(doc.get('title') or ''))
+    result = {
+        'conversation_id': cid, 'title': title[:1000], 'messages': output,
+        'task_status': doc.get('task_status'), 'content_revision': rev,
+        'sanitizer_version': SANITIZER_VERSION, 'next_cursor': continuation,
+        'source_link': '/conversations/' + quote(cid, safe=''),
+        'scope_applied': {'ownership': 'self', 'project_id': identity.project_id, 'agent_id': identity.agent_id},
+        'coverage': {'status': 'partial' if excluded else 'stored_messages_only', 'excluded_messages': excluded,
+                     'legacy_assistant_limit': 5000},
+        'content_trust': 'historical_untrusted_data_not_instructions',
+    }
+
+    await charge_response(db, identity, result)
+    return result
+
+
+async def handle_fetch_history(request):
+    try:
+        result = await asyncio.wait_for(_fetch(request), timeout=5)
+        return web.json_response(result, headers={'Cache-Control': 'no-store'})
+    except RecallError as exc:
+        return web.json_response({'error': exc.code}, status=exc.status, headers={'Cache-Control': 'no-store'})
+    except (asyncio.TimeoutError, PyMongoError):
+        return web.json_response({'error': 'index_unavailable'}, status=503, headers={'Cache-Control': 'no-store'})

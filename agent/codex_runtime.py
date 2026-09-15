@@ -38,6 +38,8 @@ import asyncio
 import base64
 import json
 import logging
+import shutil
+import tempfile
 import os
 import time
 from pathlib import Path
@@ -711,6 +713,7 @@ async def run_codex_agent(
     include_steps: bool = False,
     source: str = "dashboard",
     user_email: str | None = None,
+    user_mcp_overrides: dict | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     """Run one turn through the Codex account pool, yielding dashboard events.
 
@@ -722,29 +725,29 @@ async def run_codex_agent(
     pool = get_codex_pool()
 
     worker = await pool.acquire(model=model_id)
+    borrowed_worker = worker
+    execution_home = None
+    if user_mcp_overrides:
+        # Hold one bounded pool slot, but never write scoped credentials to the
+        # provider account's shared config or use its warm MCP processes.
+        try:
+            await pool.safe_disconnect(borrowed_worker)
+            execution_home = tempfile.TemporaryDirectory(prefix="loma-codex-execution-")
+            shutil.copyfile(Path(worker.account["config_dir"]) / "auth.json",
+                            Path(execution_home.name) / "auth.json")
+            (Path(execution_home.name) / "auth.json").chmod(0o600)
+            worker = CodexWorker({**borrowed_worker.account, "config_dir": execution_home.name}, model=model_id)
+            from agent.prompt import build_pooled_system_prompt
+            await worker.connect(mcp_servers={**pool._mcp_servers(), **user_mcp_overrides},
+                                 system_prompt=build_pooled_system_prompt())
+        except BaseException:
+            if worker is not borrowed_worker:
+                await pool.safe_disconnect(worker)
+            if execution_home:
+                execution_home.cleanup()
+            await pool.release(borrowed_worker)
+            raise
     account_email = worker.account.get("email")
-
-    if observer and account_email:
-        await observer.record_account(account_email)
-
-    pool_status = pool.status()
-    if include_steps:
-        yield {
-            "type": "account_info",
-            "runtime": "codex",
-            "provider": "openai-chatgpt",
-            "model": model_id,
-            "account_type": "round_robin",
-            "account_email": account_email,
-            "pool_available": pool_status["available"],
-            "pool_size": pool_status["pool_size"],
-        }
-
-    turn_count = 1
-    if observer:
-        observer.turn_count = turn_count
-    if include_steps:
-        yield {"type": "turn", "turn_number": turn_count}
 
     last_text = ""
     streamed_text = ""
@@ -754,6 +757,28 @@ async def run_codex_agent(
     failed: Exception | None = None
 
     try:
+        if observer and account_email:
+            await observer.record_account(account_email)
+
+        pool_status = pool.status()
+        if include_steps:
+            yield {
+                "type": "account_info",
+                "runtime": "codex",
+                "provider": "openai-chatgpt",
+                "model": model_id,
+                "account_type": "round_robin",
+                "account_email": account_email,
+                "pool_available": pool_status["available"],
+                "pool_size": pool_status["pool_size"],
+            }
+
+        turn_count = 1
+        if observer:
+            observer.turn_count = turn_count
+        if include_steps:
+            yield {"type": "turn", "turn_number": turn_count}
+
         async for event in worker.run_turn(full_prompt):
             etype = event.get("type")
 
@@ -837,7 +862,10 @@ async def run_codex_agent(
         failed = e
         raise
     finally:
-        await pool.release(worker)
+        if execution_home:
+            await pool.safe_disconnect(worker)
+            execution_home.cleanup()
+        await pool.release(borrowed_worker)
         if observer:
             if failed is not None:
                 await observer.record_error(str(failed))

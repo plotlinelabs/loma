@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { RiDownloadLine, RiSendPlaneLine } from "@remixicon/react";
+import GoogleSkillSourcePanel from "./GoogleSkillSourcePanel";
 import SkillEmptyState from "./SkillEmptyState";
 
 const PROSE_CLASSES =
@@ -57,10 +58,13 @@ export default function SkillDetailPane({
   selectedFilePath: string | null;
   loading: boolean;
   createUrl: string;
-  onSkillUpdated: () => void;
+  onSkillUpdated: () => Promise<void>;
 }) {
   const [editorContent, setEditorContent] = useState("");
+  const [sourceRefreshFailed, setSourceRefreshFailed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [baseHash, setBaseHash] = useState<string | undefined>();
   const [chatInput, setChatInput] = useState("");
   const [activeTab, setActiveTab] = useState("viewer");
 
@@ -86,20 +90,42 @@ export default function SkillDetailPane({
   function handleTabChange(value: string) {
     if (value === "editor") {
       setEditorContent(fileContent);
+      setBaseHash(skill?.source?.hash);
+      setSaveError("");
     }
     setActiveTab(value);
+  }
+
+  async function refreshSkill() {
+    try {
+      await onSkillUpdated();
+      setSourceRefreshFailed(false);
+    } catch (e) {
+      setSourceRefreshFailed(true);
+      throw e;
+    }
   }
 
   async function handleSave() {
     if (!skill || saving) return;
     const slug = skill.slug || skill.name;
     setSaving(true);
+    setSaveError("");
     try {
-      await updateSkillFile(slug, filePath, editorContent);
-      onSkillUpdated();
+      await updateSkillFile(slug, filePath, editorContent, baseHash);
+    } catch (e) {
+      setSaveError((e as Error).message);
+      // A failed write can still leave a pending publication or conflict.
+      // Refresh metadata without resetting the editor or its original base hash.
+      if (skill.source) await refreshSkill().catch(() => {});
+      setSaving(false);
+      return;
+    }
+    try {
+      await refreshSkill();
       setActiveTab("viewer");
     } catch {
-      // silent
+      setSaveError("Save succeeded, but the latest skill could not be loaded. Your draft is preserved.");
     } finally {
       setSaving(false);
     }
@@ -144,6 +170,7 @@ export default function SkillDetailPane({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full">
+      {skill.source && <GoogleSkillSourcePanel source={skill.source} slug={slug} onUpdated={refreshSkill} statusUnknown={sourceRefreshFailed} disabled={saving} />}
       {/* Content area */}
       {isAssetFile ? (
         <ScrollArea className="flex-1 px-6 py-5">
@@ -202,7 +229,7 @@ export default function SkillDetailPane({
               </div>
             )}
             {isMarkdown ? (
-              <div className={PROSE_CLASSES}>
+              <div className={cn(PROSE_CLASSES, skill.source && "[&_p]:whitespace-pre-line")}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripFrontmatter(fileContent)}</ReactMarkdown>
               </div>
             ) : (
@@ -214,10 +241,16 @@ export default function SkillDetailPane({
 
           <TabsContent value="editor" className="flex-1 overflow-y-auto px-5 py-4 m-0">
             <div className="space-y-3">
+              {saveError && <div role="alert" className="text-sm text-destructive space-y-2"><p>{saveError}</p>
+                {skill.source && <><p>Your draft is still below. Sync now to load the latest source, then compare it here before saving.</p>
+                <details><summary>Latest published instructions</summary><pre className="text-xs whitespace-pre-wrap">{fileContent}</pre></details>
+                <Button variant="outline" size="sm" onClick={() => { setBaseHash(skill.source?.hash); setSaveError(""); }}>Use latest source as my edit base</Button></>}
+              </div>}
+              {skill.source && filePath === "SKILL.md" && <p className="text-xs text-muted-foreground">Saving updates the Google Doc. Keep the metadata header unchanged.</p>}
               {!isSystemSkill && (
                 <div className="flex justify-end">
                   <Button size="sm" onClick={handleSave} disabled={saving}>
-                    {saving ? "Saving..." : "Save"}
+                    {saving ? "Saving..." : skill.source && filePath === "SKILL.md" ? "Save to Google Docs" : "Save"}
                   </Button>
                 </div>
               )}

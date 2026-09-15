@@ -3,6 +3,7 @@ import logging
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from config.app_config import OBSERVABILITY_DB_NAME
+from config.recall import recall_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,10 @@ async def init_observability():
 
     _client = AsyncIOMotorClient(uri)
     _db = _client[OBSERVABILITY_DB_NAME]
+
+    if recall_enabled():
+        from api.recall_controls import ensure_control_indexes
+        await ensure_control_indexes(_db)
 
     # Create indexes
     await _db.conversations.create_index([("started_at", -1)])

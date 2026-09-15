@@ -79,7 +79,12 @@ async def refresh_loma_skill_index_from_db() -> None:
             set_loma_skill_index_cache("No Loma skills are configured yet.")
             return
 
-        set_loma_skill_index_cache(await skill_index_text(db))
+        from api.skill_service import skill_actor
+        token = skill_actor.set(None)
+        try:
+            set_loma_skill_index_cache(await skill_index_text(db))
+        finally:
+            skill_actor.reset(token)
         logger.info("Loaded Loma skill index into prompt cache")
     except Exception:
         logger.exception("Failed to load Loma skill index from MongoDB")
@@ -123,6 +128,8 @@ Loma skills are DB-backed company playbooks and references stored in MongoDB. Us
 Do not use the built-in `Skill` tool for Loma DB-backed skills. Search or read the relevant Loma skill before starting work when the user asks for a domain-specific workflow, playbook, runbook, review, implementation, support investigation, or company procedure. When the user asks to print, inspect, or load an entire skill, use `dump --slug` instead of repeatedly calling `file`.
 
 Only update skills when the user explicitly asks you to change company playbooks or skills. For write commands, use the authenticated user's `--user-email` and `--auth-token` values when they are provided in the current message.
+
+Google Docs-linked skills are optional. To discover/read linked skills, pass the authenticated user's --user-email and --auth-token to loma_skills (including list/search/get/dump/file). Private skills are deliberately absent from this shared index. For linked instruction edits, use update-file --base-hash HASH from the last get response; never edit the local copy directly. A conflict requires rereading and revising, not blind retries.
 
 Available skill index:
 {_loma_skill_index_cache}
