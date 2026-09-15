@@ -201,7 +201,8 @@ async def test_native_provider_failure_not_retried(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not NATIVE, reason='Native Codex binary is required (synthetic provider only)')
-async def test_native_cli_through_real_worker_process_and_supervisor(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_files", [False, True])
+async def test_native_cli_through_real_worker_process_and_supervisor(tmp_path, monkeypatch, with_files):
     import ssl
     import sys
     from aiohttp.test_utils import TestClient, TestServer
@@ -211,7 +212,7 @@ async def test_native_cli_through_real_worker_process_and_supervisor(tmp_path, m
     # Build an explicit worker package allowlist, not the backend source tree.
     package = tmp_path / 'image' / 'isolation'
     package.mkdir(parents=True)
-    modules = ('__init__.py', 'protocol.py', 'model_bridge.py', 'codex_worker.py', 'worker_entry.py')
+    modules = ('__init__.py', 'protocol.py', 'model_bridge.py', 'codex_worker.py', 'worker_entry.py', 'workspace_tools.py', 'workspace.py', 'artifacts.py')
     for module in modules:
         shutil.copyfile(Path(__file__).parents[1] / 'isolation' / module, package / module)
     script = tmp_path / 'image' / 'launch.py'
@@ -237,20 +238,48 @@ asyncio.run(main())
     app.router.add_get('/v1/run', host.run)
     client = TestClient(TestServer(app))
     await client.start_server()
+    requests = []
     async def provider(request):
-        return web.Response(body=sse(reply_events('Real native worker reply')), content_type='text/event-stream')
+        data = await request.json()
+        requests.append(data)
+        if with_files and len(requests) <= 2:
+            args = ({'command': 'printf "native-generated" > report.txt'} if len(requests) == 1 else {'path': 'report.txt'})
+            item = {'id': 'fc_' + str(len(requests)), 'type': 'function_call', 'call_id': 'call_' + str(len(requests)),
+                    'name': 'gateway_' + str(len(requests) - 1), 'arguments': json.dumps(args)}
+            events = [{'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+                      {'type': 'response.completed', 'response': {'id': 'resp_' + str(len(requests)), 'status': 'completed', 'output': [item]}}]
+        else:
+            events = reply_events('Real native worker reply')
+        return web.Response(body=sse(events), content_type='text/event-stream')
     relay, server, session, callbacks = await fixture(provider)
     relay.grant = replace(grant(), model='gpt-5.4', native_codex=True)
+    from isolation.artifacts import ArtifactScope
+    from isolation.gateway import ToolGateway, FILE_SCHEMAS
+    from isolation.catalog import CATALOG
+    authority = replace(AUTH, allowed_tools=AUTH.allowed_tools | frozenset(FILE_SCHEMAS))
+    relay.authority = authority
+    scope = ArtifactScope(tmp_path / 'artifacts', authority, 'conversation')
+    file_events = []
+    async def committed(meta): file_events.append(meta)
+    gateway = ToolGateway(authority, authorize=AsyncMock(return_value=True), audit=AsyncMock(),
+                          artifacts=scope, models=relay, on_artifact=committed)
+    tools = [t for t in CATALOG if t['name'] in ('workspace.exec', 'workspace.publish')] if with_files else []
     try:
         output = [chunk async for chunk in stream_worker(session=Transport(client),
             url='https://worker.example.test', token=TOKEN, tls=ssl.create_default_context(),
-            authority=AUTH, input={'runtime': 'codex', 'model': 'gpt-5.4',
-                                   'instructions': 'Answer briefly.', 'prompt': 'hello', 'tools': []},
-            authorize=AsyncMock(return_value=True), execute_tool=relay, max_seconds=30)]
+            authority=authority, input={'runtime': 'codex', 'model': 'gpt-5.4',
+                                   'instructions': 'Answer briefly.', 'prompt': 'hello', 'tools': tools},
+            authorize=AsyncMock(return_value=True), execute_tool=gateway, max_seconds=30)]
         assert ''.join(output) == 'Real native worker reply'
-        assert len(relay.session.requests) == 1
+        assert len(relay.session.requests) == (3 if with_files else 1)
+        if with_files:
+            import base64
+            assert len(file_events) == 1
+            assert base64.b64decode(scope.read(file_events[0]['artifact_id'], 0)['data']) == b'native-generated'
+            assert file_events[0]['name'] == 'report.txt'
         assert list(root.iterdir()) == []  # ephemeral home removed on success
     finally:
+        scope.close()
         await client.close()
         await close(relay, server, session)
     assert not host.active

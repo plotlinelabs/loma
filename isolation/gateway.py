@@ -11,6 +11,7 @@ from isolation.protocol import RunAuthority
 
 FILE_SCHEMAS = {
     'artifacts.list': set(),
+    'artifacts.describe': {'artifact_id'},
     'artifacts.read': {'artifact_id', 'offset'},
     'artifacts.begin': {'name', 'size'},
     'artifacts.write': {'artifact_id', 'offset', 'data'},
@@ -24,7 +25,7 @@ class GatewayDenied(ValueError):
 
 
 class ToolGateway:
-    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None, models=None):
+    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None, models=None, knowledge=None, on_artifact=None):
         if artifacts.authority != authority or not callable(authorize) or not callable(audit):
             raise ValueError('A matching server-owned artifact scope and policy are required')
         self.authority, self.authorize, self.audit = authority, authorize, audit
@@ -33,6 +34,12 @@ class ToolGateway:
         if models is not None and models.authority != authority:
             raise ValueError('A matching server-owned model relay is required')
         self.models = models
+        if knowledge is not None and knowledge.authority != authority:
+            raise ValueError('A matching server-owned knowledge scope is required')
+        self.knowledge = knowledge
+        if on_artifact is not None and not callable(on_artifact):
+            raise ValueError('A trusted artifact registration callback is required')
+        self.on_artifact = on_artifact
         self.lock = asyncio.Lock()
         self.calls = 0
 
@@ -51,6 +58,19 @@ class ToolGateway:
                 if self.models is None:
                     raise GatewayDenied('Model relay is unavailable')
                 return await self.models(authority, tool, arguments)
+            from isolation.knowledge import SCHEMAS as KNOWLEDGE_SCHEMAS, validate as validate_knowledge
+            if tool in KNOWLEDGE_SCHEMAS:
+                if self.knowledge is None:
+                    raise GatewayDenied('Knowledge gateway is unavailable')
+                validate_knowledge(tool, arguments)
+                await self.audit(authority, {'tool': tool, 'stage': 'requested'})
+                if not await self.authorize(authority):
+                    raise GatewayDenied('Run access is no longer valid')
+                result = await self.knowledge(authority, tool, arguments)
+                if not await self.authorize(authority):
+                    raise GatewayDenied('Run access is no longer valid')
+                await self.audit(authority, {'tool': tool, 'stage': 'completed'})
+                return result
             schema = FILE_SCHEMAS.get(tool, READ_SCHEMAS.get(tool))
             if schema is None or not isinstance(arguments, dict) or set(arguments) != schema:
                 raise GatewayDenied('Unknown tool or invalid arguments')
@@ -68,6 +88,8 @@ class ToolGateway:
             try:
                 if tool == 'artifacts.list':
                     result = {'files': self.artifacts.manifest()}
+                elif tool == 'artifacts.describe':
+                    result = self.artifacts.metadata(arguments['artifact_id'])
                 elif tool == 'artifacts.read':
                     result = self.artifacts.read(arguments['artifact_id'], arguments['offset'])
                 elif tool == 'artifacts.begin':
@@ -84,6 +106,12 @@ class ToolGateway:
             # Never return data fetched while the account was being revoked.
             if not await self.authorize(authority):
                 raise GatewayDenied('Run access is no longer valid')
+            if tool == 'artifacts.commit' and self.on_artifact is not None:
+                # Receipt comes from committed/checksummed broker bytes, not a
+                # worker-supplied URL, path, owner or claimed output event.
+                await self.on_artifact(dict(result))
+                if not await self.authorize(authority):
+                    raise GatewayDenied('Run access is no longer valid')
             await self.audit(authority, {'tool': tool, 'stage': 'completed'})
             return result
 

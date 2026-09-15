@@ -425,3 +425,58 @@ The GitHub credential available for this continuation reports `repo, user`, not
 `workflow`. Native-CLI CI installation still needs a workflow-capable maintainer.
 The local environment has neither Docker nor a Docker socket, so dedicated-host
 image builds and hostile-worker/gVisor certification remain unperformed.
+
+## Scoped knowledge and worker file delivery
+
+The latest continuation connects additional runtime-facing components. It does
+**not** route existing chat, schedules, recovery or utility calls to remote workers.
+The migration and dedicated-host gates remain open.
+
+- `KnowledgeGateway` binds an authenticated run to its owned conversation and
+  pins the user ID, project and agent scope. `search_history` and `fetch_history`
+  reuse the HTTP endpoints' internal cores, live ownership/exclusion checks,
+  sanitizer, cursor binding and durable rate limits. No recall capability or
+  issuer credential enters the worker. Scope changes terminate access.
+- Skill list/search/get/text-file/asset adapters reuse `skill_service` under the
+  current owner's ContextVar, with explicit personal-scope checks and disabled/
+  suspended checks. Internal source metadata, credentials and backend paths are
+  not returned. Binary assets use bounded, checksum-checked, no-symlink reads
+  and enter the run's artifact broker. `workspace.import` stages their bytes.
+- The fixed `catalog` is filtered by server grants and does not grant permission
+  itself. Tools not in it or not in a run's scope remain unavailable.
+- `WorkspaceTools` gives all three native adapters worker-local text editing,
+  listing, reading, commands and explicit file publication. Commands run only
+  inside the disposable worker, with a minimal environment, a 120-second limit,
+  bounded output and process-group cleanup. This is not a new backend shell and
+  is not itself a sandbox. gVisor remains the mandatory isolation boundary.
+  Native worker images must be rebuilt to include these allowlisted modules.
+- The worker entrypoint stages authorized attachments before the first turn
+  whenever workspace tools are present. Newly generated files are uploaded as
+  bytes; `ToolGateway.on_artifact` receives only a validated commit receipt.
+- `DownloadRegistry` persists owner/conversation-bound metadata before emitting
+  the dashboard's existing `file_artifact` event. `/api/files/worker-<id>` now
+  serves those registered files after live account/conversation checks, including
+  after backend recreation. It shares the legacy download handler's pinned-fd,
+  Range, no-store, nosniff and sandbox-CSP protections. Text naming a backend path
+  or URL cannot register a download.
+- Configure `LOMA_WORKER_ARTIFACT_DIR` to a backend-only persistent volume. There
+  is no ephemeral default and it must never be mounted into workers. Downloads
+  expire after 30 days. Run `python -m isolation.retention` daily in the trusted
+  backend environment to remove old blobs/metadata and seven-day-old unfinished
+  uploads. It ignores symlinks, unknown names and nonregular files. Operator
+  volume and cleanup scheduling are not deployed by this change.
+- Native clients can close HTTP immediately after a terminal SSE event. If the
+  backend has already drained and settled the stream, a failed HTTP EOF trailer
+  no longer poisons the next tool turn. Earlier disconnects still fail closed.
+
+Verification includes an actual native Codex process through the supervisor
+transport executing a synthetic file command and publishing its bytes. Docker
+is substituted in that test: it is not containment proof. Real throwaway Mongo
+and HTTP tests cover private skill/asset and history denials, mid-read revocation,
+artifact persistence, expired/revoked download access and Range/CSP behavior.
+
+Remaining: subscription-account selection/refresh and pricing/reporting wiring;
+other connector/action adapters; complete native feature parity; ingress
+attachment selection and full authenticated prompt/history assembly; actual
+interactive/scheduled/recovery/utility/prewarm cutover; deployment configuration,
+pinned native CI and dedicated-host hostile-worker/live-provider certification.

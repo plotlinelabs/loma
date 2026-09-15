@@ -9,7 +9,7 @@ import asyncio
 import base64
 import binascii
 
-from aiohttp import web
+from aiohttp import ClientConnectionError, web
 
 from isolation.protocol import MAX_FRAME
 
@@ -87,7 +87,15 @@ class ModelBridge:
                     if data:
                         raise RuntimeError('Invalid model end marker')
                     stream_id = None  # backend has already closed the stream
-                    await response.write_eof()
+                    try:
+                        await response.write_eof()
+                    except (ConnectionResetError, ClientConnectionError):
+                        # Native clients may close HTTP after the terminal SSE
+                        # event and immediately start their next tool turn.
+                        # The backend has already drained/settled this stream;
+                        # failure to write the HTTP trailer is not a lost model
+                        # outcome. Earlier disconnects still poison the bridge.
+                        pass
                     return response
                 if not data:
                     raise RuntimeError('Empty model chunk')

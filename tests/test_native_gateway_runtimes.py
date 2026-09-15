@@ -167,7 +167,7 @@ async def test_native_cli_through_real_worker_process(tmp_path, monkeypatch, bin
     package = tmp_path / 'image' / 'isolation'
     package.mkdir(parents=True)
     modules = ('__init__.py', 'protocol.py', 'model_bridge.py', 'codex_worker.py',
-               'claude_worker.py', 'opencode_worker.py', 'mcp_bridge.py', 'worker_entry.py')
+               'claude_worker.py', 'opencode_worker.py', 'mcp_bridge.py', 'worker_entry.py', 'workspace_tools.py', 'workspace.py', 'artifacts.py')
     for module in modules:
         shutil.copyfile(Path(__file__).parents[1] / 'isolation' / module, package / module)
     script = tmp_path / 'image' / 'launch.py'

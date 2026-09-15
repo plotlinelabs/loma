@@ -73,6 +73,7 @@ class ArtifactScope:
         finally:
             os.close(root_fd)
         self.authority = authority
+        self.conversation_id = conversation_id
         self.inputs = input_ids
         self.pending = {}
         self.published = {}
@@ -175,6 +176,16 @@ class ArtifactScope:
             data = handle.read(CHUNK)
         return {'data': base64.b64encode(data).decode(), 'offset': offset,
                 'next_offset': offset + len(data), 'eof': offset + len(data) == meta['size']}
+
+    def open_committed(self, artifact_id):
+        """Trusted download path: pin and check the same descriptor we serve."""
+        meta = self.metadata(artifact_id)
+        fd = self._open(identifier(artifact_id) + '.blob', os.O_RDONLY)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != meta['size']:
+            os.close(fd)
+            raise ValueError('Artifact is unavailable')
+        return fd, meta
 
     def ingest(self, filename, data):
         """Trusted upload ingestion, bytes only. Never follows an upload's path."""

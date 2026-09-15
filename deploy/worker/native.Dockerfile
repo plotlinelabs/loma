@@ -18,7 +18,8 @@ RUN ln -s /opt/native/node_modules/.bin/claude /usr/local/bin/claude \
 WORKDIR /opt/worker
 COPY isolation/__init__.py isolation/protocol.py isolation/model_bridge.py \
      isolation/codex_worker.py isolation/claude_worker.py isolation/opencode_worker.py \
-     isolation/mcp_bridge.py isolation/worker_entry.py /opt/worker/isolation/
+     isolation/mcp_bridge.py isolation/worker_entry.py isolation/workspace_tools.py \
+     isolation/workspace.py isolation/artifacts.py /opt/worker/isolation/
 ENV PYTHONPATH=/opt/worker PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/workspace
 USER 65532:65532
 WORKDIR /workspace

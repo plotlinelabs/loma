@@ -99,6 +99,17 @@ async def handle_serve_file(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "Authentication required"}, status=401)
     file_id = request.match_info["file_id"]
     entry = _served_files.get(file_id)
+    if file_id.startswith("worker-"):
+        from isolation.downloads import open_download
+        from observability.db import get_db
+        try:
+            db = get_db()
+            if db is None:
+                raise ValueError("Artifact store unavailable")
+            fd, entry = await open_download(db, user_email, file_id)
+        except (ValueError, OSError):
+            return web.json_response({"error": "File not found"}, status=404)
+        return await _stream_registered_file(request, fd, entry)
     # Do not disclose whether another user's file exists. No admin/share bypass
     # in containment: sharing requires a separate, explicit artifact policy.
     if not entry or entry.get("owner_email") != user_email:
@@ -119,6 +130,11 @@ async def handle_serve_file(request: web.Request) -> web.StreamResponse:
     except OSError:
         return web.json_response({"error": "File expired"}, status=410)
 
+    return await _stream_registered_file(request, fd, entry)
+
+
+async def _stream_registered_file(request, fd, entry):
+    """Serve a checked descriptor, shared by legacy and durable worker files."""
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode):
         os.close(fd)

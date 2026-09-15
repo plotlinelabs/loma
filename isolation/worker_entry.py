@@ -10,6 +10,7 @@ from pathlib import Path
 import tempfile
 
 from isolation.codex_worker import CodexRuntime
+from isolation.workspace_tools import WorkspaceTools, TOOLS as WORKSPACE_TOOLS
 from isolation.protocol import MAX_INPUT, ProtocolError, decode, response_frame, worker_frame
 
 
@@ -82,12 +83,20 @@ async def run(reader, write, *, root=Path('/workspace'), executable=None):
         # Fixed image locations. The optional executable override is for trusted
         # local tests, never a wire field or a fallback to backend execution.
         executable = executable or '/usr/local/bin/' + value['runtime']
-        runtime = runtime_class(Path(work) / 'runtime', broker.rpc, broker.emit, executable=executable)
+        allowed = {tool['name'] for tool in value['tools']}
+        files = WorkspaceTools(Path(work) / 'files', broker.rpc, allowed)
+        runtime = runtime_class(Path(work) / 'runtime', files, broker.emit, executable=executable)
         try:
             await runtime.start(value['model'], value['instructions'], value['tools'])
+            if allowed & WORKSPACE_TOOLS:
+                manifest = await broker.rpc('artifacts.list', {})
+                await files.workspace.stage(manifest['files'])
             await runtime.turn(value['prompt'])
         finally:
-            await runtime.close()
+            try:
+                await runtime.close()
+            finally:
+                files.close()
     await broker.frame({'type': 'done'})
 
 

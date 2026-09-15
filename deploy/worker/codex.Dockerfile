@@ -14,7 +14,8 @@ COPY --from=native /out/codex /usr/local/bin/codex
 WORKDIR /opt/worker
 # Explicit source allowlist: no app, pools, tools, .env, accounts, config or DB.
 COPY isolation/__init__.py isolation/protocol.py isolation/model_bridge.py \
-     isolation/codex_worker.py isolation/worker_entry.py /opt/worker/isolation/
+     isolation/codex_worker.py isolation/worker_entry.py isolation/workspace_tools.py \
+     isolation/workspace.py isolation/artifacts.py /opt/worker/isolation/
 ENV PYTHONPATH=/opt/worker PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/workspace
 USER 65532:65532
 WORKDIR /workspace
