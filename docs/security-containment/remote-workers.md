@@ -480,3 +480,58 @@ other connector/action adapters; complete native feature parity; ingress
 attachment selection and full authenticated prompt/history assembly; actual
 interactive/scheduled/recovery/utility/prewarm cutover; deployment configuration,
 pinned native CI and dedicated-host hostile-worker/live-provider certification.
+
+## Integrated backend run assembly
+
+`isolation.run.stream_run` now composes the native transport, model relay, durable
+budget, scoped knowledge, attachment broker, download registry and live run policy.
+It is a backend integration API, **not an entrypoint cutover or subscription-account
+implementation**. Existing chat and scheduled/recovery entrypoints remain unchanged.
+
+- The caller supplies an authenticated owner/conversation, a reviewed model grant
+  and budget, explicit model-visible tools, current policy callback, cancellation
+  event, verified TLS transport and private artifact store. Unknown tools, runtime
+  mismatches and contracts below the native 8,192-token output limit fail before
+  dispatch. No environment-derived account, endpoint or local runtime fallback.
+- `ConversationContext` loads only an owned, running dashboard/task conversation.
+  It pins user identity, project and agent scope and rechecks them on output and
+  tool/model access. Deleted, transferred, interrupted or scope-changed runs stop.
+  Caller policy must additionally check current account and tool grants.
+- History comes from the existing visible-message sanitizer, not legacy prompt
+  envelopes or native HOME archives. The already-recorded current message is
+  removed once; bounded recent history is retained in chronological order. The
+  model receives coverage counts for omitted/redacted/excluded messages.
+- Attachments are typed filename/bytes pairs accepted by authenticated ingress.
+  Reusing an output requires a matching, unexpired owner/conversation download
+  receipt plus immutable metadata. No backend path, arbitrary URL or guessed ID
+  becomes an input grant. Reused and new inputs share the run's file/byte quota.
+- The model-visible catalog and low-level artifact permissions are derived
+  separately. Workspace reads do not authorize uploads. `allowed_skills` is
+  enforced in `KnowledgeGateway`, including listing and direct get/file/asset
+  calls; an empty set denies all skills. It is not just a prompt instruction.
+- File events enter a bounded output queue only after durable registration.
+  Generator close, cancellation and transport failure stop the producer and
+  close model streams, HTTP sessions, budget admission and artifact descriptors.
+  Final usage holds survive failure. Callers must close abandoned generators.
+- Actual integration exposed two native timing races hidden by fast fake ledgers:
+  a follow-up can begin after terminal SSE but before EOF settlement, and native
+  completion can arrive while the final broker reply is pending. The model bridge
+  now allows one bounded waiting request, never overlapping upstream calls, and
+  the worker drains its final exchange before emitting completion. Failed
+  settlement denies the waiting request; cancellation still cleans up immediately.
+
+`tests/test_worker_run.py` exercises live throwaway Mongo and an actual Codex
+process through the supervisor transport with local synthetic provider responses:
+owned history, staged input, workspace command, published download and three
+provider-side usage receipts settled exactly once. Additional tests cover scopes,
+read-only grants, skill restrictions, cancellation, generator close, settlement
+failure and cleanup. Docker is substituted, so these are **not** gVisor or live
+subscription-provider certification. Run with `LOMA_LOCAL_E2E=1`; the native test
+also requires the pinned Codex executable. It is included in the explicit native
+suite, not silently enabled against production accounts.
+
+Remaining scope: subscription-account selection/refresh and reporting; remaining
+connector/action adapters and native feature parity; authenticated production
+prompt/attachment callers; interactive/scheduled/recovery/utility/prewarm routing;
+reviewed deployment configuration; workflow-capable native CI setup; dedicated-host
+image/hostile-worker and live-provider certification. PR #191 remains draft.

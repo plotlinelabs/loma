@@ -26,6 +26,9 @@ class ModelBridge:
         self.runner = None
         self.origin = None
         self.busy = False
+        self.idle = asyncio.Event()
+        self.idle.set()
+        self.waiter = None
         self.failed = False
         self.tasks = set()
 
@@ -54,8 +57,24 @@ class ModelBridge:
         if self.failed:
             raise web.HTTPBadRequest(text="Model gateway failed; start a new authorized run")
         if self.busy:
-            raise web.HTTPConflict(text='Only one model request may be active')
+            # Native clients start their next tool turn after the terminal SSE
+            # event, before the backend finishes durable EOF settlement. Allow
+            # one bounded waiter, never overlapping provider calls or retries.
+            if self.waiter is not None:
+                raise web.HTTPConflict(text='Only one model request may wait')
+            self.waiter = asyncio.current_task()
+            try:
+                await asyncio.wait_for(self.idle.wait(), 10)
+            except TimeoutError:
+                raise web.HTTPConflict(text='Previous model request has not settled') from None
+            finally:
+                self.waiter = None
+            if self.failed:
+                raise web.HTTPBadRequest(text='Model gateway failed; start a new authorized run')
+            if self.busy:
+                raise web.HTTPConflict(text='Only one model request may be active')
         self.busy = True
+        self.idle.clear()
         task = asyncio.current_task()
         self.tasks.add(task)
         stream_id = None
@@ -126,11 +145,21 @@ class ModelBridge:
                 pass
             finally:
                 self.busy = False
+                self.idle.set()
                 self.tasks.discard(task)
 
+    async def drain(self):
+        """Finish the final broker exchange before emitting worker completion."""
+        await asyncio.wait_for(self.idle.wait(), 10)
+        if self.failed or self.waiter is not None:
+            raise RuntimeError('Model exchange did not settle')
+
     async def close(self):
+        self.failed = True
+        self.idle.set()
         current = asyncio.current_task()
-        tasks = [t for t in self.tasks if t != current]
+        active = self.tasks | ({self.waiter} if self.waiter else set())
+        tasks = [t for t in active if t != current]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

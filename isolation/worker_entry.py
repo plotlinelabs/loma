@@ -92,6 +92,10 @@ async def run(reader, write, *, root=Path('/workspace'), executable=None):
                 manifest = await broker.rpc('artifacts.list', {})
                 await files.workspace.stage(manifest['files'])
             await runtime.turn(value['prompt'])
+            # Native completion can precede backend EOF/usage settlement. Do
+            # not cancel an in-flight broker reply or emit done with a pending
+            # request. Cancellation still takes the immediate finally path.
+            await runtime.bridge.drain()
         finally:
             try:
                 await runtime.close()

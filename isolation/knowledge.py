@@ -57,11 +57,15 @@ def validate(tool, arguments):
 
 
 class KnowledgeGateway:
-    def __init__(self, db, authority, conversation_id, *, artifacts=None):
+    def __init__(self, db, authority, conversation_id, *, artifacts=None, allowed_skills=None):
         if not isinstance(conversation_id, str) or not 1 <= len(conversation_id) <= 128:
             raise ValueError('An authorized conversation is required')
         self.db, self.authority, self.conversation_id = db, authority, conversation_id
         self.identity = None
+        if allowed_skills is not None and (not isinstance(allowed_skills, (set, frozenset))
+                or any(not isinstance(s, str) for s in allowed_skills)):
+            raise ValueError('Invalid skill restriction')
+        self.allowed_skills = None if allowed_skills is None else frozenset(allowed_skills)
         if artifacts is not None and (artifacts.authority != authority or artifacts.conversation_id != conversation_id):
             raise ValueError('A matching artifact scope is required')
         self.artifacts = artifacts
@@ -110,6 +114,8 @@ class KnowledgeGateway:
         return identity, {**query, '_id': user['_id'], 'recall_excluded': {'$ne': True}}, user
 
     async def _skill(self, slug):
+        if self.allowed_skills is not None and slug not in self.allowed_skills:
+            raise GatewayDenied('Skill not found')
         # Recheck even ordinary skills: an explicit personal scope is private,
         # regardless of the older shared CLI's backward-compatible defaults.
         row = await self.db.skills.find_one({'slug': slug, 'enabled': {'$ne': False}})
