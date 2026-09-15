@@ -1066,6 +1066,9 @@ async def handle_chat(request: web.Request) -> web.Response:
                 if conversation_context else agent_block
             )
 
+    from api.recall_session import launch_recall
+    recall_session = await launch_recall(request, observer.conversation_id if observer else None, user_email)
+
     response = web.StreamResponse(
         status=200,
         reason="OK",
@@ -1115,6 +1118,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             user_email=user_email,
             selected_model=selected_model,
             tool_config=tool_config,
+            recall_session=recall_session,
         ):
             # If the client already disconnected, keep consuming events so the
             # agent runs to completion (observability still records everything)
@@ -2118,6 +2122,12 @@ def setup_api_routes(app: web.Application):
             "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
         })
+
+    # Recall deliberately does not reuse the dashboard conversation ACL.
+    from api.recall_search import handle_search_history
+    app.router.add_post("/api/recall/search", handle_search_history)
+    from api.recall_routes import handle_fetch_history
+    app.router.add_post("/api/recall/fetch", handle_fetch_history)
 
     # API routes
     app.router.add_get("/api/conversations", handle_list_conversations)
