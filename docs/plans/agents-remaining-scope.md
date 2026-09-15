@@ -17,6 +17,8 @@ Implemented in this branch:
   permission details, run history, desktop/mobile review dialogs and setup templates.
 - Separate jobs/runs, checkpointed decisions, 120-second leases, one active run per job,
   shared model-call limits, delayed wake-ups and cancelled child propagation.
+- Shared per-run USD model budgets, atomic conservative reservations, SDK usage
+  accounting and persistent unknown-charge holds across retries and delegates.
 - Configurable run deadlines (1 minute to 30 days; default 24 hours), inherited by
   delegates and capped approval expiry. Waiting, sleeping and retries do not reset time.
 - Configurable text-planner transport retries (0 to 3; default 2), using 30/60/120-second
@@ -35,7 +37,8 @@ Important limitations requiring follow-up before broad rollout:
   operating-system authority is required against a compromised legacy runtime.
 - Planner calls use a separately configured Anthropic model. No live model or Gmail
   delivery was exercised in QA; the planner and delivery adapter were stubbed.
-- Model-call/output limits are not dollar budgets or full token accounting.
+- USD model budgets use configured operator price ceilings, not live billing rates.
+  They exclude connector charges and require pricing configuration before provider calls.
   Connector calls with unknown outcomes are never automatically retried.
 - Event keys provide deduplicated enqueue via the signed API; external ticket/webhook
   subscription wiring and a general event outbox are not implemented.
@@ -51,7 +54,7 @@ Important limitations requiring follow-up before broad rollout:
 
 Default: off. Set `LOMA_BOUNDED_WORK_ENABLED=true` in the backend, a matching
 `LOMA_WORK_GATEWAY_SECRET` (at least 32 random characters) in backend/dashboard,
-`LOMA_WORK_MODEL`, `ANTHROPIC_API_KEY`, and enable the scheduler only after review.
+`LOMA_WORK_MODEL`, `ANTHROPIC_API_KEY`, `LOMA_WORK_PRICING_JSON`, and enable the scheduler only after review.
 Never put the gateway secret in a `NEXT_PUBLIC_*` variable. The planner receives only
 job context, permitted private notes and prior results; it has no arbitrary tool API.
 The broker mints the existing personal CLI token only at dispatch, not in model context.
@@ -81,11 +84,46 @@ Invalid model output, policy errors and authentication failures are not retried.
 Every attempted call, including a failed one, consumes the root call budget. Retries
 are capped per run and require both remaining calls and enough time before the deadline.
 Parent and child calls share the existing root budget. Waiting for retry has no model
-process. Provider charges for failed calls are unknown; this is not a currency cap.
+process. Provider charges for failed calls are unknown; their full USD reservation stays held.
 
 UI: creation exposes deadline and retry limits with conservative defaults; Work cards
 show the saved limits, and run details show deadline, attempts and retry history. Open
 run details refresh with the overview instead of displaying a stale running state.
+
+## USD model budgets and usage accounting
+
+New bounded jobs default to **$1 per root run**, configurable from $0.01 to $100.
+Older bounded job/run snapshots without the field also use $1; legacy unrestricted
+Flows are unchanged. Every recurring invocation has its own budget. This is not a
+monthly account cap. Safe tests consume model budget even though connectors are off.
+
+The root holds an atomic integer-nanodollar ledger shared with all delegates. Before
+any provider call, reserve 131,072 input tokens and all 2,048 possible output tokens
+at the configured price ceilings. Requests are limited to 100,000 UTF-8 bytes across
+the system prompt and serialized context. No prompt caching, tools or thinking mode
+are requested. Conservative reservation can stop a small job before its actual spend
+reaches the cap. No provider request is made without budget or configured pricing.
+
+Set `LOMA_WORK_PRICING_JSON` to a JSON object keyed by the **exact** model identifier,
+with positive decimal `input_usd_per_million` and `output_usd_per_million` strings.
+Administrators must supply and maintain ceilings covering that model's provider rate;
+there are deliberately no hardcoded market prices. Each reservation records its rates.
+This bounds **calculated model cost**, not the provider's invoice or connector fees.
+A fixed Anthropic API origin avoids environment-driven alternate provider endpoints.
+
+Only SDK-reported usage settles a reservation, atomically and once. Model-generated
+JSON and owner reports cannot release funds. Malformed model output still costs money
+and is accounted before JSON parsing. Timeouts, crashes and missing/unrecognized usage
+retain the maximum reservation, including across retries/restarts. Usage exceeding the
+reserved input/output ceiling blocks further root spending. Terminal cancellation does
+not refund an unresolved charge; a late valid usage response can settle without reviving
+work. Approval and email receipts are independent of the model-cost ledger.
+
+UI: setup shows the USD limit and per-invocation semantics; work cards show the saved
+cap; run details separate recorded cost and reservations, reported input/output tokens,
+and shared parent/delegate totals. Reserved funds are not labeled confirmed spend.
+Live provider billing verification remains a release gate. Automated reconciliation of
+held model charges is not implemented; they are never optimistically refunded.
 
 ## Unknown email investigation (manual, no retry authority)
 

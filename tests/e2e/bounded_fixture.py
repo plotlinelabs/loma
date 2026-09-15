@@ -22,7 +22,7 @@ async def main():
     if sys.argv[1] == 'seed':
         for collection in ('agent_work', 'agent_runs', 'agent_approvals', 'agent_notes'):
             await db[collection].delete_many({'owner': owner})
-        await db.flows.delete_many({'bounded_work_id': {'$exists': True}})
+        await db.flows.delete_many({'bounded_work_id': {'$type': 'string'}})
 
         await db.agent_identities.update_one({'agent_id': 'bounded-qa'}, {'$set': {
             'agent_id': 'bounded-qa', 'name': 'Invoice assistant QA', 'description': 'A local test agent',
@@ -31,7 +31,7 @@ async def main():
     elif sys.argv[1] == 'schedule':
         from unittest.mock import patch
         import scheduler.executor as executor
-        flow = await db.flows.find_one({'bounded_work_id': {'$exists': True}, 'status': 'active'})
+        flow = await db.flows.find_one({'bounded_work_id': {'$type': 'string'}, 'status': 'active'})
         assert flow is not None
         with patch.object(executor, 'get_db', return_value=db), patch('api.bounded_work_routes.enabled', return_value=True):
             await executor.execute_flow(flow['flow_id'])
@@ -83,6 +83,19 @@ async def main():
         await tick(db, planner, broker)
         planner.assert_not_called(); broker.assert_not_called()
         assert (await db.agent_runs.find_one({'run_id': run['run_id']}))['status'] == 'failed'
+    elif sys.argv[1] == 'costs':
+        from autonomy import core, costs
+        from types import SimpleNamespace
+        await tick(db, AsyncMock(), AsyncMock())
+        work = await db.agent_work.find_one({'owner': owner, 'parent_only': {'$ne': True}})
+        work['paused'] = False
+        run = await core.enqueue(db, work, 'cost-browser-fixture', dry_run=True)
+        rates = {'model': 'SIMULATED', 'input_nusd_per_token': 3000, 'output_nusd_per_token': 15000}
+        settled = await costs.reserve(db, run, rates)
+        await costs.settle(db, run, settled, SimpleNamespace(input_tokens=1000, output_tokens=100))
+        await costs.reserve(db, run, rates)
+        await db.agent_runs.update_one({'run_id': run['run_id']}, {'$set': {
+            'status': 'failed', 'calls_used': 2, 'result': 'Synthetic billing uncertainty. No provider call was made.'}})
     elif sys.argv[1] == 'verify':
         assert await db.agent_runs.count_documents({'owner': owner, 'status': 'done', 'dry_run': True}) == 1
         assert await db.agent_runs.count_documents({'owner': owner, 'status': 'done', 'dry_run': False}) == 1

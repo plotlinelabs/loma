@@ -136,13 +136,15 @@ async def create_work(db, owner, data):
     budget = data.get('max_steps', 10)
     if type(budget) is not int or not 1 <= budget <= MAX_STEPS:
         raise ValueError('Step budget must be between 1 and 30')
+    from autonomy.costs import validate_budget, DEFAULT_BUDGET_MICROUSD
+    cost_budget = validate_budget(data.get('max_cost_microusd', DEFAULT_BUDGET_MICROUSD))
     minutes, retries = validate_limits(data)
     work = {'work_id': ident(), 'owner': owner, 'agent_id': agent['agent_id'],
             'title': text(data.get('title'), 'Job title', 120),
             'instructions': text(data.get('instructions'), 'Instructions'),
             'success': text(data.get('success'), 'Expected result', 2000),
             'policy': policy, 'delegates': list(set(peers)), 'max_steps': budget,
-            'max_runtime_minutes': minutes, 'max_planner_retries': retries,
+            'max_runtime_minutes': minutes, 'max_planner_retries': retries, 'max_cost_microusd': cost_budget,
             'agent_snapshot': {'name': agent['name'], 'instructions': agent.get('identity_prompt', ''),
                                'version': str(agent.get('updated_at', ''))},
             'created_at': now(), 'paused': True, 'version': 1}

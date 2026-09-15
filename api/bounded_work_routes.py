@@ -16,7 +16,7 @@ from pymongo import ReturnDocument
 from api.auth_helpers import get_user_email, require_operator_or_above
 from api.agent_identity_routes import _serialize
 from observability.db import get_db
-from autonomy import core
+from autonomy import core, costs
 from autonomy.worker import tick, planner_ready
 
 logger = logging.getLogger(__name__)
@@ -73,12 +73,20 @@ async def handle(request):
                 job['next_run_at'] = scheduled.get('next_run_at')
                 job['schedule_error'] = scheduled.get('last_error')
             runs = await db.agent_runs.find({'owner': owner}).sort('created_at', -1).limit(100).to_list(100)
+            roots = {r['run_id']: r for r in runs if not r.get('parent_id')}
+            for run in runs:
+                if run.get('parent_id'):
+                    root = roots.get(run['root_id']) or await db.agent_runs.find_one({'run_id': run['root_id'], 'owner': owner})
+                    if root:
+                        run['shared_cost'] = {k: root.get(k, 0) for k in ('cost_committed_nusd', 'cost_recorded_nusd', 'input_tokens_used', 'output_tokens_used')}
+                        run['shared_cost']['max_cost_microusd'] = root['snapshot'].get('max_cost_microusd', costs.DEFAULT_BUDGET_MICROUSD)
             attention = {'$or': [{'status': 'pending'}, {'status': 'uncertain', 'action': 'gmail.send',
                          'reconciliation.outcome': {'$nin': ['sent', 'not_sent']}}]}
             pending = await db.agent_approvals.find({'owner': owner, **attention}).sort('created_at', 1).limit(200).to_list(200)
             recent = await db.agent_approvals.find({'owner': owner, '$nor': [attention]}).sort('created_at', -1).limit(100).to_list(100)
             approvals = pending + recent
             return response({'work': work, 'runs': runs, 'approvals': approvals, 'model_ready': planner_ready(),
+                             'pricing_ready': costs.ready(),
                              'google_connected': bool(await db.oauth_tokens.find_one({'user_email': owner, 'provider': 'google'}, {'_id': 1})),
                              'worker_enabled': os.getenv('LOMA_ENABLE_SCHEDULER', 'true').lower() == 'true'})
         if route == 'work' and method == 'POST':

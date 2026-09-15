@@ -38,7 +38,7 @@ def planner_ready():
     return bool(os.getenv('LOMA_WORK_MODEL') and os.getenv('ANTHROPIC_API_KEY'))
 
 
-async def plan(context):
+async def plan(context, *, db=None, run=None):
     """Text-only Anthropic call. No agent SDK, MCP, shell or tool definitions.
 
     Fixed provider origin; neither jobs nor model output may supply a URL/key.
@@ -48,10 +48,16 @@ async def plan(context):
         raise ValueError('Ask an admin to configure LOMA_WORK_MODEL and ANTHROPIC_API_KEY')
     from anthropic import AsyncAnthropic, APIConnectionError, APIStatusError
     content = json.dumps(context, default=str)
-    if len(content) > 100000:
+    if len((content + PLANNER_RULES).encode('utf-8')) > 100000:
         raise ValueError('Work context is too large. Shorten notes or split this job.')
+    from autonomy import costs
+    if db is None or run is None:
+        raise ValueError('A run-scoped budget is required before calling the model')
+    rates = costs.pricing(os.environ['LOMA_WORK_MODEL'])
+    await current_authority(db, run)
+    entry = await costs.reserve(db, run, rates)
     try:
-        async with AsyncAnthropic(api_key=os.environ['ANTHROPIC_API_KEY'], max_retries=0, timeout=45) as client:
+        async with AsyncAnthropic(api_key=os.environ['ANTHROPIC_API_KEY'], base_url="https://api.anthropic.com", max_retries=0, timeout=45) as client:
             message = await client.messages.create(model=os.environ['LOMA_WORK_MODEL'], max_tokens=2048,
                 system=PLANNER_RULES, messages=[{'role': 'user', 'content': content}])
     except APIConnectionError:
@@ -60,6 +66,7 @@ async def plan(context):
         if exc.status_code == 429 or exc.status_code >= 500:
             raise RetryablePlannerError() from None
         raise ValueError('Model access failed. Ask an admin to check the configured model.') from None
+    await costs.settle(db, run, entry, message.usage)
     result = json.loads(''.join(b.text for b in message.content if b.type == 'text'))
     if not isinstance(result, dict):
         raise ValueError('Planner must return one structured step')
@@ -112,8 +119,12 @@ async def step(db, run, planner=plan, broker=adapter):
         notes = await db.agent_notes.find({'owner': run['owner'], 'agent_id': run['snapshot']['agent_id']},
                                          {'_id': 0, 'title': 1, 'content': 1}).limit(10).to_list(10)
         try:
-            decision = await asyncio.wait_for(planner({'job': run['snapshot'], 'history': run['history'],
-                                                       'notes': notes, 'dry_run': run['dry_run']}), 50)
+            context = {'job': run['snapshot'], 'history': run['history'],
+                       'notes': notes, 'dry_run': run['dry_run']}
+            # The production planner cannot run without its broker-side meter.
+            # Injected test planners have no provider access or real billing.
+            call = planner(context, db=db, run=run) if planner is plan else planner(context)
+            decision = await asyncio.wait_for(call, 50)
         except TimeoutError:
             raise RetryablePlannerError() from None
         # A model call may finish after cancellation, revocation or the deadline.
