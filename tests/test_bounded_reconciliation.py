@@ -187,7 +187,10 @@ async def test_connector_dispatch_is_fixed_bounded_and_uses_isolated_environment
     from pathlib import Path
     monkeypatch.setattr(_auth_token, 'create_user_auth_token', lambda owner: 'QA-TOKEN')
     proc = MagicMock()
+    proc.pid = 424242
     proc.returncode = None
+    kill_group = MagicMock()
+    monkeypatch.setattr(connector.os, "killpg", kill_group)
     proc.stdout.read = AsyncMock(side_effect=[b'x' * (connector.MAX_OUTPUT + 1)] if oversize else [b'{"ok":true}', b''])
     async def wait():
         proc.returncode = 0
@@ -197,9 +200,11 @@ async def test_connector_dispatch_is_fixed_bounded_and_uses_isolated_environment
     if oversize:
         with pytest.raises(ValueError, match='size limit'):
             await connector.gmail(['search', '--query', 'hello'], OWNER)
-        proc.kill.assert_called_once()
     else:
         assert await connector.gmail(['search', '--query', 'hello'], OWNER) == {'ok': True}
+    kill_group.assert_called_once_with(proc.pid, connector.signal.SIGKILL)
+    proc.kill.assert_not_called()
+    assert spawn.call_args.kwargs["start_new_session"] is True
     call = spawn.call_args
     assert call.args[1] == '-I'
     assert call.args[-2:] == ('--user-email', OWNER)

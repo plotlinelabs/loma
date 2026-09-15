@@ -13,6 +13,7 @@ import json
 import os
 import resource
 import shlex
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -20,6 +21,7 @@ from pathlib import Path
 KEYS = ('OBSERVABILITY_MONGODB_URI', 'OBSERVABILITY_DB_NAME', 'OAUTH_ENCRYPTION_KEY',
         'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET')
 MAX_OUTPUT = 128000
+CONNECTOR_TIMEOUT = 45
 # Exact first-party scripts only. Argument order matches each CLI's parser.
 TOOLS = {'gmail': 'tools/gmail.py', 'slack': 'tools/slack_user.py', 'calendar': 'tools/google_calendar.py'}
 
@@ -71,7 +73,7 @@ async def personal(tool, command, owner):
             stderr=asyncio.subprocess.DEVNULL, limit=MAX_OUTPUT,
             start_new_session=True, preexec_fn=_limits)
         try:
-            async with asyncio.timeout(45):
+            async with asyncio.timeout(CONNECTOR_TIMEOUT):
                 chunks, size = [], 0
                 while chunk := await proc.stdout.read(8192):
                     size += len(chunk)
@@ -86,12 +88,16 @@ async def personal(tool, command, owner):
                 raise ValueError('Personal connector action returned an invalid result')
             return value
         finally:
-            if proc.returncode is None:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
+            # start_new_session makes this PID the connector's process-group ID.
+            # Clean up descendants even when the direct child already exited:
+            # wrappers may otherwise outlive a successful/failed connector, and
+            # inherited stdout can keep read() open until the timeout. Never use
+            # process-name matching here; other runs share this host.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await asyncio.shield(proc.wait())
 
 
 async def gmail(command, owner):
