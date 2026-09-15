@@ -344,3 +344,32 @@ needed for the negative filesystem/network/credential tests. Merely adding a
 container declaration, an environment toggle or mocked tests is not proof of an
 isolation boundary. Additional connectors/external subscriptions, held-charge
 reconciliation and full taskboard/workspace-knowledge integration are still open.
+
+---
+
+## Update (commit 3862206): remaining scope implemented
+
+The four items previously tracked as open are now implemented on this branch:
+
+1. **Broader connectors and external events.** `slack.send` (exact allowed
+   channel IDs) and read-only `calendar.list` join the bounded action set under
+   the same default-deny policy, digests, receipts and uncertainty handling.
+   Per-job hashed event tokens plus `POST /api/bounded-work-hooks/{work_id}`
+   provide deduplicated external wake-ups; event notes are bounded, stored as
+   untrusted data and carry no authority.
+2. **Held-charge reconciliation.** Owner charge reviews (billed / not billed /
+   unknown, version-CAS, append-only history) surface in Needs you for ended
+   top-level runs with held reservations. Audit-only: no refunds, no unblocks,
+   no restarts.
+3. **Taskboard integration.** A read-only "Agent work needs you" banner on
+   /tasks (new `attention` endpoint) deep-links to /agents/work?tab=needs.
+   Nothing on the board can approve or execute an action.
+4. **Runtime isolation (implementation).** Connector children run in their own
+   session with conservative rlimits, plus an optional operator-configured
+   `LOMA_CONNECTOR_SANDBOX` argv prefix for namespace isolation on capable
+   hosts. Verification on an isolation-capable runner is still required; the
+   legacy shell runtime's shared OS authority is unchanged.
+
+Still outstanding before release: isolation verification, a browser/UX pass
+over the new surfaces, live-provider validation, and workspace-level knowledge
+beyond per-agent notes.
