@@ -50,8 +50,11 @@ class ModelGrant:
     headers: dict = field(repr=False)
     max_output_tokens: int = 8192
     max_calls: int = 32
+    native_codex: bool = False
 
     def __post_init__(self):
+        if type(self.native_codex) is not bool or (self.native_codex and self.protocol != 'responses'):
+            raise ValueError('Native Codex requires the Responses protocol')
         target = urlsplit(self.endpoint)
         if (self.protocol not in FIELDS or target.scheme != 'https' or not target.hostname
                 or target.username or target.password or target.query or target.fragment):
@@ -89,6 +92,33 @@ def _content(value, protocol, depth=0):
 
 
 def request_body(grant, body):
+    if grant.native_codex and isinstance(body, dict):
+        # Native clients attach local cache/session diagnostics. Do not forward
+        # those as provider conversation identifiers or cache namespaces. No
+        # endpoint/header/content fields are silently dropped by this adapter.
+        body = {key: value for key, value in body.items()
+                if key not in {'client_metadata', 'prompt_cache_key'}}
+        if 'include' in body:
+            if body['include'] != ['reasoning.encrypted_content']:
+                raise ModelDenied('Unsupported native response expansion')
+            body = {key: value for key, value in body.items() if key != 'include'}
+        # The initial isolated adapter exposes only gateway functions. Native
+        # local tools are withheld until their file/sandbox parity is verified.
+        # Reject rather than silently translate unknown hosted capabilities.
+        tools = body.get('tools', [])
+        if not isinstance(tools, list):
+            raise ModelDenied('Invalid native tool list')
+        filtered = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                raise ModelDenied('Invalid native tool')
+            if tool.get('type') == 'custom' and tool.get('name') == 'apply_patch':
+                continue
+            if tool.get('type') != 'function':
+                raise ModelDenied('Unsupported native tool')
+            if isinstance(tool.get('name'), str) and re.fullmatch(r'gateway_[0-9]{1,2}', tool['name']):
+                filtered.append(tool)
+        body = {**body, 'tools': filtered}
     if not isinstance(body, dict) or set(body) - FIELDS[grant.protocol]:
         raise ModelDenied('Unsupported model request fields')
     try:

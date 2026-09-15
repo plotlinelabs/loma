@@ -1,10 +1,10 @@
 # Remote chat worker migration
 
-## Status: transport foundation only, NOT a production cutover
+## Status: partial native runtime adapter, NOT a production cutover
 
 The approved direction is to retain chat while moving its workers off the
-backend. `isolation/` now contains the supervisor, backend transport and narrow
-wire protocol. **Existing chat is not routed through them yet.** This is not
+backend. `isolation/` now contains the supervisor, backend transport, narrow
+wire protocol and an initial Codex adapter (see the latest section below). **Existing chat is not routed through them yet.** This is not
 completion of runtime isolation and must not be used to mark PR #191 ready.
 No existing backend, chat, scheduler, model account or production deployment is
 changed by adding these modules. Chat still has its previously documented risk.
@@ -208,3 +208,59 @@ synthetic supervisor credentials are generated afresh per test process rather
 than embedded constants. No scanner rules or exemptions were relaxed. This change does not deploy or start the supervisor. Operators who have
 tested an earlier supervisor must drain its old-labelled containers before
 upgrading; the new label does not discover those containers automatically.
+
+
+## Native Codex adapter (latest continuation)
+
+`codex_worker.py` and `worker_entry.py` now run the **actual Codex app-server**
+through the model relay and framed tool gateway. This is no longer only a
+synthetic-worker transport test. It is still **not a chat cutover**, a complete
+Codex feature migration, or proof of gVisor containment.
+
+- Codex 0.153.3 gets a fresh ephemeral HOME and CODEX_HOME, a fixed loopback custom
+  model provider and no account files, inherited environment, API credentials,
+  hooks, plugins, backend paths or arbitrary MCP configuration. No CLI/account
+  code from `agent/` is imported. The caller fixes the model.
+- Typed function requests map to the supplied gateway catalog. Unknown tools,
+  cross-thread calls, namespace overrides and native approval requests are denied.
+  A catalog describes capabilities; it never grants them. The backend still
+  independently validates the current account, resource policy and action.
+- The server-created Responses `ModelGrant` must explicitly enable
+  `native_codex`. The adapter strips native cache/session diagnostics and does
+  not forward native shell, image, patch or other built-in tools. Only mapped
+  gateway functions reach the model. This deliberately narrower capability set
+  means **existing coding/file-editing chat does not yet have parity**.
+- Text streams through the existing transport. Native model/provider failures
+  do not retry, switch accounts or start a local backend worker. Cancellation
+  kills the runtime process group; full-run cleanup also closes the model relay.
+- Tests cover two successive turns in the same disposable runtime. This is **not
+  cross-container resume**: do not restore a native HOME/session/account archive.
+  Authorized history replay and artifact/download registration still need wiring.
+- `deploy/worker/codex.Dockerfile` is an explicit file-allowlist image recipe, not
+  an application image. It pins the CLI and does not copy `agent/`, `tools/`,
+  backend config or account directories. The image has not been built or tested
+  with Docker/gVisor in this container. No deployment references it yet.
+- `scripts/test_native_worker.sh` requires the pinned CLI and fails if it is
+  missing or a different version. Tests use only local synthetic provider
+  responses; there are no paid requests or personal-account operations. **The
+  automatic CI install still needs a maintainer:** the available GitHub token
+  cannot edit workflows. Until then, normal CI skips native tests if the CLI is
+  absent; a green check alone is not native parity evidence.
+
+Fresh local verification: **1,042 passed, 108 skipped** with the session's
+`AGENT_DEFAULT_MODEL` override removed (that override otherwise changes an
+unrelated default-runtime test). This includes **29 new tests**, of which four
+use the native binary: permitted tool + follow-up, provider failure without retry,
+cancellation, and real child process through the supervisor WebSocket/model relay.
+Both public-content and secret scans pass. No browser or real-container isolation
+verification was performed for this continuation.
+
+Remaining merge gates: Claude/OpenCode native adapters; subscription-account
+selection/refresh and authoritative usage settlement; full scoped tool/file/recall
+parity; chat/scheduled/recovery routing; backend download registration; then native
+browser and hostile-worker containment tests on the dedicated host. Production
+chat remains on the legacy execution path and the PR must remain draft.
+
+Configuration follows the [official custom-provider reference](https://developers.openai.com/codex/config-reference),
+with app-server request/response fields verified from the pinned native binary's
+generated experimental JSON schema and actual protocol exchanges.
