@@ -36,7 +36,7 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   await page.setViewportSize({width:390,height:844});
   await form.locator('#runtime').scrollIntoViewIfNeeded();
   assert(await form.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
-  await page.screenshot({path:'/tmp/bounded-limits-mobile.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-limits-mobile.png'});
   await page.setViewportSize({width:1440,height:1050});
   // Simulate a save failure and ensure inputs survive, then submit for real.
   await page.route('**/work-api/work', route => route.fulfill({status:503,json:{error:'Temporary test failure. Try again.'}}), {times:1});
@@ -69,7 +69,7 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   const review = page.getByRole('dialog',{name:'Review before authorizing'});
   assert.match(await review.innerText(),/recipient@example.com/);
   assert.match(await review.innerText(),/local test proposal/);
-  await page.screenshot({path:'/tmp/bounded-approval-desktop.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-approval-desktop.png'});
   await review.getByRole('button',{name:'Edit proposal'}).click();
   await review.locator('#review-body').fill('Edited QA reminder. This exact text is authorized.');
   await review.getByRole('button',{name:'Save new version'}).click();
@@ -78,7 +78,7 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   assert.match(await review.innerText(),/Version 2/);
   await page.setViewportSize({width:390,height:844});
   assert(await review.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
-  await page.screenshot({path:'/tmp/bounded-approval-mobile.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-approval-mobile.png'});
   await review.getByRole('button',{name:'Approve & send'}).focus();
   await page.keyboard.press('Enter');
   await review.waitFor({state:'hidden'});
@@ -88,7 +88,7 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   await page.getByText('✋ gmail.send · executed',{exact:true}).click();
   assert.match(await page.innerText('main'),/SIMULATED-RECEIPT-NOT-SENT/);
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-  await page.screenshot({path:'/tmp/bounded-history-mobile.png',fullPage:true});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-history-mobile.png',fullPage:true});
   await page.getByRole('button',{name:'Work',exact:true}).click();
   await card.getByRole('button',{name:'Knowledge & memory'}).click();
   const notes = page.getByRole('dialog',{name:'Knowledge & memory'});
@@ -105,7 +105,9 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   await notes.getByRole('button',{name:'Close',exact:true}).click();
   await notes.waitFor({state:'hidden'});
   await page.setViewportSize({width:1440,height:1050});
-  await page.screenshot({path:'/tmp/bounded-work-desktop.png',fullPage:true});
+  // Let the responsive navigation finish its resize transition before evidence capture.
+  await page.waitForTimeout(600);
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-work-desktop.png',fullPage:true});
   await card.getByRole('button',{name:'Edit schedule',exact:true}).click();
   const editSchedule = page.getByRole('dialog',{name:'Edit schedule',exact:true});
   await editSchedule.locator('#cron').fill('0 10 * * 1-5');
@@ -125,7 +127,7 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   assert.equal(await expiredRun.getByRole('button',{name:'Stop this run and delegates'}).count(),0);
   await page.setViewportSize({width:390,height:844});
   assert(await expiredRun.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
-  await page.screenshot({path:'/tmp/bounded-deadline-mobile.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-deadline-mobile.png'});
   await expiredRun.getByRole('button',{name:'Close',exact:true}).click();
   driver('uncertain'); await page.reload();
   await page.getByRole('button',{name:'Needs you (1)',exact:true}).click();
@@ -152,10 +154,10 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   await investigation.locator('#delivery-evidence').fill('Synthetic owner report: matching message ID QA-123, recipient and exact body verified. No live provider contacted.');
   await investigation.getByRole('checkbox').check();
   assert(await investigation.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
-  await page.screenshot({path:'/tmp/bounded-investigation-mobile.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-investigation-mobile.png'});
   await page.setViewportSize({width:1440,height:1050});
   await page.waitForTimeout(600);
-  await page.screenshot({path:'/tmp/bounded-investigation-desktop.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-investigation-desktop.png'});
   await saveInvestigation.focus(); await page.keyboard.press('Enter');
   await investigation.waitFor({state:'hidden'});
   await page.getByRole('button',{name:'Needs you (0)',exact:true}).waitFor();
@@ -178,11 +180,11 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   assert.match(await verification.innerText(), /SIMULATED-GMAIL-MATCH/);
   await page.setViewportSize({width:1440,height:1050});
   await verification.scrollIntoViewIfNeeded();
-  await page.screenshot({path:'/tmp/bounded-provider-desktop.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-provider-desktop.png'});
   await page.setViewportSize({width:390,height:844});
   await verification.scrollIntoViewIfNeeded();
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-  await page.screenshot({path:'/tmp/bounded-provider-mobile.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-provider-mobile.png'});
   driver('costs'); await page.reload();
   await page.getByRole('button',{name:'Run history',exact:true}).click();
   await page.getByRole('button',{name:/Invoice follow-up QA · Safe test/}).first().click();
@@ -194,12 +196,12 @@ const driver = action => execFileSync(path.join(root,'.venv/bin/python'), [path.
   assert.match(await costs.innerText(), /billing outcome is unknown/);
   await page.setViewportSize({width:1440,height:1050});
   await page.waitForTimeout(500);
-  await page.screenshot({path:'/tmp/bounded-cost-desktop.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-cost-desktop.png'});
   await page.setViewportSize({width:390,height:844});
   await costs.scrollIntoViewIfNeeded();
   await page.waitForTimeout(500);
   assert(await page.getByRole('dialog').evaluate(e => e.scrollWidth <= e.clientWidth + 1));
-  await page.screenshot({path:'/tmp/bounded-cost-mobile.png'});
+  await page.screenshot({animations:'disabled',path:'/tmp/bounded-cost-mobile.png'});
   assert.deepEqual(errors,[]);
   console.log('PASS: create/error preservation, dry run, enable, proposal, edit/version, keyboard approve, receipt, notes CRUD, deadline expiry, limit persistence, delivery investigation/error preservation/corrections, no resend or resume, desktop/mobile overflow. No external send.');
   await browser.close();

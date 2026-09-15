@@ -9,7 +9,7 @@ from datetime import timedelta
 from pymongo import ReturnDocument
 from autonomy.core import (
     now, ident, digest, text, authority, current_authority, advance, propose,
-    execute_proposal, enqueue, TERMINAL, deadline, DEADLINE_MESSAGE,
+    execute_proposal, enqueue, TERMINAL, deadline, DEADLINE_MESSAGE, effective_policy,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,12 +169,13 @@ async def step(db, run, planner=plan, broker=adapter):
         await complete_step(db, run, {'kind': 'preview', 'action': proposal['action'], 'args': proposal['args'],
                                      'note': 'Not executed. Dry runs do not read or write connected accounts.'})
         return
-    mode = run['snapshot']['policy']['actions'][proposal['action']]
+    mode = (await effective_policy(db, run))['actions'][proposal['action']]
     if proposal['status'] == 'pending' and mode == 'allow':
         await db.agent_approvals.update_one({'approval_id': proposal['approval_id'], 'status': 'pending'},
             {'$set': {'status': 'approved', 'approved_digest': proposal['digest'], 'decided_by': 'saved-policy'}})
         proposal['status'] = 'approved'
         proposal['approved_digest'] = proposal['digest']
+        proposal['decided_by'] = 'saved-policy'
     if proposal['status'] == 'pending':
         await advance(db, run, {'status': 'waiting_approval', 'approval_id': proposal['approval_id']})
         return

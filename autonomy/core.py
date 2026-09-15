@@ -154,6 +154,8 @@ async def create_work(db, owner, data):
 
 async def enqueue(db, work, event_key, *, dry_run=False, parent=None):
     await authority(db, work['owner'], work['agent_id'])
+    if work.get('revoked'):
+        raise ValueError('Work access has been revoked')
     event_key = text(event_key, 'Event ID', 200)
     if work.get('paused') and not dry_run and parent is None:
         raise ValueError('Enable this work before starting a run')
@@ -197,11 +199,34 @@ async def current_authority(db, run, *, check_lease=True):
         raise ValueError('Work access has been revoked')
     await authority(db, run['owner'], run['snapshot']['agent_id'])
     root = await db.agent_runs.find_one({'run_id': run['root_id']})
-    if not root or root['status'] in ('cancelled', 'failed'):
+    if not root or root.get('owner') != run['owner'] or root['status'] in ('cancelled', 'failed'):
         raise ValueError('Parent work was cancelled or failed')
     if deadline(root) <= now():
         raise ValueError(DEADLINE_MESSAGE)
+    if run.get('parent_id'):
+        root_work = await db.agent_work.find_one({'work_id': root['work_id'], 'owner': run['owner']})
+        if not root_work or root_work.get('revoked') or root['status'] in TERMINAL:
+            raise ValueError('Parent work is no longer active')
+        await authority(db, run['owner'], root['snapshot']['agent_id'])
     return work
+
+
+async def effective_policy(db, run, *, check_lease=True):
+    """Saved grants are a ceiling, not a way to bypass current revocation.
+
+    Delegates also intersect the root's current grant. No peer identity, later
+    edit or stale snapshot can increase the principal's original authority.
+    """
+    work = await current_authority(db, run, check_lease=check_lease)
+    policy = intersect(validate_policy(run['snapshot']['policy']), validate_policy(work['policy']))
+    if run.get('parent_id'):
+        root = await db.agent_runs.find_one({'run_id': run['root_id'], 'owner': run['owner']})
+        if not root or root['status'] in TERMINAL:
+            raise ValueError('Parent work is no longer active')
+        root_work = await current_authority(db, root, check_lease=False)
+        policy = intersect(policy, intersect(validate_policy(root['snapshot']['policy']),
+                                            validate_policy(root_work['policy'])))
+    return policy
 
 
 async def advance(db, run, fields, event=None):
@@ -215,7 +240,7 @@ async def advance(db, run, fields, event=None):
 
 
 async def propose(db, run, action, args, reason):
-    args = validate_action(action, args, run['snapshot']['policy'])
+    args = validate_action(action, args, await effective_policy(db, run))
     proposal = {'approval_id': ident(), 'run_id': run['run_id'], 'work_id': run['work_id'],
                 'owner': run['owner'], 'step': run['step'], 'action': action, 'args': args,
                 'reason': text(reason, 'Reason', 2000), 'version': 1,
@@ -243,7 +268,8 @@ async def decide(db, owner, approval_id, version, decision, args=None):
     if not run or run['status'] in TERMINAL:
         raise ValueError('The parent run is no longer active')
     if decision in ('approve', 'edit'):
-        await current_authority(db, run, check_lease=False)
+        policy = await effective_policy(db, run, check_lease=False)
+        validate_action(proposal['action'], args if decision == 'edit' else proposal['args'], policy)
     changes = {'updated_at': now(), 'decided_by': owner}
     if decision == 'edit':
         args = validate_action(proposal['action'], args, run['snapshot']['policy'])
@@ -270,8 +296,12 @@ async def decide(db, owner, approval_id, version, decision, args=None):
 
 
 async def execute_proposal(db, proposal, run, adapter):
-    await current_authority(db, run)
-    validate_action(proposal['action'], proposal['args'], run['snapshot']['policy'])
+    if run.get('dry_run'):
+        raise ValueError('Safe tests cannot execute connected-account actions')
+    policy = await effective_policy(db, run)
+    validate_action(proposal['action'], proposal['args'], policy)
+    if policy['actions'][proposal['action']] == 'ask' and proposal.get('decided_by') != run['owner']:
+        raise ValueError('Current policy requires explicit human approval')
     expected = digest({'action': proposal['action'], 'args': proposal['args'], 'owner': run['owner']})
     if expected != proposal.get('approved_digest'):
         raise ValueError('Approval does not match the exact action')
@@ -287,7 +317,10 @@ async def execute_proposal(db, proposal, run, adapter):
     # Never put executing back into approved. A timeout/crash may be a successful
     # provider write. An operator must inspect the receipt/provider before any retry.
     try:
-        await current_authority(db, run)
+        policy = await effective_policy(db, run)
+        validate_action(proposal['action'], proposal['args'], policy)
+        if policy['actions'][proposal['action']] == 'ask' and claimed.get('decided_by') != run['owner']:
+            raise ValueError('Current policy requires explicit human approval')
         receipt = await adapter(proposal['action'], proposal['args'], run['owner'], proposal['approval_id'])
         status = 'executed'
     except Exception:

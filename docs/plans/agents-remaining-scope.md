@@ -310,3 +310,37 @@ Still outstanding: full runtime isolation; additional connectors and external ev
 subscriptions; held model-charge reconciliation and safe retry authorization; full
 personal taskboard and workspace knowledge integration. Do not mark the full Agents
 roadmap completed.
+
+## Merge-readiness audit (2026-09-15)
+
+Current main was merged into this branch; the Google helper conflict keeps the
+centralized database default from main. The connector still disables dotenv and
+supplies an explicit isolated database name when tested.
+
+Found and fixed a release-blocking authority gap: normal proposal creation,
+human approval, automatic approval and final dispatch now intersect the pinned
+grant with the current job grant. Delegates additionally intersect the root's
+saved/current grants. Root revocation, lost agent visibility or principal mismatch
+blocks child work before its model call. A policy-derived approval cannot satisfy
+a later human-approval requirement. The execution boundary independently rejects
+safe-preview sends, and revoked work cannot enqueue another preview.
+
+Fresh verification after syncing main:
+- Full backend: 862 passed, 95 skipped; skipped cases include opt-in DB suites.
+- Opt-in isolated Mongo suites: 139 passed, including eight new authority tests.
+- TypeScript and diff whitespace checks passed.
+- Real local backend plus Next.js browser workflow passed at desktop/mobile widths,
+  with synthetic login, fresh throwaway DB and no external integration credentials.
+  Model and provider calls were simulated, not live-provider validation.
+- Browser evidence disables animations and waits for responsive navigation so a
+  viewport transition is not mistaken for clipped navigation.
+
+**Not merge-ready.** This audit does not complete the remaining roadmap. Runtime
+isolation is still absent in deployment; legacy shell execution shares the broker's
+OS/filesystem and DB/secret authority. There is no Docker socket in this test
+container, and `unshare --user --map-root-user --net true` fails with
+`Operation not permitted`. A dedicated non-production isolation-capable runner is
+needed for the negative filesystem/network/credential tests. Merely adding a
+container declaration, an environment toggle or mocked tests is not proof of an
+isolation boundary. Additional connectors/external subscriptions, held-charge
+reconciliation and full taskboard/workspace-knowledge integration are still open.
