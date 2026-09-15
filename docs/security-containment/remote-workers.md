@@ -379,3 +379,49 @@ Those migration and deployment gates above remain open. Tests use synthetic
 provider streams, including real HTTP relay calls, arbitrary chunk boundaries,
 missing or contradictory usage and accounting failures. No new browser or
 container-isolation evidence is claimed for this backend-only component.
+
+## Durable API usage budgets (latest continuation)
+
+`isolation/accounting.py` now binds `ModelRelay` to a majority-acknowledged Mongo
+budget. Backend callers create a `BudgetSpec`, initialize a `ModelBudget`, then
+use its `relay(...)` factory with trusted authorization and audit callbacks.
+No backend paths, credentials, request bodies or response content are recorded
+in the ledger. This module is excluded from all worker-image source allowlists.
+
+- A single `isolated_model_budgets` document owns a run's immutable owner,
+  opaque account reference, exact model/protocol, nanodollar rates, token limits,
+  call count, remaining spend and bounded call ledger. Mongo's unique `_id`
+  prevents run-ID reuse from replacing an existing owner or budget contract.
+- Reservation and call admission are atomic. Repeated reservation IDs fail,
+  rather than authorize replay. Majority acknowledgement must succeed before
+  the relay contacts the provider. A failed/ambiguous database write aborts
+  dispatch, and reopening a backend object cannot reset spend or stop flags.
+- OpenAI cached input is part of total input; Messages cache reads/writes are
+  additional input. Explicit rates and exact returned model matching are
+  required. No model alias, live rate or subscription dollar cost is guessed.
+- A verified provider receipt atomically records usage and releases only the
+  unused hold. Concurrent duplicate callbacks cannot count or refund twice.
+  Conflicting receipts, reused response IDs within a run and usage outside the
+  contract block new calls. Missing evidence and transport EOF never refund.
+- Stopping admission retains all holds. Late verified receipts may settle once
+  but never restart work. There is no automatic TTL or owner-reported refund.
+  These are conservative price-ceiling accounting records, not provider invoices.
+
+**Still not a production accounting integration or chat cutover.** The current
+chat entrypoints do not construct this ledger. Subscription-account selection,
+refresh, provider-specific pricing/contracts, reporting integration, scoped
+remaining tools/history/files and entrypoint migration remain unfinished.
+The operator must select reviewed price ceilings and a conservative input bound
+for each provider; an excessive receipt blocks future spend, but cannot undo
+an already billed request. No claim of a universal tokenizer bound is made.
+
+Tests in `tests/test_worker_accounting.py` include real isolated Mongo concurrency,
+backend recreation, cross-owner denials, duplicate/conflicting receipts, stopped
+runs and real HTTP relay callbacks with synthetic providers. Set `LOMA_LOCAL_E2E=1`
+to run the database cases against throwaway databases; ordinary CI skips those
+cases. `scripts/test_native_worker.sh` includes the new accounting tests.
+
+The GitHub credential available for this continuation reports `repo, user`, not
+`workflow`. Native-CLI CI installation still needs a workflow-capable maintainer.
+The local environment has neither Docker nor a Docker socket, so dedicated-host
+image builds and hostile-worker/gVisor certification remain unperformed.
