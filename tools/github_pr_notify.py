@@ -255,7 +255,7 @@ async def _cmd_register(args: argparse.Namespace) -> int:
         "target": target,
         "disabled_notice": disabled_notice,
     }))
-    return 0
+    return 3 if disabled_notice == "failed" else 0
 
 
 async def _cmd_show(args: argparse.Namespace) -> int:

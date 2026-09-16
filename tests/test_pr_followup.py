@@ -39,6 +39,7 @@ def _fake_db(existing_record=None):
     """A minimal db double exposing db[COLLECTION].update_one/find_one."""
     collection = MagicMock()
     collection.update_one = AsyncMock()
+    collection.update_many = AsyncMock()
     collection.find_one = AsyncMock(return_value=existing_record)
     # The disabled-notice claim: by default this event wins it.
     collection.find_one_and_update = AsyncMock(return_value=existing_record)
@@ -94,9 +95,7 @@ class TestRegistration:
         record = {"repo_full_name": REPO, "pr_number": 42, "target": {"type": "linear"}}
         db, collection = _fake_db(existing_record=record)
         assert await get_pr_notification_target(db, REPO, 42) == record
-        collection.find_one.assert_awaited_once_with(
-            {"repo_full_name": REPO, "pr_number": 42}
-        )
+        assert collection.find_one.call_args.args[0]["target"] == {"$exists": True}
 
     def test_normalize_repo_lowercases_and_strips(self):
         assert _normalize_repo("ExampleOrg/Repo") == "exampleorg/repo"
@@ -117,7 +116,7 @@ class TestRegistration:
         await get_pr_notification_target(db, "EXAMPLEORG/REPO", 7)
         # First read is the exact (normalised) key; the fake returns None so a
         # case-insensitive fallback read follows — see the dedicated test.
-        assert collection.find_one.call_args_list[0].args[0]["repo_full_name"] == "exampleorg/repo"
+        assert collection.find_one.call_args_list[0].args[0]["repo_full_name"]["$options"] == "i"
 
     @pytest.mark.asyncio
     async def test_mark_self_review_disabled_upserts_marker(self):
@@ -142,7 +141,7 @@ class TestRegistration:
             "disabled_pending_pr_url": PR_URL,
         }
         db, collection = _fake_db(existing_record=record)
-        with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=True) as loma:
+        with patch("utils.pr_followup._self_review_enabled", return_value=False), patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=True) as loma:
             doc = await register_pr_notification_target(
                 db, REPO, 42, {"type": "loma", "user_email": "a@b.co"}
             )
@@ -162,7 +161,7 @@ class TestRegistration:
             "disabled_pending_pr_url": PR_URL,
         }
         db, collection = _fake_db(existing_record=record)
-        with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=False):
+        with patch("utils.pr_followup._self_review_enabled", return_value=False), patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=False):
             doc = await register_pr_notification_target(
                 db, REPO, 42, {"type": "loma", "user_email": "a@b.co"}
             )
@@ -204,8 +203,7 @@ class TestRegistration:
             db, repo_full_name=REPO, pr_number=42, pr_url=PR_URL,
             verdict=None, succeeded=False, disabled=True,
         ) is False
-        assert collection.update_one.call_args.args[1] == \
-            {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}}
+        collection.update_one.assert_not_awaited()
         # (c) delivered now → cleared too, and the delivery record still written
         db, collection = _fake_db(existing_record=fresh)
         with patch("utils.pr_followup._dispatch_loma", new_callable=AsyncMock, return_value=True):
@@ -228,7 +226,7 @@ class TestRegistration:
     @pytest.mark.asyncio
     async def test_get_target_falls_back_to_a_case_insensitive_read(self):
         # A doc registered before keys were lowercased must stay reachable
-        # during the deploy window (init_observability folds them at boot).
+        # without requiring a destructive boot-time migration.
         legacy = {"repo_full_name": "Example-Org/Example-Repo", "pr_number": 42,
                   "target": {"type": "linear", "issue_id": "u"}}
         db, collection = _fake_db()
@@ -237,7 +235,7 @@ class TestRegistration:
         fallback_filter = collection.find_one.call_args_list[1].args[0]
         assert fallback_filter["repo_full_name"]["$options"] == "i"
         assert fallback_filter["repo_full_name"]["$regex"] == "^example\\-org/example\\-repo$"
-        # Exact hit → no second read
+        # Target found → no marker-only fallback
         db, collection = _fake_db(existing_record=legacy)
         await get_pr_notification_target(db, REPO, 42)
         collection.find_one.assert_awaited_once()
@@ -1002,7 +1000,150 @@ class TestNotifyCliOriginCheck:
         with patch.object(cli, "_get_db", return_value=(client, db)), \
              patch.object(cli, "register_pr_notification_target", new_callable=AsyncMock,
                           return_value={"disabled_notice": "failed"}):
-            assert await cli._cmd_register(args) == 0
+            assert await cli._cmd_register(args) == 3
         out, err = capsys.readouterr()
         assert json.loads(out.strip().splitlines()[-1])["disabled_notice"] == "failed"
         assert "could not be delivered" in err
+
+
+class TestFollowupStateTransitions:
+    """Exercise Mongo filters against stored state, not unconditional mocks."""
+
+    @staticmethod
+    async def db():
+        from mongomock_motor import AsyncMongoMockClient
+        db = AsyncMongoMockClient(tz_aware=True).test
+        await db[COLLECTION].create_index([("pr_number", 1), ("repo_full_name", 1)], unique=True)
+        return db
+
+    @staticmethod
+    async def seed(db, **overrides):
+        record = {"repo_full_name": REPO, "pr_number": 42,
+                  "registered_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                  "target": {"type": "loma", "user_email": "example@example.com"},
+                  "disabled_pending": True, "disabled_pending_pr_url": PR_URL}
+        record.update(overrides)
+        record["_id"] = (await db[COLLECTION].insert_one(record)).inserted_id
+        return record
+
+    @staticmethod
+    async def send(db, **kwargs):
+        return await post_self_review_followup(db, repo_full_name=REPO, pr_number=42,
+                                             pr_url=PR_URL, verdict=None, succeeded=False,
+                                             disabled=True, **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_losing_claim_preserves_marker_when_winner_fails_then_retry_delivers(self):
+        import asyncio
+        db = await self.db()
+        await self.seed(db)
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def fail_delivery(*args):
+            entered.set()
+            await release.wait()
+            return False
+
+        with patch("utils.pr_followup._dispatch_loma", side_effect=fail_delivery):
+            winner = asyncio.create_task(self.send(db))
+            await entered.wait()
+            status = {}
+            assert not await self.send(db, delivery_status=status)
+            assert status["status"] == "pending"
+            assert (await get_pr_notification_target(db, REPO, 42))["disabled_pending"]
+            release.set()
+            assert not await winner
+        record = await get_pr_notification_target(db, REPO, 42)
+        assert record["disabled_pending"] and "disabled_notice_for" not in record
+        with patch("utils.pr_followup._dispatch_loma", return_value=True):
+            assert await self.send(db)
+        record = await get_pr_notification_target(db, REPO, 42)
+        assert "disabled_pending" not in record and record["last_followup_disabled"]
+
+    @pytest.mark.asyncio
+    async def test_delivery_to_old_registration_cannot_clear_new_registration_marker(self):
+        db = await self.db()
+        original = await self.seed(db)
+        new_time = original["registered_at"] + timedelta(days=1)
+
+        async def reregister_while_delivering(*args):
+            await db[COLLECTION].update_one({"_id": original["_id"]}, {"$set": {
+                "registered_at": new_time, "disabled_pending": True,
+                "target": {"type": "loma", "user_email": "new@example.com"}}})
+            return True
+
+        with patch("utils.pr_followup._dispatch_loma", side_effect=reregister_while_delivering):
+            assert await self.send(db)
+        record = await get_pr_notification_target(db, REPO, 42)
+        assert record["disabled_pending"]
+        assert "last_followup_at" not in record
+        with patch("utils.pr_followup._dispatch_loma", return_value=True) as dispatch:
+            assert await self.send(db)
+            assert dispatch.call_args.args[1]["user_email"] == "new@example.com"
+
+    @pytest.mark.asyncio
+    async def test_legacy_target_and_lowercase_marker_remain_deliverable(self):
+        db = await self.db()
+        legacy = await self.seed(db, repo_full_name="Example-Org/Example-Repo")
+        await db[COLLECTION].insert_one({"repo_full_name": REPO, "pr_number": 42,
+                                        "disabled_pending": True})
+        await mark_self_review_disabled(db, REPO, 42, PR_URL)
+        with patch("utils.pr_followup._dispatch_loma", return_value=True):
+            assert await self.send(db)
+        record = await db[COLLECTION].find_one({"_id": legacy["_id"]})
+        assert record["last_followup_disabled"] and "disabled_pending" not in record
+        assert await db[COLLECTION].count_documents({}) == 2
+        # Registration updates the selected target by ID, without renaming it
+        # onto a colliding marker-only sibling.
+        with patch("utils.pr_followup._self_review_enabled", return_value=True):
+            await register_pr_notification_target(db, REPO, 42,
+                                                 {"type": "loma", "user_email": "new@example.com"})
+        record = await get_pr_notification_target(db, REPO, 42)
+        assert record["_id"] == legacy["_id"] and record["target"]["user_email"] == "new@example.com"
+        assert await db[COLLECTION].count_documents({}) == 2
+
+    @pytest.mark.asyncio
+    async def test_mark_disabled_does_not_create_lowercase_sibling(self):
+        db = await self.db()
+        original = await self.seed(db, repo_full_name="Example-Org/Example-Repo")
+        await mark_self_review_disabled(db, REPO, 42, PR_URL)
+        assert await db[COLLECTION].count_documents({}) == 1
+        assert (await get_pr_notification_target(db, REPO, 42))["_id"] == original["_id"]
+
+    @pytest.mark.asyncio
+    async def test_newest_registration_wins_across_casing_variants(self):
+        db = await self.db()
+        await self.seed(db)
+        newer = await self.seed(db, repo_full_name="Example-Org/Example-Repo",
+                               registered_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
+        assert (await get_pr_notification_target(db, REPO, 42))["_id"] == newer["_id"]
+
+    @pytest.mark.asyncio
+    async def test_enabled_registration_discards_stale_disabled_intent(self):
+        db = await self.db()
+        await self.seed(db)
+        with patch("utils.pr_followup._self_review_enabled", return_value=True), \
+             patch("utils.pr_followup._dispatch_loma") as dispatch:
+            result = await register_pr_notification_target(db, REPO, 42,
+                                                          {"type": "loma", "user_email": "new@example.com"})
+        dispatch.assert_not_called()
+        assert result["disabled_notice"] is None
+        assert "disabled_pending" not in await get_pr_notification_target(db, REPO, 42)
+
+    @pytest.mark.asyncio
+    async def test_real_review_start_clears_all_case_variants(self):
+        from utils.pr_followup import clear_self_review_disabled
+        db = await self.db()
+        await self.seed(db)
+        await self.seed(db, repo_full_name="Example-Org/Example-Repo")
+        await clear_self_review_disabled(db, REPO, 42)
+        assert await db[COLLECTION].count_documents({"disabled_pending": True}) == 0
+
+    @pytest.mark.asyncio
+    async def test_disabled_registration_without_prior_webhook_delivers_notice(self):
+        db = await self.db()
+        with patch("utils.pr_followup._self_review_enabled", return_value=False), \
+             patch("utils.pr_followup._dispatch_loma", return_value=True):
+            result = await register_pr_notification_target(db, REPO, 42,
+                                                          {"type": "loma", "user_email": "new@example.com"})
+        assert result["disabled_notice"] == "delivered"

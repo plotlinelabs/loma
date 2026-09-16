@@ -51,14 +51,10 @@ TARGET_REQUIRED_FIELDS = {
 
 
 def _normalize_repo(repo_full_name: str) -> str:
-    """Normalize a repo full name for storage and lookup.
+    """Normalize new keys and lookup inputs; existing records keep their keys.
 
-    GitHub repo full names are case-insensitive (`ExampleOrg/Repo` and
-    `exampleorg/repo` are the same repo) but Mongo string equality is not.
-    The CLI stores whatever the agent typed while the webhook looks up the
-    canonical casing GitHub sends, so without normalising on BOTH the write
-    (register) and read (lookup) paths a casing mismatch silently drops the
-    follow-up. Applied to every key touching the collection.
+    Legacy records are selected case-insensitively and updated by document ID,
+    avoiding both missed writes and collisions with lowercase siblings.
     """
     return (repo_full_name or "").strip().lower()
 
@@ -109,14 +105,20 @@ async def register_pr_notification_target(
         raise ValueError("pr_number must be a positive integer")
 
     repo_full_name = _normalize_repo(repo_full_name)
+    existing = await get_pr_notification_target(db, repo_full_name, pr_number)
+    key = _record_key(existing, repo_full_name, pr_number)
     doc = {
-        "repo_full_name": repo_full_name,
+        "repo_full_name": (existing or {}).get("repo_full_name", repo_full_name),
         "pr_number": pr_number,
         "target": target,
         "registered_at": datetime.now(timezone.utc),
     }
+    enabled = _self_review_enabled()
+    if not enabled:
+        doc.update(disabled_pending=True,
+                   disabled_pending_pr_url=f"https://github.com/{repo_full_name}/pull/{pr_number}")
     await db[COLLECTION].update_one(
-        {"repo_full_name": repo_full_name, "pr_number": pr_number},
+        key,
         {"$set": doc},
         upsert=True,
     )
@@ -131,21 +133,23 @@ async def register_pr_notification_target(
     # marker instead. Now that a target exists, answer the Stage-1 promise. For
     # a single-push PR there is no later `synchronize` to trigger it otherwise.
     try:
-        stored = await db[COLLECTION].find_one(
-            {"repo_full_name": repo_full_name, "pr_number": pr_number}
-        )
+        stored = await get_pr_notification_target(db, repo_full_name, pr_number)
     except Exception:
         stored = None
-    disabled_notice = None
-    if stored and stored.get("disabled_pending"):
+    disabled_notice = None if enabled else "failed"
+    if enabled:
+        await clear_self_review_disabled(db, repo_full_name, pr_number)
+    elif stored:
+        outcome = {}
         delivered = await post_self_review_followup(
             db,
             repo_full_name=repo_full_name,
             pr_number=pr_number,
-            pr_url=stored.get("disabled_pending_pr_url", ""),
+            pr_url=stored.get("disabled_pending_pr_url") or f"https://github.com/{repo_full_name}/pull/{pr_number}",
             verdict=None,
             succeeded=False,
             disabled=True,
+            delivery_status=outcome,
         )
         # `post_self_review_followup` clears the marker itself once the notice
         # is out (or found already delivered). If delivery failed here — this
@@ -153,12 +157,12 @@ async def register_pr_notification_target(
         # credentials — the marker stays so a later event can retry, and the
         # caller is told: for a single-push PR there may be no later event, so
         # "registered: true" alone would hide that the Stage-1 promise dangles.
-        disabled_notice = "delivered" if delivered else "failed"
-        if not delivered:
+        disabled_notice = "delivered" if delivered else outcome.get("status", "failed")
+        if disabled_notice == "failed":
             logger.warning(
                 "[PR-FOLLOWUP] Self-review is disabled for %s#%d but the notice could "
                 "not be delivered from this process — the registered target has NOT "
-                "been told; a later webhook event will retry",
+                "been confirmed told; tell the requester directly",
                 repo_full_name, pr_number,
             )
     return {**doc, "disabled_notice": disabled_notice}
@@ -183,8 +187,9 @@ async def mark_self_review_disabled(
         return
     repo_full_name = _normalize_repo(repo_full_name)
     try:
+        record = await get_pr_notification_target(db, repo_full_name, pr_number)
         await db[COLLECTION].update_one(
-            {"repo_full_name": repo_full_name, "pr_number": pr_number},
+            _record_key(record, repo_full_name, pr_number),
             {"$set": {"disabled_pending": True, "disabled_pending_pr_url": pr_url}},
             upsert=True,
         )
@@ -200,24 +205,47 @@ async def get_pr_notification_target(
     repo_full_name: str,
     pr_number: int,
 ) -> dict | None:
-    """Fetch the registered notification target for a PR, or None.
+    """Read legacy keys without renaming or colliding with canonical siblings.
 
-    Keys are stored lowercased (see ``_normalize_repo``). Docs registered
-    before that normalisation shipped may still carry GitHub's mixed casing;
-    ``init_observability`` folds them at boot, but a target registered by an
-    older CLI against a newer server (or vice-versa) during the deploy window
-    would otherwise be unreachable, so miss → one case-insensitive retry.
+    Prefer the newest registration across all casings. Marker-only siblings
+    cannot shadow a target. All subsequent writes use the selected document ID.
+    No boot-time migration or Mongo pipeline-update support is required.
     """
-    normalized = _normalize_repo(repo_full_name)
-    record = await db[COLLECTION].find_one(
-        {"repo_full_name": normalized, "pr_number": pr_number}
-    )
-    if record is not None or not normalized:
-        return record
-    return await db[COLLECTION].find_one({
-        "repo_full_name": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"},
+    query = {
+        "repo_full_name": {"$regex": f"^{re.escape(_normalize_repo(repo_full_name))}$", "$options": "i"},
         "pr_number": pr_number,
-    })
+    }
+    record = await db[COLLECTION].find_one(
+        {**query, "target": {"$exists": True}},
+        sort=[("registered_at", -1), ("_id", -1)],
+    )
+    return record or await db[COLLECTION].find_one(query)
+
+
+def _record_key(record, repo_full_name, pr_number):
+    if record and "_id" in record:
+        return {"_id": record["_id"]}
+    return {"repo_full_name": (record or {}).get("repo_full_name", _normalize_repo(repo_full_name)),
+            "pr_number": pr_number}
+
+
+def _self_review_enabled():
+    from config.app_config import LOMA_ENABLE_SELF_REVIEW
+    return LOMA_ENABLE_SELF_REVIEW
+
+
+async def clear_self_review_disabled(db, repo_full_name, pr_number):
+    """An enabled deployment or real review supersedes old disabled intent."""
+    if db is None:
+        return
+    try:
+        await db[COLLECTION].update_many(
+            {"repo_full_name": {"$regex": f"^{re.escape(_normalize_repo(repo_full_name))}$", "$options": "i"},
+             "pr_number": pr_number},
+            {"$unset": {"disabled_pending": "", "disabled_pending_pr_url": ""}},
+        )
+    except Exception:
+        logger.warning("[PR-FOLLOWUP] Could not clear disabled intent for %s#%d", repo_full_name, pr_number)
 
 
 def _parse_github_timestamp(value) -> datetime | None:
@@ -500,6 +528,7 @@ async def post_self_review_followup(
     disabled: bool = False,
     review_posted: bool = False,
     verdict_unknown: bool = False,
+    delivery_status: dict | None = None,
 ) -> bool:
     """Stage 2: thread the self-review outcome back to where the PR was announced.
 
@@ -512,14 +541,17 @@ async def post_self_review_followup(
     Returns True if a follow-up was delivered, False if no target was
     registered or delivery failed. Never raises — this runs in the review
     pipeline's cleanup path and must not mask the review result.
+    Optional ``delivery_status`` distinguishes delivered, pending, and failed
+    for the registration CLI without changing the pipeline's boolean contract.
     """
+    if delivery_status is not None:
+        delivery_status["status"] = "failed"
     if db is None:
         logger.info("[PR-FOLLOWUP] No database — skipping follow-up for %s#%d",
                     repo_full_name, pr_number)
         return False
 
-    # Normalize once so the lookup AND every subsequent key/update below match
-    # the casing the doc was stored under (see _normalize_repo).
+    # Normalize the lookup input; writes use the selected document identity.
     repo_full_name = _normalize_repo(repo_full_name)
     try:
         record = await get_pr_notification_target(db, repo_full_name, pr_number)
@@ -536,7 +568,8 @@ async def post_self_review_followup(
         return False
 
     target = record["target"]
-    key = {"repo_full_name": repo_full_name, "pr_number": pr_number}
+    key = {**_record_key(record, repo_full_name, pr_number),
+           "registered_at": record.get("registered_at")}
 
     async def _clear_disabled_pending() -> None:
         # The webhook re-arms `disabled_pending` on EVERY reviewable event
@@ -574,6 +607,8 @@ async def post_self_review_followup(
                 "disabled — skipping repeat", repo_full_name, pr_number,
             )
             await _clear_disabled_pending()
+            if delivery_status is not None:
+                delivery_status["status"] = "delivered"
             return False
         # The read above is not enough on its own: `opened` and the first
         # `synchronize` land within seconds and both read the doc before
@@ -597,7 +632,9 @@ async def post_self_review_followup(
                 "[PR-FOLLOWUP] Another event already claimed %s#%d's disabled "
                 "notice — skipping repeat", repo_full_name, pr_number,
             )
-            await _clear_disabled_pending()
+            # A claim is not a receipt. The winner may still fail.
+            if delivery_status is not None:
+                delivery_status["status"] = "pending"
             return False
 
     title, body, slack_text = _build_messages(
@@ -636,8 +673,9 @@ async def post_self_review_followup(
                            repo_full_name, pr_number)
 
     if delivered:
-        if disabled:
-            await _clear_disabled_pending()
+        if delivery_status is not None:
+            delivery_status["status"] = "delivered"
+        await _clear_disabled_pending()
         try:
             # Condition on the registration we actually delivered to: if the flow
             # re-registered (new announcement) between our read and this write,

@@ -479,3 +479,12 @@ async def get_pr_reviews(
         len(reviews), repo_owner, repo_name, pr_number,
     )
     return reviews
+
+
+async def get_authenticated_login() -> str:
+    """Resolve the review token's identity; never infer it from PR metadata."""
+    result = await _graphql_request("query { viewer { login } }")
+    login = ((result.get("data") or {}).get("viewer") or {}).get("login")
+    if result.get("errors") or not isinstance(login, str) or not login:
+        raise RuntimeError("Could not resolve GitHub token identity")
+    return login

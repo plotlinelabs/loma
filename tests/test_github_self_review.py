@@ -347,6 +347,8 @@ class TestSelfReviewPipeline:
             patch("webhooks.github.get_pr_reviews", new_callable=AsyncMock, side_effect=_reviews),
             patch("webhooks.github.post_self_review_followup", new_callable=AsyncMock, return_value=True),
             patch("webhooks.github._get_pr_details", new_callable=AsyncMock, return_value=pr_details),
+            patch("webhooks.github.get_authenticated_login", new_callable=AsyncMock, return_value=AGENT_GITHUB_LOGIN),
+            patch("webhooks.github.clear_self_review_disabled", new_callable=AsyncMock),
         ]
 
     async def _run(self, reviews, stream=None, pr_details=None, reviews_before=None, **kwargs):
@@ -423,7 +425,12 @@ class TestSelfReviewPipeline:
         assert author != AGENT_GITHUB_LOGIN
         reviews = [{"id": "R2", "author": author, "created_at": _ts(datetime.now(timezone.utc)),
                     "body": "✅ Self-review: no blocking issues found"}]
-        mocks = await self._run(reviews, reviews_before=[], pr_author=author)
+        patches = self._patches(reviews, reviews_before=[])
+        for p in patches:
+            if p.attribute == "get_authenticated_login":
+                p.kwargs["return_value"] = author
+        with patch.object(self, "_patches", return_value=patches):
+            mocks = await self._run(reviews, reviews_before=[], pr_author=author)
         followup = mocks["post_self_review_followup"].call_args.kwargs
         assert followup["succeeded"] is True
         assert followup["verdict"].startswith("✅ Self-review: no blocking")
@@ -447,6 +454,27 @@ class TestSelfReviewPipeline:
                                 action="synchronize")
         followup = mocks["post_self_review_followup"].call_args.kwargs
         assert followup["verdict"] is None and followup["review_posted"] is False
+
+    @pytest.mark.asyncio
+    async def test_human_author_cannot_supply_self_review_verdict(self):
+        reviews = [{"id": "human", "author": "human-dev",
+                    "created_at": _ts(datetime.now(timezone.utc)),
+                    "body": "✅ Self-review: no blocking issues found"}]
+        mocks = await self._run(reviews, reviews_before=[], pr_author="human-dev")
+        result = mocks["post_self_review_followup"].call_args.kwargs
+        assert result["verdict"] is None and result["review_posted"] is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_token_identity_is_neutral_not_guessed(self):
+        patches = self._patches([], reviews_before=[])
+        for p in patches:
+            if p.attribute == "get_authenticated_login":
+                p.kwargs["side_effect"] = RuntimeError("GitHub unavailable")
+        with patch.object(self, "_patches", return_value=patches):
+            mocks = await self._run([], reviews_before=[], pr_author="human-dev")
+        result = mocks["post_self_review_followup"].call_args.kwargs
+        assert result["verdict_unknown"] is True and result["verdict"] is None
+        assert mocks["_update_check_run"].call_args.kwargs["conclusion"] == "neutral"
 
     @pytest.mark.asyncio
     async def test_agent_error_posts_failed_followup(self):
@@ -996,3 +1024,17 @@ class TestCoalescedRerun:
         comment_mock.assert_awaited_once()
         body = comment_mock.call_args.args[3]
         assert "@loma-agent /rereview" in body and "newer commits" in body
+
+
+@pytest.mark.asyncio
+async def test_authenticated_login_uses_viewer_and_rejects_errors():
+    from webhooks.github_graphql import get_authenticated_login
+    with patch("webhooks.github_graphql._graphql_request", new_callable=AsyncMock,
+               return_value={"data": {"viewer": {"login": "token-owner"}}}) as request:
+        assert await get_authenticated_login() == "token-owner"
+        request.assert_awaited_once_with("query { viewer { login } }")
+    for response in ({"errors": [{"message": "unavailable"}]}, {"data": {"viewer": None}}):
+        with patch("webhooks.github_graphql._graphql_request", new_callable=AsyncMock,
+                   return_value=response):
+            with pytest.raises(RuntimeError, match="token identity"):
+                await get_authenticated_login()

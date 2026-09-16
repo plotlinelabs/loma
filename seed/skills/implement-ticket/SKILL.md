@@ -286,7 +286,7 @@ python3 tools/github_pr_notify.py register --repo <owner>/<repo> --pr <pr-number
 
 If registration fails, continue — the PR still gets its self-review on GitHub; only the follow-up notification is skipped. In that case **drop the "verdict will be posted in this thread" line from Step 7** and say the verdict will appear on the PR instead — never promise a follow-up you did not register. Never work around a refused Slack/Linear target by registering a different one: the refusal means that thread/issue is not where this run came from.
 
-> **If self-review is disabled on the deployment** (`LOMA_ENABLE_SELF_REVIEW=false`), the webhook pipeline posts a "self-review skipped" follow-up to the registered target instead of a verdict, so the Stage-1 line below is still safe to send.
+> **Inspect registration output before announcing.** `disabled_notice: delivered` means self-review is disabled: say no verdict will follow. `disabled_notice: failed` (exit 3) means registration succeeded but delivery failed: tell the requester directly that no verdict will follow. `disabled_notice: pending` means another sender holds the delivery claim, not that delivery succeeded: say self-review is disabled and notification delivery is unconfirmed. In all three cases omit the "self-review running / verdict will follow" line. Never treat exit 0 alone as proof of delivery.
 
 ---
 

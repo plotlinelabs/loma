@@ -29,6 +29,7 @@ from webhooks.linear_api import _graphql_request as linear_graphql_request
 from webhooks.github_graphql import (
     dismiss_review,
     get_agent_review_threads,
+    get_authenticated_login,
     get_pr_comments,
     get_pr_reviews,
     minimize_comment,
@@ -40,6 +41,7 @@ from api.drain import is_draining
 from utils.pr_followup import (
     REREVIEW_COMMAND,
     _login_set,
+    clear_self_review_disabled,
     find_self_review,
     mark_self_review_disabled,
     post_self_review_followup,
@@ -1384,6 +1386,8 @@ async def _process_pr_review(
 
     cancelled = False
     try:
+        if self_review:
+            await clear_self_review_disabled(db, repo_full_name, pr_number)
         await _run_pr_review(
             db=db,
             repo_owner=repo_owner,
@@ -1812,18 +1816,9 @@ async def _run_pr_review(
     pre_run_review_ids: set[str] | None = None
     started_at = datetime.now(timezone.utc)
 
-    # Which login posts the self-review depends on WHY this is a self-review:
-    #   - agent-authored PR: the agent token, which is the PR author == env login;
-    #   - `Agent PR` label backstop with AGENT_GITHUB_LOGIN misconfigured: the PR
-    #     author is the real token, the env login never posts anything;
-    #   - `Agent PR` label on a human's draft with a correct env login: the agent
-    #     token posts, and it is NOT the PR author.
-    # Scoping the snapshot and lookup to only one of the two misreports the other
-    # case as "Incomplete" on every run, so accept either. Run scoping stays
-    # structural (pre-run review IDs, taken for the same set), so a previous run's
-    # review under either login is still excluded. Defined before the try so the
-    # verdict lookup in the finally can always reference it.
-    review_author_logins = _login_set((pr_author, AGENT_GITHUB_LOGIN))
+    # Only the authenticated token identity may supply a verdict. A label or
+    # PR author is not proof of the identity that posts reviews.
+    review_author_logins = set()
     review_succeeded = True
     interrupted = False
     try:
@@ -1836,6 +1831,10 @@ async def _run_pr_review(
         if observer is not None:
             await observer.start()
         if self_review:
+            try:
+                review_author_logins = {await get_authenticated_login()}
+            except Exception:
+                logger.warning("Could not resolve review token identity; verdict will be unknown")
             pre_run_review_ids = await _snapshot_agent_review_ids(
                 repo_owner, repo_name, pr_number, agent_login=review_author_logins,
             )
@@ -1904,6 +1903,8 @@ async def _run_pr_review(
         self_review_posted = True
         if self_review and review_succeeded:
             try:
+                if not review_author_logins:
+                    raise RuntimeError("Review token identity unavailable")
                 reviews = await get_pr_reviews(repo_owner, repo_name, pr_number)
                 if pre_run_review_ids is not None:
                     lookup = find_self_review(
