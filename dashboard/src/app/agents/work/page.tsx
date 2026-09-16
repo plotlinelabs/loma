@@ -122,7 +122,7 @@ export default function AgentWorkPage() {
   return <main className="mx-auto h-full w-full max-w-6xl space-y-6 overflow-y-auto p-4 pb-28 md:p-8 md:pb-12">
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><Link className="text-sm text-muted-foreground underline" href={`${basePath}/agents`}>Agents</Link><h1 className="mt-2 text-2xl font-semibold">Agent work</h1><p className="mt-1 text-sm text-muted-foreground">Give a job. Review what needs you. See what got done.</p></div>
-      <div className="flex gap-2"><Button variant="outline" disabled={!data} onClick={() => setLibrary(true)}>Playbook library</Button><Button onClick={() => setCreating(true)} disabled={!data}>New work</Button></div>
+      <div className="flex gap-2"><Button asChild variant="outline"><Link href={`${basePath}/agents/proposals`}>Worker proposals</Link></Button><Button variant="outline" disabled={!data} onClick={() => setLibrary(true)}>Playbook library</Button><Button onClick={() => setCreating(true)} disabled={!data}>New work</Button></div>
     </header>
     {error && <div role="alert" className="rounded-xl border border-destructive p-3 text-sm">{error}<Button variant="ghost" size="sm" onClick={() => void load().catch(e => setError(e.message))}>Retry</Button></div>}
     {notice && <div role="status" className="flex items-center justify-between gap-3 rounded-xl bg-muted p-3 text-sm">{notice}<Button variant="ghost" size="sm" onClick={() => setNotice("")}>Dismiss</Button></div>}

@@ -18,6 +18,7 @@ from api.agent_identity_routes import _serialize
 from observability.db import get_db
 from autonomy import core, costs, knowledge
 from autonomy.worker import tick, planner_ready
+from isolation import proposals as worker_proposals
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,15 @@ async def handle(request):
                 job['run_status'] = run.get('status')
                 job['dry_run'] = run.get('dry_run', False)
             return response({'work': jobs})
+        if method == 'GET' and route == 'proposals':
+            # Remote-worker write/send proposals: owner review and receipts only.
+            return response(await worker_proposals.listing(db, owner))
+        if len(parts) == 2 and parts[0] == 'proposals' and method == 'POST':
+            return response(await worker_proposals.decide(db, owner, parts[1], body.get('version'),
+                                                          body.get('decision'), body.get('args')))
+        if len(parts) == 3 and parts[0] == 'proposals' and parts[2] == 'reconcile' and method == 'POST':
+            return response(await worker_proposals.reconcile(db, owner, parts[1], body.get('version'),
+                                                             body.get('outcome'), body.get('evidence')))
         if method == 'GET' and route == 'attention':
             approvals = await db.agent_approvals.count_documents({'owner': owner, 'status': 'pending', 'expires_at': {'$gt': core.now()}})
             questions = await db.agent_runs.count_documents({'owner': owner, 'status': 'needs_input'})
@@ -130,8 +140,10 @@ async def handle(request):
             charges = await db.agent_runs.count_documents({'owner': owner, 'parent_id': None,
                 'status': {'$in': list(core.TERMINAL)}, 'cost_ledger': {'$elemMatch': {'status': 'held'}},
                 'cost_review.outcome': {'$nin': ['billed', 'not_billed']}})
+            proposals = await worker_proposals.attention_count(db, owner)
             return response({'approvals': approvals, 'questions': questions, 'deliveries': deliveries,
-                             'charges': charges, 'total': approvals + questions + deliveries + charges})
+                             'charges': charges, 'proposals': proposals,
+                             'total': approvals + questions + deliveries + charges + proposals})
         if route == 'work' and method == 'POST':
             return response(await core.create_work(db, owner, body), 201)
         if len(parts) == 3 and parts[0] == 'work' and method == 'POST':
@@ -290,6 +302,7 @@ async def lifecycle(app):
         db = get_db()
         if db is not None:
             await core.indexes(db)
+            await worker_proposals.indexes(db)
         if os.getenv('LOMA_ENABLE_SCHEDULER', 'true').lower() == 'true':
             async def work_loop():
                 while True:

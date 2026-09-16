@@ -22,6 +22,7 @@ from isolation.downloads import DownloadRegistry
 from isolation.gateway import ToolGateway, GatewayDenied, personal_read
 from isolation.knowledge import KnowledgeGateway
 from isolation.models import SCHEMAS as MODEL_SCHEMAS
+from isolation.proposals import ProposalGateway
 from isolation.protocol import RunAuthority
 from isolation.workspace_tools import TOOLS as WORKSPACE_TOOLS
 
@@ -107,8 +108,11 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         registry = DownloadRegistry(db, artifacts, emit=events.put)
         knowledge = KnowledgeGateway(db, authority, conversation_id,
             artifacts=artifacts, allowed_skills=allowed_skills)
+        # Writes/sends only become durable owner-reviewed proposals; the run
+        # never holds a send adapter.
+        proposals = ProposalGateway(db, authority, conversation_id, check_access=context.authorize)
         gateway = ToolGateway(authority, authorize=context.authorize, audit=audit, artifacts=artifacts,
-            connector=personal_read, models=relay, knowledge=knowledge, on_artifact=registry)
+            connector=personal_read, models=relay, knowledge=knowledge, on_artifact=registry, proposals=proposals)
         # Never merge historical developer/system envelopes. Only the sanitized
         # visible transcript goes into the model grant on the trusted backend.
         coverage = json.dumps(context.coverage, sort_keys=True)

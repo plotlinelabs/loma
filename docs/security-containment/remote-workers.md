@@ -340,10 +340,11 @@ those checks, and no old UI screenshots establish the new chat path.
 
 1. Backend subscription-account selection/refresh and authoritative model usage
    settlement must construct and service the new grants.
-2. The read-tool surface now has typed adapters (see the connector read-adapter
-   section below). Write/send actions stay in the durable approval engine and
-   still need their own worker-visible proposal flow; database, GitHub and other
-   MCP surfaces remain deliberately unavailable to workers.
+2. The read-tool surface has typed adapters (see the connector read-adapter
+   section below) and write/send actions now have a worker-visible proposal
+   flow (see the proposal section below): a worker can only file a durable
+   proposal, and only the owner's signed decision executes it. Database, GitHub
+   and other MCP surfaces remain deliberately unavailable to workers.
 3. Chat attachments and generated-file download events still need to be connected
    to the artifact broker. File component tests are not dashboard integration.
 4. Interactive chat, scheduled flows, recovery/resume, utility calls and pool
@@ -400,6 +401,72 @@ gateway's authorization, audit and revocation checks.
 shapes, no-token-minting for service CLIs, invalid-argument rejection before
 dispatch, gateway audit/denial ordering and a real-subprocess adapter path.
 No personal accounts, providers or databases are used.
+
+## Worker write/send proposals (subsequent implementation)
+
+`isolation/proposals.py` gives remote workers a way to *propose* an external
+write without any send adapter on the worker path. `ToolGateway` routes the
+proposal tools to a run-bound `ProposalGateway`; `isolation/run.py` constructs
+it with the run's current-access check. This grants nothing by itself: a run
+only sees proposal tools its backend-supplied `allowed_tools` includes, and
+public entrypoint cutover is still separate.
+
+- **Model-visible tools**: `gmail.propose_send`, `gmail.propose_draft`,
+  `slack.propose_send`, `calendar.propose_create`, `docs.propose_append`,
+  `sheets.propose_write` (each requires a `reason` shown to the owner), plus
+  `proposals.status` and `proposals.list`. The catalog schema and
+  `WRITE_SCHEMAS` are asserted equal in tests; the catalog stays under the
+  native 64-tool limit (50 tools).
+- **What a worker gets back**: a proposal ID, status, note and the normalized
+  arguments — never a receipt, provider output, owner audit or digest. An
+  identical re-proposal in the same conversation (same action/args) returns the
+  existing pending/executed/uncertain proposal flagged `duplicate`; only a
+  rejected, expired or cancelled proposal can be filed again. Limits: 10 open
+  proposals per conversation, 30 per run; excess and invalid arguments fail
+  closed like read-tool denials.
+- **Validation** (`validate_write`): exact required/optional names per action;
+  exact single recipient, bounded comma-separated `cc`/`attendees`; no line
+  breaks in subjects/titles/ranges; no NUL bytes; exact Slack channel IDs and
+  `thread_ts` shapes; ISO 8601 datetimes with a UTC offset and `end > start`;
+  resource-ID patterns for Docs/Sheets; bounded typed cell matrices for Sheets.
+  argparse CLIs receive `--flag=value` so values starting with a dash cannot be
+  read as flags; `slack_user.py` (exact-token flag parsing) rejects text that
+  starts with `--`.
+- **Durable state machine** (`isolated_worker_proposals`, majority writes):
+  `pending -> approved -> executing -> executed | uncertain`, or
+  `rejected | cancelled | expired`. Every transition is a Mongo CAS on
+  `(proposal_id, owner, version, status, expires_at)`. Approval stores
+  `approved_digest`; execution claims `approved -> executing` only when the
+  stored digest, approved digest and `decided_by == owner` all match, so an
+  edited or tampered proposal cannot execute. `executing` never returns to
+  `approved`; a claim older than five minutes without a receipt is swept to
+  `uncertain`, and an adapter exception records `uncertain` with a do-not-resend
+  receipt. Uncertain outcomes are only closed by an owner investigation
+  (`reconcile`), which never authorizes a retry.
+- **Owner control plane**: the signed bounded-work routes gain
+  `GET proposals`, `POST proposals/<id>` (approve/edit/reject/cancel under a
+  version CAS; approval executes the exact version in-request, shielded from a
+  dropped dashboard connection) and `POST proposals/<id>/reconcile`; the
+  `attention` count includes pending/uncertain proposals. The dashboard page
+  `/agents/proposals` renders exact arguments, edit-as-new-version, receipts
+  and delivery investigations; `AgentAttention` links to it. Creating a
+  proposal upserts one idempotent Loma notification for the owner.
+- **Execution** (`write_adapter`) re-validates the stored arguments, builds the
+  fixed connector argv (`send-email` carries the stable `--rfc-message-id`
+  derived from the proposal ID, as bounded work does) and requires a
+  provider-specific receipt (`sent`+`messageId`, `created`+`draftId`,
+  `sent`+`message_ts`, `created`+`id`, `appended`, `updatedRange`). The owner
+  token is minted on the backend at execution time; the worker never holds it.
+- Deliberately excluded: automatic Gmail provider checks for uncertain
+  proposals (bounded work's reconciliation sweep is scoped to
+  `agent_approvals`); Slack reactions/file uploads, Drive mutations, Pylon
+  replies/updates and notification sends remain unavailable to workers.
+
+`tests/test_worker_proposals.py` covers schema/argv pinning, receipt checks,
+gateway dispatch and revocation, durable creation/notification/scoping, the
+duplicate rule, limits, approve/edit/reject/cancel/expiry, exclusive claims,
+digest tampering, uncertain outcomes and sweeps, shielded execution across a
+cancelled request, and the signed routes. No provider is contacted.
 
 ## Provider-side usage evidence
 

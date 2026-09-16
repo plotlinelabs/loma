@@ -14,6 +14,13 @@ LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 50}
 DAYS = {'type': 'integer', 'minimum': 1, 'maximum': 90}
 DATE = {'type': 'string', 'pattern': '^\\d{4}-\\d{2}-\\d{2}$'}
 MONTH = {'type': 'string', 'pattern': '^\\d{4}-\\d{2}$'}
+EMAIL = {'type': 'string', 'minLength': 3, 'maxLength': 254}
+EMAILS = {'type': 'string', 'minLength': 3, 'maxLength': 1000, 'description': 'Comma-separated exact email addresses'}
+LINE = {'type': 'string', 'minLength': 1, 'maxLength': 1000}
+BODY = {'type': 'string', 'minLength': 1, 'maxLength': 12000}
+REASON = {'type': 'string', 'minLength': 1, 'maxLength': 2000, 'description': 'Why this action is needed; shown to the owner'}
+DATETIME = {'type': 'string', 'minLength': 16, 'maxLength': 40}
+RESOURCE = {'type': 'string', 'pattern': '^[A-Za-z0-9_-]{10,200}$'}
 CATALOG = [
     _tool('gmail.search', 'Search your Gmail messages.', {'query': TEXT, 'limit': LIMIT}, ['query']),
     _tool('gmail.read', 'Read one of your Gmail messages.', {'message_id': TEXT}),
@@ -60,6 +67,24 @@ CATALOG = [
         'before': {'type': 'integer', 'minimum': 0, 'maximum': 20},
         'after': {'type': 'integer', 'minimum': 0, 'maximum': 20},
         'max_chars': {'type': 'integer', 'minimum': 256, 'maximum': 40000}}, ['conversation_id']),
+    _tool('gmail.propose_send', 'Propose sending an email from your Gmail. Nothing is sent until the owner approves the exact proposal in Loma; you receive a proposal ID, never a receipt.', {
+        'to': EMAIL, 'subject': LINE, 'body': BODY, 'cc': EMAILS, 'reason': REASON}, ['to', 'subject', 'body', 'reason']),
+    _tool('gmail.propose_draft', 'Propose creating a Gmail draft. Created only after the owner approves the exact proposal.', {
+        'to': EMAIL, 'subject': LINE, 'body': BODY, 'cc': EMAILS, 'reason': REASON}, ['to', 'subject', 'body', 'reason']),
+    _tool('slack.propose_send', 'Propose sending a Slack message from your account to an exact channel ID. Sent only after the owner approves.', {
+        'channel': {'type': 'string', 'pattern': '^[CDG][A-Z0-9]{4,25}$'}, 'text': {'type': 'string', 'minLength': 1, 'maxLength': 4000},
+        'thread_ts': {'type': 'string', 'pattern': '^\\d{10}\\.\\d{6}$'}, 'reason': REASON}, ['channel', 'text', 'reason']),
+    _tool('calendar.propose_create', 'Propose creating an event in your calendar (ISO 8601 datetimes with UTC offset). Created only after the owner approves.', {
+        'summary': {'type': 'string', 'minLength': 1, 'maxLength': 300}, 'start': DATETIME, 'end': DATETIME,
+        'description': {'type': 'string', 'minLength': 1, 'maxLength': 4000}, 'attendees': EMAILS,
+        'location': {'type': 'string', 'minLength': 1, 'maxLength': 500}, 'reason': REASON}, ['summary', 'start', 'end', 'reason']),
+    _tool('docs.propose_append', 'Propose appending text to one of your Google Docs. Applied only after the owner approves.', {
+        'document_id': RESOURCE, 'text': BODY, 'reason': REASON}),
+    _tool('sheets.propose_write', 'Propose writing values (rows of cells) to a range of one of your Google Sheets. Applied only after the owner approves.', {
+        'spreadsheet_id': RESOURCE, 'range': LINE, 'values': {'type': 'array', 'minItems': 1, 'maxItems': 200, 'items': {
+            'type': 'array', 'minItems': 1, 'maxItems': 50, 'items': {'type': ['string', 'number', 'boolean']}}}, 'reason': REASON}),
+    _tool('proposals.status', 'Read the current status of one proposal in this conversation. Statuses other than executed mean nothing was sent.', {'proposal_id': TEXT}),
+    _tool('proposals.list', 'List recent proposals in this conversation with their statuses.', {}),
     _tool('workspace.list', 'List files in this disposable worker workspace, including staged attachments.', {}),
     _tool('workspace.import', 'Import a newly granted artifact, such as a skill asset, into this workspace.', {'artifact_id': TEXT}),
     _tool('workspace.read', 'Read a UTF-8 file relative to this private workspace.', {'path': PATH}),

@@ -1,9 +1,11 @@
 """Trusted run-bound dispatch. No general CLI, URL, path or identity API.
 
 The same gateway serves all runtime adapters. Runtime/model output cannot
-register handlers, pass credentials or extend grants. Sending must use the
-existing durable approval engine; this read/file gateway deliberately has no
-send adapter. An unsupported action fails closed, not through a shell fallback.
+register handlers, pass credentials or extend grants. Writes and sends are
+never executed here: a worker can only file a durable proposal through the
+run-bound proposal gateway (isolation/proposals.py), and only the owner's
+signed decision lets the backend execute the exact approved version. An
+unsupported action fails closed, not through a shell fallback.
 """
 import asyncio
 import re
@@ -88,7 +90,7 @@ class GatewayDenied(ValueError):
 
 
 class ToolGateway:
-    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None, models=None, knowledge=None, on_artifact=None):
+    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None, models=None, knowledge=None, on_artifact=None, proposals=None):
         if artifacts.authority != authority or not callable(authorize) or not callable(audit):
             raise ValueError('A matching server-owned artifact scope and policy are required')
         self.authority, self.authorize, self.audit = authority, authorize, audit
@@ -100,6 +102,9 @@ class ToolGateway:
         if knowledge is not None and knowledge.authority != authority:
             raise ValueError('A matching server-owned knowledge scope is required')
         self.knowledge = knowledge
+        if proposals is not None and proposals.authority != authority:
+            raise ValueError('A matching server-owned proposal scope is required')
+        self.proposals = proposals
         if on_artifact is not None and not callable(on_artifact):
             raise ValueError('A trusted artifact registration callback is required')
         self.on_artifact = on_artifact
@@ -130,6 +135,19 @@ class ToolGateway:
                 if not await self.authorize(authority):
                     raise GatewayDenied('Run access is no longer valid')
                 result = await self.knowledge(authority, tool, arguments)
+                if not await self.authorize(authority):
+                    raise GatewayDenied('Run access is no longer valid')
+                await self.audit(authority, {'tool': tool, 'stage': 'completed'})
+                return result
+            from isolation.proposals import TOOLS as PROPOSAL_TOOLS
+            if tool in PROPOSAL_TOOLS:
+                # Durable proposal only: no send adapter exists on this path.
+                if self.proposals is None:
+                    raise GatewayDenied('Proposal gateway is unavailable')
+                await self.audit(authority, {'tool': tool, 'stage': 'requested'})
+                if not await self.authorize(authority):
+                    raise GatewayDenied('Run access is no longer valid')
+                result = await self.proposals(authority, tool, arguments)
                 if not await self.authorize(authority):
                     raise GatewayDenied('Run access is no longer valid')
                 await self.audit(authority, {'tool': tool, 'stage': 'completed'})
