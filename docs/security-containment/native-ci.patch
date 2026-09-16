@@ -1,0 +1,72 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 1d579c3..a6c96fb 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -41,6 +41,58 @@ jobs:
+       - name: Tests
+         run: pytest -q
+ 
++  native-workers:
++    runs-on: ubuntu-latest
++    timeout-minutes: 20
++    permissions:
++      contents: read
++    services:
++      mongo:
++        image: mongo:7.0
++        ports:
++          - 27017:27017
++        options: >-
++          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'"
++          --health-interval 10s
++          --health-timeout 5s
++          --health-retries 10
++    env:
++      LOMA_LOCAL_E2E: "1"
++      LOMA_ENABLE_SLACK: "false"
++      LOMA_ENABLE_SCHEDULER: "false"
++      PYTHON: python
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++          cache: pip
++      - uses: actions/setup-node@v4
++        with:
++          node-version: "22"
++      - name: Install test dependencies and pinned native runtimes
++        run: |
++          pip install -r requirements-test.txt
++          npm install --global @openai/codex@0.153.3 @anthropic-ai/claude-code@2.1.261 opencode-ai@1.18.28
++      - name: Configure disposable test database
++        run: |
++          printf '%s\n' 'OBSERVABILITY_MONGODB_URI=mongodb://127.0.0.1:27017' 'OBSERVABILITY_DB_NAME=loma_local_native_ci' > .env
++      - name: Native runtimes against synthetic providers
++        run: bash scripts/test_native_worker.sh --junitxml=native-results.xml
++      - name: Reject silently skipped native coverage
++        run: |
++          python - <<'PY'
++          import xml.etree.ElementTree as ET
++          root = ET.parse('native-results.xml').getroot()
++          assert not root.findall('.//skipped'), 'Native CI must run every test, not skip prerequisites'
++          PY
++      - uses: actions/upload-artifact@v4
++        if: always()
++        with:
++          name: native-worker-test-results
++          path: native-results.xml
++          if-no-files-found: warn
++
+   dashboard:
+     runs-on: ubuntu-latest
+     steps:
+@@ -61,7 +113,7 @@ jobs:
+         working-directory: dashboard
+ 
+   deploy:
+-    needs: [public-content-scan, secret-scan, backend, dashboard]
++    needs: [public-content-scan, secret-scan, backend, native-workers, dashboard]
+     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+     runs-on: ubuntu-latest
+     environment: production

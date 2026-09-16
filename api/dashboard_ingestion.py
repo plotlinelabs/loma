@@ -39,7 +39,7 @@ def _format_text(prompt: str, response: str | None) -> str:
     return "\n".join(parts).strip()
 
 
-async def _extract_thread_refs_llm(prompt: str) -> dict[str, list[str]]:
+async def _extract_thread_refs_llm(prompt: str, *, db=None, conversation_id=None) -> dict[str, list[str]]:
     """Use Haiku to extract entity IDs from a conversation prompt.
 
     Returns a dict of thread_refs where each value is an array (a single
@@ -64,28 +64,33 @@ async def _extract_thread_refs_llm(prompt: str) -> dict[str, list[str]]:
     )
 
     try:
-        from agent.pool import background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", message,
-            "--model", "claude-haiku-4-5-20251001",
-            "--max-turns", "1",
-            "--output-format", "json",
-            "--allowedTools", "",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            raw = await complete(message, db=db, conversation_id=conversation_id, timeout=15)
+        else:
+            from agent.pool import background_cli_env
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", message,
+                "--model", "claude-haiku-4-5-20251001",
+                "--max-turns", "1",
+                "--output-format", "json",
+                "--allowedTools", "",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=background_cli_env(),
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
 
-        if proc.returncode != 0:
-            return {}
+            if proc.returncode != 0:
+                return {}
 
-        output = stdout.decode().strip()
-        try:
-            envelope = json.loads(output)
-            raw = envelope.get("result", output)
-        except json.JSONDecodeError:
-            raw = output
+            output = stdout.decode().strip()
+            try:
+                envelope = json.loads(output)
+                raw = envelope.get("result", output)
+            except json.JSONDecodeError:
+                raw = output
 
         # Parse the JSON from the LLM response.
         if isinstance(raw, str):
@@ -205,7 +210,7 @@ async def ingest_dashboard_chat(
         full_context = "\n\n".join(full_context_parts) if full_context_parts else prompt
 
         # Use LLM to extract entity IDs from the full conversation context.
-        llm_refs = await _extract_thread_refs_llm(full_context)
+        llm_refs = await _extract_thread_refs_llm(full_context, db=db, conversation_id=conversation_id)
         if llm_refs:
             _merge_refs(thread_refs, llm_refs)
             logger.info("[DASHBOARD-INGESTION] LLM extracted refs conv=%s refs=%s", conversation_id, llm_refs)

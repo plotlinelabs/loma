@@ -25,11 +25,11 @@ async def test_title_refreshes_every_five_user_messages(count):
     ) as classify:
         await observer._run_title_topic_enrichment("reply")
 
-    classify.assert_awaited_once_with("latest prompt", "reply")
+    classify.assert_awaited_once_with("latest prompt", "reply", db=db, conversation_id="chat")
     db.conversations.update_one.assert_any_await(
         {"conversation_id": "chat"}, {"$set": {"topic": "engineering"}})
     if count in (1, 6, 11, 16):
-        generate.assert_awaited_once_with("latest prompt", "reply")
+        generate.assert_awaited_once_with("latest prompt", "reply", db=db, conversation_id="chat")
         db.conversations.update_one.assert_any_await(
             {"conversation_id": "chat", "title_edited": {"$ne": True}},
             {"$set": {"title": "Updated title"}},
@@ -64,7 +64,7 @@ async def test_rename_during_generation_is_guarded_at_write_time():
     document = {"title": "Auto title", "messages": [{"role": "user"}]}
     db.conversations.find_one = AsyncMock(side_effect=lambda *args: dict(document))
 
-    async def rename_during_generation(*args):
+    async def rename_during_generation(*args, **kwargs):
         document.update(title="My manual title", title_edited=True)
         return "Generated title"
 

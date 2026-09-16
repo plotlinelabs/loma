@@ -127,6 +127,11 @@ def background_cli_env() -> dict[str, str]:
     CLAUDE_CONFIG_DIR (round-robin, cooldown-aware) so the CLI can run.
     Falls back to the plain server env if the pool is empty or uninitialized.
     """
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        # Cutover contract: remote mode never borrows accounts for local CLIs.
+        # Callers degrade (fallback titles, uncompressed replies) instead.
+        raise RuntimeError('Local model CLI utilities are disabled while LOMA_REMOTE_WORKERS=on')
     env = dict(os.environ)
     try:
         account = get_pool()._next_account()

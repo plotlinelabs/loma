@@ -212,6 +212,7 @@ export default function AgentsPage() {
       <div className="px-3 lg:px-4 py-4 border-b border-border bg-card flex items-center justify-between gap-3">
         <div>
           <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Agents</h1>
+          <Button variant="link" className="px-0" onClick={() => router.push(`${basePath}/agents/work`)}>Open agent work & approvals</Button>
           <p className="text-[13px] text-muted-foreground">
             Choose a specialist to chat with or give it scheduled work.
           </p>

@@ -6,6 +6,7 @@ and attaches user identity + system role to the request.
 
 import logging
 import os
+import re
 
 from aiohttp import web
 
@@ -50,6 +51,11 @@ async def auth_middleware(request, handler):
     # Recall has its own signed-capability boundary; never use forwarded or
     # preview identities for it. Only the exact registered POST is exempt.
     if request.path in ("/api/recall/fetch", "/api/recall/search") and request.method == "POST":
+        return await handler(request)
+
+    # External job events use their own per-job token, not a human session.
+    # Exempt only the exact POST shape; never the signed work control plane.
+    if request.method == "POST" and re.fullmatch(r"/api/bounded-work-hooks/[A-Za-z0-9-]{1,100}", request.path):
         return await handler(request)
 
     # CORS preflight requests don't carry auth headers

@@ -1779,7 +1779,18 @@ async def stream_agent(prompt: str, conversation_context: str = "", files=None,
         recall_session=None):
     """Own recall credentials for exactly one turn, including cancellation/errors."""
     from agent.recall_runtime import refresh_history, revoke
+    from isolation.deployment import remote_workers_enabled
     try:
+        if remote_workers_enabled():
+            # Operator cutover: remote isolated workers own every agent run.
+            # Configuration/transport failure surfaces an error; it never
+            # falls back to a local CLI runtime (see isolation/entrypoint.py).
+            from isolation.entrypoint import remote_stream_agent
+            async for event in remote_stream_agent(prompt, conversation_context,
+                    files, observer, include_steps, source, user_email,
+                    selected_model, tool_config):
+                yield event
+            return
         if recall_session:
             await refresh_history(recall_session['user_id'])
         async for event in _stream_agent(prompt, conversation_context, files, observer,

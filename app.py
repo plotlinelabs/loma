@@ -76,6 +76,9 @@ async def log_404_middleware(request, handler):
 async def main():
     # Initialize observability MongoDB
     await init_observability()
+    # Complete compatibility assignments before any scheduler or webhook can run.
+    from scheduler.legacy_identity import backfill_legacy_identities
+    await backfill_legacy_identities(get_db())
     # Ensure skill indexes exist (idempotent, covers new indexes on upgrades).
     from api import skill_service
     await skill_service.ensure_skill_indexes(get_db())
@@ -87,11 +90,15 @@ async def main():
     # Pre-warm Claude SDK client pool (background \u2014 doesn't block startup)
     agent_config = load_config()
     agent_config = await merge_db_integrations(agent_config)
-    await init_pool(config=agent_config)
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        logger.info("Remote worker mode: local Claude/Codex pools and prewarm disabled")
+    else:
+        await init_pool(config=agent_config)
 
     # Pre-warm Codex (ChatGPT subscription) worker pool — feature-flagged off
     # by default until rollout sign-off (set CODEX_POOL_ENABLED=1).
-    if codex_pool_enabled():
+    if codex_pool_enabled() and not remote_workers_enabled():
         await init_codex_pool(config=agent_config)
     else:
         logger.info("Codex pool disabled (set CODEX_POOL_ENABLED=1 to enable)")
@@ -146,6 +153,8 @@ async def main():
     setup_integration_routes(webhook_app)
     setup_prompt_settings_routes(webhook_app)
     setup_agent_identity_routes(webhook_app)
+    from api.bounded_work_routes import setup_bounded_work_routes
+    setup_bounded_work_routes(webhook_app)
     setup_telegram_routes(webhook_app)
     setup_drain_routes(webhook_app)
 

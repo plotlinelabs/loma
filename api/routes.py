@@ -99,6 +99,17 @@ async def handle_serve_file(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "Authentication required"}, status=401)
     file_id = request.match_info["file_id"]
     entry = _served_files.get(file_id)
+    if file_id.startswith("worker-"):
+        from isolation.downloads import open_download
+        from observability.db import get_db
+        try:
+            db = get_db()
+            if db is None:
+                raise ValueError("Artifact store unavailable")
+            fd, entry = await open_download(db, user_email, file_id)
+        except (ValueError, OSError):
+            return web.json_response({"error": "File not found"}, status=404)
+        return await _stream_registered_file(request, fd, entry)
     # Do not disclose whether another user's file exists. No admin/share bypass
     # in containment: sharing requires a separate, explicit artifact policy.
     if not entry or entry.get("owner_email") != user_email:
@@ -119,6 +130,11 @@ async def handle_serve_file(request: web.Request) -> web.StreamResponse:
     except OSError:
         return web.json_response({"error": "File expired"}, status=410)
 
+    return await _stream_registered_file(request, fd, entry)
+
+
+async def _stream_registered_file(request, fd, entry):
+    """Serve a checked descriptor, shared by legacy and durable worker files."""
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode):
         os.close(fd)
@@ -322,7 +338,7 @@ def _fallback_title(prompt: str) -> str:
     return title
 
 
-async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
+async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
     """Generate a short 5-word conversation title using Claude Haiku.
 
     Uses the claude CLI (same pattern as observability/confidence.py).
@@ -340,6 +356,12 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            raw = await complete(message, db=db, conversation_id=conversation_id, timeout=45)
+            title = raw.strip().strip('"').strip("'").strip()
+            return ' '.join(title.split()[:8]) or _fallback_title(prompt)
         from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
@@ -379,7 +401,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
         return _fallback_title(prompt)
 
 
-async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
+async def _classify_topic_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
     """Classify a conversation into a topic category using Claude Haiku.
 
     Returns one of the _VALID_TOPICS values, or 'other' on failure.
@@ -397,6 +419,12 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            raw = await complete(message, db=db, conversation_id=conversation_id, timeout=45)
+            topic = raw.strip().lower().strip('"').strip("'").strip()
+            return topic if topic in _VALID_TOPICS else 'other'
         from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
@@ -439,12 +467,12 @@ async def _enrich_conversation(db, conversation: dict) -> dict:
     response_snippet = (conversation.get("final_response") or "")[:300]
 
     if not conversation.get("title") and not conversation.get("title_edited"):
-        title = await _generate_title_llm(prompt, response_snippet)
+        title = await _generate_title_llm(prompt, response_snippet, db=db, conversation_id=conversation["conversation_id"])
         conversation["title"] = title
         needs_update["title"] = title
 
     if not conversation.get("topic"):
-        topic = await _classify_topic_llm(prompt, response_snippet)
+        topic = await _classify_topic_llm(prompt, response_snippet, db=db, conversation_id=conversation["conversation_id"])
         conversation["topic"] = topic
         needs_update["topic"] = topic
 
@@ -1199,6 +1227,38 @@ async def handle_agent_models(request: web.Request) -> web.Response:
             "recommended": True,
         }
 
+    # Remote worker mode: never boot a local OpenCode server (or read local
+    # pools) just to list models. Serve the static entries the remote
+    # entrypoint can actually run, plus configured remote codex/chat models.
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        remote_models = list(claude_models)
+        try:
+            from isolation.deployment import load_deployment
+            deployment = load_deployment()
+            if deployment.codex_accounts:
+                from agent.codex_runtime import supported_codex_model_ids
+                remote_models += [_codex_entry(mid) for mid in supported_codex_model_ids([])]
+            if deployment.chat_endpoint and deployment.default_model and \
+                    deployment.default_model.split("/", 1)[0] not in ("anthropic", "codex"):
+                provider_id, _, model_id = deployment.default_model.partition("/")
+                remote_models.append({
+                    "id": deployment.default_model, "provider_id": provider_id,
+                    "model_id": model_id or deployment.default_model,
+                    "label": f"Remote worker · {model_id or deployment.default_model}",
+                    "context_limit": None, "supports_attachments": True,
+                    "supports_reasoning": False, "status": "active", "cost": {},
+                    "recommended": True,
+                })
+            default_agent_model = deployment.default_model or f"anthropic/{default_claude_model}"
+        except Exception:
+            logger.exception("Remote worker deployment is not configured; serving Claude entries only")
+            default_agent_model = f"anthropic/{default_claude_model}"
+        return web.json_response({
+            "default_model": default_agent_model,
+            "models": _order_agent_models(remote_models),
+        })
+
     # Codex (ChatGPT subscription) models — only surfaced when the Codex pool
     # is enabled and at least one account is connected.
     codex_models: list[dict] = []
@@ -1523,7 +1583,7 @@ async def handle_auto_organize_skills(request: web.Request) -> web.Response:
     if db is None:
         return web.json_response({"error": "MongoDB is not configured"}, status=503)
     try:
-        result = await skill_service.auto_organize_skills(db)
+        result = await skill_service.auto_organize_skills(db, owner=get_user_email(request))
         return web.json_response(result)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)
@@ -1838,8 +1898,67 @@ async def handle_available_tools(request: web.Request) -> web.Response:
     return web.json_response({"tools": tools, "skills": skills})
 
 
+def _remote_pool_status() -> dict:
+    """Pool status while LOMA_REMOTE_WORKERS=on: no local pools exist.
+
+    Reports the configured remote subscription accounts (emails only, never
+    directories or tokens) so the sidebar widget stays meaningful. A missing
+    or invalid deployment is reported, not raised: this endpoint is polled by
+    every dashboard session and must never 500 on operator misconfiguration.
+    """
+    from isolation.deployment import DeploymentError, load_deployment
+    status = {
+        "pool_size": 0, "available": 0, "in_use": 0, "warming": 0, "queue_depth": 0,
+        "accounts": [], "accounts_on_cooldown": [], "account_distribution": {},
+        "remote_workers": {"enabled": True, "configured": False, "error": None},
+    }
+    try:
+        deployment = load_deployment()
+    except DeploymentError as error:
+        status["remote_workers"]["error"] = str(error)
+        return status
+    status["accounts"] = [a.email for a in (*deployment.claude_accounts, *deployment.codex_accounts)]
+    status["remote_workers"].update({
+        "configured": True,
+        "claude_accounts": len(deployment.claude_accounts),
+        "codex_accounts": len(deployment.codex_accounts),
+        "chat_endpoint": bool(deployment.chat_endpoint),
+        "default_model": deployment.default_model,
+    })
+    return status
+
+
+async def handle_remote_account_usage(request, window=None):
+    """Admin-only, bounded reporting across remote subscription/API accounts."""
+    require_admin(request)
+    owner = get_user_email(request)
+    if not owner:
+        raise web.HTTPUnauthorized()
+    db = get_db()
+    if db is None:
+        raise web.HTTPServiceUnavailable()
+    # Recheck current status/role rather than trusting a stale signed session.
+    user = await db.users.find_one({'email': owner, 'deleted': {'$ne': True}})
+    if not user or user.get('status', 'active') != 'active' or user.get('system_role') != 'admin':
+        raise web.HTTPForbidden()
+    from isolation.accounting import account_usage
+    try:
+        window = {} if window is None else window
+        if not isinstance(window, dict) or set(window) - {'start', 'end'} or request.query:
+            raise ValueError('Only start and end are supported')
+        end = datetime.fromisoformat(window['end']) if 'end' in window else datetime.now(timezone.utc)
+        start = datetime.fromisoformat(window['start']) if 'start' in window else end - timedelta(days=7)
+        result = await account_usage(db, start, end)
+    except (ValueError, TypeError) as error:
+        return web.json_response({'error': 'Invalid usage window: use timezone-aware start/end within 31 days'}, status=400)
+    return web.json_response(result, headers={'Cache-Control': 'no-store'})
+
+
 async def handle_pool_status(request):
     """Return agent pool status (available/in_use/queued)."""
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        return web.json_response(_remote_pool_status())
     from agent.pool import get_pool
     pool = get_pool()
     try:

@@ -98,6 +98,11 @@ def source_query(identity):
 async def _fetch(request):
     db, identity, user_query = await authenticate(request)
     body = await read_body(request)
+    return await fetch_history(db, identity, user_query, body)
+
+
+async def fetch_history(db, identity, user_query, body):
+    """Internal core; caller must authenticate, scope identity and admit_request."""
     if not isinstance(body, dict) or set(body) - {'conversation_id', 'anchor_message_id', 'before', 'after', 'max_chars', 'cursor'}:
         raise RecallError('invalid_argument')
     cid = body.get('conversation_id')

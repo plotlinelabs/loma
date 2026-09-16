@@ -164,7 +164,7 @@ async def test_stream_response_compresses_final_text_with_prompt():
     with patch("slack_app.handlers.maybe_compress_slack_reply", AsyncMock(return_value="short")) as compress:
         await _stream_response(client, "C1", "1.0", "2.0", _events("draft", LONG_REPLY), prompt="explain the ask")
 
-    compress.assert_awaited_once_with(LONG_REPLY, "explain the ask")
+    compress.assert_awaited_once_with(LONG_REPLY, "explain the ask", db=None, conversation_id=None)
     client.chat_postMessage.assert_awaited_once_with(channel="C1", text="short", thread_ts="1.0")
 
 

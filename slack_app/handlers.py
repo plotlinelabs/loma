@@ -31,7 +31,7 @@ TASK_CAPTURE_EMOJI = "loma-task"
 CONVERSATION_TRACKER_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3001").rstrip("/") + "/conversations"
 
 
-async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, prompt=""):
+async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, prompt="", observer=None):
     """
     Consume the agent stream and post only the final response.
 
@@ -80,7 +80,9 @@ async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, p
         return
 
     # Post only the final response, compressed if it came back as a report
-    final_text = truncate_for_slack(await maybe_compress_slack_reply(last_text, prompt))
+    final_text = truncate_for_slack(await maybe_compress_slack_reply(last_text, prompt,
+        db=observer.db if observer else None,
+        conversation_id=observer.conversation_id if observer else None))
     logger.info("[SLACK] Posting final response (%d chars)", len(final_text))
     await client.chat_postMessage(
         channel=channel,
@@ -202,7 +204,7 @@ async def _handle_agent_request(
             source=source,
             user_email=user_email,
         )
-        await _stream_response(client, channel, thread_ts, event_ts, agent_stream, prompt=prompt)
+        await _stream_response(client, channel, thread_ts, event_ts, agent_stream, prompt=prompt, observer=observer)
         logger.info("[SLACK] All responses posted successfully")
 
         # Fire-and-forget: ingest this conversation as a change-stream event.

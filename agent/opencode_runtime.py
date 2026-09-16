@@ -709,6 +709,9 @@ def _configured_prewarm_models() -> set[str]:
 
 
 def _should_prewarm_model(model_id: str) -> bool:
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        return False  # Remote worker mode: never prewarm local OpenCode servers.
     return OPENCODE_PREWARM_POOL_SIZE > 0 and model_id in _configured_prewarm_models()
 
 

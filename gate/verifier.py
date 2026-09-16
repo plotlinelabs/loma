@@ -211,6 +211,22 @@ class LLMVerifier:
         raise NotImplementedError
 
 
+class RemoteVerifier(LLMVerifier):
+    """Independent, accounted, tool-free assessment on the backend event loop."""
+
+    async def assess_remote(self, *, db, conversation_id, ticket_context,
+                            draft_reply, evidence_kinds, evidence_digest=""):
+        if not (draft_reply or "").strip():
+            return _empty_draft_assessment()
+        from isolation.utility import complete
+        prompt = _build_prompt(ticket_context, draft_reply, evidence_kinds, evidence_digest)
+        return _parse_assessment(await complete(prompt, db=db,
+            conversation_id=conversation_id, timeout=40))
+
+    def _complete(self, prompt):
+        raise RuntimeError("Remote verification requires async assess_remote with stored ownership")
+
+
 class ClaudeCLIVerifier(LLMVerifier):
     """Production verifier — Claude via the `claude` CLI subprocess.
 
@@ -227,6 +243,9 @@ class ClaudeCLIVerifier(LLMVerifier):
         import json
         import subprocess
 
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            raise RuntimeError("Local model CLI verifier is disabled while LOMA_REMOTE_WORKERS=on")
         proc = subprocess.run(
             ["claude", "-p", prompt, "--model", self._model,
              "--max-turns", "1", "--output-format", "json"],
@@ -293,6 +312,9 @@ def get_verifier() -> Verifier:
     forced = os.environ.get("GATE_VERIFIER", "").strip().lower()
     if forced == "heuristic":
         return HeuristicVerifier()
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        return RemoteVerifier()
     if forced == "openai":
         return OpenAIVerifier()
     if forced == "anthropic":

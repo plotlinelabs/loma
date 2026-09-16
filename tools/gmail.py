@@ -44,7 +44,8 @@ from dotenv import load_dotenv
 
 # Allow imports from project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-load_dotenv()
+if os.getenv("PYTHON_DOTENV_DISABLED") != "1":
+    load_dotenv()
 
 from tools._google_auth import get_google_credentials  # noqa: E402
 
@@ -298,7 +299,7 @@ async def read_email(user_email: str, message_id: str) -> dict:
 
 async def send_email(
     user_email: str, to: str, subject: str, body: str, cc: str = "",
-    attachments: str = "", html_body: str = "",
+    attachments: str = "", html_body: str = "", rfc_message_id: str = "",
 ) -> dict:
     """Send an email on behalf of the user, optionally with HTML and attachments.
 
@@ -306,12 +307,16 @@ async def send_email(
         attachments: Comma-separated file paths (e.g., "/tmp/a.pdf,/tmp/b.csv").
         html_body: Optional HTML body; `body` becomes the plain-text fallback.
     """
+    if rfc_message_id and not re.fullmatch(r"<loma-[a-f0-9]{64}@actions.loma.invalid>", rfc_message_id):
+        raise ValueError("Invalid bounded action Message-ID")
     service = await _get_service(user_email)
 
     attachment_paths = _parse_attachments(attachments)
     message = _build_message_with_attachments(body, attachment_paths, html_body or None)
     message["to"] = to
     message["subject"] = subject
+    if rfc_message_id:
+        message["Message-ID"] = rfc_message_id
     if cc:
         message["cc"] = cc
 
@@ -329,6 +334,34 @@ async def send_email(
         response["attachments"] = [os.path.basename(p) for p in attachment_paths]
 
     return response
+
+
+async def check_sent(user_email: str, rfc_message_id: str) -> dict:
+    """A missing result is NOT proof of non-delivery. Never sends or retries.
+
+    Bound search and full-message reads. Return no unrelated messages. Gmail's
+    SENT label is evidence of submission, not recipient delivery or reading.
+    """
+    if not re.fullmatch(r"<loma-[a-f0-9]{64}@actions.loma.invalid>", rfc_message_id):
+        raise ValueError("Invalid bounded action Message-ID")
+    service = await _get_service(user_email)
+    messages = service.users().messages()
+    found = messages.list(userId="me", q="rfc822msgid:" + rfc_message_id,
+                          labelIds=["SENT"], maxResults=2).execute()
+    candidates = found.get("messages", [])
+    if found.get("nextPageToken") or len(candidates) > 1:
+        return {"outcome": "ambiguous"}
+    if not candidates:
+        return {"outcome": "not_found"}
+    message = messages.get(userId="me", id=candidates[0]["id"], format="full").execute()
+    payload = message.get("payload", {})
+    headers = _extract_headers(payload.get("headers", []), "Message-ID", "To", "Cc", "Bcc", "Subject")
+    if headers.get("Message-ID") != rfc_message_id or "SENT" not in message.get("labelIds", []):
+        return {"outcome": "mismatch"}
+    return {"outcome": "candidate", "message_id": message["id"],
+            "rfc_message_id": rfc_message_id, "to": headers.get("To", ""),
+            "cc": headers.get("Cc", ""), "bcc": headers.get("Bcc", ""),
+            "subject": headers.get("Subject", ""), "body": _decode_body(payload)}
 
 
 async def create_draft(
@@ -437,6 +470,12 @@ def main():
     p_send.add_argument("--html-body", default="", help="HTML body (renders full-width with clickable links); --body is the plain-text fallback")
     p_send.add_argument("--html-body-file", default="", help="Path to a file containing the HTML body (avoids shell-escaping large HTML)")
 
+    p_send.add_argument("--rfc-message-id", default="", help="Stable bounded action identity; not an idempotency guarantee")
+
+    p_check = sub.add_parser("check-sent", help="Read-only lookup of a bounded action in Sent")
+    p_check.add_argument("--user-email", required=True)
+    p_check.add_argument("--rfc-message-id", required=True)
+
     # create-draft
     p_draft = sub.add_parser("create-draft", help="Create a draft email")
     p_draft.add_argument("--user-email", required=True)
@@ -473,8 +512,10 @@ def main():
         elif args.command == "send-email":
             result = asyncio.run(send_email(
                 args.user_email, args.to, args.subject, args.body, args.cc,
-                args.attachments, _resolve_html_body(args),
+                args.attachments, _resolve_html_body(args), args.rfc_message_id,
             ))
+        elif args.command == "check-sent":
+            result = asyncio.run(check_sent(args.user_email, args.rfc_message_id))
         elif args.command == "create-draft":
             result = asyncio.run(create_draft(
                 args.user_email, args.to, args.subject, args.body, args.cc,

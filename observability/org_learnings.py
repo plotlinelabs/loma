@@ -85,7 +85,7 @@ async def _vector_search(
     return await collection.aggregate(pipeline).to_list(limit)
 
 
-async def _haiku_confirm_duplicate(new_text: str, existing_text: str) -> bool:
+async def _haiku_confirm_duplicate(new_text: str, existing_text: str, *, db=None, conversation_id=None) -> bool:
     """Ask Haiku whether two learnings are saying the same thing."""
     prompt = f"""Do these two learnings convey the same core insight? Ignore differences in wording, detail level, or examples — focus only on whether the KEY TAKEAWAY is the same.
 
@@ -98,25 +98,30 @@ LEARNING B:
 Answer ONLY "yes" or "no". If they cover the same topic and teach the same lesson, answer "yes" even if one has more detail than the other."""
 
     try:
-        from agent.pool import background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
-            "--model", HAIKU_MODEL,
-            "--max-turns", "1",
-            "--allowedTools", "",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=HAIKU_TIMEOUT)
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            answer = (await complete(prompt, db=db, conversation_id=conversation_id, timeout=HAIKU_TIMEOUT)).lower()
+        else:
+            from agent.pool import background_cli_env
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", prompt,
+                "--model", HAIKU_MODEL,
+                "--max-turns", "1",
+                "--allowedTools", "",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=background_cli_env(),
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=HAIKU_TIMEOUT)
 
-        if proc.returncode != 0:
-            err_msg = stderr.decode().strip()[:200] if stderr else "unknown"
-            logger.warning("[ORG-LEARNINGS] Haiku CLI failed (rc=%d): %s", proc.returncode, err_msg)
-            return False
+            if proc.returncode != 0:
+                err_msg = stderr.decode().strip()[:200] if stderr else "unknown"
+                logger.warning("[ORG-LEARNINGS] Haiku CLI failed (rc=%d): %s", proc.returncode, err_msg)
+                return False
 
-        answer = stdout.decode().strip().lower()
-        result = "yes" in answer
+            answer = stdout.decode().strip().lower()
+        result = answer.strip().rstrip(".") == "yes"
         if verbose:
             logger.info(
                 "[ORG-LEARNINGS] Haiku verdict=%s (raw=%r)\n  A: %s\n  B: %s",
@@ -182,7 +187,7 @@ async def _dedup_and_store(
         if verbose:
             logger.info("[%s] Score %.3f >= threshold, asking Haiku to confirm...", label, score)
 
-        is_duplicate = await _haiku_confirm_duplicate(text, candidate.get(text_field, ""))
+        is_duplicate = await _haiku_confirm_duplicate(text, candidate.get(text_field, ""), db=db, conversation_id=conversation_id)
         if is_duplicate:
             existing_id = candidate[id_field]
             update: dict = {

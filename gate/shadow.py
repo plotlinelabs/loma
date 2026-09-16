@@ -18,7 +18,7 @@ import os
 import re
 
 from gate.decision import GateConfig, evaluate
-from gate.verifier import LLMVerifier, get_verifier
+from gate.verifier import LLMVerifier, RemoteVerifier, get_verifier
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +118,18 @@ async def record_gate_shadow(db, *, conversation_id: str, flow_id: str, issue_id
         ticket_context = f"Ticket #{meta['number']}: {meta['title']}\n{meta['body']}".strip()
 
         verifier = get_verifier()
-        assessment = await asyncio.to_thread(
-            verifier.assess,
-            ticket_context=ticket_context,
-            draft_reply=reply_body,
-            evidence_kinds=evidence_kinds,
-            evidence_digest=evidence_digest,
-        )
+        if isinstance(verifier, RemoteVerifier):
+            assessment = await verifier.assess_remote(db=db, conversation_id=conversation_id,
+                ticket_context=ticket_context, draft_reply=reply_body,
+                evidence_kinds=evidence_kinds, evidence_digest=evidence_digest)
+        else:
+            assessment = await asyncio.to_thread(
+                verifier.assess,
+                ticket_context=ticket_context,
+                draft_reply=reply_body,
+                evidence_kinds=evidence_kinds,
+                evidence_digest=evidence_digest,
+            )
         is_llm = isinstance(verifier, LLMVerifier)
         result = evaluate(assessment, GateConfig(hold_on_missing_confidence=is_llm))
 

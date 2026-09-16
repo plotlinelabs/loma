@@ -463,11 +463,11 @@ class ConversationObserver:
             title = None
             if refresh_title:
                 title, topic = await asyncio.gather(
-                    _generate_title_llm(prompt, response_snippet),
-                    _classify_topic_llm(prompt, response_snippet),
+                    _generate_title_llm(prompt, response_snippet, db=self.db, conversation_id=self.conversation_id),
+                    _classify_topic_llm(prompt, response_snippet, db=self.db, conversation_id=self.conversation_id),
                 )
             else:
-                topic = await _classify_topic_llm(prompt, response_snippet)
+                topic = await _classify_topic_llm(prompt, response_snippet, db=self.db, conversation_id=self.conversation_id)
 
             await self.db.conversations.update_one(
                 {"conversation_id": self.conversation_id},
