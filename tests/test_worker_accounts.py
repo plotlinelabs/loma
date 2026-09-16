@@ -209,7 +209,7 @@ async def test_configuration_and_cooldown_validation(db, tmp_path):
     with pytest.raises(ValueError):
         selector(db, [a, a])
     with pytest.raises(ValueError):
-        selector(db, [a], refresh=None)
+        selector(db, [a], refresh=False)
     pool = selector(db, [a])
     for account_id, seconds in [('unknown', 60), (a.account_id, True), (a.account_id, 0), (a.account_id, 86401)]:
         with pytest.raises(ValueError):

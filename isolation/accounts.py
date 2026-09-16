@@ -1,9 +1,10 @@
 """Backend-only subscription selection, independent of local CLI pools.
 
-Candidates and refresh adapters are supplied by trusted ingress. This module
-never discovers grants from disk, starts a CLI, or gives workers account paths.
+Candidates are supplied by trusted ingress; refresh defaults to backend OAuth.
+This module never discovers grants from disk, starts a CLI, or gives workers account paths.
 Selection order is process-local; durable cooldowns are shared across processes.
-It does not implement provider OAuth refresh or deployment-wide pool capacity.
+The default backend OAuth adapter refreshes tokens without starting a CLI.
+Deployment-wide pool capacity is not implemented.
 """
 import asyncio
 import base64
@@ -84,7 +85,10 @@ class SubscriptionAccount:
 
 
 class SubscriptionAccounts:
-    def __init__(self, db, accounts, *, check_access, refresh):
+    def __init__(self, db, accounts, *, check_access, refresh=None):
+        if refresh is None:
+            from isolation.oauth import OAuthRefresh
+            refresh = OAuthRefresh(check_access=self._allowed)
         # Neither candidates nor adapters may originate in a worker request.
         accounts = tuple(accounts)
         if (not all(isinstance(a, SubscriptionAccount) for a in accounts)

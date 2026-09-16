@@ -9,6 +9,11 @@ completion of runtime isolation and must not be used to mark PR #191 ready.
 No existing backend, chat, scheduler, model account or production deployment is
 changed by adding these modules. Chat still has its previously documented risk.
 
+The concrete backend OAuth refresh adapters are now implemented and are the
+default for the subscription selector. See [OAuth adapters](#concrete-backend-oauth-refresh-adapters)
+for the current implementation, deployment ownership contract and verification
+limits. Earlier checkpoints below describe their state at that point in the migration.
+
 ## Boundary implemented
 
 ```
@@ -607,3 +612,59 @@ reporting, remaining tool adapters and authenticated entrypoint migration. This
 selector does not start any CLI or alter existing production routing. Subscription
 usage currently retains the supplied priced budget contract; it is not an invoice
 or subscription-quota meter. PR #191 remains draft.
+
+## Concrete backend OAuth refresh adapters
+
+`SubscriptionAccounts(..., check_access=...)` now defaults to
+`isolation.oauth.OAuthRefresh`. An explicit trusted refresh callback remains
+supported for tests or reviewed provider integrations. Claude and Codex adapters
+are implemented; this does not switch any production entrypoint to remote runs.
+
+- Reads the selected account's bounded, no-follow credential file only. Fresh
+  credentials return provider headers; expiring credentials use a fixed HTTPS
+  refresh endpoint and public OAuth client ID. No CLI, environment URL override,
+  ambient HTTP proxy, redirect, retry, API-key fallback or account failover.
+- Claude refreshes `claudeAiOauth` using the stored scopes and preserves account
+  metadata. Codex refreshes `tokens`, preserves omitted refresh/ID tokens, and
+  updates `last_refresh`. JWT expiry (five-minute margin) takes precedence over
+  an opaque token's persisted expiry/eight-day timestamp fallback. JWT decoding
+  detects identity changes only; it does not authenticate a token.
+- Checks policy before dispatch, after the exchange and before returning headers;
+  rejects changed provider identity/account, reconnect/disconnect observed during
+  refresh, malformed credentials/responses and invalid expiries. The existing
+  selected-account and relay checks still guard dispatch and stream reads.
+- Separate adapter instances/processes serialize with a cancellable `flock` on
+  `.loma-oauth.lock`. The refreshed bundle is atomically replaced, mode `0600`,
+  with file and directory `fsync`, before any new credentials are returned.
+- A durable `.loma-oauth.pending` marker fingerprints the pre-exchange bundle.
+  Cancellation, timeout, upstream rejection, malformed reply or persistence
+  failure leave that bundle fenced. It is never retried automatically, because
+  the provider may already have consumed/rotated its refresh token. Reconnect
+  with a changed bundle clears the fence logically; successful refresh removes
+  it. A crash after the credential rename can safely reuse the committed bundle.
+  Error messages never include provider bodies or credential values.
+
+**Deployment contract:** all backend refreshers for an account must use the same
+credential directory on a shared filesystem supporting `flock`, atomic rename and
+`fsync`. Do not copy bundles to independent host-local stores. Do not enable a
+legacy CLI and this adapter as concurrent credential writers for the same account;
+legacy writers do not participate in this lock. External login/disconnect changes
+are revalidated but are not transactional with the adapter. Entrypoint cutover
+must enforce exclusive ownership before rollout. No shared production files were
+changed by this implementation.
+
+Tests cover both providers, real synthetic HTTP transport, rotation persistence,
+concurrent instances and separate Python processes, stale-token fencing, restart,
+cancellation, timeout, policy revocation, identity/account changes, file failures,
+and default-selector/run-to-budget wiring. The native test script includes this
+suite. No live subscription credential or paid provider is used; live-provider
+compatibility and dedicated-host containment certification remain rollout gates.
+Protocol references: Codex `rust-v0.153.3` login/auth implementation and installed
+Claude Code `2.1.261` OAuth client. Public credential guidance:
+https://developers.openai.com/codex/auth
+
+**Remaining PR scope:** other connector/action adapters, authenticated production
+entrypoint migration, distributed account capacity/rate-limit feedback and usage
+reporting, native CI permissions, dedicated Docker/gVisor and live-provider
+verification. The concrete OAuth refresh-adapter implementation is complete;
+PR #191 remains draft for the broader migration.
