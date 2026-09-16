@@ -102,7 +102,7 @@ class SubscriptionAccounts:
         self._index = 0
         self._lock = asyncio.Lock()
 
-    async def _allowed(self, authority, account):
+    async def _allowed(self, authority, account, *, check_cooldown=True):
         # Fail closed on DB/policy errors, unknown users and admin disablement.
         if await self.check_access(authority, account) is not True:
             return False
@@ -111,6 +111,8 @@ class SubscriptionAccounts:
         if (not user or user.get('status', 'active') != 'active'
                 or user.get(account.runtime + '_pool_enabled', True) is not True):
             return False
+        if not check_cooldown:
+            return True
         state = await self.states.find_one({'_id': account.account_id})
         return not state or state.get('cooldown_until', datetime.min.replace(tzinfo=timezone.utc)) <= datetime.now(timezone.utc)
 
@@ -156,6 +158,16 @@ class SelectedSubscription:
                 and self.account.identity() == self.identity)
         except Exception:
             return False
+
+    async def report_rate_limit(self, authority, seconds):
+        if (authority != self.authority
+                or not await self.selector._allowed(authority, self.account, check_cooldown=False)
+                or self.account.identity() != self.identity):
+            raise ModelDenied('Subscription account access changed')
+        # An already-running call may report a longer cooldown after another
+        # backend's report. Cooldown itself must not prevent that extension.
+        # $max preserves longer concurrent cooldown reports across backends.
+        await self.selector.cooldown(self.account_id, seconds)
 
     async def resolve_headers(self, authority, account_id):
         # Re-check before and after refresh. Never switch identities/accounts in

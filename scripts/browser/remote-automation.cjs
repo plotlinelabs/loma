@@ -23,7 +23,8 @@ assert(process.env.LOMA_SMOKE_EVIDENCE, 'LOMA_SMOKE_EVIDENCE required');
 const dash = localConfig(path.join(root, 'dashboard/.env'));
 for (const key of ['USER_NAME', 'PASSWORD']) assert(dash[key], `dashboard/.env ${key} required`);
 async function login(page) {
-  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.goto(`${base}/login`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.waitForLoadState('networkidle', {timeout:60000});
   if (await page.locator('#signin-email').count()) {
     for (let i = 0; i < 20; i++) {
       await page.fill('#signin-email', dash.USER_NAME); await page.fill('#signin-password', dash.PASSWORD);

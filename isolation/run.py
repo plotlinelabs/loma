@@ -89,10 +89,12 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         artifacts = ArtifactScope(artifact_root, authority, conversation_id)
         stack.callback(artifacts.close)
         await context.stage(artifacts, attachments, input_ids)
+        on_rate_limit = None
         if subscription_accounts is not None:
             selected = await subscription_accounts.select(authority, runtime)
             budget_spec = replace(budget_spec, account_id=selected.account_id)
             resolve_account_headers = selected.resolve_headers
+            on_rate_limit = selected.report_rate_limit
 
             async def account_access(auth):
                 return await check_access(auth) and await selected.authorize(auth)
@@ -106,7 +108,7 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         session = await stack.enter_async_context(aiohttp.ClientSession(
             cookie_jar=aiohttp.DummyCookieJar(), trust_env=False))
         relay = budget.relay(grant, session=session, authorize=context.authorize, audit=audit,
-            resolve_account_headers=resolve_account_headers)
+            resolve_account_headers=resolve_account_headers, on_rate_limit=on_rate_limit)
         stack.push_async_callback(relay.close)
         registry = DownloadRegistry(db, artifacts, emit=events.put)
         knowledge = KnowledgeGateway(db, authority, conversation_id,

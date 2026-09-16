@@ -1,18 +1,32 @@
 # Remote chat worker migration
 
-## Status: three native runtime adapters, NOT a production cutover
+## Current status: default-off entrypoint routing implemented; certification pending
 
-The approved direction is to retain chat while moving its workers off the
-backend. `isolation/` now contains the supervisor, backend transport, narrow
-wire protocol and native Codex, Claude Code and OpenCode adapters (see the latest section below). **Existing chat is not routed through them yet.** This is not
-completion of runtime isolation and must not be used to mark PR #191 ready.
-No existing backend, chat, scheduler, model account or production deployment is
-changed by adding these modules. Chat still has its previously documented risk.
+Remote mode now includes native runtime adapters, pinned subscription selection
+and OAuth refresh, accounted model relay, scoped knowledge/files/connectors,
+owner-approved writes, chat/flow/recovery routing, tool-free utilities and scoped
+GitHub/Linear webhook automation. Worker/supervisor image build and deployment
+configuration are provided. `LOMA_REMOTE_WORKERS` remains off by default; no
+production rollout or dedicated-host certification has been performed here.
 
-The concrete backend OAuth refresh adapters are now implemented and are the
-default for the subscription selector. See [OAuth adapters](#concrete-backend-oauth-refresh-adapters)
-for the current implementation, deployment ownership contract and verification
-limits. Earlier checkpoints below describe their state at that point in the migration.
+Provider HTTP 429 responses now update the selected subscription's durable
+cooldown. Only the trusted provider's bounded Retry-After hint is used (1 second
+to 24 hours, with a 60-second default); date-form hints are also supported. The
+relay closes without retry or account failover, and missing usage evidence keeps
+the spend reservation. Other backend selectors observe the same cooldown;
+concurrent cooldown updates cannot shorten it. Feedback persistence failures
+fail closed without disclosing provider details.
+
+**Still required:** native CI installation with workflow-capable credentials;
+actual image builds and dedicated Docker/gVisor hostile-worker, cleanup and
+live-provider certification; distributed subscription capacity/rate-limit
+coordination beyond cooldowns and account-level usage reporting; operator-owned
+persistent storage/retention configuration and a drained production rollout.
+These are not implied by synthetic tests or local browser screenshots.
+
+The sections below retain historical implementation checkpoints. Statements
+such as "not routed yet" describe that checkpoint, not the current default-off
+routing implementation. The latest implementation sections are at the bottom.
 
 ## Boundary implemented
 

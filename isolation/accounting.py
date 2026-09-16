@@ -164,7 +164,7 @@ class ModelBudget:
     async def stop(self):
         await self.collection.update_one(self.key, {'$set': {'active': False}})
 
-    def relay(self, grant, *, session, authorize, audit, resolve_account_headers=None):
+    def relay(self, grant, *, session, authorize, audit, resolve_account_headers=None, on_rate_limit=None):
         """Bind refresh to the durable account ID, never a worker-selected account.
 
         resolve_account_headers(authority, account_id) must check the current
@@ -181,4 +181,5 @@ class ModelBudget:
 
         return ModelRelay(self.authority, grant, session=session, authorize=authorize, audit=audit,
                           reserve=self.reserve, settle=self.settle, record_usage=self.record_usage,
-                          resolve_headers=resolve_headers if resolve_account_headers is not None else None)
+                          resolve_headers=resolve_headers if resolve_account_headers is not None else None,
+                          on_rate_limit=on_rate_limit)

@@ -489,3 +489,48 @@ def test_credential_resolver_requires_callable():
     with pytest.raises(ValueError, match='Credential resolver'):
         ModelRelay(AUTH, grant(), session=None, authorize=AsyncMock(), audit=AsyncMock(),
                    reserve=AsyncMock(), settle=AsyncMock(), resolve_headers='worker-chosen')
+
+
+@pytest.mark.parametrize('hint,expected', [(None,60),('',60),('nonsense',60),('-2',60),
+    ('0',1),('90',90),('999999999',86400),('1.5',60),('9'*129,60),('９',60),
+    ('Wed, 21 Oct 2015 07:28:00 GMT',1)])
+def test_provider_retry_after_is_bounded(hint,expected):
+    from isolation.models import retry_after_seconds
+    assert retry_after_seconds(hint)==expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('callback_failure',[False,True])
+async def test_rate_limit_feedback_closes_relay_without_retry(callback_failure):
+    async def provider(request):
+        return web.Response(status=429,headers={'Retry-After':'120','X-Secret':CANARY})
+    feedback=AsyncMock(side_effect=RuntimeError(CANARY) if callback_failure else None)
+    usage=AsyncMock()
+    relay,server,session,callbacks=await fixture(provider,on_rate_limit=feedback,record_usage=usage)
+    try:
+        with pytest.raises(ModelDenied) as error:
+            await relay(AUTH,'model.start',{'body':body()})
+        assert CANARY not in str(error.value)
+        feedback.assert_awaited_once_with(AUTH,120)
+        assert relay.closed and relay.response is None
+        assert usage.await_args.args[-1] is None  # retain uncertain spend
+        assert callbacks['settle'].await_args.args[-1]=='unknown'
+        with pytest.raises(ModelDenied,match='closed'):
+            await relay(AUTH,'model.start',{'body':body()})
+        assert len(relay.session.requests)==1
+    finally:
+        await close(relay,server,session)
+
+
+@pytest.mark.asyncio
+async def test_non_rate_limit_error_does_not_change_account_cooldown():
+    async def provider(request):
+        return web.Response(status=503,headers={'Retry-After':'120'})
+    feedback=AsyncMock()
+    relay,server,session,_=await fixture(provider,on_rate_limit=feedback)
+    try:
+        with pytest.raises(ModelDenied):
+            await relay(AUTH,'model.start',{'body':body()})
+        feedback.assert_not_awaited()
+    finally:
+        await close(relay,server,session)

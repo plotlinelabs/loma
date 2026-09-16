@@ -249,3 +249,36 @@ async def test_soft_deleted_account_is_unavailable(db, tmp_path):
     await db.users.update_one({'email': OWNER}, {'$set': {'deleted': True}})
     with pytest.raises(ModelDenied):
         await pool.select(AUTH, 'codex')
+
+
+@pytest.mark.asyncio
+async def test_provider_feedback_pins_account_and_blocks_other_backend(db,tmp_path):
+    a,b=account(tmp_path),account(tmp_path,email=OTHER)
+    pool=selector(db,[a,b]); selected=await pool.select(AUTH,'codex')
+    with pytest.raises(ModelDenied):
+        await selected.report_rate_limit(replace(AUTH,run_id='foreign'),120)
+    assert await db.isolated_subscription_accounts.count_documents({})==0
+    await selected.report_rate_limit(AUTH,120)
+    assert not await selected.authorize(AUTH)
+    await selected.report_rate_limit(AUTH,3600)
+    state=await db.isolated_subscription_accounts.find_one({'_id':a.account_id})
+    assert state['cooldown_until'].replace(tzinfo=timezone.utc)>datetime.now(timezone.utc)+timedelta(seconds=3500)
+    other_backend=selector(db,[a,b])
+    assert (await other_backend.select(AUTH,'codex')).account_id==b.account_id
+    assert await db.isolated_subscription_accounts.find_one({'_id':b.account_id}) is None
+
+
+@pytest.mark.asyncio
+async def test_run_wires_provider_feedback_to_selected_account(db,tmp_path,monkeypatch):
+    await seed(db)
+    a=account(tmp_path); pool=selector(db,[a])
+    async def worker(**kw):
+        relay=kw['execute_tool'].models
+        assert callable(relay.on_rate_limit)
+        await relay.on_rate_limit(kw['authority'],90)
+        yield 'must not escape after account cooldown'
+    monkeypatch.setattr(mod,'stream_worker',worker)
+    with pytest.raises(Exception,match='access is no longer valid'):
+        _=[e async for e in mod.stream_run(**args(db,tmp_path/'artifacts',subscription_accounts=pool))]
+    state=await db.isolated_subscription_accounts.find_one({'_id':a.account_id})
+    assert state['cooldown_until'] is not None

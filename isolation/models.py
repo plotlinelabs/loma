@@ -245,8 +245,28 @@ def request_body(grant, body):
     return body
 
 
+def retry_after_seconds(value):
+    """Bound provider cooldowns to one day; malformed/missing hints use 60s."""
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+    import math
+    if not isinstance(value, str) or len(value) > 128:
+        return 60
+    value = value.strip()
+    if value.isascii() and value.isdigit():
+        return max(1, min(86400, int(value)))
+    try:
+        until = parsedate_to_datetime(value)
+        if until.tzinfo is None:
+            return 60
+        seconds = math.ceil((until - datetime.now(timezone.utc)).total_seconds())
+        return max(1, min(86400, seconds))
+    except (ValueError, TypeError, OverflowError):
+        return 60
+
+
 class ModelRelay:
-    def __init__(self, authority, grant, *, session, authorize, audit, reserve, settle, record_usage=None, resolve_headers=None):
+    def __init__(self, authority, grant, *, session, authorize, audit, reserve, settle, record_usage=None, resolve_headers=None, on_rate_limit=None):
         """Callbacks are trusted backend adapters, never selected by the worker.
 
         reserve(authority, call_id, grant, body) durably reserves spend BEFORE
@@ -259,6 +279,8 @@ class ModelRelay:
         resolve_headers(authority), if supplied, refreshes credentials for the
         pinned account before EACH call. It cannot change model, endpoint, budget
         or history. Errors never fall back to the grant's original credentials.
+        on_rate_limit(authority, seconds) persists bounded provider HTTP 429
+        feedback for the pinned account; it never authorizes a retry.
         """
         if any(not callable(f) for f in (authorize, audit, reserve, settle)):
             raise ValueError('Model policy, audit and budget callbacks are required')
@@ -266,6 +288,9 @@ class ModelRelay:
             raise ValueError("Usage recorder must be a trusted callback")
         if resolve_headers is not None and not callable(resolve_headers):
             raise ValueError("Credential resolver must be a trusted callback")
+        if on_rate_limit is not None and not callable(on_rate_limit):
+            raise ValueError("Rate-limit recorder must be a trusted callback")
+        self.on_rate_limit = on_rate_limit
         self.resolve_headers = resolve_headers
         self.record_usage = record_usage
         self.usage = None
@@ -341,6 +366,18 @@ class ModelRelay:
                     self.response = await self.session.post(self.grant.endpoint, json=body,
                         headers=headers, allow_redirects=False,
                         timeout=aiohttp.ClientTimeout(total=300, sock_read=60))
+                    if self.response.status == 429:
+                        # Provider feedback only; never accept worker retry hints,
+                        # retry a billed call, or switch this run's pinned account.
+                        self.closed = True
+                        if self.on_rate_limit is not None:
+                            try:
+                                async with asyncio.timeout(10):
+                                    await self.on_rate_limit(authority, retry_after_seconds(
+                                        self.response.headers.get('Retry-After')))
+                            except Exception:
+                                raise ModelDenied('Account rate-limit recording failed') from None
+                        raise ModelDenied('Model account is rate limited; request was not retried')
                     if self.response.status != 200 or self.response.content_type != 'text/event-stream':
                         raise ModelDenied('Model provider did not return a valid stream')
                     await self._authorized(authority)
