@@ -1928,6 +1928,31 @@ def _remote_pool_status() -> dict:
     return status
 
 
+async def handle_remote_account_usage(request):
+    """Admin-only, bounded reporting across remote subscription/API accounts."""
+    require_admin(request)
+    owner = get_user_email(request)
+    if not owner:
+        raise web.HTTPUnauthorized()
+    db = get_db()
+    if db is None:
+        raise web.HTTPServiceUnavailable()
+    # Recheck current status/role rather than trusting a stale signed session.
+    user = await db.users.find_one({'email': owner, 'deleted': {'$ne': True}})
+    if not user or user.get('status', 'active') != 'active' or user.get('system_role') != 'admin':
+        raise web.HTTPForbidden()
+    from isolation.accounting import account_usage
+    try:
+        if set(request.query) - {'start', 'end'}:
+            raise ValueError('Only start and end are supported')
+        end = datetime.fromisoformat(request.query['end']) if 'end' in request.query else datetime.now(timezone.utc)
+        start = datetime.fromisoformat(request.query['start']) if 'start' in request.query else end - timedelta(days=7)
+        result = await account_usage(db, start, end)
+    except ValueError as error:
+        return web.json_response({'error': str(error)}, status=400)
+    return web.json_response(result, headers={'Cache-Control': 'no-store'})
+
+
 async def handle_pool_status(request):
     """Return agent pool status (available/in_use/queued)."""
     from isolation.deployment import remote_workers_enabled
@@ -2260,6 +2285,7 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/mcp-servers", handle_list_mcp_servers)
     app.router.add_get("/api/available-tools", handle_available_tools)
     app.router.add_get("/api/pool-status", handle_pool_status)
+    app.router.add_get("/api/remote-account-usage", handle_remote_account_usage)
 
     # Flow routes (scheduled/recurring automations)
     from api.flow_routes import setup_flow_routes

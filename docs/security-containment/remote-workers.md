@@ -1029,3 +1029,24 @@ also retain a slot until expiry; availability never overrides the capacity cap.
 This coordinates admitted remote runs, not a claim about provider-side work
 continuing after a lost TCP connection. Real host teardown remains a certification
 gate. All cooperating backends must share the same account-state Mongo database.
+
+
+## Account-level usage reporting
+
+`GET /api/remote-account-usage?start=<ISO8601>&end=<ISO8601>` is restricted to
+currently active admins, using signed dashboard identity and a fresh DB role
+check. It defaults to the past seven days; explicit windows must be timezone-aware,
+positive, and at most 31 days. Unknown query keys are rejected. Responses are
+`Cache-Control: no-store`. This is an API report, not a new dashboard page.
+
+Rows group the authoritative `isolated_model_budgets` ledger by opaque account ID,
+model and protocol, with runs, calls, blocked runs, recorded tokens, committed and
+recorded nanodollars, unsettled calls and retained holds. There is no second
+mutable usage counter to lose or double-increment. The half-open window selects
+**run creation time**, not settlement time; late receipts update prior windows.
+Provider receipt token fields retain their protocol-specific cache semantics.
+Prices are pinned API-equivalent estimates, **not subscription invoices**.
+Unknown usage never appears as a zero-cost settled call. Owner emails, prompts,
+provider response IDs and credentials are excluded. Queries use a creation-time
+index, a 10-second execution limit and a 1000-group result bound; overflow fails
+explicitly rather than silently truncating totals.

@@ -183,3 +183,49 @@ class ModelBudget:
                           reserve=self.reserve, settle=self.settle, record_usage=self.record_usage,
                           resolve_headers=resolve_headers if resolve_account_headers is not None else None,
                           on_rate_limit=on_rate_limit)
+
+
+async def account_usage(db, start, end):
+    """Account/model totals from the authoritative ledger, not a second counter.
+
+    Windows include runs *created* in [start, end); late settlements update the
+    same report. Amounts are pinned API-price estimates, never subscription
+    invoices. Pending/unknown holds are reported separately from evidenced use.
+    No prompt, owner, provider response ID or credential leaves this function.
+    """
+    from datetime import timedelta
+    if (not isinstance(start, datetime) or not isinstance(end, datetime)
+            or start.tzinfo is None or end.tzinfo is None
+            or not timedelta(0) < end - start <= timedelta(days=31)):
+        raise ValueError('Usage window must be timezone-aware and at most 31 days')
+    collection = db.isolated_model_budgets
+    await collection.create_index('created_at')
+    pipeline = [
+        {'$match': {'created_at': {'$gte': start, '$lt': end}}},
+        {'$group': {
+            '_id': {'account_id': '$spec.account_id', 'model': '$spec.model', 'protocol': '$spec.protocol'},
+            'runs': {'$sum': 1}, 'calls': {'$sum': '$call_count'},
+            'blocked_runs': {'$sum': {'$cond': ['$blocked', 1, 0]}},
+            'committed_nusd': {'$sum': '$committed_nusd'},
+            'recorded_nusd': {'$sum': '$recorded_nusd'},
+            'unsettled_calls': {'$sum': {'$size': {'$filter': {
+                'input': '$calls', 'as': 'call', 'cond': {'$eq': ['$$call.status', 'held']}}}}},
+            **{field: {'$sum': {'$sum': {'$map': {
+                'input': '$calls', 'as': 'call', 'in': {'$cond': [
+                    {'$eq': ['$$call.status', 'recorded']},
+                    {'$ifNull': ['$$call.receipt.' + field, 0]}, 0]}}}}}
+               for field in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens')},
+        }},
+        {'$sort': {'_id.account_id': 1, '_id.model': 1, '_id.protocol': 1}},
+        {'$limit': 1001},
+    ]
+    rows = await collection.aggregate(pipeline, maxTimeMS=10000).to_list(length=1001)
+    if len(rows) > 1000:
+        raise ValueError('Too many account/model groups; choose a shorter window')
+    for row in rows:
+        row.update(row.pop('_id'))
+        row['held_nusd'] = row['committed_nusd'] - row['recorded_nusd']
+    return {'start': start.isoformat(), 'end': end.isoformat(), 'window_basis': 'run_created_at',
+            'cost_basis': 'pinned_api_price_estimate_not_subscription_invoice',
+            'token_basis': 'provider_receipt_fields; cache inclusion depends on protocol',
+            'accounts': rows}
