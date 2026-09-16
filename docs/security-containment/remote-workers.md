@@ -1033,10 +1033,14 @@ gate. All cooperating backends must share the same account-state Mongo database.
 
 ## Account-level usage reporting
 
-`GET /api/remote-account-usage?start=<ISO8601>&end=<ISO8601>` is restricted to
+`GET /work-api/remote-account-usage` (dashboard proxy) is restricted to
 currently active admins, using signed dashboard identity and a fresh DB role
 check. It defaults to the past seven days; explicit windows must be timezone-aware,
-positive, and at most 31 days. Unknown query keys are rejected. Responses are
+positive, and at most 31 days. Use POST with `{start, end}` ISO8601 fields for
+a custom window. Unknown fields and backend query keys are rejected. The backend
+route lives under `/api/bounded-work/remote-account-usage`, never an unsigned
+generic API route. The existing bounded-work enable flag and signing secret
+are required. Responses are
 `Cache-Control: no-store`. This is an API report, not a new dashboard page.
 
 Rows group the authoritative `isolated_model_budgets` ledger by opaque account ID,
@@ -1050,3 +1054,27 @@ Unknown usage never appears as a zero-cost settled call. Owner emails, prompts,
 provider response IDs and credentials are excluded. Queries use a creation-time
 index, a 10-second execution limit and a 1000-group result bound; overflow fails
 explicitly rather than silently truncating totals.
+
+
+## Native CI activation patch
+
+`docs/security-containment/native-ci.patch` adds a `native-workers` job with
+pinned Codex 0.153.3, Claude Code 2.1.261 and OpenCode 1.18.28, Python 3.12,
+Node 22, a disposable Mongo 7 service, opt-in database tests, JUnit artifacts
+and an explicit zero-skips check. The job becomes a dependency of production
+deployment. Providers remain synthetic; no subscription/API secrets are used.
+
+The patch is prepared but **not active** until a maintainer or workflow-capable
+GitHub connection applies and pushes it:
+
+```sh
+git apply --check docs/security-containment/native-ci.patch
+git apply docs/security-containment/native-ci.patch
+git add .github/workflows/ci.yml
+git commit -m "ci: run pinned native worker suite"
+```
+
+The available connection lacks workflow-edit permission. A green existing CI
+run must not be described as execution of this new native CI job. The pinned
+suite can be run locally with `LOMA_LOCAL_E2E=1 PYTHON=<venv-python> bash
+scripts/test_native_worker.sh --junitxml=<path>` against a throwaway database.
