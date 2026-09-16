@@ -29,7 +29,7 @@ from isolation.workspace_tools import TOOLS as WORKSPACE_TOOLS
 async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtime,
                      grant, budget_spec, allowed_tools, check_access, cancelled,
                      url, token, tls, artifact_root, attachments=(), input_ids=(),
-                     allowed_skills=None, max_seconds=3600, resolve_account_headers=None):
+                     allowed_skills=None, max_seconds=3600, resolve_account_headers=None, subscription_accounts=None):
     """Yield text and trusted file events; own all resources until generator close.
 
     Caller owns the run consumer and MUST close it when abandoning a stream.
@@ -38,8 +38,11 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
     state, never a worker frame. The model grant's old history is never reused.
     resolve_account_headers(authority, account_id) is a trusted credential
     refresh callback, bound to budget_spec.account_id on each provider call.
-    Selection and public entrypoint cutover remain separate.
+    subscription_accounts optionally selects a trusted subscription and pins its
+    ID into the ledger before admission. Public entrypoint cutover is separate.
     """
+    if subscription_accounts is not None and resolve_account_headers is not None:
+        raise ValueError("Use one account selection/refresh source")
     if resolve_account_headers is not None and not callable(resolve_account_headers):
         raise ValueError("Account credential resolver must be callable")
     expected = {'codex': 'responses', 'claude': 'messages', 'opencode': 'chat'}
@@ -82,6 +85,17 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         artifacts = ArtifactScope(artifact_root, authority, conversation_id)
         stack.callback(artifacts.close)
         await context.stage(artifacts, attachments, input_ids)
+        if subscription_accounts is not None:
+            selected = await subscription_accounts.select(authority, runtime)
+            budget_spec = replace(budget_spec, account_id=selected.account_id)
+            resolve_account_headers = selected.resolve_headers
+
+            async def account_access(auth):
+                return await check_access(auth) and await selected.authorize(auth)
+
+            # Revocation also gates stream reads, tool dispatch and user-visible
+            # output, not only the next provider request.
+            context.check_access = account_access
         budget = ModelBudget(db, authority, budget_spec)
         stack.push_async_callback(budget.stop)
         await budget.initialize()

@@ -564,3 +564,46 @@ binding, foreign-authority denial and trusted run-assembly wiring. No real
 subscription credential is used. Still pending: concrete subscription resolvers,
 account selection/cooldown policy and reporting, other adapters, entrypoint
 migration and dedicated-host/live-provider verification.
+
+## Subscription selection without local CLI warmup
+
+`isolation/accounts.py` now provides a backend-only subscription selector for
+Claude and Codex, separate from the legacy process pools. Authenticated ingress
+must supply the approved candidates, current-access callback and provider refresh
+adapter. Finding a credential file alone does not grant access to it.
+
+- Selection intersects explicit backend candidates, current per-run policy, an
+  existing active Loma user, the existing `claude_pool_enabled` or
+  `codex_pool_enabled` admin switch, credential presence and durable cooldowns.
+  Unknown users, policy/DB errors, unsupported/API-key files and empty pools
+  cannot fall back to local execution or another credential source.
+- Account reads are bounded and reject symlinks and non-regular files. Provider
+  identity is fingerprinted from local account metadata, not token bytes, so
+  token rotation is allowed but re-login to another identity stops an existing
+  run. ID-token decoding is only an identity-change detector, not authentication.
+- `stream_run(subscription_accounts=...)` selects after conversation admission,
+  pins the selected opaque ID into the durable budget, and binds refresh to the
+  exact run/account. It rejects combining this selector with a separate resolver.
+  The worker receives neither account IDs, paths nor credentials.
+- Each credential resolution rechecks policy, disablement, disconnect, cooldown
+  and provider identity before and after the provider refresh adapter. There is
+  no mid-run account failover. The selected account is also checked on tool
+  dispatch, stream reads and user-visible output, so revocation need not wait
+  for the next model call. Provider refresh errors are secret-safe and fail
+  closed; cancellation propagates.
+- Cooldowns live in `isolated_subscription_accounts`, with majority writes and
+  atomic `$max` updates so concurrent reports never shorten them. Dates are read
+  timezone-aware even when the application's Mongo client defaults otherwise.
+  Round-robin ordering is process-local, not deployment-wide capacity control.
+
+Tests use synthetic account files and throwaway Mongo, including run-to-budget
+wiring, cross-run denials, credential rotation, re-login, revocation during
+refresh, cooldown persistence/expiry, DB failures and no worker dispatch on
+selection failure. No personal account or paid model was used.
+
+**Still not complete:** concrete provider OAuth refresh adapters and live-provider
+protocol validation, distributed account capacity/rate-limit feedback and usage
+reporting, remaining tool adapters and authenticated entrypoint migration. This
+selector does not start any CLI or alter existing production routing. Subscription
+usage currently retains the supplied priced budget contract; it is not an invoice
+or subscription-quota meter. PR #191 remains draft.
