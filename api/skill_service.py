@@ -240,7 +240,68 @@ async def _load_files(db, slug: str, *, include_disabled: bool = False) -> list[
     if not include_disabled:
         query["deleted"] = {"$ne": True}
     docs = await db.skill_files.find(query, {"_id": 0}).sort("path", 1).to_list(1000)
-    return [serialize_doc(doc) or {} for doc in docs]
+    result = [serialize_doc(doc) or {} for doc in docs]
+    skill = await db.skills.find_one({"slug": slug})
+    source = (skill or {}).get("source") or {}
+    if source.get("type") == "google_doc":
+        result = [f for f in result if f["path"] != "SKILL.md"]
+        result.insert(0, validate_text_file("SKILL.md", source["published_content"]))
+    return result
+
+
+# Actor context is set only after API/CLI authentication. Shared prompt refreshes
+# intentionally use no actor, so private linked skills never enter a global cache.
+from contextvars import ContextVar
+
+skill_actor = ContextVar("skill_actor", default=None)
+skill_dashboard = ContextVar("skill_dashboard", default=False)
+
+
+def _controlled(skill):
+    return (skill.get("source") or {}).get("type") == "google_doc" or skill.get("access_controlled")
+
+
+def _visible(skill, actor):
+    if not _controlled(skill):
+        return True  # Preserve regular skill behaviour.
+    return bool(actor) and (skill.get("scope") == "workspace" or skill.get("created_by") == actor)
+
+
+async def check_linked_access(db, slug, *, actor=None, write=False, owner_only=False):
+    skill = await db.skills.find_one({"slug": slugify(slug)})
+    if not skill or not _controlled(skill):
+        return
+    if skill.get("enabled") is False:
+        raise SkillError("Skill not found", status=404)
+    actor = actor or skill_actor.get()
+    if not _visible(skill, actor):
+        raise SkillError("Skill not found", status=404)
+    if owner_only and skill.get("created_by") != actor:
+        raise SkillError("Only the skill owner can change its sharing or source", status=403)
+    if write:
+        user = await db.users.find_one({"email": actor})
+        if (user or {}).get("system_role") not in ("maintainer", "admin"):
+            raise SkillError("Maintainer access required", status=403)
+    if not write and not skill_dashboard.get() and (skill.get("source") or {}).get("status") == "suspended":
+        raise SkillError("This linked skill is suspended. Reauthorize or disconnect its source.", status=403)
+
+
+def _serialize_linked_mutation(fn):
+    """Supporting files and lifecycle changes use the same source lease as sync."""
+    from functools import wraps
+    @wraps(fn)
+    async def guarded(db, *args, **kwargs):
+        slug = slugify(kwargs["slug"])
+        await check_linked_access(db, slug, actor=kwargs.get("actor"), write=True)
+        skill = await db.skills.find_one({"slug": slug})
+        linked = (skill or {}).get("source", {}).get("type") == "google_doc"
+        main_edit = fn.__name__ == "update_skill_file" and kwargs.get("file_doc", {}).get("path") == "SKILL.md"
+        if linked and not main_edit:
+            from api.skill_sync_service import lease
+            async with lease(db, slug):
+                return await fn(db, *args, **kwargs)
+        return await fn(db, *args, **kwargs)
+    return guarded
 
 
 async def get_skill(db, slug: str) -> dict[str, Any]:
@@ -248,11 +309,15 @@ async def get_skill(db, slug: str) -> dict[str, Any]:
     skill = await db.skills.find_one({"slug": slug, "enabled": {"$ne": False}})
     if not skill:
         raise SkillError("Skill not found", status=404)
+    await check_linked_access(db, slug)
     files = await _load_files(db, slug)
     skill_doc = serialize_doc(skill) or {}
     skill_doc["scope"] = skill_doc.get("scope") or ("system" if skill_doc.get("created_by") in ("system", "import") else "personal")
     skill_doc["folder"] = skill_doc.get("folder") or None
     skill_doc["folder_source"] = skill_doc.get("folder_source") or None
+    if (skill_doc.get("source") or {}).get("type") == "google_doc":
+        from api.skill_sync_service import public_source
+        skill_doc["source"] = public_source(skill_doc["source"])
     skill_doc["files"] = files
     skill_md = next((f for f in files if f["path"] == "SKILL.md"), None)
     skill_doc["content"] = skill_md.get("content", "") if skill_md else ""
@@ -274,6 +339,8 @@ async def list_skills(db) -> list[dict[str, Any]]:
         serialize_doc(doc) or {}
         for doc in await db.skills.find({"enabled": {"$ne": False}}, {"_id": 0}).sort("slug", 1).to_list(1000)
     ]
+    docs = [d for d in docs if _visible(d, skill_actor.get()) and
+            (skill_dashboard.get() or (d.get("source") or {}).get("status") != "suspended")]
     counts: dict[str, list[dict[str, Any]]] = {}
     async for file_doc in db.skill_files.find(
         {"skill_slug": {"$in": [d["slug"] for d in docs]}, "deleted": {"$ne": True}},
@@ -281,7 +348,12 @@ async def list_skills(db) -> list[dict[str, Any]]:
     ):
         counts.setdefault(file_doc["skill_slug"], []).append(serialize_doc(file_doc) or {})
     for doc in docs:
+        if (doc.get("source") or {}).get("type") == "google_doc":
+            from api.skill_sync_service import public_source
+            doc["source"] = public_source(doc["source"])
         files = sorted(counts.get(doc["slug"], []), key=lambda f: f["path"])
+        if doc.get("source") and not any(f["path"] == "SKILL.md" for f in files):
+            files.insert(0, {"path": "SKILL.md", "kind": "inline_text", "content_type": "text/markdown"})
         doc["files"] = [f["path"] for f in files if f["path"] != "SKILL.md"]
         doc["file_details"] = files
         doc["has_extra_files"] = bool(doc["files"])
@@ -308,10 +380,13 @@ async def search_skills(db, query: str) -> list[dict[str, Any]]:
         if needle in haystack:
             matches.append(skill)
             continue
-        skill_md = await db.skill_files.find_one(
-            {"skill_slug": skill["slug"], "path": "SKILL.md", "deleted": {"$ne": True}},
-            {"content": 1},
-        )
+        if (skill.get("source") or {}).get("type") == "google_doc":
+            skill_md = await get_skill_file(db, skill["slug"], "SKILL.md")
+        else:
+            skill_md = await db.skill_files.find_one(
+                {"skill_slug": skill["slug"], "path": "SKILL.md", "deleted": {"$ne": True}},
+                {"content": 1},
+            )
         if skill_md and needle in (skill_md.get("content") or "").lower():
             matches.append(skill)
     return matches[:SKILL_INDEX_LIMIT]
@@ -360,6 +435,7 @@ async def upsert_skill(
     actor: str,
     source: str = "dashboard",
     message: str = "Updated skill",
+    base_hash: str | None = None,
 ) -> dict[str, Any]:
     slug = slugify(slug)
     validate_skill_package(files)
@@ -369,6 +445,9 @@ async def upsert_skill(
         scope = "system" if actor in ("system", "import") else "personal"
     timestamp = now_utc()
     existing = await db.skills.find_one({"slug": slug})
+    await check_linked_access(db, slug, actor=actor, write=True)
+    if (existing or {}).get("source", {}).get("type") == "google_doc":
+        raise SkillError("Package replacement is disabled for linked skills. Use update-file with a base hash.", status=409)
     if existing and existing.get("scope"):
         scope = existing["scope"]
     await db.skills.update_one(
@@ -404,6 +483,7 @@ async def upsert_skill(
     return result
 
 
+@_serialize_linked_mutation
 async def update_skill_file(
     db,
     *,
@@ -412,16 +492,23 @@ async def update_skill_file(
     actor: str,
     source: str = "dashboard",
     message: str | None = None,
+    base_hash: str | None = None,
 ) -> dict[str, Any]:
     slug = slugify(slug)
     skill = await db.skills.find_one({"slug": slug, "enabled": {"$ne": False}})
     if not skill:
         raise SkillError("Skill not found", status=404)
+    await check_linked_access(db, slug, actor=actor, write=True)
+    if (skill.get("source") or {}).get("type") == "google_doc" and file_doc["path"] == "SKILL.md":
+        from api.skill_sync_service import write_instructions
+        return await write_instructions(db, slug, file_doc["content"], actor, base_hash)
     current_files = await _load_files(db, slug)
     merged = [f for f in current_files if f["path"] != file_doc["path"]]
     merged.append(file_doc)
     validate_skill_package(merged)
     metadata = _skill_metadata_from_files(slug, merged)
+    if _controlled(skill):
+        metadata.pop("scope", None)
     timestamp = now_utc()
     await db.skills.update_one(
         {"slug": slug},
@@ -436,8 +523,10 @@ async def update_skill_file(
     return await get_skill(db, slug)
 
 
+@_serialize_linked_mutation
 async def delete_skill_file(db, *, slug: str, path: str, actor: str, source: str = "dashboard") -> dict[str, Any]:
     slug = slugify(slug)
+    await check_linked_access(db, slug, actor=actor, write=True, owner_only=False)
     path = normalize_file_path(path)
     if path == "SKILL.md":
         raise SkillError("SKILL.md cannot be deleted")
@@ -451,8 +540,10 @@ async def delete_skill_file(db, *, slug: str, path: str, actor: str, source: str
     return await get_skill(db, slug)
 
 
+@_serialize_linked_mutation
 async def update_skill_scope(db, *, slug: str, scope: str, actor: str) -> dict[str, Any]:
     slug = slugify(slug)
+    await check_linked_access(db, slug, actor=actor, write=True, owner_only=True)
     if scope not in ("personal", "workspace"):
         raise SkillError("Scope must be 'personal' or 'workspace'")
     skill = await db.skills.find_one({"slug": slug, "enabled": {"$ne": False}})
@@ -468,8 +559,10 @@ async def update_skill_scope(db, *, slug: str, scope: str, actor: str) -> dict[s
     return await get_skill(db, slug)
 
 
+@_serialize_linked_mutation
 async def delete_skill(db, *, slug: str, actor: str, source: str = "dashboard") -> None:
     slug = slugify(slug)
+    await check_linked_access(db, slug, actor=actor, write=True, owner_only=True)
     result = await db.skills.update_one(
         {"slug": slug, "enabled": {"$ne": False}},
         {"$set": {"enabled": False, "updated_at": now_utc(), "updated_by": actor}},
@@ -479,10 +572,12 @@ async def delete_skill(db, *, slug: str, actor: str, source: str = "dashboard") 
     await _record_version(db, slug, actor, source, "Disabled skill")
 
 
+@_serialize_linked_mutation
 async def update_skill_folder(
     db, *, slug: str, folder: str | None, actor: str, folder_source: str = "manual",
 ) -> dict[str, Any]:
     slug = slugify(slug)
+    await check_linked_access(db, slug, actor=actor, write=True, owner_only=True)
     skill = await db.skills.find_one({"slug": slug, "enabled": {"$ne": False}})
     if not skill:
         raise SkillError("Skill not found", status=404)
@@ -504,10 +599,8 @@ async def update_skill_folder(
 
 
 async def list_folders(db) -> list[str]:
-    folders = await db.skills.distinct(
-        "folder", {"enabled": {"$ne": False}, "folder": {"$ne": None}},
-    )
-    return sorted([f for f in folders if f])
+    folders = [s.get("folder") for s in await list_skills(db)]
+    return sorted({f for f in folders if f})
 
 
 def _extract_json_object(raw: str) -> dict | None:
@@ -544,6 +637,8 @@ async def auto_organize_skills(db) -> dict[str, Any]:
     logger = logging.getLogger("loma.skill_organize")
 
     unorganized = await db.skills.find({
+        "source.type": {"$ne": "google_doc"},
+        "access_controlled": {"$ne": True},
         "enabled": {"$ne": False},
         "scope": {"$ne": "system"},
         "$or": [{"folder": {"$exists": False}}, {"folder": None}],
@@ -654,7 +749,12 @@ async def auto_organize_skills(db) -> dict[str, Any]:
 
 async def get_skill_file(db, slug: str, path: str) -> dict[str, Any]:
     slug = slugify(slug)
+    await check_linked_access(db, slug)
     path = normalize_file_path(path)
+    if path == "SKILL.md":
+        skill = await db.skills.find_one({"slug": slug})
+        if (skill or {}).get("source", {}).get("type") == "google_doc":
+            return validate_text_file(path, skill["source"]["published_content"])
     doc = await db.skill_files.find_one(
         {"skill_slug": slug, "path": path, "deleted": {"$ne": True}},
         {"_id": 0},
@@ -666,12 +766,14 @@ async def get_skill_file(db, slug: str, path: str) -> dict[str, Any]:
 
 async def history(db, slug: str) -> list[dict[str, Any]]:
     slug = slugify(slug)
+    await check_linked_access(db, slug)
     docs = await db.skill_versions.find({"skill_slug": slug}, {"_id": 0}).sort("created_at", -1).to_list(100)
     return [serialize_doc(doc) or {} for doc in docs]
 
 
 async def version(db, slug: str, version_id: str) -> dict[str, Any]:
     slug = slugify(slug)
+    await check_linked_access(db, slug)
     doc = await db.skill_versions.find_one({"skill_slug": slug, "version_id": version_id}, {"_id": 0})
     if not doc:
         raise SkillError("Version not found", status=404)
@@ -701,6 +803,10 @@ async def import_skill_directory(db, source_dir: Path, *, actor: str = "import")
     if not source_dir.is_dir():
         raise SkillError(f"Skill directory not found: {source_dir}", status=404)
     slug = slugify(source_dir.name)
+    await check_linked_access(db, slug, actor=actor, write=True)
+    existing = await db.skills.find_one({"slug": slug})
+    if (existing or {}).get("source", {}).get("type") == "google_doc":
+        raise SkillError("Directory import cannot replace a linked skill. Use update-file with a base hash.", status=409)
     files: list[dict[str, Any]] = []
     for path in sorted(p for p in source_dir.rglob("*") if p.is_file()):
         rel = normalize_file_path(str(path.relative_to(source_dir)))

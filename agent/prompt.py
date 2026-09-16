@@ -79,7 +79,12 @@ async def refresh_loma_skill_index_from_db() -> None:
             set_loma_skill_index_cache("No Loma skills are configured yet.")
             return
 
-        set_loma_skill_index_cache(await skill_index_text(db))
+        from api.skill_service import skill_actor
+        token = skill_actor.set(None)
+        try:
+            set_loma_skill_index_cache(await skill_index_text(db))
+        finally:
+            skill_actor.reset(token)
         logger.info("Loaded Loma skill index into prompt cache")
     except Exception:
         logger.exception("Failed to load Loma skill index from MongoDB")
@@ -124,6 +129,8 @@ Do not use the built-in `Skill` tool for Loma DB-backed skills. Search or read t
 
 Only update skills when the user explicitly asks you to change company playbooks or skills. For write commands, use the authenticated user's `--user-email` and `--auth-token` values when they are provided in the current message.
 
+Google Docs-linked skills are optional. To discover/read linked skills, pass the authenticated user's --user-email and --auth-token to loma_skills (including list/search/get/dump/file). Private skills are deliberately absent from this shared index. For linked instruction edits, use update-file --base-hash HASH from the last get response; never edit the local copy directly. A conflict requires rereading and revising, not blind retries.
+
 Available skill index:
 {_loma_skill_index_cache}
 """.strip()
@@ -141,8 +148,57 @@ You are responding in Slack. Use Slack mrkdwn:
 - Keep investigations thorough internally; do not post investigation narration, evidence dumps, code blocks, or unsolicited next steps/offers by default.
 - Give more detail when explicitly requested, when the requested deliverable requires it (such as a command or code snippet), or when needed to explain a blocker, uncertainty, or important safety warning. Never hide important information just to meet the default length.
 - For follow-ups such as "confirm" or "any update?", use the existing thread context and answer only the latest request. Do not repeat the full investigation or claim fresh verification without checking.
+- Follow-ups such as "explain", "summarize", "what happened?" or "confirm" are capped at about 5 short lines. Reserve long answers for requests that say "detailed", "full", "complete" or "step by step".
+- Earlier assistant replies in the thread context may be long. Do not copy their length, headers, or closing offers.
 - These Slack-specific presentation rules take precedence over generic instructions to narrate plans or produce lengthy reports. Still follow required investigation and approval procedures; ask necessary questions concisely.
 """.strip()
+
+# Every Slack entry point (mentions, DMs, monitored channels, Slack-triggered
+# flows) tags its source with this prefix, so the Slack rules key off the family
+# rather than an exact value.
+SLACK_SOURCE_PREFIX = "slack"
+
+# Bare "slack" is also stream_agent's default and the tag the scheduled and
+# webhook flow executors run under. Those runs tell the model its text output is
+# not posted anywhere, so they must not receive the per-message Slack reminder.
+# Real Slack entry points always tag a specific variant (slack_mention, slack_dm,
+# slack_flow, slack_channel_*).
+SLACK_EXECUTOR_SOURCE = "slack"
+
+_REPLY_FORMAT_REMINDER_SLACK = (
+    "[Reply format: this is a Slack thread. Default to at most 3 short lines: answer, "
+    "outcome, stop. No section headers, code blocks, evidence dumps, or closing offers "
+    "such as \"Want me to...?\". Go longer only if the user asked for a \"detailed\", "
+    "\"full\" or \"step by step\" answer, the deliverable itself is code or a command, "
+    "or you must flag a blocker, uncertainty or safety issue.]"
+)
+_REPLY_FORMAT_REMINDER_SLACK_FOLLOWUP = (
+    " [This is a follow-up in an existing thread. \"Explain\", \"summarize\" or "
+    "\"confirm\" style requests are capped at about 5 short lines. Earlier assistant "
+    "replies above may be long; do not copy their length or format.]"
+)
+
+
+def is_slack_source(source: str | None) -> bool:
+    """True for any Slack-family source (slack, slack_mention, slack_dm, slack_flow, slack_channel_*)."""
+    return bool(source) and str(source).startswith(SLACK_SOURCE_PREFIX)
+
+
+def build_reply_format_reminder(source: str | None, has_thread_context: bool = False) -> str:
+    """Short per-message format reminder placed next to the user's message.
+
+    The pooled system prompt is large and the Slack brevity rules sit at its
+    end, so they lose to nearer instructions and to long earlier replies in the
+    thread context. Repeating the essentials right beside the current message
+    keeps them in force. Returns "" for non-Slack sources and for the bare
+    executor tag (see SLACK_EXECUTOR_SOURCE), whose output is never posted.
+    """
+    if not is_slack_source(source) or source == SLACK_EXECUTOR_SOURCE:
+        return ""
+    reminder = _REPLY_FORMAT_REMINDER_SLACK
+    if has_thread_context:
+        reminder += _REPLY_FORMAT_REMINDER_SLACK_FOLLOWUP
+    return reminder
 
 
 _FORMATTING_DASHBOARD = """
@@ -155,7 +211,9 @@ You are responding in the dashboard. Use standard Markdown.
 _FORMATTING_POOLED = f"""
 ## Response Formatting
 
-Each message may specify its output channel with a `[Source: slack]`, `[Source: dashboard]`, `[Source: telegram]`, or `[Source: github_webhook]` marker. Apply the formatting rules for the indicated source.
+Each message specifies its output channel with a `[Source: ...]` marker. Apply the formatting rules for the indicated source:
+- Any source starting with `slack` (`slack`, `slack_mention`, `slack_dm`, `slack_flow`, `slack_channel_*`) is a Slack reply and MUST follow the Slack rules below.
+- `dashboard` uses the dashboard rules; `telegram` and `github_webhook` use their sections below.
 
 {_FORMATTING_SLACK}
 

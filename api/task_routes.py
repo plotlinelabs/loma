@@ -80,7 +80,7 @@ async def build_board_context(db, owner: str) -> str:
 
 async def _run_task_headless(db, conversation_id: str, prompt: str,
                              model: str, files: list, owner: str,
-                             tool_config: dict | None = None):
+                             tool_config: dict | None = None, recall_session: dict | None = None):
     """Run a task's first agent turn in the background — no client stream.
 
     Powers quick-add: the task fires immediately and keeps running even if
@@ -117,6 +117,7 @@ async def _run_task_headless(db, conversation_id: str, prompt: str,
             user_email=owner,
             selected_model=model or None,
             tool_config=tool_config,
+            recall_session=recall_session,
         ):
             pass  # observer records; nobody is watching the stream
     except Exception as e:
@@ -248,6 +249,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "title": task.get("title") or None,
         "prompt": prompt[:200],
         "model": task.get("model") or None,
+        "tool_config": task.get("tool_config"),
         "status": task.get("status"),
         "task_status": task.get("task_status"),
         "task_lane": task.get("task_lane"),
@@ -268,7 +270,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
 
 
 _TASK_PROJECTION = {
-    "conversation_id": 1, "title": 1, "prompt": 1, "model": 1, "status": 1,
+    "conversation_id": 1, "title": 1, "prompt": 1, "model": 1, "status": 1, "tool_config": 1,
     "task_status": 1, "task_lane": 1, "task_rank": 1,
     "total_turns": 1, "started_at": 1, "finished_at": 1,
     "task_created_at": 1, "task_staged_at": 1, "task_started_at": 1,
@@ -397,9 +399,12 @@ async def handle_create_task(request: web.Request) -> web.Response:
         asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
 
     if start:
+        from api.recall_session import launch_recall
+        recall_session = await launch_recall(request, doc["conversation_id"], user_email)
         asyncio.create_task(_run_task_headless(
             db, doc["conversation_id"], prompt, model, files, user_email,
             tool_config=tool_config,
+            recall_session=recall_session,
         ))
 
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)

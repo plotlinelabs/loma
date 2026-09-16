@@ -28,3 +28,9 @@ boto3>=1.28.0
 
 # Test dependencies (CI installs this shared requirements file).
 mongomock-motor==0.0.36
+pytest-aiohttp==1.1.1
+
+# Execution-local history recall MCP adapter.
+mcp>=2,<3
+
+markdown-it-py>=3.0,<5

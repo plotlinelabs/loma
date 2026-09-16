@@ -37,13 +37,9 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
     selection: toolsSelection,
     loadState: toolsLoadState,
     loadCatalog: loadToolsCatalog,
-    toggleTool,
-    toggleSkill,
-    enableAll: enableAllTools,
-    isAllEnabled: allToolsEnabled,
-    disabledCount: toolsDisabledCount,
+    setEnabled,
+    setAll,
     toolConfig,
-    isAlwaysEnabled,
   } = useToolsPicker();
 
   const addFiles = async (fileList: FileList | File[]) => {
@@ -138,7 +134,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               onSelect={selectModel}
               loadState={loadState}
             />
-            <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onToggleTool={toggleTool} onToggleSkill={toggleSkill} onEnableAll={enableAllTools} onOpen={loadToolsCatalog} isAllEnabled={allToolsEnabled} disabledCount={toolsDisabledCount} loadState={toolsLoadState} isAlwaysEnabled={isAlwaysEnabled} />
+            <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} />
           </div>
           <div className="ml-auto flex items-center gap-1 max-md:gap-2 shrink-0">
             <DictationButton

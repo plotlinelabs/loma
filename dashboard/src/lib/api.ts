@@ -230,6 +230,7 @@ export async function generateTitles(): Promise<{ processed: number; message: st
 }
 
 export interface Skill {
+  source?: GoogleSkillSource;
   slug?: string;
   name: string;
   description: string;
@@ -254,6 +255,7 @@ export interface SkillFile {
 }
 
 export interface SkillDetailResponse {
+  source?: GoogleSkillSource;
   slug?: string;
   name: string;
   description?: string;
@@ -288,6 +290,8 @@ export interface AvailableSkill {
   name: string;
   description: string;
   tags?: string[];
+  scope?: "workspace" | "personal" | "system";
+  folder?: string | null;
 }
 
 export interface AvailableToolsResponse {
@@ -339,11 +343,11 @@ export async function updateSkill(name: string, payload: { content?: string; fil
   return res.json();
 }
 
-export async function updateSkillFile(name: string, path: string, content: string): Promise<SkillDetailResponse> {
+export async function updateSkillFile(name: string, path: string, content: string, baseHash?: string): Promise<SkillDetailResponse> {
   const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/files`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, content }),
+    body: JSON.stringify({ path, content, base_hash: baseHash }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -503,6 +507,9 @@ export interface SlackConfig {
 }
 
 export interface Flow {
+  agent_id?: string | null;
+  agent_snapshot?: { context: string; name: string; captured_at: string; configuration_updated_at?: string };
+  can_manage?: boolean;
   flow_id: string;
   name: string;
   description: string;
@@ -558,10 +565,12 @@ export interface WebhookLog {
 export async function fetchFlows(
   status?: string,
   triggerType?: string,
+  agentId?: string,
 ): Promise<{ flows: Flow[] }> {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   if (triggerType) params.set("trigger_type", triggerType);
+  if (agentId) params.set("agent_id", agentId);
   const qs = params.toString() ? `?${params.toString()}` : "";
   const res = await fetch(`${API_BASE}/api/flows${qs}`);
   if (!res.ok) throw new Error(`Failed to fetch flows: ${res.status}`);
@@ -580,7 +589,10 @@ export async function createFlow(data: Partial<Flow>): Promise<{ flow: Flow }> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error(`Failed to create flow: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Could not create schedule. Please try again.");
+  }
   return res.json();
 }
 
@@ -590,7 +602,10 @@ export async function updateFlow(id: string, updates: Partial<Flow>): Promise<{ 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
-  if (!res.ok) throw new Error(`Failed to update flow: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Flow was not saved. Please try again.");
+  }
   return res.json();
 }
 
@@ -602,13 +617,19 @@ export async function deleteFlow(id: string): Promise<{ deleted: boolean }> {
 
 export async function pauseFlow(id: string): Promise<{ flow: Flow }> {
   const res = await fetch(`${API_BASE}/api/flows/${id}/pause`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to pause flow: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Could not pause schedule. Please try again.");
+  }
   return res.json();
 }
 
 export async function resumeFlow(id: string): Promise<{ flow: Flow }> {
   const res = await fetch(`${API_BASE}/api/flows/${id}/resume`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to resume flow: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || "Could not resume schedule. Please try again.");
+  }
   return res.json();
 }
 
@@ -1091,6 +1112,7 @@ export interface TaskTag {
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 
 export interface Task {
+  tool_config?: ToolConfig | null;
   conversation_id: string;
   title: string | null;
   prompt: string;
@@ -1175,6 +1197,7 @@ export async function updateTask(
     prompt?: string;
     title?: string;
     model?: string;
+    tool_config?: ToolConfig | null;
     task_tag_ids?: string[];
     task_priority?: TaskPriority | null;
     task_deadline?: string | null;
@@ -1321,4 +1344,39 @@ export async function fetchConversationCost(conversationId: string): Promise<Con
   const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/cost`);
   if (!res.ok) throw new Error(`Failed to fetch cost: ${res.status}`);
   return res.json();
+}
+
+export interface GoogleSkillSource {
+  type: "google_doc";
+  document_id: string;
+  tab_id: string;
+  tab_title: string;
+  title: string;
+  connection_owner: string;
+  auto_sync_enabled: boolean;
+  status: string;
+  hash: string;
+  last_checked?: string;
+  last_published?: string;
+  error?: string;
+}
+
+export interface GoogleSkillPreview {
+  document_id: string;
+  title: string;
+  tabs: { id: string; title: string }[];
+  can_edit: boolean;
+  connection_owner: string;
+  tab_id?: string;
+  content?: string;
+  hash?: string;
+}
+
+export async function skillSourceRequest<T>(path: string, body?: object): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/${path}`, body ? {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  } : undefined);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Google Docs skill request failed");
+  return data;
 }

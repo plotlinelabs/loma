@@ -480,3 +480,51 @@ def test_turn_timeout_message_is_explicit():
 
     assert "1800s wall-clock limit" in ocr._describe_turn_timeout(1800)
     assert "connection timed out" in ocr._describe_turn_timeout(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source,context", [("slack_flow", ""), ("slack_mention", "**User (U1)**: earlier"), ("slack_dm", "")])
+async def test_stream_agent_appends_slack_reply_reminder_after_message(monkeypatch, source, context):
+    import agent.opencode_runtime as opencode_runtime
+    from agent.client import stream_agent
+
+    captured = {}
+
+    async def fake_run_opencode_agent(**kwargs):
+        captured.update(kwargs)
+        yield "done"
+
+    monkeypatch.setattr(opencode_runtime, "run_opencode_agent", fake_run_opencode_agent)
+
+    async for _ in stream_agent(
+        prompt="explain the ask", conversation_context=context, source=source,
+        selected_model="openai/gpt-5.5",
+    ):
+        pass
+
+    full_prompt = captured["full_prompt"]
+    assert full_prompt.startswith(f"[Source: {source}]")
+    assert "## Current Message\nexplain the ask" in full_prompt
+    # The reminder is the last thing the model reads, after the message itself.
+    assert full_prompt.rstrip().endswith("]")
+    assert full_prompt.index("[Reply format: this is a Slack thread.") > full_prompt.index("## Current Message")
+    assert ("follow-up in an existing thread" in full_prompt) == bool(context)
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_adds_no_slack_reminder_for_dashboard(monkeypatch):
+    import agent.opencode_runtime as opencode_runtime
+    from agent.client import stream_agent
+
+    captured = {}
+
+    async def fake_run_opencode_agent(**kwargs):
+        captured.update(kwargs)
+        yield "done"
+
+    monkeypatch.setattr(opencode_runtime, "run_opencode_agent", fake_run_opencode_agent)
+
+    async for _ in stream_agent(prompt="hello", source="dashboard", selected_model="openai/gpt-5.5"):
+        pass
+
+    assert "[Reply format:" not in captured["full_prompt"]
