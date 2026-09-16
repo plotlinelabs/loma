@@ -26,5 +26,5 @@ google-auth>=2.22.0
 google-api-python-client>=2.100.0
 boto3>=1.28.0
 
-# Stateful Mongo regression tests (CI installs this shared dependency manifest)
+# Test dependencies (CI installs this shared requirements file).
 mongomock-motor==0.0.36
