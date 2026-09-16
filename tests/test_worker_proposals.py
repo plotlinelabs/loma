@@ -89,6 +89,8 @@ def test_catalog_matches_gateway_schemas_and_stays_within_native_limits():
     by_name = {t['name']: t for t in CATALOG}
     assert set(PROPOSAL_TOOLS) | {'proposals.status', 'proposals.list'} <= set(by_name)
     for tool, action in PROPOSAL_TOOLS.items():
+        if action in ("github.write", "linear.write"):
+            continue  # Exact operation schemas covered by test_worker_automation.
         required, optional = WRITE_SCHEMAS[action]
         schema = by_name[tool]['input_schema']
         assert set(schema['properties']) - {'reason'} == required | optional

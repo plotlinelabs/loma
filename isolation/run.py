@@ -114,8 +114,12 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         # Writes/sends only become durable owner-reviewed proposals; the run
         # never holds a send adapter.
         proposals = ProposalGateway(db, authority, conversation_id, check_access=context.authorize)
+        async def automation(tool, args):
+            from isolation.automation import read
+            return await read(db, owner, tool, args)
+
         gateway = ToolGateway(authority, authorize=context.authorize, audit=audit, artifacts=artifacts,
-            connector=personal_read, models=relay, knowledge=knowledge, on_artifact=registry, proposals=proposals)
+            connector=personal_read, models=relay, knowledge=knowledge, on_artifact=registry, proposals=proposals, automation=automation)
         # Never merge historical developer/system envelopes. Only the sanitized
         # visible transcript goes into the model grant on the trusted backend.
         coverage = json.dumps(context.coverage, sort_keys=True)

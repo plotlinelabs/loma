@@ -40,7 +40,10 @@ class Settings:
 
     @classmethod
     def from_env(cls):
-        return cls(os.environ['LOMA_WORKER_IMAGE'], os.environ['LOMA_WORKER_CONTROL_TOKEN'],
+        from pathlib import Path
+        token_file = os.environ.get('LOMA_WORKER_CONTROL_TOKEN_FILE')
+        token = Path(token_file).read_text().strip() if token_file else os.environ['LOMA_WORKER_CONTROL_TOKEN']
+        return cls(os.environ['LOMA_WORKER_IMAGE'], token,
                    max_seconds=int(os.getenv('LOMA_WORKER_MAX_SECONDS', '3600')),
                    max_workers=int(os.getenv('LOMA_WORKER_MAX_CONCURRENCY', '4')))
 

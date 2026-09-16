@@ -923,3 +923,70 @@ Browser integration also caught an older entrypoint authority mismatch: the live
 policy read `owner`, but `RunAuthority` stores `user_email`. Both entrypoint
 admission and subscription-policy checks now use the real field; tests construct
 actual `RunAuthority` objects rather than permissive lookalike objects.
+
+## Remaining utilities, scoped automation, and deployable image wiring
+
+Remote mode now routes entity-reference extraction, skill organization,
+review-quality comparison, org-learning duplicate confirmation and the shadow
+support verifier through the same tool-free `isolation.utility` transport.
+Stored-conversation callers retain owner, deletion and scope checks. Skill
+organization uses the authenticated maintainer's explicit identity, a temporary
+message-free context and live maintainer checks; it never selects an arbitrary
+admin. Missing ownership/configuration keeps the existing conservative fallback
+instead of starting a local CLI. The synchronous offline verifier API refuses
+remote execution: the live shadow path uses `RemoteVerifier.assess_remote` on
+the backend event loop. Legacy offline backtests remain a separate workflow.
+
+### GitHub / Linear boundaries
+
+Four catalog entries expose fixed operations, not arbitrary URLs or GraphQL:
+
+- `github.read`: PR metadata, changed files, reviews, issue comments, repository
+  contents and nonrecursive trees. Paginated lists return 30 items per page.
+- `github.propose_write`: issue/PR comment, commit-pinned review, creation of a
+  draft PR, creation of a `loma/` branch, or one file create/update on that branch.
+  File updates require the provider's existing blob SHA. No merge, force push,
+  delete or workflow editing is exposed. Large repository responses fail closed;
+  tree traversal is bounded per call, not an unbounded repository clone.
+- `linear.read`: issue, comments, team issues and workflow states. Connection
+  reads return cursor metadata with a bounded first page.
+- `linear.propose_write`: comment, issue creation, title/description update and
+  optional state change. Issue identifiers resolve to provider UUIDs; a new
+  state must belong to that issue's team.
+
+`LOMA_REMOTE_AUTOMATION_GRANTS` is deny-by-default operator JSON, keyed by exact
+owner email, then `github` repository names / `linear` team UUIDs. Active owner
+and resource grants are checked before reads, before returning data and before
+writes. Credentials stay in the backend; shared integration access is never
+mistaken for permission to every repository/team. No worker executes a write.
+The durable proposal engine requires the owner's exact-version approval,
+checks grants again at execution, persists provider receipts and never retries
+an uncertain outcome. Review execution rejects a changed PR head.
+
+Webhook ingress additionally requires `LOMA_REMOTE_WEBHOOK_OWNERS`, an explicit
+repository/team-to-owner mapping. No GitHub login or prompt text is treated as
+an authenticated email. Binding persists owner/provider/resource on the trusted
+conversation; admission rechecks that binding and operator mapping throughout
+the run. Existing ownership cannot silently change. These webhook runs do not
+receive personal Gmail/Slack/Calendar tools. Writes remain pending proposals,
+not autonomous bot sends. Operators must configure grants and mappings before
+these automations can run remotely. A proposal is not a posted review or PR.
+
+### Image build and supervisor wiring
+
+`deploy/worker/build.py` builds/publishes native and supervisor images using a
+fresh allowlisted context (never `.env`, accounts, .git or the application tree).
+It writes digest-only `images.env` atomically after both builds return registry
+digests. The supervisor image copies only the supervisor/protocol modules.
+`deploy/worker/compose.yaml` consumes those image refs, requires an explicit
+private bind address and mounts the control token and TLS material as secrets.
+Only the trusted supervisor mounts the dedicated Docker daemon socket. Its
+startup still requires runsc and the pinned native image, with no runc fallback.
+See [the dedicated-host instructions](../../deploy/worker/README.md).
+
+**Verification boundary:** build orchestration tests mock Docker; they do not
+constitute an image build. This editing environment has neither Docker CLI nor
+a Docker socket. Actual image builds/publishing, supervisor boot, hostile-worker
+containment, live-provider certification and production rollout still require
+an approved dedicated host. No host or production configuration was changed.
+Native CI workflow installation remains a separate maintainer action.

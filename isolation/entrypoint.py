@@ -181,6 +181,21 @@ async def remote_stream_agent(prompt, conversation_context='', files=None, obser
     if observer is None or not getattr(observer, 'conversation_id', None):
         raise RuntimeError('Remote worker runs require an observability conversation')
     owner = (user_email or '').strip()
+    webhook_scope = None
+    metadata = getattr(observer, 'metadata', {})
+    if isinstance(metadata, dict) and metadata.get('source') in ('github_webhook', 'linear_webhook'):
+        try:
+            from isolation.automation import webhook_owner
+            mapped_owner, provider, resource = await webhook_owner(observer.db, observer.conversation_id)
+            if owner and owner != mapped_owner:
+                raise GatewayDenied('Webhook owner does not match the authenticated principal')
+            owner, webhook_scope = mapped_owner, (provider, resource)
+            source = metadata['source']
+        except GatewayDenied as error:
+            message = UNAVAILABLE + str(error)
+            await observer.record_error(message)
+            yield message
+            return
     if not owner:
         # Persist exactly what the user sees: the dashboard re-renders the
         # stored error on reload, so the raw reason alone would replace it.
@@ -189,6 +204,17 @@ async def remote_stream_agent(prompt, conversation_context='', files=None, obser
         yield message
         return
     db = observer.db
+    async def check_access(authority):
+        if not await _owner_check(db, owner)(authority):
+            return False
+        if webhook_scope:
+            from isolation.automation import authorize_webhook
+            try:
+                await authorize_webhook(db, owner, *webhook_scope)
+            except GatewayDenied:
+                return False
+        return True
+
     handle = RemoteRunHandle()
     chunks: list[str] = []
     try:
@@ -214,8 +240,10 @@ async def remote_stream_agent(prompt, conversation_context='', files=None, obser
     run = stream_run(
         db=db, owner=owner, conversation_id=observer.conversation_id, prompt=prompt,
         instructions=instructions, runtime=runtime, grant=grant,
-        budget_spec=budget_spec, allowed_tools=allowed_tools_for(tool_config),
-        check_access=_owner_check(db, owner), cancelled=handle.cancelled,
+        budget_spec=budget_spec, allowed_tools=(allowed_tools_for(tool_config) & frozenset(
+                name for name in FULL_TOOLS if name.startswith(('github.', 'linear.', 'workspace.', 'skills.', 'proposals.')))
+                if webhook_scope else allowed_tools_for(tool_config)),
+        check_access=check_access, cancelled=handle.cancelled,
         url=deployment.url, token=deployment.token, tls=deployment.tls,
         artifact_root=deployment.artifact_root, attachments=attachments,
         input_ids=input_ids, allowed_skills=allowed_skills_for(tool_config),

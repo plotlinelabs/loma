@@ -65,3 +65,27 @@ async def complete(message, *, db, conversation_id, model=None, timeout=45):
     finally:
         cancelled.set()
         await stream.aclose()
+
+
+async def complete_maintenance(message, *, db, owner, purpose, timeout=120):
+    """Privileged backend maintenance with explicit authenticated attribution.
+
+    Never guess an owner from a prompt or select an arbitrary administrator.
+    A short-lived, message-free context is hidden from conversation history and
+    deleted on exit; the run/accounting audit remains durable.
+    """
+    import uuid
+    if db is None or not isinstance(owner, str) or not owner or purpose != 'skill-organization':
+        raise GatewayDenied('Maintenance requires an authenticated owner and known purpose')
+    user = await db.users.find_one({'email': owner, 'deleted': {'$ne': True}})
+    if not user or user.get('status', 'active') != 'active' or user.get('system_role') not in ('admin', 'maintainer'):
+        raise GatewayDenied('Maintenance requires an active maintainer')
+    conversation_id = 'utility-' + uuid.uuid4().hex
+    from datetime import datetime, timezone
+    await db.conversations.insert_one({'conversation_id': conversation_id, 'source': 'utility',
+        'status': 'completed', 'metadata': {'user_name': owner, 'utility_purpose': purpose},
+        'started_at': datetime.now(timezone.utc), 'messages': []})
+    try:
+        return await complete(message, db=db, conversation_id=conversation_id, timeout=timeout)
+    finally:
+        await db.conversations.delete_one({'conversation_id': conversation_id, 'metadata.user_name': owner})

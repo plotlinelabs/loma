@@ -1,0 +1,38 @@
+# Dedicated worker host ONLY. Never run this on the backend/database host.
+# docker compose --env-file images.env --env-file supervisor.env -f deploy/worker/compose.yaml up -d
+services:
+  supervisor:
+    image: ${LOMA_SUPERVISOR_IMAGE:?Use the immutable image from build.py}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1
+    ports:
+      - "${LOMA_WORKER_BIND_IP:?Private interface IP required}:8443:8443"
+    environment:
+      LOMA_WORKER_IMAGE: ${LOMA_WORKER_IMAGE:?Digest-pinned native image required}
+      LOMA_WORKER_CONTROL_TOKEN_FILE: /run/secrets/control-token
+      LOMA_WORKER_TLS_CERT: /run/secrets/server-cert
+      LOMA_WORKER_TLS_KEY: /run/secrets/server-key
+      LOMA_WORKER_CLIENT_CA: /run/secrets/client-ca
+      LOMA_WORKER_MAX_CONCURRENCY: ${LOMA_WORKER_MAX_CONCURRENCY:-4}
+      LOMA_WORKER_MAX_SECONDS: ${LOMA_WORKER_MAX_SECONDS:-3600}
+    volumes:
+      # This grants the trusted supervisor control of the DEDICATED daemon.
+      # Never mounted into workers; docker_command forbids worker host mounts.
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    secrets: [control-token, server-cert, server-key, client-ca]
+secrets:
+  control-token:
+    file: ${LOMA_WORKER_CONTROL_TOKEN_PATH:?Secret file required}
+  server-cert:
+    file: ${LOMA_WORKER_SERVER_CERT_PATH:?Server certificate required}
+  server-key:
+    file: ${LOMA_WORKER_SERVER_KEY_PATH:?Server private key required}
+  client-ca:
+    file: ${LOMA_WORKER_CLIENT_CA_PATH:?Client CA required}

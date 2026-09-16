@@ -90,7 +90,7 @@ class GatewayDenied(ValueError):
 
 
 class ToolGateway:
-    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None, models=None, knowledge=None, on_artifact=None, proposals=None):
+    def __init__(self, authority: RunAuthority, *, authorize, audit, artifacts, connector=None, models=None, knowledge=None, on_artifact=None, proposals=None, automation=None):
         if artifacts.authority != authority or not callable(authorize) or not callable(audit):
             raise ValueError('A matching server-owned artifact scope and policy are required')
         self.authority, self.authorize, self.audit = authority, authorize, audit
@@ -105,6 +105,7 @@ class ToolGateway:
         if proposals is not None and proposals.authority != authority:
             raise ValueError('A matching server-owned proposal scope is required')
         self.proposals = proposals
+        self.automation = automation
         if on_artifact is not None and not callable(on_artifact):
             raise ValueError('A trusted artifact registration callback is required')
         self.on_artifact = on_artifact
@@ -135,6 +136,19 @@ class ToolGateway:
                 if not await self.authorize(authority):
                     raise GatewayDenied('Run access is no longer valid')
                 result = await self.knowledge(authority, tool, arguments)
+                if not await self.authorize(authority):
+                    raise GatewayDenied('Run access is no longer valid')
+                await self.audit(authority, {'tool': tool, 'stage': 'completed'})
+                return result
+            from isolation.automation import READ_TOOLS as AUTOMATION_TOOLS, validate as validate_automation
+            if tool in AUTOMATION_TOOLS:
+                if self.automation is None:
+                    raise GatewayDenied('Automation gateway unavailable')
+                validate_automation(tool, arguments)
+                await self.audit(authority, {'tool': tool, 'stage': 'requested'})
+                if not await self.authorize(authority):
+                    raise GatewayDenied('Run access is no longer valid')
+                result = await self.automation(tool, arguments)
                 if not await self.authorize(authority):
                     raise GatewayDenied('Run access is no longer valid')
                 await self.audit(authority, {'tool': tool, 'stage': 'completed'})

@@ -1583,7 +1583,7 @@ async def handle_auto_organize_skills(request: web.Request) -> web.Response:
     if db is None:
         return web.json_response({"error": "MongoDB is not configured"}, status=503)
     try:
-        result = await skill_service.auto_organize_skills(db)
+        result = await skill_service.auto_organize_skills(db, owner=get_user_email(request))
         return web.json_response(result)
     except skill_service.SkillError as exc:
         return _skill_error_response(exc)

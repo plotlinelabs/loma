@@ -26,5 +26,5 @@ if ! opencode --version 2>/dev/null | grep -qx '1.18.28'; then
 fi
 exec "${PYTHON:-python3}" -m pytest tests/test_codex_worker.py tests/test_worker_models.py \
   tests/test_worker_usage.py tests/test_worker_accounts.py tests/test_worker_oauth.py tests/test_worker_run.py tests/test_worker_accounting.py tests/test_worker_knowledge.py \
-  tests/test_worker_downloads.py tests/test_worker_connectors.py tests/test_worker_proposals.py tests/test_connector_lifecycle.py tests/test_workspace_tools.py tests/test_worker_boundary.py tests/test_worker_artifacts.py tests/test_claude_worker.py tests/test_remote_entrypoint.py tests/test_remote_utility.py \
+  tests/test_worker_downloads.py tests/test_worker_connectors.py tests/test_worker_proposals.py tests/test_connector_lifecycle.py tests/test_workspace_tools.py tests/test_worker_boundary.py tests/test_worker_artifacts.py tests/test_claude_worker.py tests/test_remote_entrypoint.py tests/test_remote_utility.py tests/test_remote_utility_remaining.py tests/test_worker_automation.py tests/test_worker_build.py \
   tests/test_opencode_worker.py tests/test_native_gateway_runtimes.py tests/test_mcp_bridge.py -q

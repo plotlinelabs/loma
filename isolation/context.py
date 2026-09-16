@@ -21,6 +21,7 @@ class Attachment:
 
 class ConversationContext:
     requires_running = True
+    sources = ["dashboard", "task", "flow", "webhook", "telegram"]
 
     def __init__(self, db, authority, conversation_id, *, cancelled, check_access):
         if (not isinstance(conversation_id, str) or not 1 <= len(conversation_id) <= 128
@@ -44,13 +45,23 @@ class ConversationContext:
         # source whose user_name is a display name or bot ID fails closed.
         row = await self.db.conversations.find_one({'conversation_id': self.conversation_id,
             'metadata.user_name': self.authority.user_email, 'deleted': {'$ne': True},
-            '$or': [{'source': {'$in': ['dashboard', 'task', 'flow', 'webhook', 'telegram']}},
-                    {'source': {'$regex': '^slack'}}],
+            '$or': [{'source': {'$in': self.sources}},
+                    {'source': {'$regex': '^slack'}},
+                    {'source': {'$in': ['github_webhook', 'linear_webhook']},
+                     'metadata.remote_automation.owner': self.authority.user_email}],
             **({'status': 'running'} if self.requires_running else {})},
-            {'project_id': 1, 'metadata.agent_id': 1, **({'messages': 1} if include_messages else {})})
+            {'source': 1, 'metadata.remote_automation': 1, 'project_id': 1, 'metadata.agent_id': 1, **({'messages': 1} if include_messages else {})})
         if not user or not row:
             raise GatewayDenied('Conversation access is no longer valid')
-        scope = (str(user['_id']), row.get('project_id'), (row.get('metadata') or {}).get('agent_id'))
+        binding = (row.get('metadata') or {}).get('remote_automation')
+        if row.get('source') in ('github_webhook', 'linear_webhook'):
+            from isolation.automation import authorize_webhook
+            if (not isinstance(binding, dict) or set(binding) != {'owner', 'provider', 'resource'}
+                    or binding['owner'] != self.authority.user_email
+                    or binding['provider'] != row['source'].split('_')[0]):
+                raise GatewayDenied('Missing automation binding')
+            await authorize_webhook(self.db, self.authority.user_email, binding['provider'], binding['resource'])
+        scope = (str(user['_id']), row.get('project_id'), (row.get('metadata') or {}).get('agent_id'), row.get('source'), str(binding))
         if self.scope is not None and self.scope != scope:
             raise GatewayDenied('Conversation scope changed')
         self.scope = scope
@@ -144,6 +155,17 @@ class UtilityContext(ConversationContext):
     No conversation history is sent, and no conversation status is changed.
     """
     requires_running = False
+    sources = ConversationContext.sources + ['utility']
+
+    async def _read(self, *, include_messages=False):
+        row = await super()._read(include_messages=include_messages)
+        stored = await self.db.conversations.find_one({'conversation_id': self.conversation_id}, {'source': 1})
+        if (stored or {}).get('source') == 'utility':
+            user = await self.db.users.find_one({'email': self.authority.user_email}, {'system_role': 1})
+            if (user or {}).get('system_role') not in ('admin', 'maintainer'):
+                raise GatewayDenied('Maintenance permission revoked')
+        return row
+
 
     async def load(self, prompt):
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode()) > 32 * 1024:

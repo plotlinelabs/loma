@@ -96,5 +96,27 @@ CATALOG = [
 ]
 
 
+# One bounded operation per call. Backend validates the exact per-operation
+# argument set; neither a generic REST nor a GraphQL interface is exposed.
+from isolation.automation import SCHEMAS as AUTOMATION_SCHEMAS
+for _action, _operations in AUTOMATION_SCHEMAS.items():
+    _write = _action.endswith('.write')
+    _names = set().union(*(required | optional for required, optional in _operations.values()))
+    _properties = {name: (BODY if name in ('body', 'description', 'content') else TEXT) for name in sorted(_names)}
+    for _name in ('number', 'page'):
+        if _name in _properties:
+            _properties[_name] = {'type': 'integer', 'minimum': 1, 'maximum': 100 if _name == 'page' else 100000000}
+    _properties['operation'] = {'type': 'string', 'enum': list(_operations)}
+    _required = ['operation']
+    if _write:
+        _properties['reason'] = REASON
+        _required.append('reason')
+    _detail = '; '.join(op + ': required ' + ', '.join(sorted(req)) +
+        ('; optional ' + ', '.join(sorted(opt)) if opt else '') for op, (req, opt) in _operations.items())
+    CATALOG.append(_tool(_action.replace('.write', '.propose_write'),
+        ('Propose an exact owner-reviewed write; never executes in the worker. ' if _write else 'Read within your operator-granted repository/team scope. ') + _detail,
+        _properties, _required))
+
+
 def catalog(authority):
     return deepcopy([tool for tool in CATALOG if tool['name'] in authority.allowed_tools])

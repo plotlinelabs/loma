@@ -628,7 +628,7 @@ def _extract_json_object(raw: str) -> dict | None:
     return None
 
 
-async def auto_organize_skills(db) -> dict[str, Any]:
+async def auto_organize_skills(db, *, owner=None) -> dict[str, Any]:
     """Categorize unorganized skills into business-function folders using LLM."""
     import asyncio
     import json as json_module
@@ -685,29 +685,34 @@ async def auto_organize_skills(db) -> dict[str, Any]:
         )
 
         try:
-            from agent.pool import background_cli_env
-            proc = await asyncio.create_subprocess_exec(
-                "claude", "-p", message,
-                "--model", "claude-haiku-4-5-20251001",
-                "--max-turns", "1",
-                "--output-format", "json",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=background_cli_env(),
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-            if proc.returncode != 0:
-                detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip() or "no output"
-                logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, detail)
-                errors.append(f"{batch_label}: claude CLI exited {proc.returncode}: {detail}")
-                continue
+            from isolation.deployment import remote_workers_enabled
+            if remote_workers_enabled():
+                from isolation.utility import complete_maintenance
+                raw = await complete_maintenance(message, db=db, owner=owner, purpose="skill-organization", timeout=120)
+            else:
+                from agent.pool import background_cli_env
+                proc = await asyncio.create_subprocess_exec(
+                    "claude", "-p", message,
+                    "--model", "claude-haiku-4-5-20251001",
+                    "--max-turns", "1",
+                    "--output-format", "json",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=background_cli_env(),
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+                if proc.returncode != 0:
+                    detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip() or "no output"
+                    logger.warning("Skill organize CLI failed (rc=%d): %s", proc.returncode, detail)
+                    errors.append(f"{batch_label}: claude CLI exited {proc.returncode}: {detail}")
+                    continue
 
-            output = stdout.decode().strip()
-            try:
-                envelope = json_module.loads(output)
-                raw = envelope.get("result", output)
-            except json_module.JSONDecodeError:
-                raw = output
+                output = stdout.decode().strip()
+                try:
+                    envelope = json_module.loads(output)
+                    raw = envelope.get("result", output)
+                except json_module.JSONDecodeError:
+                    raw = output
             mapping = _extract_json_object(raw) if isinstance(raw, str) else (raw if isinstance(raw, dict) else None)
             if mapping is None:
                 logger.warning("Failed to parse LLM response for skill organize %s: %r", batch_label, str(raw)[:300])

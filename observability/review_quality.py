@@ -85,33 +85,38 @@ async def assess_review_quality(
     )
 
     try:
-        from agent.pool import background_cli_env
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
-            "--model", "claude-opus-4-8",
-            "--max-turns", "1",
-            "--output-format", "json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=background_cli_env(),
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-
-        if proc.returncode != 0:
-            logger.error(
-                "[REVIEW-QUALITY] CLI failed (rc=%d): %s",
-                proc.returncode, stderr.decode()[:200],
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            raw = await complete(prompt, db=db, conversation_id=conversation_id, timeout=60)
+        else:
+            from agent.pool import background_cli_env
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", prompt,
+                "--model", "claude-opus-4-8",
+                "--max-turns", "1",
+                "--output-format", "json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=background_cli_env(),
             )
-            return None
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
 
-        output = stdout.decode().strip()
+            if proc.returncode != 0:
+                logger.error(
+                    "[REVIEW-QUALITY] CLI failed (rc=%d): %s",
+                    proc.returncode, stderr.decode()[:200],
+                )
+                return None
 
-        # Parse CLI JSON envelope
-        try:
-            envelope = json.loads(output)
-            raw = envelope.get("result", output)
-        except json.JSONDecodeError:
-            raw = output
+            output = stdout.decode().strip()
+
+            # Parse CLI JSON envelope
+            try:
+                envelope = json.loads(output)
+                raw = envelope.get("result", output)
+            except json.JSONDecodeError:
+                raw = output
 
         # Strip markdown fences if present
         raw = raw.strip()

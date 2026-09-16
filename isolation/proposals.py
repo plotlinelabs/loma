@@ -22,6 +22,8 @@ from isolation.gateway import GatewayDenied
 
 # Model-visible proposal tool -> durable action name.
 PROPOSAL_TOOLS = {
+    'github.propose_write': 'github.write',
+    'linear.propose_write': 'linear.write',
     'gmail.propose_send': 'gmail.send',
     'gmail.propose_draft': 'gmail.draft',
     'slack.propose_send': 'slack.send',
@@ -65,7 +67,7 @@ NOTES = {
     'expired': 'Expired before a decision. Propose again only if the owner still wants it.',
     'cancelled': 'Cancelled by the owner.',
 }
-LABELS = {'gmail.send': 'Send email', 'gmail.draft': 'Create Gmail draft', 'slack.send': 'Send Slack message',
+LABELS = {'github.write': 'GitHub action', 'linear.write': 'Linear action', 'gmail.send': 'Send email', 'gmail.draft': 'Create Gmail draft', 'slack.send': 'Send Slack message',
           'calendar.create': 'Create calendar event', 'docs.append': 'Append to Google Doc',
           'sheets.write': 'Write to Google Sheet'}
 
@@ -126,6 +128,9 @@ def _cells(value):
 
 def validate_write(action, arguments):
     """Exact, typed arguments for one durable write action. Fails closed."""
+    from isolation.automation import WRITE_ACTIONS, validate
+    if action in WRITE_ACTIONS:
+        return validate(action, arguments)
     if action not in WRITE_SCHEMAS or not isinstance(arguments, dict):
         raise GatewayDenied('Unknown action or invalid arguments')
     required, optional = WRITE_SCHEMAS[action]
@@ -237,7 +242,8 @@ def summary(proposal):
     action = proposal['action']
     target = {'gmail.send': args.get('to'), 'gmail.draft': args.get('to'), 'slack.send': args.get('channel'),
               'calendar.create': args.get('summary'), 'docs.append': args.get('document_id'),
-              'sheets.write': args.get('spreadsheet_id')}.get(action) or ''
+              'sheets.write': args.get('spreadsheet_id'), 'github.write': args.get('repo'),
+              'linear.write': args.get('issue_id') or args.get('team_id')}.get(action) or ''
     return f"{LABELS.get(action, action)}: {target}"[:200]
 
 
@@ -291,6 +297,9 @@ class ProposalGateway:
         reason = _text(arguments.get('reason'), 'reason', 2000)
         args = validate_write(action, {k: v for k, v in arguments.items() if k != 'reason'})
         owner = self.authority.user_email
+        from isolation.automation import WRITE_ACTIONS, check_scope
+        if action in WRITE_ACTIONS:
+            await check_scope(self.db, owner, action, args)
         fingerprint = digest({'action': action, 'args': args, 'owner': owner, 'conversation_id': self.conversation_id})
         existing = await self.db.isolated_worker_proposals.find_one(
             {**self._scope(), 'digest': fingerprint, 'status': {'$in': list(HANDLED)}})
@@ -400,7 +409,13 @@ async def decide(db, owner, proposal_id, version, decision, args=None, adapter=N
 
 
 async def execute(db, proposal, adapter=None):
-    adapter = adapter or write_adapter
+    if adapter is None:
+        from isolation.automation import WRITE_ACTIONS, write
+        if proposal['action'] in WRITE_ACTIONS:
+            async def adapter(action, args, owner, proposal_id):
+                return await write(db, owner, action, args, proposal_id)
+        else:
+            adapter = write_adapter
     expected = digest({'action': proposal['action'], 'args': proposal['args'], 'owner': proposal['owner'],
                        'conversation_id': proposal['conversation_id']})
     if expected != proposal.get('approved_digest') or proposal.get('decided_by') != proposal['owner']:

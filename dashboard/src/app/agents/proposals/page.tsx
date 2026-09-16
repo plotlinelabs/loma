@@ -12,16 +12,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 type Cell = string | number | boolean;
-type Args = Record<string, string | Cell[][]>;
+type Args = Record<string, string | number | Cell[][]>;
 type Reconciliation = { outcome: string; evidence: string; actor: string; at: string; version: number };
 type Proposal = { proposal_id: string; conversation_id: string; action: string; args: Args; reason: string; owner: string; status: string; version: number; created_at: string; expires_at: string; receipt?: unknown; decided_by?: string; reconciliation?: Reconciliation };
 type Listing = { proposals: Proposal[]; attention_limited?: boolean };
 
-const labels: Record<string, string> = { "gmail.send": "Send email", "gmail.draft": "Create Gmail draft", "slack.send": "Send Slack message", "calendar.create": "Create calendar event", "docs.append": "Append to Google Doc", "sheets.write": "Write to Google Sheet" };
+const labels: Record<string, string> = { "github.write": "GitHub action", "linear.write": "Linear action", "gmail.send": "Send email", "gmail.draft": "Create Gmail draft", "slack.send": "Send Slack message", "calendar.create": "Create calendar event", "docs.append": "Append to Google Doc", "sheets.write": "Write to Google Sheet" };
 const fields: Record<string, string> = { to: "Recipient", cc: "Cc", subject: "Subject", body: "Message", channel: "Slack channel ID", text: "Message", thread_ts: "Thread", summary: "Event title", start: "Starts", end: "Ends", description: "Description", attendees: "Attendees", location: "Location", document_id: "Document ID", spreadsheet_id: "Spreadsheet ID", range: "Range", values: "Values (JSON rows)" };
 const statusLabel = (status: string) => ({ pending: "Needs your decision", approved: "Approved", executing: "Executing", executed: "Executed", uncertain: "Outcome unknown", rejected: "Rejected", expired: "Expired", cancelled: "Cancelled" }[status] || status);
-const target = (p: Proposal) => String(p.args.to ?? p.args.channel ?? p.args.summary ?? p.args.document_id ?? p.args.spreadsheet_id ?? "");
-const show = (value: string | Cell[][]) => typeof value === "string" ? value : JSON.stringify(value);
+const target = (p: Proposal) => String(p.args.to ?? p.args.channel ?? p.args.summary ?? p.args.document_id ?? p.args.spreadsheet_id ?? p.args.repo ?? p.args.issue_id ?? p.args.team_id ?? "");
+const show = (value: string | number | Cell[][]) => typeof value === "string" ? value : JSON.stringify(value);
 const unresolved = (p: Proposal) => p.status === "uncertain" && !["sent", "not_sent"].includes(p.reconciliation?.outcome || "");
 
 export default function ProposalsPage() {
@@ -50,7 +50,7 @@ export default function ProposalsPage() {
   const history = data?.proposals.filter(p => !(p.status === "pending" && new Date(p.expires_at) > new Date()) && !unresolved(p)) || [];
   const decide = (decision: string) => act(async () => {
     if (!review) return;
-    const args = decision === "edit" && edit ? Object.fromEntries(Object.entries(edit).map(([k, v]) => [k, k === "values" ? JSON.parse(v) : v])) : undefined;
+    const args = decision === "edit" && edit ? Object.fromEntries(Object.entries(edit).map(([k, v]) => [k, (k === "values" || typeof review.args[k] === "number") ? JSON.parse(v) : v])) : undefined;
     const result = await api<Proposal>(`proposals/${review.proposal_id}`, { decision, version: review.version, ...(args ? { args } : {}) });
     setReview(null); setEdit(null);
     if (decision === "approve" && result.status === "uncertain") return { warning: "Approved, but the outcome is unknown. Check the provider before doing anything else; it will not be retried." };
