@@ -90,11 +90,15 @@ async def main():
     # Pre-warm Claude SDK client pool (background \u2014 doesn't block startup)
     agent_config = load_config()
     agent_config = await merge_db_integrations(agent_config)
-    await init_pool(config=agent_config)
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        logger.info("Remote worker mode: local Claude/Codex pools and prewarm disabled")
+    else:
+        await init_pool(config=agent_config)
 
     # Pre-warm Codex (ChatGPT subscription) worker pool — feature-flagged off
     # by default until rollout sign-off (set CODEX_POOL_ENABLED=1).
-    if codex_pool_enabled():
+    if codex_pool_enabled() and not remote_workers_enabled():
         await init_codex_pool(config=agent_config)
     else:
         logger.info("Codex pool disabled (set CODEX_POOL_ENABLED=1 to enable)")

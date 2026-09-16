@@ -350,6 +350,9 @@ those checks, and no old UI screenshots establish the new chat path.
 4. Interactive chat, scheduled flows, recovery/resume, utility calls and pool
    prewarming must be routed to remote workers, with no local fallback and a
    tested drain/cutover procedure that preserves existing chat functionality.
+   *(The routing seam now exists behind `LOMA_REMOTE_WORKERS=on` — see the
+   entrypoint routing section below. Utility calls fail closed rather than run
+   remotely, and the cutover has not been exercised against a real worker host.)*
 5. Then run the integrated desktop/mobile chat suite and hostile-worker checks
    using the built images on a dedicated Docker/gVisor host.
 
@@ -774,8 +777,110 @@ Protocol references: Codex `rust-v0.153.3` login/auth implementation and install
 Claude Code `2.1.261` OAuth client. Public credential guidance:
 https://developers.openai.com/codex/auth
 
-**Remaining PR scope:** other connector/action adapters, authenticated production
-entrypoint migration, distributed account capacity/rate-limit feedback and usage
-reporting, native CI permissions, dedicated Docker/gVisor and live-provider
-verification. The concrete OAuth refresh-adapter implementation is complete;
-PR #191 remains draft for the broader migration.
+**Remaining PR scope:** distributed account capacity/rate-limit feedback,
+remote utility completions (local `claude -p` helpers now fail closed in remote
+mode instead of running remotely), native CI permissions, worker image builds,
+and dedicated Docker/gVisor plus live-provider verification. The entrypoint
+cutover switch now exists (see the entrypoint routing section at the end);
+enabling it is a separate operator action after those gates. PR #191 remains
+draft.
+
+## Production entrypoint routing (latest continuation)
+
+`isolation/deployment.py` and `isolation/entrypoint.py` implement the cutover
+seam for item 4. `agent.client.stream_agent` — the single chokepoint for
+dashboard chat, Slack/Telegram/GitHub/Linear webhooks, scheduled flows,
+deferred-flow recovery and conversation resume — now routes every run through
+`isolation.run.stream_run` when the operator sets `LOMA_REMOTE_WORKERS=on`.
+The default is off: nothing changes for existing deployments, and turning the
+flag on without full configuration fails runs closed with a visible error.
+There is deliberately no per-run, per-user or worker-controllable override and
+no local fallback path from remote mode.
+
+What the entrypoint assembles from authenticated backend state, per run:
+
+- **Runtime and model** from the dashboard model id (`codex/…` → Codex,
+  Claude ids → Claude, otherwise the configured OpenAI-compatible chat
+  endpoint), with `LOMA_REMOTE_DEFAULT_MODEL` for unselected runs.
+- **Model grant and pinned budget** from `isolation/deployment.py`: fixed
+  HTTPS provider endpoints, pinned integer nanodollar prices (unknown models
+  charge deliberately conservative rates), a worst-case reservation check at
+  configuration time, and `LOMA_REMOTE_RUN_BUDGET_NUSD` as the per-run cap.
+  Subscription runtimes carry no static credentials — headers come from the
+  existing selector/OAuth refresh path; only the operator chat endpoint uses a
+  configured API key.
+- **Accounts** from explicit operator lists (`LOMA_REMOTE_CLAUDE_ACCOUNTS`,
+  `LOMA_REMOTE_CODEX_ACCOUNTS`, comma-separated `email=/absolute/dir`), fed to
+  the existing `SubscriptionAccounts` selector. No disk scanning, no local CLI.
+- **Instructions** built without the legacy prompt envelope: rulebook, skill
+  index, source formatting, and an explicit statement that identity is enforced
+  server-side. No personal auth tokens are minted or embedded; a test fails if
+  any remote path calls the token minter.
+- **Tools**: the full reviewed catalog by default. A chat with an explicit
+  legacy SDK tool restriction gets a conservative workspace+skills-only set,
+  because SDK tool names have no name-for-name remote equivalent; per-chat
+  skill allowlists map through unchanged.
+- **Attachments and files**: chat upload dicts become validated attachment
+  bytes; prior committed outputs of the same owner and conversation are
+  re-offered as inputs, bounded by count and by half the run byte quota so one
+  large generated file can never block later turns.
+- **Lifecycle**: an interrupt shim registers in `active_streams` so the
+  existing interrupt endpoint cancels remote runs; observability records
+  chunks, artifacts, interruptions and errors through the same observer.
+  Structured file/artifact events only flow to consumers that requested
+  steps (dashboard SSE); plain-text consumers get text only. Mid-stream
+  injection is refused with a clear error rather than silently dropped.
+
+The conversation context now admits the reviewed ingress sources whose
+`metadata.user_name` is the creator's authenticated email — dashboard/task
+chat, scheduled (`flow`) and `webhook` flows, `telegram`, and `slack*` — while
+ownership still requires that email to match the run authority and resolve to
+an active platform user, so a Slack requester without a resolvable email fails
+closed rather than running under someone else's identity.
+
+Remote mode requires an authenticated, active platform user as the run owner.
+Runs that arrive without one — GitHub/Linear webhook automation and legacy
+recovery resumes — fail closed with a recorded, visible error instead of
+guessing a principal. Those automations also need worker-side GitHub/Linear
+surfaces that deliberately do not exist yet, so restoring them under remote
+mode is follow-up work, not a routing flag.
+
+Local execution is disabled, not just bypassed, while the flag is on:
+`background_cli_env()` (titles, topics, Slack compression, org-learning dedup,
+review-quality and skill-organize helpers) raises and each caller degrades to
+its existing fallback; the gate verifier CLI refuses; Claude/Codex pool warmup
+and OpenCode prewarm are skipped; the model catalog endpoint serves static
+entries instead of booting a local OpenCode server. Remote utility
+completions are future work — utility features degrade in remote mode today.
+
+Verification: `tests/test_remote_entrypoint.py` (39 tests, in the pinned
+native script) covers flag parsing, fail-closed configuration (transport, TLS,
+accounts, budget bounds), pricing pins, grant/budget composition per runtime,
+routing by flag with no local fallback, full assembly against throwaway Mongo
+with a synthetic `stream_run`, interrupt handling, owner revalidation, the
+disabled local-CLI surfaces, and `/api/pool-status` in remote mode.
+
+`scripts/browser/remote-cutover.cjs` boots the real stack with
+`LOMA_REMOTE_WORKERS=on` and no worker transport, logs in on desktop and
+mobile contexts separately, sends a chat, and asserts that the run is routed
+remotely, fails closed with the named missing configuration, leaks no local
+runtime output, and that the same message is still rendered after a page
+reload. That smoke caught three defects the unit tests could not:
+
+- `/api/pool-status` (polled by every dashboard session) raised because no
+  local pool exists in remote mode. It now reports remote mode, the configured
+  account emails (never directories or tokens) and any configuration error
+  with a 200.
+- The persisted conversation `error` was the bare reason while the streamed
+  text was the fail-closed message, so a reload showed a different string.
+  The entrypoint now persists exactly what it streams; internal exception
+  detail stays in server logs.
+- The initial `/chat?continue=<id>` loader dropped a persisted error entirely
+  (only the recovery poller appended it). Both paths now share
+  `dashboard/src/lib/terminal-status.ts`, which also fixes refreshes of legacy
+  errored conversations. Covered by `dashboard/tests/terminal-status.test.cjs`.
+
+**Not verified here:** a real supervisor host, built worker images,
+Docker/gVisor containment, live providers, or drain under production load.
+Enabling the flag in production remains an operator action gated on the
+checklist above.

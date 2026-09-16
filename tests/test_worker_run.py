@@ -85,9 +85,26 @@ async def test_history_limits_are_reported_and_suffix_order_preserved(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('source,allowed', [
+    ('dashboard', True), ('task', True), ('flow', True), ('webhook', True),
+    ('telegram', True), ('slack_mention', True), ('slack', True),
+    ('github_webhook', False), ('linear', False), ('', False),
+])
+async def test_only_reviewed_owner_email_sources_are_admitted(db, source, allowed):
+    await db.conversations.insert_one({'conversation_id': 'current', 'source': source,
+        'status': 'running', 'metadata': {'user_name': OWNER, 'agent_id': 'agent-a'},
+        'project_id': 'project-a', 'messages': []})
+    if allowed:
+        assert (await context(db).load('Current message')).history == ()
+    else:
+        with pytest.raises(GatewayDenied):
+            await context(db).load('Current message')
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('update', [
     {'metadata.user_name': OTHER}, {'project_id': 'elsewhere'}, {'metadata.agent_id': 'other-agent'},
-    {'deleted': True}, {'status': 'interrupted'}, {'source': 'slack'},
+    {'deleted': True}, {'status': 'interrupted'}, {'source': 'github_webhook'},
 ])
 async def test_scope_changes_and_termination_revoke_run(db, update):
     await seed(db)

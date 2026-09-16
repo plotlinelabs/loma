@@ -227,6 +227,9 @@ class ClaudeCLIVerifier(LLMVerifier):
         import json
         import subprocess
 
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            raise RuntimeError("Local model CLI verifier is disabled while LOMA_REMOTE_WORKERS=on")
         proc = subprocess.run(
             ["claude", "-p", prompt, "--model", self._model,
              "--max-turns", "1", "--output-format", "json"],

@@ -35,9 +35,16 @@ class ConversationContext:
             raise GatewayDenied('Run access is no longer valid')
         user = await self.db.users.find_one({'email': self.authority.user_email,
             'status': {'$in': [None, 'active']}, 'deleted': {'$ne': True}}, {'_id': 1})
+        # Reviewed ingress sources whose metadata.user_name is the creator's
+        # authenticated email (dashboard/task chat, scheduled and webhook
+        # flows, Telegram DMs, Slack channels). Ownership still requires that
+        # email to match the run authority and resolve to an active user, so a
+        # source whose user_name is a display name or bot ID fails closed.
         row = await self.db.conversations.find_one({'conversation_id': self.conversation_id,
             'metadata.user_name': self.authority.user_email, 'deleted': {'$ne': True},
-            'source': {'$in': ['dashboard', 'task']}, 'status': 'running'},
+            '$or': [{'source': {'$in': ['dashboard', 'task', 'flow', 'webhook', 'telegram']}},
+                    {'source': {'$regex': '^slack'}}],
+            'status': 'running'},
             {'project_id': 1, 'metadata.agent_id': 1, **({'messages': 1} if include_messages else {})})
         if not user or not row:
             raise GatewayDenied('Conversation access is no longer valid')

@@ -18,6 +18,7 @@ import type { ChatItem } from "../../components/ChatPanel";
 import type { Artifact } from "../../components/ArtifactViewer";
 import type { ChatFile, ToolConfig } from "../../lib/api";
 import { rebuildItemsFromConversation } from "../../components/ChatPanel";
+import { withTerminalStatus } from "../../lib/terminal-status";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import { CostChip } from "../../components/CostChip";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
@@ -152,7 +153,9 @@ function ChatPageContent() {
           data.turns,
           data.artifacts,
         );
-        setInitialItems(items);
+        // Surface a persisted error/interruption exactly as the recovery
+        // poller does, so a refresh never drops the outcome the user saw.
+        setInitialItems(withTerminalStatus(items, data.conversation) as ChatItem[]);
         setInitialArtifacts(restoredArtifacts);
         setInitialStatus(data.conversation.status);
         setConversationTitle(data.conversation.title || null);

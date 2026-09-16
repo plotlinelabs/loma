@@ -1215,6 +1215,38 @@ async def handle_agent_models(request: web.Request) -> web.Response:
             "recommended": True,
         }
 
+    # Remote worker mode: never boot a local OpenCode server (or read local
+    # pools) just to list models. Serve the static entries the remote
+    # entrypoint can actually run, plus configured remote codex/chat models.
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        remote_models = list(claude_models)
+        try:
+            from isolation.deployment import load_deployment
+            deployment = load_deployment()
+            if deployment.codex_accounts:
+                from agent.codex_runtime import supported_codex_model_ids
+                remote_models += [_codex_entry(mid) for mid in supported_codex_model_ids([])]
+            if deployment.chat_endpoint and deployment.default_model and \
+                    deployment.default_model.split("/", 1)[0] not in ("anthropic", "codex"):
+                provider_id, _, model_id = deployment.default_model.partition("/")
+                remote_models.append({
+                    "id": deployment.default_model, "provider_id": provider_id,
+                    "model_id": model_id or deployment.default_model,
+                    "label": f"Remote worker · {model_id or deployment.default_model}",
+                    "context_limit": None, "supports_attachments": True,
+                    "supports_reasoning": False, "status": "active", "cost": {},
+                    "recommended": True,
+                })
+            default_agent_model = deployment.default_model or f"anthropic/{default_claude_model}"
+        except Exception:
+            logger.exception("Remote worker deployment is not configured; serving Claude entries only")
+            default_agent_model = f"anthropic/{default_claude_model}"
+        return web.json_response({
+            "default_model": default_agent_model,
+            "models": _order_agent_models(remote_models),
+        })
+
     # Codex (ChatGPT subscription) models — only surfaced when the Codex pool
     # is enabled and at least one account is connected.
     codex_models: list[dict] = []
@@ -1854,8 +1886,41 @@ async def handle_available_tools(request: web.Request) -> web.Response:
     return web.json_response({"tools": tools, "skills": skills})
 
 
+def _remote_pool_status() -> dict:
+    """Pool status while LOMA_REMOTE_WORKERS=on: no local pools exist.
+
+    Reports the configured remote subscription accounts (emails only, never
+    directories or tokens) so the sidebar widget stays meaningful. A missing
+    or invalid deployment is reported, not raised: this endpoint is polled by
+    every dashboard session and must never 500 on operator misconfiguration.
+    """
+    from isolation.deployment import DeploymentError, load_deployment
+    status = {
+        "pool_size": 0, "available": 0, "in_use": 0, "warming": 0, "queue_depth": 0,
+        "accounts": [], "accounts_on_cooldown": [], "account_distribution": {},
+        "remote_workers": {"enabled": True, "configured": False, "error": None},
+    }
+    try:
+        deployment = load_deployment()
+    except DeploymentError as error:
+        status["remote_workers"]["error"] = str(error)
+        return status
+    status["accounts"] = [a.email for a in (*deployment.claude_accounts, *deployment.codex_accounts)]
+    status["remote_workers"].update({
+        "configured": True,
+        "claude_accounts": len(deployment.claude_accounts),
+        "codex_accounts": len(deployment.codex_accounts),
+        "chat_endpoint": bool(deployment.chat_endpoint),
+        "default_model": deployment.default_model,
+    })
+    return status
+
+
 async def handle_pool_status(request):
     """Return agent pool status (available/in_use/queued)."""
+    from isolation.deployment import remote_workers_enabled
+    if remote_workers_enabled():
+        return web.json_response(_remote_pool_status())
     from agent.pool import get_pool
     pool = get_pool()
     try:

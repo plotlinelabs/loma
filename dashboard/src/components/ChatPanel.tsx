@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { withTerminalStatus } from "../lib/terminal-status";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
 import { useAgentModels } from "@/hooks/useAgentModels";
@@ -837,17 +838,7 @@ export default function ChatPanel({
         if (data.conversation.status !== "running") {
           setIsRecovering(false);
           setIsStreaming(false);
-          if (data.conversation.status === "interrupted") {
-            setItems((prev) => [
-              ...prev,
-              { role: "assistant", content: "The server restarted while processing your request. You can send a follow-up to continue." },
-            ]);
-          } else if (data.conversation.status === "error" && !data.conversation.final_response) {
-            setItems((prev) => [
-              ...prev,
-              { role: "assistant", content: `Error: ${data.conversation.error || "Unknown error"}` },
-            ]);
-          }
+          setItems((prev) => withTerminalStatus(prev, data.conversation));
           requestAnimationFrame(() => inputRef.current?.focus());
           return;
         }
