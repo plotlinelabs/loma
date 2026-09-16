@@ -340,8 +340,10 @@ those checks, and no old UI screenshots establish the new chat path.
 
 1. Backend subscription-account selection/refresh and authoritative model usage
    settlement must construct and service the new grants.
-2. The existing chat tool/skill/recall surface still needs typed, current-access
-   gateway adapters; no generic backend-shell escape hatch is acceptable.
+2. The read-tool surface now has typed adapters (see the connector read-adapter
+   section below). Write/send actions stay in the durable approval engine and
+   still need their own worker-visible proposal flow; database, GitHub and other
+   MCP surfaces remain deliberately unavailable to workers.
 3. Chat attachments and generated-file download events still need to be connected
    to the artifact broker. File component tests are not dashboard integration.
 4. Interactive chat, scheduled flows, recovery/resume, utility calls and pool
@@ -356,6 +358,48 @@ Native configuration references: [Claude Code CLI](https://code.claude.com/docs/
 [Claude MCP](https://code.claude.com/docs/en/mcp),
 [OpenCode configuration](https://opencode.ai/docs/config/) and
 [OpenCode MCP](https://opencode.ai/docs/mcp-servers/).
+
+## Typed connector read adapters (subsequent implementation)
+
+`isolation/gateway.py` (`READ_SCHEMAS`, `validate_read`, `READ_COMMANDS`,
+`personal_read`) and `autonomy/connector.py` now cover the legacy chat
+read-tool surface with typed, current-access adapters. This does not route
+existing chat and grants nothing by itself: a run only sees tools its
+backend-supplied `allowed_tools` includes, and every dispatch still passes the
+gateway's authorization, audit and revocation checks.
+
+- **Per-user identity tools** (Gmail search/read/inbox, Calendar
+  list/search/get, Drive list/search/read, Docs info/read, Sheets
+  info/tabs/read, Slack channel read/search via the member's own Slack token,
+  Loma notification list): the connector mints a short-lived token for the
+  authenticated run owner on the backend. Workers never see tokens; the
+  connector passes them as argv to exact first-party scripts with fixed flag
+  shapes (`GLOBAL_AUTH` vs trailing `--user-email`).
+- **Team integration tools** (Grain search/transcript/recent, Pylon
+  issue/messages/teams/issues, PostHog projects/definitions/events, Linear
+  velocity/bucket-split): read-only commands against backend-held Fernet
+  integration keys. These CLIs take no identity argv, so no owner token is
+  minted (`SERVICE`); access is still bound to an authorized run and audited.
+- Argument validation is schema-exact per tool: required/optional names,
+  bounded integers, date/month patterns, no control characters, and rejection
+  of leading dashes for arguments that hand-rolled CLIs consume positionally.
+  The model-visible catalog schema and the gateway schema are asserted equal in
+  tests, so drift between advertisement and enforcement fails CI.
+- Deliberately excluded: every write/send (Gmail send/draft, Slack send/react,
+  Docs/Sheets/Drive mutation, Pylon reply/update, notification send) — those
+  remain in the durable approval engine; `slack_reader.py` bot-wide reads
+  (no per-user scoping); `loma_skills.py` (the run-bound knowledge gateway
+  already serves skills with stricter scoping); MongoDB/ClickHouse/GitHub and
+  all other MCP or shell surfaces.
+- The connector still enforces exact scripts, `-I`, private cwd, env
+  allowlist, rlimits, bounded output and a strict JSON-dict result. Failure
+  paths (missing integration key, plain-text CLI usage errors, non-dict
+  output) fail closed as connector errors, never partial text.
+
+`tests/test_worker_connectors.py` pins the exact argv per tool, the three argv
+shapes, no-token-minting for service CLIs, invalid-argument rejection before
+dispatch, gateway audit/denial ordering and a real-subprocess adapter path.
+No personal accounts, providers or databases are used.
 
 ## Provider-side usage evidence
 

@@ -23,7 +23,16 @@ KEYS = ('OBSERVABILITY_MONGODB_URI', 'OBSERVABILITY_DB_NAME', 'OAUTH_ENCRYPTION_
 MAX_OUTPUT = 128000
 CONNECTOR_TIMEOUT = 45
 # Exact first-party scripts only. Argument order matches each CLI's parser.
-TOOLS = {'gmail': 'tools/gmail.py', 'slack': 'tools/slack_user.py', 'calendar': 'tools/google_calendar.py'}
+TOOLS = {'gmail': 'tools/gmail.py', 'slack': 'tools/slack_user.py', 'calendar': 'tools/google_calendar.py',
+         'drive': 'tools/google_drive.py', 'docs': 'tools/google_docs_personal.py',
+         'sheets': 'tools/google_sheets.py', 'notify': 'tools/notify.py',
+         'grain': 'tools/grain.py', 'pylon': 'tools/pylon.py',
+         'posthog': 'tools/posthog.py', 'linear': 'tools/linear.py'}
+# slack_user.py/notify.py parse identity flags globally, before the subcommand.
+GLOBAL_AUTH = frozenset({'slack', 'notify'})
+# Backend-held team integration keys (Fernet-encrypted in the observability DB);
+# these CLIs take no identity argv, so no per-owner token is minted for them.
+SERVICE = frozenset({'grain', 'pylon', 'posthog', 'linear'})
 
 
 def _limits():
@@ -52,11 +61,14 @@ def sandbox_prefix():
 def build_argv(tool, command, owner, token):
     script = str(Path(__file__).resolve().parents[1] / TOOLS[tool])
     interpreter = [sys.executable, '-I', script]
-    if tool == 'slack':
-        # slack_user.py accepts global args anywhere before the subcommand.
+    if tool in SERVICE:
+        # Team-integration CLIs: no identity argv; keys resolve backend-side.
+        argv = interpreter + list(command)
+    elif tool in GLOBAL_AUTH:
+        # slack_user.py/notify.py accept global args anywhere before the subcommand.
         argv = interpreter + ['--auth-token', token, '--user-email', owner, *command]
     else:
-        # gmail.py/google_calendar.py: subcommand first, --user-email per-sub.
+        # gmail.py/google_* CLIs: subcommand first, --user-email per-sub.
         argv = interpreter + ['--auth-token', token, *command, '--user-email', owner]
     return sandbox_prefix() + argv
 
@@ -64,8 +76,14 @@ def build_argv(tool, command, owner, token):
 async def personal(tool, command, owner):
     if tool not in TOOLS:
         raise ValueError('Unknown personal tool')
-    from tools._auth_token import create_user_auth_token
-    argv = build_argv(tool, command, owner, create_user_auth_token(owner))
+    if not isinstance(owner, str) or not owner.strip():
+        raise ValueError('A backend-authenticated owner is required')
+    if tool in SERVICE:
+        token = ''
+    else:
+        from tools._auth_token import create_user_auth_token
+        token = create_user_auth_token(owner)
+    argv = build_argv(tool, command, owner, token)
     # Private disposable cwd prevents output/cache mixing across principals.
     with tempfile.TemporaryDirectory(prefix='loma-connector-') as cwd:
         proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=environment(),

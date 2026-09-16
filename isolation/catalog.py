@@ -10,10 +10,40 @@ def _tool(name, description, properties, required=None):
 
 TEXT = {'type': 'string', 'minLength': 1, 'maxLength': 1000}
 PATH = {'type': 'string', 'minLength': 1, 'maxLength': 1000}
+LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 50}
+DAYS = {'type': 'integer', 'minimum': 1, 'maximum': 90}
+DATE = {'type': 'string', 'pattern': '^\\d{4}-\\d{2}-\\d{2}$'}
+MONTH = {'type': 'string', 'pattern': '^\\d{4}-\\d{2}$'}
 CATALOG = [
-    _tool('gmail.search', 'Search your Gmail messages.', {'query': TEXT}),
+    _tool('gmail.search', 'Search your Gmail messages.', {'query': TEXT, 'limit': LIMIT}, ['query']),
     _tool('gmail.read', 'Read one of your Gmail messages.', {'message_id': TEXT}),
-    _tool('calendar.list', 'List upcoming events in your calendar.', {}),
+    _tool('gmail.inbox', 'List recent messages in your Gmail inbox, optionally filtered by a Gmail query.', {'query': TEXT, 'limit': LIMIT}, []),
+    _tool('calendar.list', 'List upcoming events in your calendar.', {'limit': LIMIT}, []),
+    _tool('calendar.search', 'Search events in your calendar.', {'query': TEXT, 'limit': LIMIT}, ['query']),
+    _tool('calendar.get', 'Read one event in your calendar.', {'event_id': TEXT}),
+    _tool('drive.list', 'List recent files in your Google Drive, optionally filtered by name.', {'query': TEXT, 'limit': LIMIT}, []),
+    _tool('drive.search', 'Search files in your Google Drive.', {'query': TEXT, 'limit': LIMIT}, ['query']),
+    _tool('drive.read', 'Read the text content of one of your Google Drive files.', {'file_id': TEXT}),
+    _tool('docs.info', 'Read the metadata of one of your Google Docs.', {'document_id': TEXT}),
+    _tool('docs.read', 'Read the text content of one of your Google Docs.', {'document_id': TEXT}),
+    _tool('sheets.info', 'Read the metadata of one of your Google Sheets spreadsheets.', {'spreadsheet_id': TEXT}),
+    _tool('sheets.tabs', 'List the sheet tabs in one of your Google Sheets spreadsheets.', {'spreadsheet_id': TEXT}),
+    _tool('sheets.read', 'Read a range (A1 notation) from one of your Google Sheets spreadsheets.', {'spreadsheet_id': TEXT, 'range': TEXT}),
+    _tool('slack.read', 'Read recent messages from a Slack channel you are a member of, using your Slack account.', {'channel': TEXT, 'limit': LIMIT}, ['channel']),
+    _tool('slack.search', 'Search Slack messages visible to your Slack account.', {'query': TEXT, 'limit': LIMIT}, ['query']),
+    _tool('notifications.list', 'List your recent Loma inbox notifications.', {'limit': LIMIT}, []),
+    _tool('grain.search', 'Search team Grain meeting recordings.', {'query': TEXT}),
+    _tool('grain.transcript', 'Read the transcript of a team Grain recording.', {'recording_id': TEXT}),
+    _tool('grain.recent', 'List recent team Grain recordings.', {'days': DAYS}, []),
+    _tool('pylon.issue', 'Read one Pylon support issue.', {'issue_id': TEXT}),
+    _tool('pylon.messages', 'Read the messages on a Pylon support issue.', {'issue_id': TEXT}),
+    _tool('pylon.teams', 'List Pylon support teams.', {}),
+    _tool('pylon.issues', 'List recent Pylon support issues, optionally filtered by state or team.', {'days': DAYS, 'state': TEXT, 'team_id': TEXT}, []),
+    _tool('posthog.projects', 'List PostHog analytics projects.', {}),
+    _tool('posthog.definitions', 'List PostHog event definitions, optionally filtered by a search term.', {'search': TEXT, 'limit': LIMIT}, []),
+    _tool('posthog.events', 'Read recent PostHog events by event name, optionally bounded by ISO dates.', {'event_name': TEXT, 'from': DATE, 'to': DATE, 'limit': LIMIT}, ['event_name']),
+    _tool('linear.velocity', 'Read the team Linear velocity report for a month (YYYY-MM).', {'month': MONTH}),
+    _tool('linear.bucket_split', 'Read the team Linear bucket-split report for a month (YYYY-MM).', {'month': MONTH}),
     _tool('skills.list', 'List currently accessible skills.', {}),
     _tool('skills.search', 'Search currently accessible skills.', {'query': TEXT}),
     _tool('skills.get', 'Read SKILL.md and the list of supporting files for an accessible skill.', {'slug': TEXT}),
