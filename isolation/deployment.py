@@ -91,7 +91,8 @@ def _parse_accounts(runtime, raw):
         if not separator or not email.strip() or not directory.strip():
             raise DeploymentError(f'Invalid {runtime} account entry; use email=/absolute/dir')
         try:
-            accounts.append(SubscriptionAccount(runtime, email.strip(), Path(directory.strip())))
+            capacity = int(os.environ.get('LOMA_REMOTE_ACCOUNT_CAPACITY', '1'))
+            accounts.append(SubscriptionAccount(runtime, email.strip(), Path(directory.strip()), capacity))
         except ValueError as error:
             raise DeploymentError(f'Invalid {runtime} account entry: {error}') from None
     return tuple(accounts)

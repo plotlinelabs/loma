@@ -76,7 +76,12 @@ async def test_selection_round_robin_runtime_and_current_grants(db, tmp_path):
     a, b = account(tmp_path), account(tmp_path, email=OTHER)
     claude = account(tmp_path, 'claude')
     pool = selector(db, [a, b, claude])
-    assert [(await pool.select(AUTH, 'codex')).account_id for _ in range(3)] == [a.account_id, b.account_id, a.account_id]
+    ids = []
+    for _ in range(3):
+        selected = await pool.select(AUTH, 'codex')
+        ids.append(selected.account_id)
+        await selected.release()
+    assert ids == [a.account_id, b.account_id, a.account_id]
     assert (await pool.select(AUTH, 'claude')).account_id == claude.account_id
     await db.users.update_one({'email': OWNER}, {'$set': {'codex_pool_enabled': False}})
     assert (await pool.select(AUTH, 'codex')).account_id == b.account_id
@@ -257,7 +262,8 @@ async def test_provider_feedback_pins_account_and_blocks_other_backend(db,tmp_pa
     pool=selector(db,[a,b]); selected=await pool.select(AUTH,'codex')
     with pytest.raises(ModelDenied):
         await selected.report_rate_limit(replace(AUTH,run_id='foreign'),120)
-    assert await db.isolated_subscription_accounts.count_documents({})==0
+    state = await pool.states.find_one({'_id': a.account_id})
+    assert state['cooldown_until'] <= datetime.now(timezone.utc)
     await selected.report_rate_limit(AUTH,120)
     assert not await selected.authorize(AUTH)
     await selected.report_rate_limit(AUTH,3600)
@@ -265,7 +271,7 @@ async def test_provider_feedback_pins_account_and_blocks_other_backend(db,tmp_pa
     assert state['cooldown_until'].replace(tzinfo=timezone.utc)>datetime.now(timezone.utc)+timedelta(seconds=3500)
     other_backend=selector(db,[a,b])
     assert (await other_backend.select(AUTH,'codex')).account_id==b.account_id
-    assert await db.isolated_subscription_accounts.find_one({'_id':b.account_id}) is None
+    assert (await pool.states.find_one({'_id': b.account_id}))['cooldown_until'] <= datetime.now(timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -282,3 +288,90 @@ async def test_run_wires_provider_feedback_to_selected_account(db,tmp_path,monke
         _=[e async for e in mod.stream_run(**args(db,tmp_path/'artifacts',subscription_accounts=pool))]
     state=await db.isolated_subscription_accounts.find_one({'_id':a.account_id})
     assert state['cooldown_until'] is not None
+
+
+@pytest.mark.asyncio
+async def test_distributed_capacity_is_atomic_and_reusable(db, tmp_path):
+    a = replace(account(tmp_path), max_concurrent_runs=2)
+    # Independent selectors model separate backend processes, not a shared lock.
+    pools = [selector(db, [a]) for _ in range(12)]
+    results = await asyncio.gather(*[p.select(replace(AUTH, run_id=f'run-{i}'), 'codex')
+        for i, p in enumerate(pools)], return_exceptions=True)
+    winners = [r for r in results if not isinstance(r, Exception)]
+    assert len(winners) == 2
+    assert all(isinstance(r, ModelDenied) for r in results if isinstance(r, Exception))
+    assert len((await pools[0].states.find_one({'_id': a.account_id}))['leases']) == 2
+    await winners[0].release()
+    replacement = await pools[-1].select(AUTH, 'codex')
+    await winners[0].release()  # stale cleanup must not release the replacement
+    assert await replacement.authorize(AUTH)
+    assert not await winners[0].authorize(winners[0].authority)
+    with pytest.raises(ModelDenied):
+        await pools[0].select(AUTH, 'codex')
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_reclaimed_but_old_holder_cannot_refresh(db, tmp_path):
+    a = account(tmp_path); pool = selector(db, [a])
+    old = await pool.select(AUTH, 'codex')
+    await pool.states.update_one({'_id': a.account_id}, {'$set': {
+        'leases.0.expires_at': datetime.now(timezone.utc) - timedelta(seconds=1)}})
+    assert not await old.authorize(AUTH)
+    with pytest.raises(ModelDenied):
+        await old.resolve_headers(AUTH, a.account_id)
+    current = await selector(db, [a]).select(AUTH, 'codex')
+    await old.release()
+    assert await current.authorize(AUTH)
+    assert len((await pool.states.find_one({'_id': a.account_id}))['leases']) == 1
+
+
+@pytest.mark.asyncio
+async def test_capacity_mismatch_and_acquisition_outage_fail_closed(db, tmp_path):
+    a = account(tmp_path); pool = selector(db, [a])
+    selected = await pool.select(AUTH, 'codex'); await selected.release()
+    with pytest.raises(ModelDenied):
+        await selector(db, [replace(a, max_concurrent_runs=2)]).select(AUTH, 'codex')
+    pool._acquire = AsyncMock(side_effect=RuntimeError('database unavailable'))
+    with pytest.raises(RuntimeError):
+        await pool.select(AUTH, 'codex')
+    pool.refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('seconds', [True, 0, 59, 3661, float('nan'), '60'])
+async def test_invalid_lease_duration(db, tmp_path, seconds):
+    with pytest.raises(ValueError):
+        await selector(db, [account(tmp_path)]).select(AUTH, 'codex', lease_seconds=seconds)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['initialize', 'worker', 'cancel'])
+async def test_run_releases_lease_on_failure(db, tmp_path, monkeypatch, failure):
+    await seed(db)
+    a = account(tmp_path); pool = selector(db, [a])
+    async def worker(**kw):
+        if failure == 'cancel':
+            raise asyncio.CancelledError()
+        raise RuntimeError('synthetic worker failure')
+        yield
+    monkeypatch.setattr(mod, 'stream_worker', worker)
+    if failure == 'initialize':
+        monkeypatch.setattr(mod.ModelBudget, 'initialize', AsyncMock(side_effect=RuntimeError('budget unavailable')))
+    with pytest.raises(asyncio.CancelledError if failure == 'cancel' else RuntimeError):
+        _ = [e async for e in mod.stream_run(**args(db, tmp_path / 'artifacts', subscription_accounts=pool))]
+    assert (await pool.states.find_one({'_id': a.account_id}))['leases'] == []
+
+
+@pytest.mark.asyncio
+async def test_cooldown_race_is_checked_atomically_on_acquire(db, tmp_path):
+    a = account(tmp_path); pool = selector(db, [a])
+    await pool.cooldown(a.account_id, 60)
+    # Simulate the cooldown arriving after _allowed but before acquisition.
+    pool._allowed = AsyncMock(return_value=True)
+    with pytest.raises(ModelDenied): await pool.select(AUTH, 'codex')
+    assert not (await pool.states.find_one({'_id': a.account_id})).get('leases')
+
+
+@pytest.mark.parametrize('capacity', [0, 65, True, '2', 1.5])
+def test_capacity_configuration_is_bounded(tmp_path, capacity):
+    with pytest.raises(ValueError): replace(account(tmp_path), max_concurrent_runs=capacity)

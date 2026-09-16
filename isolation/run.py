@@ -8,6 +8,7 @@ import asyncio
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import replace
 import json
+import math
 import uuid
 
 import aiohttp
@@ -42,6 +43,9 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
     subscription_accounts optionally selects a trusted subscription and pins its
     ID into the ledger before admission. Public entrypoint cutover is separate.
     """
+    if (isinstance(max_seconds, bool) or not isinstance(max_seconds, (int, float))
+            or not 0 < max_seconds <= 3600):
+        raise ValueError('Invalid run duration')
     if subscription_accounts is not None and resolve_account_headers is not None:
         raise ValueError("Use one account selection/refresh source")
     if resolve_account_headers is not None and not callable(resolve_account_headers):
@@ -91,7 +95,12 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         await context.stage(artifacts, attachments, input_ids)
         on_rate_limit = None
         if subscription_accounts is not None:
-            selected = await subscription_accounts.select(authority, runtime)
+            selected = await subscription_accounts.select(authority, runtime,
+                lease_seconds=math.ceil(max_seconds) + 60)
+            # LIFO cleanup: close transport/relay before freeing capacity. If the
+            # backend dies, the server-clock lease expires after the hard run
+            # deadline plus a 60-second cleanup grace, without a local heartbeat.
+            stack.push_async_callback(selected.release)
             budget_spec = replace(budget_spec, account_id=selected.account_id)
             resolve_account_headers = selected.resolve_headers
             on_rate_limit = selected.report_rate_limit

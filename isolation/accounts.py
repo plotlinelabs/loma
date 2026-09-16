@@ -2,9 +2,9 @@
 
 Candidates are supplied by trusted ingress; refresh defaults to backend OAuth.
 This module never discovers grants from disk, starts a CLI, or gives workers account paths.
-Selection order is process-local; durable cooldowns are shared across processes.
+Selection order is process-local; capacity leases and cooldowns are shared.
 The default backend OAuth adapter refreshes tokens without starting a CLI.
-Deployment-wide pool capacity is not implemented.
+Mongo server time owns lease expiry. Stale holders cannot release a new lease.
 """
 import asyncio
 import base64
@@ -15,6 +15,9 @@ import json
 import os
 from pathlib import Path
 import stat
+import uuid
+
+from pymongo.errors import DuplicateKeyError
 
 from bson.codec_options import CodecOptions
 from pymongo.write_concern import WriteConcern
@@ -44,11 +47,13 @@ class SubscriptionAccount:
     runtime: str
     email: str
     directory: Path = field(repr=False)
+    max_concurrent_runs: int = 1
 
     def __post_init__(self):
         if (self.runtime not in {'claude', 'codex'} or not isinstance(self.email, str)
                 or not self.email or len(self.email) > 254
-                or not isinstance(self.directory, Path) or not self.directory.is_absolute()):
+                or not isinstance(self.directory, Path) or not self.directory.is_absolute()
+                or type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= 64):
             raise ValueError('Invalid trusted subscription account')
 
     @property
@@ -116,7 +121,34 @@ class SubscriptionAccounts:
         state = await self.states.find_one({'_id': account.account_id})
         return not state or state.get('cooldown_until', datetime.min.replace(tzinfo=timezone.utc)) <= datetime.now(timezone.utc)
 
-    async def select(self, authority, runtime):
+    async def _acquire(self, account, authority, lease_seconds):
+        # A single document arbitrates capacity across all backend processes.
+        # Pin the limit: mismatched rolling-deploy configurations fail closed,
+        # rather than letting the backend with the largest limit win.
+        try:
+            await self.states.update_one({'_id': account.account_id}, {'$setOnInsert': {
+                'cooldown_until': datetime.min.replace(tzinfo=timezone.utc)}}, upsert=True)
+        except DuplicateKeyError:
+            pass  # Concurrent first use won the intrinsic unique _id index.
+        await self.states.update_one({'_id': account.account_id, 'capacity': {'$exists': False}},
+            {'$set': {'capacity': account.max_concurrent_runs}})
+        live = {'$filter': {'input': {'$ifNull': ['$leases', []]}, 'as': 'lease',
+                           'cond': {'$gt': ['$$lease.expires_at', '$$NOW']}}}
+        token = uuid.uuid4().hex
+        result = await self.states.update_one({'_id': account.account_id,
+            'capacity': account.max_concurrent_runs,
+            '$expr': {'$and': [
+                {'$lt': [{'$size': live}, account.max_concurrent_runs]},
+                {'$lte': [{'$ifNull': ['$cooldown_until', datetime.min.replace(tzinfo=timezone.utc)]}, '$$NOW']},
+            ]}}, [{'$set': {'leases': {'$concatArrays': [live, [{
+                'token': token, 'run_id': {'$literal': authority.run_id},
+                'expires_at': {'$add': ['$$NOW', lease_seconds * 1000]},
+            }]]}}}])
+        return token if result.modified_count == 1 else None
+
+    async def select(self, authority, runtime, *, lease_seconds=3660):
+        if type(lease_seconds) is not int or not 60 <= lease_seconds <= 3660:
+            raise ValueError('Invalid account lease duration')
         async with self._lock:
             for offset in range(len(self.accounts)):
                 index = (self._index + offset) % len(self.accounts)
@@ -127,8 +159,11 @@ class SubscriptionAccounts:
                     identity = account.identity()
                 except ModelDenied:
                     continue
+                token = await self._acquire(account, authority, lease_seconds)
+                if token is None:
+                    continue
                 self._index = (index + 1) % len(self.accounts)
-                return SelectedSubscription(self, authority, account, identity)
+                return SelectedSubscription(self, authority, account, identity, token)
         raise ModelDenied('No authorized subscription account is available')
 
     async def cooldown(self, account_id, seconds):
@@ -146,14 +181,29 @@ class SelectedSubscription:
     authority: object = field(repr=False)
     account: SubscriptionAccount = field(repr=False)
     identity: str = field(repr=False)
+    lease_token: str = field(repr=False)
 
     @property
     def account_id(self):
         return self.account.account_id
 
+    async def release(self):
+        # Exact token CAS; delayed cleanup cannot free another run's slot.
+        await self.selector.states.update_one({'_id': self.account_id},
+            {'$pull': {'leases': {'token': self.lease_token}}})
+
+    async def _lease_valid(self):
+        return bool(await self.selector.states.find_one({'_id': self.account_id,
+            '$expr': {'$anyElementTrue': [{'$map': {
+                'input': {'$ifNull': ['$leases', []]}, 'as': 'lease', 'in': {'$and': [
+                    {'$eq': ['$$lease.token', self.lease_token]},
+                    {'$gt': ['$$lease.expires_at', '$$NOW']},
+                ]}}}]}}, {'_id': 1}))
+
     async def authorize(self, authority):
         try:
             return (authority == self.authority
+                and await self._lease_valid()
                 and await self.selector._allowed(authority, self.account)
                 and self.account.identity() == self.identity)
         except Exception:

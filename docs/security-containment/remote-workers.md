@@ -19,8 +19,7 @@ fail closed without disclosing provider details.
 
 **Still required:** native CI installation with workflow-capable credentials;
 actual image builds and dedicated Docker/gVisor hostile-worker, cleanup and
-live-provider certification; distributed subscription capacity/rate-limit
-coordination beyond cooldowns and account-level usage reporting; operator-owned
+live-provider certification; operator-owned
 persistent storage/retention configuration and a drained production rollout.
 These are not implied by synthetic tests or local browser screenshots.
 
@@ -1004,3 +1003,29 @@ a Docker socket. Actual image builds/publishing, supervisor boot, hostile-worker
 containment, live-provider certification and production rollout still require
 an approved dedicated host. No host or production configuration was changed.
 Native CI workflow installation remains a separate maintainer action.
+
+
+## Distributed subscription capacity
+
+Remote Claude/Codex runs acquire majority-acknowledged capacity leases in the
+same `isolated_subscription_accounts` document as cooldowns. Independent backend
+processes use a single Mongo conditional update; process-local round robin is
+only selection order, not the capacity authority. Saturation fails closed,
+without retrying or switching an already selected account.
+
+`LOMA_REMOTE_ACCOUNT_CAPACITY` defaults to **1** concurrent run per configured
+subscription (integer 1–64). All backend instances must agree on this value.
+The first use persists the capacity; mismatched configurations fail closed.
+Changing it requires a drained fleet and an operator update to the persisted
+capacity, not a rolling process-local override. Legacy local pools do not use
+these leases: drain legacy work before enabling remote mode.
+
+Each lease uses Mongo server time and lasts the run deadline plus 60 seconds
+(maximum 3660 seconds). Authorization rechecks lease validity; an expired holder
+cannot refresh credentials or emit new output. Cleanup frees only its own random
+token, after the relay closes, so stale cleanup cannot release a successor's slot.
+A crashed backend retains capacity until expiry. Unknown DB-write outcomes can
+also retain a slot until expiry; availability never overrides the capacity cap.
+This coordinates admitted remote runs, not a claim about provider-side work
+continuing after a lost TCP connection. Real host teardown remains a certification
+gate. All cooperating backends must share the same account-state Mongo database.
