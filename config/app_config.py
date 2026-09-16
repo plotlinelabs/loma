@@ -28,3 +28,7 @@ LOMA_ENABLE_METRICS = env_flag("LOMA_ENABLE_METRICS", default=False)
 # unchanged; preview/ephemeral stacks set this to false (or omit SLACK_APP_TOKEN)
 # so they don't double-consume the production Slack app's events.
 LOMA_ENABLE_SLACK = env_flag("LOMA_ENABLE_SLACK", default=True)
+# Fresh-context self-review of agent-authored PRs (webhooks/github.py). Defaults
+# to on; opt out per-deploy with any falsy value (false/0/no/off) — same parser
+# as every other LOMA_ENABLE_* flag.
+LOMA_ENABLE_SELF_REVIEW = env_flag("LOMA_ENABLE_SELF_REVIEW", default=True)

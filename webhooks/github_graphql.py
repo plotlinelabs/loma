@@ -420,12 +420,16 @@ async def get_pr_reviews(
         - body: review summary text
         - author: GitHub login
         - created_at: ISO timestamp
+        - commit_oid: SHA of the PR head the review was submitted against
+
+    Fetches the NEWEST 50 reviews (``last: 50``) so long-lived PRs never drop
+    the most recent agent review — every caller cares about the latest state.
     """
     query = """
     query GetPRReviews($owner: String!, $repo: String!, $prNumber: Int!) {
         repository(owner: $owner, name: $repo) {
             pullRequest(number: $prNumber) {
-                reviews(first: 50) {
+                reviews(last: 50) {
                     nodes {
                         id
                         state
@@ -434,6 +438,9 @@ async def get_pr_reviews(
                             login
                         }
                         createdAt
+                        commit {
+                            oid
+                        }
                     }
                 }
             }
@@ -464,6 +471,7 @@ async def get_pr_reviews(
             "body": r.get("body", ""),
             "author": (r.get("author") or {}).get("login", ""),
             "created_at": r.get("createdAt"),
+            "commit_oid": (r.get("commit") or {}).get("oid", ""),
         })
 
     logger.info(
@@ -471,3 +479,12 @@ async def get_pr_reviews(
         len(reviews), repo_owner, repo_name, pr_number,
     )
     return reviews
+
+
+async def get_authenticated_login() -> str:
+    """Resolve the review token's identity; never infer it from PR metadata."""
+    result = await _graphql_request("query { viewer { login } }")
+    login = ((result.get("data") or {}).get("viewer") or {}).get("login")
+    if result.get("errors") or not isinstance(login, str) or not login:
+        raise RuntimeError("Could not resolve GitHub token identity")
+    return login
