@@ -198,7 +198,8 @@ async def account_usage(db, start, end):
             or start.tzinfo is None or end.tzinfo is None
             or not timedelta(0) < end - start <= timedelta(days=31)):
         raise ValueError('Usage window must be timezone-aware and at most 31 days')
-    collection = db.isolated_model_budgets
+    from pymongo.read_concern import ReadConcern
+    collection = db.isolated_model_budgets.with_options(read_concern=ReadConcern('majority'))
     await collection.create_index('created_at')
     pipeline = [
         {'$match': {'created_at': {'$gte': start, '$lt': end}}},

@@ -1928,7 +1928,7 @@ def _remote_pool_status() -> dict:
     return status
 
 
-async def handle_remote_account_usage(request):
+async def handle_remote_account_usage(request, window=None):
     """Admin-only, bounded reporting across remote subscription/API accounts."""
     require_admin(request)
     owner = get_user_email(request)
@@ -1943,13 +1943,14 @@ async def handle_remote_account_usage(request):
         raise web.HTTPForbidden()
     from isolation.accounting import account_usage
     try:
-        if set(request.query) - {'start', 'end'}:
+        window = {} if window is None else window
+        if not isinstance(window, dict) or set(window) - {'start', 'end'} or request.query:
             raise ValueError('Only start and end are supported')
-        end = datetime.fromisoformat(request.query['end']) if 'end' in request.query else datetime.now(timezone.utc)
-        start = datetime.fromisoformat(request.query['start']) if 'start' in request.query else end - timedelta(days=7)
+        end = datetime.fromisoformat(window['end']) if 'end' in window else datetime.now(timezone.utc)
+        start = datetime.fromisoformat(window['start']) if 'start' in window else end - timedelta(days=7)
         result = await account_usage(db, start, end)
-    except ValueError as error:
-        return web.json_response({'error': str(error)}, status=400)
+    except (ValueError, TypeError) as error:
+        return web.json_response({'error': 'Invalid usage window: use timezone-aware start/end within 31 days'}, status=400)
     return web.json_response(result, headers={'Cache-Control': 'no-store'})
 
 
@@ -2285,7 +2286,6 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/mcp-servers", handle_list_mcp_servers)
     app.router.add_get("/api/available-tools", handle_available_tools)
     app.router.add_get("/api/pool-status", handle_pool_status)
-    app.router.add_get("/api/remote-account-usage", handle_remote_account_usage)
 
     # Flow routes (scheduled/recurring automations)
     from api.flow_routes import setup_flow_routes

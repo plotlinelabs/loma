@@ -375,3 +375,19 @@ async def test_cooldown_race_is_checked_atomically_on_acquire(db, tmp_path):
 @pytest.mark.parametrize('capacity', [0, 65, True, '2', 1.5])
 def test_capacity_configuration_is_bounded(tmp_path, capacity):
     with pytest.raises(ValueError): replace(account(tmp_path), max_concurrent_runs=capacity)
+
+
+@pytest.mark.asyncio
+async def test_run_deadline_includes_setup_and_releases_capacity(db, tmp_path, monkeypatch):
+    await seed(db)
+    a = account(tmp_path); pool = selector(db, [a])
+    entered = asyncio.Event()
+    async def slow_initialize(self):
+        entered.set()
+        await asyncio.sleep(10)
+    monkeypatch.setattr(mod.ModelBudget, 'initialize', slow_initialize)
+    with pytest.raises(TimeoutError):
+        _ = [e async for e in mod.stream_run(**args(db, tmp_path / 'artifacts',
+            subscription_accounts=pool, max_seconds=2))]
+    assert entered.is_set()
+    assert (await pool.states.find_one({'_id': a.account_id}))['leases'] == []

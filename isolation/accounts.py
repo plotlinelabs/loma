@@ -21,6 +21,8 @@ from pymongo.errors import DuplicateKeyError
 
 from bson.codec_options import CodecOptions
 from pymongo.write_concern import WriteConcern
+from pymongo.read_concern import ReadConcern
+from pymongo.read_preferences import ReadPreference
 
 from isolation.models import ModelDenied
 
@@ -103,7 +105,8 @@ class SubscriptionAccounts:
         self.accounts, self.check_access, self.refresh = accounts, check_access, refresh
         self.users = db.users
         self.states = db.isolated_subscription_accounts.with_options(
-            write_concern=WriteConcern(w='majority'), codec_options=CodecOptions(tz_aware=True))
+            write_concern=WriteConcern(w='majority'), codec_options=CodecOptions(tz_aware=True),
+            read_concern=ReadConcern('majority'), read_preference=ReadPreference.PRIMARY)
         self._index = 0
         self._lock = asyncio.Lock()
 

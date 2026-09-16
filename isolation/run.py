@@ -17,7 +17,7 @@ from pymongo.write_concern import WriteConcern
 from isolation.accounting import ModelBudget
 from isolation.artifacts import ArtifactScope
 from isolation.catalog import CATALOG, catalog
-from isolation.client import stream_worker
+from isolation.client import stream_worker, WorkerUnavailable
 from isolation.context import ConversationContext, UtilityContext
 from isolation.downloads import DownloadRegistry
 from isolation.gateway import ToolGateway, GatewayDenied, personal_read
@@ -90,6 +90,9 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
             'at': datetime.now(timezone.utc), **event})
 
     async with AsyncExitStack() as stack:
+        # Include setup in the transport deadline. Never keep a timeout context
+        # open across generator yields (the consumer may close from another task).
+        deadline = asyncio.get_running_loop().time() + max_seconds
         artifacts = ArtifactScope(artifact_root, authority, conversation_id)
         stack.callback(artifacts.close)
         await context.stage(artifacts, attachments, input_ids)
@@ -113,7 +116,8 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
             context.check_access = account_access
         budget = ModelBudget(db, authority, budget_spec)
         stack.push_async_callback(budget.stop)
-        await budget.initialize()
+        async with asyncio.timeout_at(deadline):
+            await budget.initialize()
         session = await stack.enter_async_context(aiohttp.ClientSession(
             cookie_jar=aiohttp.DummyCookieJar(), trust_env=False))
         relay = budget.relay(grant, session=session, authorize=context.authorize, audit=audit,
@@ -141,9 +145,12 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         await audit(authority, {'stage': 'started', 'runtime': runtime})
 
         async def produce():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise WorkerUnavailable('Run setup exceeded the deadline')
             async with aclosing(stream_worker(session=session, url=url, token=token, tls=tls,
                     authority=authority, input=worker_input, authorize=context.authorize,
-                    execute_tool=gateway, max_seconds=max_seconds)) as stream:
+                    execute_tool=gateway, max_seconds=remaining)) as stream:
                 async for text in stream:
                     await events.put(text)
             await events.put(finished)

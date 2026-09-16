@@ -25,7 +25,7 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
       body: body || undefined, cache: "no-store", signal: AbortSignal.timeout(20000),
     });
     const raw = await result.text();
-    try { return Response.json(JSON.parse(raw), { status: result.status }); }
+    try { return Response.json(JSON.parse(raw), { status: result.status, headers: { "Cache-Control": "no-store" } }); }
     catch { return Response.json({ error: result.status === 404 ? "Bounded work is not enabled" : "Work request failed" }, { status: result.status }); }
   } catch { return Response.json({ error: "Work service unavailable. Your changes were not confirmed; refresh before retrying." }, { status: 503 }); }
 }

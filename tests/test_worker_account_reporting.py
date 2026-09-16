@@ -76,14 +76,14 @@ async def test_reporting_route_requires_current_admin(db, monkeypatch, role):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('query', ['?start=bad', '?end=2026-01-01', '?owner=other', '?start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z'])
+@pytest.mark.parametrize('query', [{'start': 'bad'}, {'end': '2026-01-01'}, {'owner': 'other'}, {'start': '2026-01-01T00:00:00Z', 'end': '2026-03-01T00:00:00Z'}, {'start': 123}])
 async def test_reporting_route_rejects_bad_windows(db, monkeypatch, query):
     from api import routes
     monkeypatch.setattr(routes, 'get_db', lambda: db)
     await db.users.update_one({'email': OWNER}, {'$set': {'system_role': 'admin'}})
-    req = make_mocked_request('GET', '/api/remote-account-usage' + query)
+    req = make_mocked_request('POST', '/api/bounded-work/remote-account-usage')
     req['user_email'] = OWNER; req['system_role'] = 'admin'
-    assert (await routes.handle_remote_account_usage(req)).status == 400
+    assert (await routes.handle_remote_account_usage(req, query)).status == 400
 
 
 @pytest.mark.asyncio
@@ -97,3 +97,33 @@ async def test_reporting_denies_missing_identity_deleted_and_demoted_admin(db, m
     for changes in [{'system_role': 'chatter'}, {'system_role': 'admin', 'deleted': True}]:
         await db.users.update_one({'email': OWNER}, {'$set': changes})
         with pytest.raises(web.HTTPForbidden): await routes.handle_remote_account_usage(req)
+
+
+@pytest.mark.asyncio
+async def test_signed_report_control_plane_rejects_forged_identity(db, monkeypatch):
+    import hashlib, hmac, time
+    from aiohttp.test_utils import TestClient, TestServer
+    from api import bounded_work_routes as work, routes
+    monkeypatch.setenv('LOMA_BOUNDED_WORK_ENABLED', 'true')
+    monkeypatch.setenv('LOMA_WORK_GATEWAY_SECRET', 'k' * 32)
+    for module in (work, routes): monkeypatch.setattr(module, 'get_db', lambda: db)
+    await db.users.update_one({'email': OWNER}, {'$set': {'system_role': 'admin'}})
+    @web.middleware
+    async def identity(request, handler):
+        request['user_email'] = request.headers.get('X-User-Email', '')
+        request['system_role'] = 'admin'
+        return await handler(request)
+    app = web.Application(middlewares=[identity])
+    app.router.add_route('*', '/api/bounded-work/{tail:.*}', work.handle)
+    path = '/api/bounded-work/remote-account-usage'
+    async with TestClient(TestServer(app)) as client:
+        assert (await client.get(path, headers={'X-User-Email': OWNER})).status == 401
+        for method, raw in [('GET', b''), ('POST', b'{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"}')]:
+            stamp = str(int(time.time()))
+            payload = '\n'.join([stamp, method, path, OWNER, hashlib.sha256(raw).hexdigest()])
+            signature = hmac.new(b'k' * 32, payload.encode(), hashlib.sha256).hexdigest()
+            headers = {'X-User-Email': OWNER, 'X-Work-Time': stamp, 'X-Work-Signature': signature}
+            response = await client.request(method, path, data=raw, headers=headers)
+            assert response.status == 200 and (await response.json())['accounts'] == []
+            if method == 'POST':
+                assert (await client.post(path, data=b'{}', headers=headers)).status == 401

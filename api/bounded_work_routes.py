@@ -64,6 +64,9 @@ async def handle(request):
         route = request.match_info.get('tail', '')
         parts = route.split('/')
         method = request.method
+        if route == 'remote-account-usage' and method in ('GET', 'POST'):
+            from api.routes import handle_remote_account_usage
+            return await handle_remote_account_usage(request, body)
         if route == 'knowledge' and method == 'GET':
             return response({'sources': await knowledge.listing(db, owner)})
         if route == 'knowledge' and method == 'POST':
