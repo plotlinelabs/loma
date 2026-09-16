@@ -338,7 +338,7 @@ def _fallback_title(prompt: str) -> str:
     return title
 
 
-async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
+async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
     """Generate a short 5-word conversation title using Claude Haiku.
 
     Uses the claude CLI (same pattern as observability/confidence.py).
@@ -356,6 +356,12 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            raw = await complete(message, db=db, conversation_id=conversation_id, timeout=45)
+            title = raw.strip().strip('"').strip("'").strip()
+            return ' '.join(title.split()[:8]) or _fallback_title(prompt)
         from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
@@ -395,7 +401,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "") -> str:
         return _fallback_title(prompt)
 
 
-async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
+async def _classify_topic_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
     """Classify a conversation into a topic category using Claude Haiku.
 
     Returns one of the _VALID_TOPICS values, or 'other' on failure.
@@ -413,6 +419,12 @@ async def _classify_topic_llm(prompt: str, response_snippet: str = "") -> str:
     )
 
     try:
+        from isolation.deployment import remote_workers_enabled
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            raw = await complete(message, db=db, conversation_id=conversation_id, timeout=45)
+            topic = raw.strip().lower().strip('"').strip("'").strip()
+            return topic if topic in _VALID_TOPICS else 'other'
         from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
@@ -455,12 +467,12 @@ async def _enrich_conversation(db, conversation: dict) -> dict:
     response_snippet = (conversation.get("final_response") or "")[:300]
 
     if not conversation.get("title") and not conversation.get("title_edited"):
-        title = await _generate_title_llm(prompt, response_snippet)
+        title = await _generate_title_llm(prompt, response_snippet, db=db, conversation_id=conversation["conversation_id"])
         conversation["title"] = title
         needs_update["title"] = title
 
     if not conversation.get("topic"):
-        topic = await _classify_topic_llm(prompt, response_snippet)
+        topic = await _classify_topic_llm(prompt, response_snippet, db=db, conversation_id=conversation["conversation_id"])
         conversation["topic"] = topic
         needs_update["topic"] = topic
 

@@ -81,7 +81,7 @@ async def _run_compress_model(message: str) -> str:
         return output
 
 
-async def maybe_compress_slack_reply(text: str, request: str = "") -> str:
+async def maybe_compress_slack_reply(text: str, request: str = "", *, db=None, conversation_id=None) -> str:
     """Return a shorter version of ``text`` for Slack, or ``text`` itself on any doubt."""
     # Only the user's own words matter for detecting "give me detail"; a Slack-flow
     # preamble or channel workflow prefix sits before them, so judge the tail.
@@ -90,9 +90,14 @@ async def maybe_compress_slack_reply(text: str, request: str = "") -> str:
         return text
 
     try:
-        rewritten = (await _run_compress_model(
-            _COMPRESS_PROMPT.format(request=request_tail, reply=text)
-        )).strip()
+        from isolation.deployment import remote_workers_enabled
+        message = _COMPRESS_PROMPT.format(request=request_tail, reply=text)
+        if remote_workers_enabled():
+            from isolation.utility import complete
+            rewritten = (await complete(message, db=db, conversation_id=conversation_id,
+                                        timeout=SLACK_COMPRESS_TIMEOUT)).strip()
+        else:
+            rewritten = (await _run_compress_model(message)).strip()
     except asyncio.TimeoutError:
         logger.warning("[SLACK] Compress pass timed out; posting original reply")
         return text

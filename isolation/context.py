@@ -20,6 +20,8 @@ class Attachment:
 
 
 class ConversationContext:
+    requires_running = True
+
     def __init__(self, db, authority, conversation_id, *, cancelled, check_access):
         if (not isinstance(conversation_id, str) or not 1 <= len(conversation_id) <= 128
                 or not callable(check_access)):
@@ -44,7 +46,7 @@ class ConversationContext:
             'metadata.user_name': self.authority.user_email, 'deleted': {'$ne': True},
             '$or': [{'source': {'$in': ['dashboard', 'task', 'flow', 'webhook', 'telegram']}},
                     {'source': {'$regex': '^slack'}}],
-            'status': 'running'},
+            **({'status': 'running'} if self.requires_running else {})},
             {'project_id': 1, 'metadata.agent_id': 1, **({'messages': 1} if include_messages else {})})
         if not user or not row:
             raise GatewayDenied('Conversation access is no longer valid')
@@ -132,3 +134,20 @@ class ConversationContext:
             meta = artifacts.ingest(attachment.name, attachment.data)
             artifacts.inputs |= {meta['artifact_id']}
         return artifacts.manifest()
+
+
+class UtilityContext(ConversationContext):
+    """Backend-only, tool-free transformations of supplied text.
+
+    Completed conversations and unstarted tasks are valid, but ownership,
+    deletion, user activity and scope are still checked throughout the run.
+    No conversation history is sent, and no conversation status is changed.
+    """
+    requires_running = False
+
+    async def load(self, prompt):
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode()) > 32 * 1024:
+            raise ValueError('Invalid utility input')
+        await self._read()
+        self.coverage = {'mode': 'utility', 'history_included': False}
+        return self

@@ -133,7 +133,7 @@ async def _auto_title_task(db, conversation_id: str, prompt: str):
     """
     try:
         from api.routes import _generate_title_llm
-        title = await _generate_title_llm(prompt)
+        title = await _generate_title_llm(prompt, db=db, conversation_id=conversation_id)
         if title and title != "Untitled conversation":
             await db.conversations.update_one(
                 {"conversation_id": conversation_id, "title": None},

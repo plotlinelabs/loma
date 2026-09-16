@@ -16,6 +16,7 @@ from isolation import entrypoint as ep
 from isolation.accounts import SubscriptionAccount
 from isolation.context import Attachment
 from isolation.models import ModelDenied
+from isolation.protocol import RunAuthority
 from tests.test_bounded_work import db, OWNER  # noqa: F401  (fixture)
 
 VALID_ENV = {
@@ -317,8 +318,8 @@ async def test_remote_run_full_assembly(monkeypatch, db, tmp_path):
     assert [a.data for a in captured['attachments']] == [b'attached']
     assert 'Personal Tools Auth Token' not in captured['instructions']
     assert captured['url'] == deployment.url and captured['tls'] is deployment.tls
-    assert await captured['check_access'](type('A', (), {'owner': OWNER})()) is True
-    assert await captured['check_access'](type('A', (), {'owner': 'other@x'})()) is False
+    assert await captured['check_access'](RunAuthority('test', OWNER, frozenset())) is True
+    assert await captured['check_access'](RunAuthority('test', 'other@x', frozenset())) is False
     observer.record_text.assert_awaited_once_with(1, 'Hello world')
     observer.finish.assert_awaited_once_with(final_response='Hello world')
     observer.record_artifact.assert_awaited_once()
@@ -371,9 +372,9 @@ async def test_remote_run_surfaces_denial_without_fallback(monkeypatch, db, tmp_
 @pytest.mark.asyncio
 async def test_owner_check_requires_live_active_user(db):
     check = ep._owner_check(db, OWNER)
-    active = type('A', (), {'owner': OWNER})()
+    active = RunAuthority('test', OWNER, frozenset())
     assert await check(active) is True
-    assert await check(type('A', (), {'owner': 'missing@example.test'})()) is False
+    assert await check(RunAuthority('test', 'missing@example.test', frozenset())) is False
     await db.users.update_one({'email': OWNER}, {'$set': {'status': 'suspended'}})
     assert await check(active) is False
     await db.users.update_one({'email': OWNER}, {'$set': {'status': 'active'}})
@@ -388,6 +389,8 @@ async def test_selector_requires_configured_accounts(db, tmp_path):
     configured = synthetic_deployment(tmp_path, claude_accounts=(account,))
     selector = ep._selector_for(db, configured, 'claude')
     assert ep._selector_for(db, configured, 'claude') is selector
+    assert await selector.check_access(RunAuthority('test', OWNER, frozenset()), account)
+    assert not await selector.check_access(RunAuthority('test', 'missing@example.test', frozenset()), account)
     assert selector.accounts == (account,)
 
 @pytest.mark.asyncio

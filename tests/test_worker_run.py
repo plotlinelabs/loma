@@ -292,7 +292,8 @@ async def test_read_only_workspace_does_not_grant_upload(db, tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_native_run_assembly_real_transport_files_and_usage(db, tmp_path, monkeypatch):
+@pytest.mark.parametrize("utility", [False, True])
+async def test_native_run_assembly_real_transport_files_and_usage(db, tmp_path, monkeypatch, utility):
     import shutil
     import sys
     from pathlib import Path
@@ -339,7 +340,7 @@ asyncio.run(main())
     async def provider(request):
         requests.append(await request.json())
         n = len(requests)
-        if n <= 2:
+        if n <= 2 and not utility:
             values = ({'command': 'find . -type f -name input.txt -exec cat {} \\; > report.txt'}
                       if n == 1 else {'path': 'report.txt'})
             item = {'id': 'fc_' + str(n), 'type': 'function_call', 'call_id': 'call_' + str(n),
@@ -370,10 +371,22 @@ asyncio.run(main())
         spec = replace(SPEC, model='gpt-5.4', output_ceiling=8192, budget_nusd=1_000_000)
         events = [x async for x in mod.stream_run(**args(db, tmp_path / 'artifacts',
             grant=replace(grant(), model='gpt-5.4', max_output_tokens=8192, native_codex=True),
-            budget_spec=spec, allowed_tools={'workspace.exec', 'workspace.publish'},
-            attachments=[Attachment('input.txt', b'verified native input')], max_seconds=40))]
+            budget_spec=spec, allowed_tools=frozenset() if utility else {'workspace.exec', 'workspace.publish'},
+            attachments=() if utility else [Attachment('input.txt', b'verified native input')],
+            max_seconds=40, utility=utility))]
         assert ''.join(e for e in events if isinstance(e, str)) == 'Verified assembled native run'
         files = [e for e in events if isinstance(e, dict)]
+        if utility:
+            assert not files
+            assert len(requests) == 1 and 'Prior question' not in json.dumps(requests)
+            assert not requests[0].get('tools')
+            saved = await db.isolated_model_budgets.find_one({})
+            assert saved['call_count'] == 1 and not saved['active']
+            assert saved['recorded_nusd'] == saved['committed_nusd'] == 500
+            assert saved['calls'][0]['status'] == 'recorded'
+            assert await db.isolated_artifact_downloads.count_documents({}) == 0
+            assert not list(root.iterdir())
+            return
         assert len(files) == 1 and files[0]['file_name'] == 'report.txt'
         assert len(requests) == 3 and 'Prior question' in json.dumps(requests[0])
         assert 'Authorization' not in json.dumps(requests)

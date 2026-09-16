@@ -126,7 +126,7 @@ def _instructions(source, owner):
 
 def _owner_check(db, owner):
     async def check(authority):
-        if getattr(authority, 'owner', None) != owner:
+        if getattr(authority, 'user_email', None) != owner:
             return False
         try:
             user = await db.users.find_one({'email': owner, 'deleted': {'$ne': True}}, {'status': 1})
@@ -144,7 +144,7 @@ def _selector_for(db, deployment, runtime):
         raise DeploymentError(f'No {runtime} subscription accounts are configured')
 
     async def policy(authority, account):
-        return await _owner_check(db, getattr(authority, 'owner', ''))(authority)
+        return await _owner_check(db, getattr(authority, 'user_email', ''))(authority)
 
     key = (id(db), runtime, accounts)
     if key not in _selectors:

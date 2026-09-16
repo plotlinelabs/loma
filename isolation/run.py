@@ -17,7 +17,7 @@ from isolation.accounting import ModelBudget
 from isolation.artifacts import ArtifactScope
 from isolation.catalog import CATALOG, catalog
 from isolation.client import stream_worker
-from isolation.context import ConversationContext
+from isolation.context import ConversationContext, UtilityContext
 from isolation.downloads import DownloadRegistry
 from isolation.gateway import ToolGateway, GatewayDenied, personal_read
 from isolation.knowledge import KnowledgeGateway
@@ -30,7 +30,7 @@ from isolation.workspace_tools import TOOLS as WORKSPACE_TOOLS
 async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtime,
                      grant, budget_spec, allowed_tools, check_access, cancelled,
                      url, token, tls, artifact_root, attachments=(), input_ids=(),
-                     allowed_skills=None, max_seconds=3600, resolve_account_headers=None, subscription_accounts=None):
+                     allowed_skills=None, max_seconds=3600, resolve_account_headers=None, subscription_accounts=None, utility=False):
     """Yield text and trusted file events; own all resources until generator close.
 
     Caller owns the run consumer and MUST close it when abandoning a stream.
@@ -46,6 +46,8 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
         raise ValueError("Use one account selection/refresh source")
     if resolve_account_headers is not None and not callable(resolve_account_headers):
         raise ValueError("Account credential resolver must be callable")
+    if type(utility) is not bool or (utility and (allowed_tools or attachments or input_ids)):
+        raise ValueError('Utility runs cannot access tools or files')
     expected = {'codex': 'responses', 'claude': 'messages', 'opencode': 'chat'}
     if (runtime not in expected or grant.protocol != expected[runtime]
             or (runtime == 'codex' and not grant.native_codex)
@@ -68,7 +70,8 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
     if 'workspace.publish' in allowed_tools:
         transport_tools.update({'artifacts.begin', 'artifacts.write', 'artifacts.commit'})
     authority = RunAuthority(uuid.uuid4().hex, owner, frozenset(allowed_tools | transport_tools))
-    context = ConversationContext(db, authority, conversation_id, cancelled=cancelled, check_access=check_access)
+    context_type = UtilityContext if utility else ConversationContext
+    context = context_type(db, authority, conversation_id, cancelled=cancelled, check_access=check_access)
     await context.load(prompt)
     grant = replace(grant, history=context.history)
     events = asyncio.Queue(maxsize=32)

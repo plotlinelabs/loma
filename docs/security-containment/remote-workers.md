@@ -351,8 +351,9 @@ those checks, and no old UI screenshots establish the new chat path.
    prewarming must be routed to remote workers, with no local fallback and a
    tested drain/cutover procedure that preserves existing chat functionality.
    *(The routing seam now exists behind `LOMA_REMOTE_WORKERS=on` — see the
-   entrypoint routing section below. Utility calls fail closed rather than run
-   remotely, and the cutover has not been exercised against a real worker host.)*
+   entrypoint routing section below. Titles, topics and Slack compression now
+   use tool-free remote utilities; other helpers still fail closed. Cutover has
+   not been exercised against a real worker host.)*
 5. Then run the integrated desktop/mobile chat suite and hostile-worker checks
    using the built images on a dedicated Docker/gVisor host.
 
@@ -778,8 +779,8 @@ Claude Code `2.1.261` OAuth client. Public credential guidance:
 https://developers.openai.com/codex/auth
 
 **Remaining PR scope:** distributed account capacity/rate-limit feedback,
-remote utility completions (local `claude -p` helpers now fail closed in remote
-mode instead of running remotely), native CI permissions, worker image builds,
+remaining remote utility completions (titles, topics and Slack compression now
+use remote utilities; other local `claude -p` helpers still fail closed), native CI permissions, worker image builds,
 and dedicated Docker/gVisor plus live-provider verification. The entrypoint
 cutover switch now exists (see the entrypoint routing section at the end);
 enabling it is a separate operator action after those gates. PR #191 remains
@@ -850,8 +851,9 @@ Local execution is disabled, not just bypassed, while the flag is on:
 review-quality and skill-organize helpers) raises and each caller degrades to
 its existing fallback; the gate verifier CLI refuses; Claude/Codex pool warmup
 and OpenCode prewarm are skipped; the model catalog endpoint serves static
-entries instead of booting a local OpenCode server. Remote utility
-completions are future work — utility features degrade in remote mode today.
+entries instead of booting a local OpenCode server. Titles, topics and Slack
+compression now bypass that local helper through the tool-free utility path
+below. Other utility helpers still degrade in remote mode.
 
 Verification: `tests/test_remote_entrypoint.py` (39 tests, in the pinned
 native script) covers flag parsing, fail-closed configuration (transport, TLS,
@@ -884,3 +886,40 @@ reload. That smoke caught three defects the unit tests could not:
 Docker/gVisor containment, live providers, or drain under production load.
 Enabling the flag in production remains an operator action gated on the
 checklist above.
+
+
+## Tool-free remote utilities
+
+`isolation/utility.py` routes conversation titles, topic classification, staged-task
+names and Slack reply compression over `stream_run`, using the configured
+`LOMA_REMOTE_DEFAULT_MODEL`. Set that operator model explicitly; missing model,
+transport or account configuration keeps the caller's existing text-only fallback.
+No local CLI is started on failure. Legacy mode is unchanged.
+
+The backend derives the owner from the stored conversation. `UtilityContext`
+permits completed conversations and unstarted tasks without changing their status,
+but revalidates active user, owner, deletion and project/agent scope on dispatch
+and output. No history, attachments, artifact reuse, knowledge or action tools
+are granted. Supplied text passes the history secret sanitizer. Each completion
+uses the existing subscription selection/refresh, model relay, durable budget
+and audit path, with two provider calls maximum, 8192 output tokens per call,
+32 KiB input/output limits and a caller deadline of at most 120 seconds.
+Cancellation closes the stream; callers discard partial output on any failure.
+These limits retain the native adapter's minimum output-token contract, not a
+new per-request pricing policy. Utilities share the pinned deployment rates.
+
+Tests exercise no-tool enforcement in the real assembly, permission revocation,
+completed/draft states, unchanged ordinary-run admission, bounded outputs,
+no-local-fallback routing and cancellation cleanup. The native assembly test
+also runs a tool-free Codex completion against a synthetic provider and checks
+usage settlement and absence of history/tools. No live provider is used.
+
+Still separate: remote entity-reference extraction, skill organization,
+review-quality analysis, org-learning deduplication and gate-verifier completion;
+worker-side GitHub/Linear automation surfaces; worker images and dedicated-host
+containment certification; native CI and live-provider certification.
+
+Browser integration also caught an older entrypoint authority mismatch: the live
+policy read `owner`, but `RunAuthority` stores `user_email`. Both entrypoint
+admission and subscription-policy checks now use the real field; tests construct
+actual `RunAuthority` objects rather than permissive lookalike objects.
