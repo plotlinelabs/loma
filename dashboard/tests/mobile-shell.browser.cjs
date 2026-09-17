@@ -81,6 +81,17 @@ const hitArea = async (page, locator) => {
     await noHorizontalOverflow(page, '/chat');
     const appH = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim());
     record('--app-h set in browser (non-standalone) mode', EXPECT_NEW ? appH !== '' : true, `--app-h="${appH}"`);
+    // Pinch-zoom shrinks visualViewport.height but is not a keyboard: the shell must fall back to 100dvh.
+    const zoomedAppH = await page.evaluate(() => {
+      const vv = window.visualViewport;
+      Object.defineProperty(vv, 'scale', { configurable: true, value: 2 });
+      Object.defineProperty(vv, 'height', { configurable: true, value: Math.round(innerHeight / 2) });
+      vv.dispatchEvent(new Event('resize'));
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim();
+      delete vv.scale; delete vv.height; vv.dispatchEvent(new Event('resize'));
+      return { zoomed: v, restored: getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim() };
+    });
+    record('pinch-zoom releases --app-h (shell falls back to 100dvh)', EXPECT_NEW ? zoomedAppH.zoomed === '' && zoomedAppH.restored !== '' : true, JSON.stringify(zoomedAppH));
     const menuBtn = page.getByRole('button', { name: 'Toggle menu' });
     const menuHit = await hitArea(page, menuBtn);
     record('hamburger has expanded touch hit area', EXPECT_NEW ? (menuHit.left && menuHit.right && menuHit.top && menuHit.bottom) : true, JSON.stringify(menuHit));
@@ -141,6 +152,8 @@ const hitArea = async (page, locator) => {
     const dialog = page.getByRole('dialog', { name: 'Q3 mobile engagement report' });
     const sheetBox = EXPECT_NEW ? await dialog.boundingBox() : null;
     record('artifact renders as a bottom sheet', EXPECT_NEW ? !!sheetBox && sheetBox.y > 40 && sheetBox.width === 390 : true, JSON.stringify(sheetBox));
+    const focusInfo = await page.evaluate(() => ({ active: document.activeElement && document.activeElement.getAttribute('aria-label'), chatInert: !!document.querySelector('.bg-muted\\/30.h-full[inert]') }));
+    record('artifact sheet takes focus and makes the chat behind it inert', EXPECT_NEW ? focusInfo.active === 'Close artifact' && focusInfo.chatInert : true, JSON.stringify(focusInfo));
     const moreBtn = page.getByLabel('More actions'); // the artifact overflow menu (aria-label); the chat context menu only has a title
     record('artifact toolbar collapses to one overflow menu', EXPECT_NEW ? await moreBtn.isVisible() : true);
     await page.screenshot({ path: `${shots}/04-artifact-sheet.png` });
@@ -152,6 +165,19 @@ const hitArea = async (page, locator) => {
       const menuOnTop = await showCode.evaluate(el => { const b = el.getBoundingClientRect(); const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return el === hit || el.contains(hit); });
       record('artifact overflow menu stacks above the sheet', menuOnTop);
       await page.screenshot({ path: `${shots}/05-artifact-menu.png` });
+      // Fullscreen must cover the whole viewport, not stay trapped inside the
+      // sheet (an animation fill-mode that keeps `transform` applied makes the
+      // sheet the containing block for the viewer's `fixed inset-0` container).
+      await page.getByRole('menuitem', { name: 'Fullscreen' }).tap();
+      await page.waitForTimeout(400);
+      const fsBox = await page.evaluate(() => { const el = document.querySelector('[class*="z-[90]"]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), vw: innerWidth, vh: innerHeight }; });
+      record('artifact fullscreen covers the viewport from the phone sheet', !!fsBox && fsBox.x === 0 && fsBox.y === 0 && fsBox.w === fsBox.vw && fsBox.h === fsBox.vh, JSON.stringify(fsBox));
+      await page.screenshot({ path: `${shots}/05b-artifact-fullscreen.png` });
+      await moreBtn.tap();
+      await page.getByRole('menuitem', { name: 'Exit fullscreen' }).tap();
+      await page.waitForTimeout(300);
+      await moreBtn.tap();
+      await showCode.waitFor();
       await page.keyboard.press('Escape');
       await page.waitForTimeout(200);
       // tap the scrim (top-left, above the sheet) to close
@@ -178,7 +204,8 @@ const hitArea = async (page, locator) => {
     await toolsTrigger.tap();
     const sheet = page.getByRole('dialog', {name:'Tools selection'});
     await sheet.waitFor({ timeout: 10000 });
-    record('tools picker opens as a bottom sheet', true);
+    // The desktop popover is role=dialog with the same name; assert the sheet itself.
+    record('tools picker opens as a bottom sheet', EXPECT_NEW ? await sheet.evaluate(el => el.dataset.slot === 'sheet-content' && el.dataset.side === 'bottom') : true);
     await page.screenshot({ path: `${shots}/07-tools-sheet.png` });
     await page.keyboard.press('Escape');
     await sheet.waitFor({ state: 'detached' });

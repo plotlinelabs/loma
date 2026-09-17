@@ -567,9 +567,14 @@
 }
 
 /* `@utility` (not a plain class) so responsive variants such as
-   `md:animate-artifact-slide-in` work. */
+   `md:animate-artifact-slide-in` work. Fill mode is `backwards`, not `both`:
+   `forwards` keeps the final `transform` applied after the animation, and any
+   transform turns the animated wrapper into the containing block for the
+   viewer's `position: fixed` fullscreen container, trapping fullscreen inside
+   the pane / phone sheet. The `to` state equals the natural state, so nothing
+   is lost by releasing it. */
 @utility animate-artifact-slide-in {
-  animation: artifactSlideIn 0.25s ease-out both;
+  animation: artifactSlideIn 0.25s ease-out backwards;
 }
 
 /* Artifact bottom sheet (phones) */
@@ -585,7 +590,7 @@
 }
 
 @utility animate-artifact-slide-up {
-  animation: artifactSlideUp 0.25s ease-out both;
+  animation: artifactSlideUp 0.25s ease-out backwards;
 }
 
 /* Steps expand */
