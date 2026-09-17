@@ -513,20 +513,27 @@ function PetSettingsButton({ children, onOpen }: { children: React.ReactNode; on
   const openSettings = usePetSettings();
   return (
     <button type="button" aria-label="Pet settings" title="Pet settings" aria-haspopup="dialog"
-      className="inline-flex shrink-0 cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
+      className="touch-target inline-flex shrink-0 cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
       onClick={(event) => { event.stopPropagation(); openSettings(); onOpen?.(); }}>
       {children}
     </button>
   );
 }
 
-/** A separate lane above the composer; hover pauses motion to make the pet easy to catch. */
+/** A separate lane above the composer; hover (or a tap on touch screens, where
+ * there is no hover) pauses motion to make the pet easy to catch. */
 export function PetRunway({ running }: { running: boolean }) {
   const { user } = useUser();
   const preference = user?.pet_preference ?? DEFAULT_PET;
+  const [paused, setPaused] = useState(false);
   if (!user || !preference.visible) return null;
   return (
-    <div className="pet-runway" data-running={running && preference.animated}>
+    <div
+      className="pet-runway"
+      data-running={running && preference.animated}
+      data-paused={paused}
+      onPointerDown={(e) => { if (e.pointerType === "touch") setPaused((p) => !p); }}
+    >
       <div className="pet-track">
         <div className="pet-runner">
           <div className="pet-facing">
@@ -542,7 +549,8 @@ export function PetRunway({ running }: { running: boolean }) {
         .pet-runway[data-running="true"] .pet-runner { animation: pet-run 8s linear infinite; }
         .pet-runway[data-running="true"] .pet-facing { animation: pet-turn 8s steps(1) infinite; }
         .pet-runway:hover .pet-runner, .pet-runway:hover .pet-facing,
-        .pet-runway:focus-within .pet-runner, .pet-runway:focus-within .pet-facing { animation-play-state: paused; }
+        .pet-runway:focus-within .pet-runner, .pet-runway:focus-within .pet-facing,
+        .pet-runway[data-paused="true"] .pet-runner, .pet-runway[data-paused="true"] .pet-facing { animation-play-state: paused; }
         @keyframes pet-run { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(100%); } }
         @keyframes pet-turn { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(-1); } }
         @media (prefers-reduced-motion: reduce) {
