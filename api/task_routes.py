@@ -197,7 +197,8 @@ def get_board_config(user_doc: dict | None) -> dict:
     if not lanes:
         lanes = [dict(lane) for lane in DEFAULT_BOARD["lanes"]]
     lanes = sorted(lanes, key=lambda lane: lane.get("order", 0))
-    return {"prompt": board.get("prompt", ""), "lanes": lanes, "tags": board.get("tags") or []}
+    return {"prompt": board.get("prompt", ""), "lanes": lanes, "tags": board.get("tags") or [],
+            "show_agent_work": board.get("show_agent_work", True)}
 
 
 async def _get_board_config_for(db, user_email: str) -> dict:
@@ -541,6 +542,7 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
 
     return web.json_response({
         "lanes": board["lanes"],
+        "show_agent_work": board["show_agent_work"],
         "tags": board["tags"],
         "tasks": ordered,
         "counts": counts,
@@ -801,6 +803,19 @@ async def handle_put_board_settings(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
+    if not isinstance(body, dict):
+        return web.json_response({"error": "Expected a JSON object"}, status=400)
+    if "show_agent_work" in body and not isinstance(body["show_agent_work"], bool):
+        return web.json_response({"error": "show_agent_work must be a boolean"}, status=400)
+    # A dismissal only changes this preference, never context, lanes or tasks.
+    if set(body) == {"show_agent_work"}:
+        await db.users.update_one(
+            {"email": user_email},
+            {"$set": {"task_board.show_agent_work": body["show_agent_work"]}},
+        )
+        board = await _get_board_config_for(db, user_email)
+        return web.json_response({**board, "migrated": 0})
+
     prompt = body.get("prompt", "")
     if not isinstance(prompt, str) or len(prompt) > MAX_BOARD_PROMPT_LEN:
         return web.json_response(
@@ -833,9 +848,12 @@ async def handle_put_board_settings(request: web.Request) -> web.Response:
     removed_ids = [lane["id"] for lane in previous["lanes"] if lane["id"] not in seen_ids]
     first_lane_id = lanes[0]["id"]
 
+    updates = {"task_board.prompt": prompt, "task_board.lanes": lanes}
+    if "show_agent_work" in body:
+        updates["task_board.show_agent_work"] = body["show_agent_work"]
     await db.users.update_one(
         {"email": user_email},
-        {"$set": {"task_board.prompt": prompt, "task_board.lanes": lanes}},
+        {"$set": updates},
     )
 
     migrated = 0
@@ -850,7 +868,8 @@ async def handle_put_board_settings(request: web.Request) -> web.Response:
         )
         migrated = result.modified_count
 
-    return web.json_response({"prompt": prompt, "lanes": lanes, "migrated": migrated})
+    return web.json_response({"prompt": prompt, "lanes": lanes, "migrated": migrated,
+                              "show_agent_work": body.get("show_agent_work", previous["show_agent_work"])})
 
 
 async def handle_create_tag(request: web.Request) -> web.Response:

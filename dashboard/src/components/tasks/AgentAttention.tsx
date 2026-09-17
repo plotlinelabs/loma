@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 type Attention = { approvals: number; questions: number; deliveries: number; charges: number; proposals?: number; total: number };
 type Work = { work_id: string; title: string; paused: boolean; revoked?: boolean; cron?: string; run_status?: string; dry_run?: boolean; agent_snapshot?: {name?: string} };
 const lane = (w: Work) => !w.run_status ? "To do" : w.run_status === "running" ? "Running" : w.run_status === "done" ? "Done" : "Waiting / review";
-export function AgentAttention() {
+export function AgentAttention({ onDismiss, dismissing }: { onDismiss: () => void; dismissing: boolean }) {
   const [attention, setAttention] = useState<Attention | null>(null);
   const [work, setWork] = useState<Work[]>([]);
   const [error, setError] = useState("");
@@ -30,7 +30,7 @@ export function AgentAttention() {
   const parts = attention ? [[attention.approvals, "approval"], [attention.questions, "question"], [attention.deliveries, "delivery review"], [attention.charges, "charge review"], [attention.proposals || 0, "worker proposal"]].filter(([count]) => Number(count) > 0).map(([count, label]) => `${count} ${label}${count === 1 ? "" : "s"}`).join(" · ") : "";
   if (!attention && !error) return null;
   return <section aria-label="Agent work on your board" className="shrink-0 space-y-3 rounded-xl border p-3">
-    <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold">Agent work</h2><p className="text-xs text-muted-foreground">Live work records. Open a card for controls; moving a chat task never grants permission.</p></div><Button asChild size="sm" variant="outline"><Link href={`${basePath}/agents/work`}>Manage agent work</Link></Button></div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold">Agent work</h2><p className="text-xs text-muted-foreground">Live work records. Open a card for controls; moving a chat task never grants permission.</p></div><div className="flex items-center gap-2"><Button size="sm" variant="ghost" onClick={onDismiss} disabled={dismissing}>Dismiss</Button><Button asChild size="sm" variant="outline"><Link href={`${basePath}/agents/work`}>Manage agent work</Link></Button></div></div>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {!!attention?.total && <Link href={`${basePath}/agents/work?tab=needs`} className="block rounded-lg border border-amber-400 p-3 text-sm"><span className="font-medium">Needs you: {parts}</span><span className="block text-xs underline">Open Needs you</span></Link>}
     {!!attention?.proposals && <Link href={`${basePath}/agents/proposals`} className="block text-xs underline">Review worker proposals</Link>}

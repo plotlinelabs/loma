@@ -17,6 +17,7 @@ import {
 import {
   basePath,
   createTask,
+  saveBoardSettings,
   fetchTasksBoard,
   updateTask,
   type Task,
@@ -69,6 +70,7 @@ export default function TasksPage() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [newTaskLane, setNewTaskLane] = useState<string | undefined>(undefined);
+  const [dismissingAgentWork, setDismissingAgentWork] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addChatOpen, setAddChatOpen] = useState(false);
   // Desktop: clicking a non-draft card opens its chat in a side drawer so the
@@ -101,13 +103,16 @@ export default function TasksPage() {
   };
 
   const hasBoardRef = useRef(false);
+  const refreshVersion = useRef(0);
   const refresh = useCallback(async () => {
     // Pause polling when the tab is hidden — but always allow the initial
     // load (a background/occluded tab would otherwise show skeletons forever).
     if (busyRef.current || (document.hidden && hasBoardRef.current)) return;
+    const version = ++refreshVersion.current;
     try {
       const data = await fetchTasksBoard(searchQuery);
       hasBoardRef.current = true;
+      if (busyRef.current || version !== refreshVersion.current) return;
       setBoard(data);
       // Keep the open drawer's task in sync (e.g. the async-generated title).
       // Only swap when title/prompt changed — a new object remounts the
@@ -139,6 +144,22 @@ export default function TasksPage() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [sessionStatus, refresh]);
+
+  const dismissAgentWork = async () => {
+    ++refreshVersion.current;
+    busyRef.current = true;
+    setDismissingAgentWork(true);
+    setError(null);
+    try {
+      await saveBoardSettings({ show_agent_work: false });
+      setBoard((current) => current ? { ...current, show_agent_work: false } : current);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to dismiss Agent work");
+    } finally {
+      busyRef.current = false;
+      setDismissingAgentWork(false);
+    }
+  };
 
   const handleTaskSubmit = async (
     values: { title: string; prompt: string; lane: string; model: string; tool_config: ToolConfig },
@@ -311,7 +332,9 @@ export default function TasksPage() {
 
       <InstallHint />
 
-      <AgentAttention />
+      {board && board.show_agent_work !== false && (
+        <AgentAttention onDismiss={dismissAgentWork} dismissing={dismissingAgentWork} />
+      )}
 
       <div className="relative w-full sm:max-w-sm">
         <RiSearchLine className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
