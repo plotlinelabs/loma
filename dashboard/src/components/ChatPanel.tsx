@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { withTerminalStatus } from "../lib/terminal-status";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useAgentIdentities } from "@/hooks/useAgentIdentities";
 import { AgentPicker } from "@/components/composer/AgentPicker";
@@ -459,17 +460,18 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
       className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-3 animate-fade-in cursor-pointer"
       onClick={onClose}
     >
-      <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+      <div className="relative max-w-[90vw] max-h-[90dvh]" onClick={(e) => e.stopPropagation()}>
         <img
           src={src}
           alt="Expanded view"
-          className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+          className="max-w-full max-h-[90dvh] object-contain rounded-lg shadow-2xl"
         />
         <Button
           variant="ghost"
           size="icon"
           onClick={onClose}
-          className="absolute -top-3 -right-3 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg"
+          aria-label="Close image"
+          className="absolute top-2 right-2 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg"
         >
           <RiCloseLine size={16} />
         </Button>
@@ -595,6 +597,7 @@ export default function ChatPanel({
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
+  const isMobile = useIsMobile();
   const [items, setItems] = useState<ChatItem[]>(initialItems || []);
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const [input, setInput] = useState(initialPrompt || "");
@@ -1373,9 +1376,9 @@ export default function ChatPanel({
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   onFocus={() => {
-                    // Installed PWA: the keyboard shrinks --app-h; keep the
-                    // latest message in view above the composer.
-                    if (standalone) scrollToBottom();
+                    // Phones: the keyboard shrinks --app-h; keep the latest
+                    // message in view above the composer.
+                    if (standalone || isMobile) scrollToBottom();
                   }}
                   placeholder={isStreaming ? "Type your next message..." : "What do you need to get done?"}
                   rows={2}
@@ -1461,7 +1464,7 @@ export default function ChatPanel({
             </div>
           )}
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 py-4" onScroll={handleMessagesScroll}>
+          <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-4" onScroll={handleMessagesScroll}>
             <div className="space-y-2 max-w-3xl mx-auto">
               {items.map((item, i) => {
                 if (item.role === "steps") {
@@ -1499,27 +1502,29 @@ export default function ChatPanel({
                   return (
                     <div key={i} className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
                       {item.queued && editingQueuedIndex !== i && (
-                        <div className="flex items-center gap-0.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-0.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <button
                             type="button"
                             onClick={() => handleStartEditQueued(i)}
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            className="touch-target p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                             title="Edit queued message"
+                            aria-label="Edit queued message"
                           >
                             <RiEditLine size={14} />
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDeleteQueued(i)}
-                            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            className="touch-target p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                             title="Delete queued message"
+                            aria-label="Delete queued message"
                           >
                             <RiDeleteBinLine size={14} />
                           </button>
                         </div>
                       )}
                       <div className={cn(
-                        "chat-text rounded-xl px-3.5 py-2.5 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
+                        "chat-text rounded-xl px-3.5 py-2.5 max-w-[88%] md:max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
                         item.queued
                           ? "bg-card/60 border border-dashed border-border"
                           : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
@@ -1698,9 +1703,9 @@ export default function ChatPanel({
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   onFocus={() => {
-                    // Installed PWA: the keyboard shrinks --app-h; keep the
-                    // latest message in view above the composer.
-                    if (standalone) scrollToBottom();
+                    // Phones: the keyboard shrinks --app-h; keep the latest
+                    // message in view above the composer.
+                    if (standalone || isMobile) scrollToBottom();
                   }}
                   placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : "Type a follow-up while agent is working...") : "Ask the agent something..."}
                   rows={1}

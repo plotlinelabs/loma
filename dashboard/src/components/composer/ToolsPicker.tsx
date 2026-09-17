@@ -5,7 +5,6 @@ import {
   useId,
   useRef,
   useState,
-  useSyncExternalStore,
   type KeyboardEvent,
 } from "react";
 import {
@@ -25,6 +24,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import type { AvailableTool, AvailableSkill } from "@/lib/api";
 import type { ToolsLoadState, ToolsSelection } from "@/hooks/useToolsPicker";
 import {
@@ -34,15 +34,6 @@ import {
   type PickerDomain,
   type PickerItem,
 } from "@/hooks/picker-selection";
-
-const mobileQuery = "(max-width: 639px)";
-const subscribeMobile = (notify: () => void) => {
-  const media = window.matchMedia(mobileQuery);
-  media.addEventListener("change", notify);
-  return () => media.removeEventListener("change", notify);
-};
-const getMobile = () => window.matchMedia(mobileQuery).matches;
-const getServerMobile = () => false;
 
 interface ToolsPickerProps {
   tools: AvailableTool[];
@@ -117,11 +108,8 @@ function DomainPicker({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const mobile = useSyncExternalStore(
-    subscribeMobile,
-    getMobile,
-    getServerMobile,
-  );
+  // Bottom sheet below md (same breakpoint as AgentPicker/ModelPicker), popover above.
+  const mobile = useIsMobile();
   const descriptionPrefix = useId();
   const [undo, setUndo] = useState<{
     selection: string[] | null;
@@ -483,7 +471,7 @@ function DomainPicker({
       type="button"
       disabled={props.disabled}
       aria-label={`${title}: ${mode}`}
-      className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-55"
+      className="touch-target inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-55"
     >
       {title}: {mode}
       <RiArrowDownSLine size={14} />

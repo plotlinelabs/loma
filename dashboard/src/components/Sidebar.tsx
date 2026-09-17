@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -14,6 +14,7 @@ import PetCompanion, { usePetSettings } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import ChatContextMenu from "./ChatContextMenu";
 import { useTheme } from "../lib/ThemeContext";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -429,6 +430,31 @@ export default function Sidebar({
 
   const openPetSettings = usePetSettings();
 
+  // Phone drawer: lock the page behind it, close on Escape and on a leftward swipe.
+  useBodyScrollLock(isOpen);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    swipeStart.current = { x: t.clientX, y: t.clientY };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start || !isOpen) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 1.5) onClose();
+  };
+
   const sidebarContent = (
     <>
       {/* Logo + collapse toggle + close button */}
@@ -572,7 +598,7 @@ export default function Sidebar({
                         >
                           {displayTitle}
                         </Link>
-                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <ChatContextMenu
                             conversationId={c.conversation_id}
                             conversationTitle={title}
@@ -628,7 +654,7 @@ export default function Sidebar({
                         >
                           {displayTitle}
                         </Link>
-                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <ChatContextMenu
                             conversationId={c.conversation_id}
                             conversationTitle={title}
@@ -785,8 +811,13 @@ export default function Sidebar({
       )}
 
       <aside
+        aria-label="Navigation"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
         className={cn(
-          "loma-sidebar fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] flex flex-col z-50 transition-all duration-200 ease-out bg-sidebar",
+          // Safe-area padding on both ends so the brand row clears the notch
+          // and the account row clears the iPhone home indicator.
+          "loma-sidebar fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col z-50 transition-all duration-200 ease-out bg-sidebar",
           isOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
           collapsed ? "w-[56px]" : "w-[300px] md:w-[220px]"

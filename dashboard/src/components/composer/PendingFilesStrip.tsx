@@ -28,7 +28,8 @@ function PendingImageThumbnail({
       <button
         type="button"
         onClick={() => onRemove(index)}
-        className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-gray-600 hover:bg-gray-800 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+        aria-label={`Remove ${file.name}`}
+        className="touch-target absolute -top-1.5 -right-1.5 w-4 h-4 bg-gray-600 hover:bg-gray-800 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity"
       >
         <RiCloseLine size={10} />
       </button>
@@ -52,7 +53,8 @@ function PendingFileBadge({
       <button
         type="button"
         onClick={() => onRemove(index)}
-        className="text-muted-foreground hover:text-foreground ml-0.5"
+        aria-label={`Remove ${file.name}`}
+        className="touch-target text-muted-foreground hover:text-foreground ml-0.5"
       >
         <RiCloseLine size={12} />
       </button>
