@@ -18,12 +18,14 @@ interface DictationButtonProps {
   disabled?: boolean;
   mobileProminent?: boolean;
   className?: string;
+  hideIdleOnMobile?: boolean;
+  compactMobile?: boolean;
 }
 
 /** Mic toggle for composers: tap to record, tap again to stop + transcribe
  * (server-side, Deepgram Nova-3). Hidden where MediaRecorder/getUserMedia
  * are unavailable (e.g. plain HTTP). */
-export function DictationButton({ onText, disabled, mobileProminent, className }: DictationButtonProps) {
+export function DictationButton({ onText, disabled, mobileProminent, className, hideIdleOnMobile, compactMobile }: DictationButtonProps) {
   const { state, seconds, error, supported, toggle } = useDictation(onText);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -56,7 +58,7 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
   if (state === "recording") {
     return (
       <>
-      <PetCompanion size={24} state="listening" />
+      <span className={compactMobile ? "max-md:hidden" : undefined}><PetCompanion size={24} state="listening" /></span>
       <Button
         ref={buttonRef}
         type="button"
@@ -68,6 +70,7 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
       aria-keyshortcuts="Alt+Space"
       className={cn(
           "h-7 gap-1.5 rounded-lg px-2 text-red-600 hover:text-red-600 hover:bg-red-500/10 max-md:order-last max-md:h-12 max-md:px-4 max-md:ring-2 max-md:ring-red-500/20",
+          compactMobile && "max-md:h-11 max-md:px-2",
           className,
         )}
       >
@@ -86,7 +89,7 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
 
   return (
     <>
-    {state === "transcribing" && <PetCompanion size={24} state="working" />}
+    {state === "transcribing" && <span className={compactMobile ? "max-md:hidden" : undefined}><PetCompanion size={24} state="working" /></span>}
     <Button
       ref={buttonRef}
       type="button"
@@ -101,6 +104,8 @@ export function DictationButton({ onText, disabled, mobileProminent, className }
         error ? "text-destructive" : "text-muted-foreground hover:text-foreground",
         "max-md:order-last max-md:size-11 max-md:rounded-xl",
         mobileProminent && "max-md:size-12 max-md:bg-accent-200 max-md:text-accent-on max-md:ring-2 max-md:ring-accent-200/25 max-md:ring-offset-2 max-md:hover:bg-accent-300 max-md:hover:text-accent-on max-md:[&_svg]:size-6",
+        compactMobile && "max-md:size-11 max-md:rounded-full max-md:ring-0 max-md:ring-offset-0 max-md:[&_svg]:size-5",
+        hideIdleOnMobile && state !== "transcribing" && "max-md:hidden",
         className,
       )}
     >
