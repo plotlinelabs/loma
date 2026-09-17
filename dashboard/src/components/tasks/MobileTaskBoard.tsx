@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { RiAddLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import type { Task, TasksBoardResponse } from "@/lib/api";
@@ -19,13 +19,17 @@ interface MobileTaskBoardProps {
   excludedTagIds: string[];
   /** View-only member of a shared board: no adds or card actions. */
   readOnly?: boolean;
+  /** Page chrome (title row, hints, search) rendered inside the board's
+   * scroll region so it scrolls away with the list instead of squeezing the
+   * pinned composer into the bottom nav on short viewports. */
+  header?: ReactNode;
 }
 
 /** Inbox-style single-column board for phones: a chip scroller switches
  * columns, tap actions replace drag. Desktop keeps the kanban. */
 export function MobileTaskBoard({
   board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, includedTagIds, excludedTagIds,
-  readOnly = false,
+  readOnly = false, header,
 }: MobileTaskBoardProps) {
   const {
     laneIds, tasksByColumn,
@@ -77,9 +81,17 @@ export function MobileTaskBoard({
   };
 
   return (
-    <div className="flex flex-1 flex-col gap-3 min-h-0">
-      {/* Column chips */}
-      <div className="flex shrink-0 gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex flex-1 flex-col min-h-0">
+      {/* One scroll region for everything above the composer. The header,
+          attention card and search are not shrinkable, so if they lived
+          outside this region the list would collapse to 0 and the composer
+          would overflow the page onto the bottom nav (the nav is in normal
+          flow below the page, and `main` does not clip vertically). */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-y-contain">
+      {header}
+      {/* Column chips: stick to the top of the scroll region so the column
+          switcher stays reachable while the list scrolls. */}
+      <div className="sticky top-0 z-10 -my-1 flex shrink-0 gap-1.5 overflow-x-auto bg-background py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {columns.map((column) => {
           const count = (tasksByColumn[column.id] ?? []).length;
           const active = column.id === selectedId;
@@ -109,7 +121,7 @@ export function MobileTaskBoard({
       </div>
 
       {/* Selected column */}
-      <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto pb-4">
+      <div className="flex flex-col gap-1.5 pb-4">
         {tasks.map((task) => (
           <MobileTaskCard
             key={task.conversation_id}
@@ -140,6 +152,7 @@ export function MobileTaskBoard({
             Task
           </button>
         )}
+      </div>
       </div>
 
       {!readOnly && <QuickAddTask onAdded={handleQuickAdded} boardId={board.board?.id} />}

@@ -171,11 +171,30 @@ const hitArea = async (page, locator) => {
       record('model picker opens as a bottom sheet', true, 'skipped: no models loaded in the isolated stack');
     }
 
-    // 09 tasks board: no overflow
+    // 09 tasks board: no overflow; the pinned composer must clear the bottom nav
     await page.goto(`${base}/tasks`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(800);
     await noHorizontalOverflow(page, '/tasks');
-    await page.screenshot({ path: `${shots}/09-tasks.png` });
+    const tasksGeometry = () => page.evaluate(() => {
+      const ta = document.querySelector('textarea[placeholder="What do you need done?"]');
+      const card = ta && ta.closest('.rounded-xl');
+      const nav = document.querySelector('main > nav');
+      if (!card || !nav) return null;
+      const c = card.getBoundingClientRect(), n = nav.getBoundingClientRect();
+      return { cardTop: Math.round(c.top), cardBottom: Math.round(c.bottom), cardH: Math.round(c.height), navTop: Math.round(n.top), navBottom: Math.round(n.bottom), vh: innerHeight };
+    });
+    for (const [label, vh] of [['844px', 844], ['600px (browser chrome + short phone)', 600]]) {
+      await page.setViewportSize({ width: 390, height: vh });
+      await page.waitForTimeout(400);
+      const g = await tasksGeometry();
+      if (EXPECT_NEW) {
+        record(`tasks composer sits above the bottom nav at ${label}`, !!g && g.cardBottom <= g.navTop && g.cardTop >= 0, JSON.stringify(g));
+        record(`tasks bottom nav is inside the viewport at ${label}`, !!g && g.navBottom <= g.vh, JSON.stringify(g));
+        record(`tasks composer is one row tall at ${label}`, !!g && g.cardH <= 120, JSON.stringify(g));
+      } else console.log(`INFO tasks composer/nav geometry at ${label}: ${JSON.stringify(g)}`);
+      await page.screenshot({ path: `${shots}/09-tasks-${vh}.png` });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     await phone.close();
 
     // ── Desktop regression: split pane + full toolbar unchanged
