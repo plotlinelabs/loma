@@ -4,6 +4,9 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { withTerminalStatus } from "../lib/terminal-status";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
+import { useKeyboardVisible } from "@/hooks/useKeyboardVisible";
+import { ComposerSettings } from "./composer/ComposerSettings";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useAgentIdentities } from "@/hooks/useAgentIdentities";
 import { AgentPicker } from "@/components/composer/AgentPicker";
@@ -459,17 +462,18 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
       className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-3 animate-fade-in cursor-pointer"
       onClick={onClose}
     >
-      <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+      <div className="relative max-w-[90vw] max-h-[90dvh]" onClick={(e) => e.stopPropagation()}>
         <img
           src={src}
           alt="Expanded view"
-          className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+          className="max-w-full max-h-[90dvh] object-contain rounded-lg shadow-2xl"
         />
         <Button
           variant="ghost"
           size="icon"
           onClick={onClose}
-          className="absolute -top-3 -right-3 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg"
+          aria-label="Close image"
+          className="absolute top-2 right-2 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg"
         >
           <RiCloseLine size={16} />
         </Button>
@@ -595,6 +599,8 @@ export default function ChatPanel({
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
+  const isMobile = useIsMobile();
+  const keyboardOpen = useKeyboardVisible();
   const [items, setItems] = useState<ChatItem[]>(initialItems || []);
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const [input, setInput] = useState(initialPrompt || "");
@@ -768,7 +774,7 @@ export default function ChatPanel({
 
   useEffect(() => {
     adjustTextareaHeight();
-  }, [input, adjustTextareaHeight]);
+  }, [input, isMobile, adjustTextareaHeight]);
 
   const addFiles = useCallback(async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
@@ -1348,11 +1354,12 @@ export default function ChatPanel({
 
       {isEmptyState ? (
         /* Empty state */
-        <div className="flex flex-col items-center justify-center h-full px-4 md:px-6 animate-fade-in-up">
-          <div className="mb-8 flex flex-col items-center gap-4 text-center">
+        <div className={cn("flex min-h-0 flex-col items-center justify-center h-full px-1 md:px-6 animate-fade-in-up", keyboardOpen && "max-md:justify-end")}>
+          <div className={cn("mb-7 md:mb-8 flex flex-col items-center gap-4 text-center", keyboardOpen && "max-md:hidden")}>
             <PetCompanion size={56} />
             <h2 className="editorial-heading text-[26px] md:text-[34px] text-foreground">
-              What do you need to get done?
+              <span className="md:hidden text-[34px] leading-[1.1]">A little help.<br />A lot done.</span>
+              <span className="hidden md:inline">What do you need to get done?</span>
             </h2>
           </div>
 
@@ -1373,25 +1380,37 @@ export default function ChatPanel({
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   onFocus={() => {
-                    // Installed PWA: the keyboard shrinks --app-h; keep the
-                    // latest message in view above the composer.
-                    if (standalone) scrollToBottom();
+                    // Phones: the keyboard shrinks --app-h; keep the latest
+                    // message in view above the composer.
+                    if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? "Type your next message..." : "What do you need to get done?"}
-                  rows={2}
-                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  placeholder={isStreaming ? "Type your next message..." : isMobile ? "Ask Loma anything..." : "What do you need to get done?"}
+                  rows={isMobile ? 1 : 2}
+                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-base md:text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
                 />
-                <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:flex-wrap">
-                  <div className="flex min-w-0 items-center gap-0.5 max-md:w-full max-md:flex-wrap">
-                    <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-                    <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
-                    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+                <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:gap-0 max-md:px-2 max-md:pb-2">
+                  <div className="flex min-w-0 items-center gap-0.5 max-md:flex-1">
+                    {isMobile && (
+                      <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" className="size-11 shrink-0 rounded-full text-muted-foreground">
+                        <RiAttachmentLine size={18} />
+                      </Button>
+                    )}
+                    {!isMobile && <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />}
+                    <div className="min-w-0 max-md:flex-1 max-md:[&_button]:h-11"><ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} /></div>
+                    {isMobile ? (
+                      <ComposerSettings>
+                        <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
+                        <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+                      </ComposerSettings>
+                    ) : <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />}
                   </div>
-                  <div className="ml-auto flex items-center gap-1 max-md:gap-2 shrink-0">
+                  <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
                     <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
                       mobileProminent
+                      hideIdleOnMobile={!!input.trim() || pendingFiles.length > 0}
+                      compactMobile
                     />
                     <Button
                       type="button"
@@ -1399,7 +1418,7 @@ export default function ChatPanel({
                       size="icon-sm"
                       onClick={() => fileInputRef.current?.click()}
                       title="Attach files"
-                      className="text-muted-foreground hover:text-foreground max-md:size-11 max-md:rounded-xl"
+                      className="text-muted-foreground hover:text-foreground max-md:hidden"
                     >
                       <RiAttachmentLine size={16} />
                     </Button>
@@ -1407,11 +1426,12 @@ export default function ChatPanel({
                       type="submit"
                       disabled={!input.trim() && pendingFiles.length === 0}
                       className={cn(
-                        "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                        "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-11 max-md:rounded-full",
                         !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
                       )}
                       size="icon-sm"
                     >
+                      <span className="sr-only">Send message</span>
                       <RiSendPlaneLine size={16} />
                     </Button>
                   </div>
@@ -1461,7 +1481,7 @@ export default function ChatPanel({
             </div>
           )}
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 py-4" onScroll={handleMessagesScroll}>
+          <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-4" onScroll={handleMessagesScroll}>
             <div className="space-y-2 max-w-3xl mx-auto">
               {items.map((item, i) => {
                 if (item.role === "steps") {
@@ -1499,27 +1519,29 @@ export default function ChatPanel({
                   return (
                     <div key={i} className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
                       {item.queued && editingQueuedIndex !== i && (
-                        <div className="flex items-center gap-0.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-0.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <button
                             type="button"
                             onClick={() => handleStartEditQueued(i)}
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            className="touch-target p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                             title="Edit queued message"
+                            aria-label="Edit queued message"
                           >
                             <RiEditLine size={14} />
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDeleteQueued(i)}
-                            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            className="touch-target p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                             title="Delete queued message"
+                            aria-label="Delete queued message"
                           >
                             <RiDeleteBinLine size={14} />
                           </button>
                         </div>
                       )}
                       <div className={cn(
-                        "chat-text rounded-xl px-3.5 py-2.5 max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
+                        "chat-text rounded-xl px-3.5 py-2.5 max-w-[88%] md:max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
                         item.queued
                           ? "bg-card/60 border border-dashed border-border"
                           : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
@@ -1538,7 +1560,7 @@ export default function ChatPanel({
                                   handleCancelEditQueued();
                                 }
                               }}
-                              className="w-full bg-transparent border-none outline-none resize-none text-[13px] leading-relaxed min-h-[2em]"
+                              className="w-full bg-transparent border-none outline-none resize-none text-base md:text-[13px] leading-relaxed min-h-[2em]"
                               autoFocus
                             />
                             <div className="flex items-center justify-end gap-1.5">
@@ -1698,25 +1720,37 @@ export default function ChatPanel({
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   onFocus={() => {
-                    // Installed PWA: the keyboard shrinks --app-h; keep the
-                    // latest message in view above the composer.
-                    if (standalone) scrollToBottom();
+                    // Phones: the keyboard shrinks --app-h; keep the latest
+                    // message in view above the composer.
+                    if (standalone || isMobile) scrollToBottom();
                   }}
                   placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : "Type a follow-up while agent is working...") : "Ask the agent something..."}
                   rows={1}
-                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-base md:text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "160px" }}
                 />
-                <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:flex-wrap">
-                  <div className="flex min-w-0 items-center gap-0.5 max-md:w-full max-md:flex-wrap">
-                    <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-                    <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
-                    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+                <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:gap-0 max-md:px-2 max-md:pb-2">
+                  <div className="flex min-w-0 items-center gap-0.5 max-md:flex-1">
+                    {isMobile && (
+                      <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" className="size-11 shrink-0 rounded-full text-muted-foreground">
+                        <RiAttachmentLine size={18} />
+                      </Button>
+                    )}
+                    {!isMobile && <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />}
+                    <div className="min-w-0 max-md:flex-1 max-md:[&_button]:h-11"><ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} /></div>
+                    {isMobile ? (
+                      <ComposerSettings>
+                        <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
+                        <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+                      </ComposerSettings>
+                    ) : <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />}
                   </div>
-                  <div className="ml-auto flex items-center gap-1 max-md:gap-2 shrink-0">
+                  <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
                     <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
                       mobileProminent
+                      hideIdleOnMobile={!!input.trim() || pendingFiles.length > 0}
+                      compactMobile
                     />
                     <Button
                       type="button"
@@ -1724,7 +1758,7 @@ export default function ChatPanel({
                       size="icon-sm"
                       onClick={() => fileInputRef.current?.click()}
                       title="Attach files"
-                      className="text-muted-foreground hover:text-foreground max-md:size-11 max-md:rounded-xl"
+                      className="text-muted-foreground hover:text-foreground max-md:hidden"
                     >
                       <RiAttachmentLine size={16} />
                     </Button>
@@ -1745,10 +1779,11 @@ export default function ChatPanel({
                       size="icon-sm"
                       disabled={!input.trim() && pendingFiles.length === 0}
                       className={cn(
-                        "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                        "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-11 max-md:rounded-full",
                         !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
                       )}
                     >
+                      <span className="sr-only">Send message</span>
                       <RiSendPlaneLine size={16} />
                     </Button>
                   </div>
