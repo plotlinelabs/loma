@@ -458,7 +458,7 @@ export default function Sidebar({
   const sidebarContent = (
     <>
       {/* Logo + collapse toggle + close button */}
-      <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-5 pt-6 pb-5")}>
+      <div className={cn("flex shrink-0 items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-5 pt-6 pb-5")}>
         <div className={cn("flex items-center gap-2", collapsed && "justify-center")}>
           <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 20} /></Link>} />
           {!collapsed && (
@@ -493,8 +493,16 @@ export default function Sidebar({
         <SidebarSkeleton />
       ) : (
         <>
+          {/* One scroll region for the nav plus projects, pinned and recents,
+              with the account footer pinned below it. `min-h-0` lets the
+              region shrink and scroll instead of overflowing. The nav must
+              live inside it: on phones the roomier 10-item nav alone is taller
+              than a short viewport (360x640), so a non-shrinking nav above
+              this region collapsed the lists to 0px and pushed the theme and
+              account rows off-screen with nothing to scroll. */}
+          <ScrollArea className="flex-1 min-h-0">
           {/* Navigation */}
-          <nav className="px-3 space-y-0.5 shrink-0 pb-1">
+          <nav className="px-3 space-y-0.5 pb-1">
             {visibleNav.map((item) => {
               const isActive = item.href === "/"
                 ? pathname === "/" || pathname === ""
@@ -536,9 +544,6 @@ export default function Sidebar({
             })}
           </nav>
 
-          {/* Scrollable middle: projects, pinned, recents. `min-h-0` lets this region
-              shrink and scroll instead of overflowing on top of the footer below. */}
-          <ScrollArea className="flex-1 min-h-0">
             {/* Projects */}
             {!collapsed && projects.length > 0 && (
               <div className="mt-6 flex flex-col">

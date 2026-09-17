@@ -1002,6 +1002,13 @@
   color: var(--sidebar-foreground);
 }
 
+/* Phone drawer: scrolling the nav/recents region must not chain into the page
+   behind it (Android Chrome turns an over-scroll at the top into
+   pull-to-refresh, which reloads the app under the open drawer). */
+.loma-sidebar [data-slot="scroll-area-viewport"] {
+  overscroll-behavior: contain;
+}
+
 ::selection { background: #DDF7A8; color: #061B20; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

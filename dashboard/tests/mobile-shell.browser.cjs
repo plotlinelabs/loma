@@ -94,6 +94,33 @@ const hitArea = async (page, locator) => {
     const bodyOverflow = await page.evaluate(() => document.body.style.overflow);
     record('page scroll locked behind drawer', EXPECT_NEW ? bodyOverflow === 'hidden' : true, `body.overflow="${bodyOverflow}"`);
     await page.screenshot({ path: `${shots}/02-sidebar-drawer.png` });
+    // Short Android-class viewport: the nav + lists share one scroll region and
+    // the account footer stays pinned inside the viewport. A non-shrinking nav
+    // above the region used to collapse the lists to 0px and push the theme and
+    // account rows below the fold with nothing to scroll.
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.waitForTimeout(400);
+    const drawerGeom = () => page.evaluate(() => {
+      const vp = document.querySelector('aside.loma-sidebar [data-slot=scroll-area-viewport]');
+      const nav = document.querySelector('aside.loma-sidebar nav');
+      const account = document.querySelector('aside.loma-sidebar [aria-label="Account menu"]');
+      const a = account.getBoundingClientRect();
+      const hit = document.elementFromPoint(a.x + a.width / 2, a.y + a.height / 2);
+      return { vh: innerHeight, accountBottom: Math.round(a.bottom), accountHit: hit === account || account.contains(hit),
+        navInScroll: !!vp && vp.contains(nav), scrollH: vp ? vp.scrollHeight : -1, clientH: vp ? vp.clientHeight : -1, scrollTop: vp ? Math.round(vp.scrollTop) : -1 };
+    });
+    const d1 = await drawerGeom();
+    record('drawer account row stays inside a 360x640 viewport', EXPECT_NEW ? d1.accountBottom <= d1.vh && d1.accountHit : true, JSON.stringify(d1));
+    record('drawer nav lives inside the scroll region', EXPECT_NEW ? d1.navInScroll : true, JSON.stringify(d1));
+    const drawerBox = await aside.boundingBox();
+    await page.mouse.move(drawerBox.x + drawerBox.width / 2, 300);
+    await page.mouse.wheel(0, 600);
+    await page.waitForTimeout(300);
+    const d2 = await drawerGeom();
+    record('drawer content scrolls when taller than the viewport', EXPECT_NEW ? (d2.scrollH <= d2.clientH || d2.scrollTop > 0) : true, JSON.stringify(d2));
+    await page.screenshot({ path: `${shots}/02b-sidebar-drawer-360x640.png` });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(300);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(400);
     const asideAfter = await aside.boundingBox();
@@ -212,6 +239,12 @@ const hitArea = async (page, locator) => {
     record('desktop has no mobile overflow menu', !(await dpage.getByLabel('More actions').isVisible()));
     const dAppH = await dpage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim());
     record('desktop leaves --app-h unset (100dvh fallback; no pinch-zoom shrink)', EXPECT_NEW ? dAppH === '' : true, `--app-h="${dAppH}"`);
+    const dSidebar = await dpage.evaluate(() => {
+      const nav = document.querySelector('aside.loma-sidebar nav').getBoundingClientRect();
+      const account = document.querySelector('aside.loma-sidebar [aria-label="Account menu"]').getBoundingClientRect();
+      return { navTop: Math.round(nav.top), accountBottom: Math.round(account.bottom), vh: innerHeight };
+    });
+    record('desktop sidebar keeps the nav at the top and the account row pinned', dSidebar.navTop < 120 && dSidebar.accountBottom <= dSidebar.vh, JSON.stringify(dSidebar));
     await dpage.screenshot({ path: `${shots}/10-desktop-artifact.png` });
     await desktop.close();
 
