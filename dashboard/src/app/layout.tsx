@@ -82,7 +82,10 @@ export default function RootLayout({
         />
       </head>
       <body
-        className="antialiased min-h-screen"
+        // Track the app shell height (--app-h follows the visual viewport on
+        // phones); `min-h-screen` (100vh) left a phantom scroll behind the
+        // iOS Safari URL bar that detached the fixed menu buttons.
+        className="antialiased min-h-[var(--app-h,100dvh)]"
       >
         <Providers>
           <ServiceWorkerRegistrar />

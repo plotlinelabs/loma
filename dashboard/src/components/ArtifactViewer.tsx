@@ -13,7 +13,15 @@ import {
   RiCheckLine,
   RiLoader4Line,
   RiErrorWarningLine,
+  RiMoreLine,
 } from "@remixicon/react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -575,9 +583,21 @@ export default function ArtifactViewer({
       .sort((a, b) => a.version - b.version);
   }, [allArtifacts, artifact.title]);
 
+  const versionIdx = versions.findIndex((v) => v.id === artifact.id);
+  const goToVersion = (delta: number) => {
+    const next = versions[versionIdx + delta];
+    if (next && onSelectArtifact) onSelectArtifact(next.id);
+  };
+  const handleClose = () => {
+    if (isFullscreen) setIsFullscreen(false);
+    onClose();
+  };
+
   const containerClass = isFullscreen
     ? "fixed inset-0 z-[90] bg-card flex flex-col animate-fade-in"
-    : "flex flex-col h-full bg-card border-l border-border animate-artifact-slide-in";
+    // Phones: the parent renders this inside a bottom sheet that owns the
+    // border and the entrance animation.
+    : "flex flex-col h-full bg-card md:border-l border-border md:animate-artifact-slide-in";
 
   return (
     <div className={containerClass}>
@@ -606,7 +626,70 @@ export default function ArtifactViewer({
           )}
         </div>
 
-        <div className="flex items-center gap-0.5 flex-shrink-0">
+        {/* Phones: one overflow menu instead of seven controls (the row overflowed at 390px) */}
+        <div className="flex md:hidden items-center gap-0.5 flex-shrink-0">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="text-muted-foreground hover:text-foreground"
+                title="More actions"
+                aria-label="More actions"
+              >
+                <RiMoreLine size={16} />
+              </Button>
+            </DropdownMenuTrigger>
+            {/* Portal: must stack above the z-[80] phone sheet and the z-[90] fullscreen container */}
+            <DropdownMenuContent align="end" className="w-52 z-[95]">
+              {canPreview && !isFileArtifact && (
+                <DropdownMenuItem onSelect={() => setViewMode(viewMode === "preview" ? "code" : "preview")}>
+                  {viewMode === "preview" ? <RiCodeSLine /> : <RiEyeLine />}
+                  {viewMode === "preview" ? "Show code" : "Show preview"}
+                </DropdownMenuItem>
+              )}
+              {versions.length > 1 && (
+                <>
+                  <DropdownMenuItem disabled={versionIdx <= 0} onSelect={() => goToVersion(-1)}>
+                    <RiArrowLeftSLine />
+                    Previous version
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={versionIdx >= versions.length - 1} onSelect={() => goToVersion(1)}>
+                    <RiArrowRightSLine />
+                    Next version
+                  </DropdownMenuItem>
+                </>
+              )}
+              <DropdownMenuSeparator />
+              {!isFileArtifact && (
+                <DropdownMenuItem onSelect={handleCopy}>
+                  {copyFeedback ? <RiCheckLine className="text-green-500" /> : <RiFileCopyLine />}
+                  {copyFeedback ? "Copied!" : "Copy"}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={handleDownload}>
+                <RiDownloadLine />
+                Download
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setIsFullscreen(!isFullscreen)}>
+                <RiFullscreenLine />
+                {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleClose}
+            className="text-muted-foreground hover:text-foreground"
+            title="Close"
+            aria-label="Close artifact"
+          >
+            <RiCloseLine size={16} />
+          </Button>
+        </div>
+
+        <div className="hidden md:flex items-center gap-0.5 flex-shrink-0">
           {/* Preview/Code toggle — only show for text-based artifacts with preview */}
           {canPreview && !isFileArtifact && (
             <div className="flex items-center bg-muted rounded-lg p-0.5 mr-1">
@@ -649,11 +732,8 @@ export default function ArtifactViewer({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                onClick={() => {
-                  const idx = versions.findIndex((v) => v.id === artifact.id);
-                  if (idx > 0 && onSelectArtifact) onSelectArtifact(versions[idx - 1].id);
-                }}
-                disabled={versions.findIndex((v) => v.id === artifact.id) === 0}
+                onClick={() => goToVersion(-1)}
+                disabled={versionIdx <= 0}
                 className="text-muted-foreground hover:text-foreground"
                 title="Previous version"
               >
@@ -662,11 +742,8 @@ export default function ArtifactViewer({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                onClick={() => {
-                  const idx = versions.findIndex((v) => v.id === artifact.id);
-                  if (idx < versions.length - 1 && onSelectArtifact) onSelectArtifact(versions[idx + 1].id);
-                }}
-                disabled={versions.findIndex((v) => v.id === artifact.id) === versions.length - 1}
+                onClick={() => goToVersion(1)}
+                disabled={versionIdx >= versions.length - 1}
                 className="text-muted-foreground hover:text-foreground"
                 title="Next version"
               >
@@ -718,10 +795,7 @@ export default function ArtifactViewer({
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => {
-              if (isFullscreen) setIsFullscreen(false);
-              onClose();
-            }}
+            onClick={handleClose}
             className="text-muted-foreground hover:text-foreground"
             title="Close (Esc)"
           >
