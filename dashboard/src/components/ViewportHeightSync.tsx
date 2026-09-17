@@ -42,7 +42,10 @@ export default function ViewportHeightSync() {
     };
 
     const sync = () => {
-      if (!touch.matches) {
+      // Desktop, or a pinch-zoomed phone tab: visualViewport.height shrinks
+      // with zoom, which is not a keyboard. Fall back to 100dvh so the shell
+      // never collapses under a zoomed-in user (same guard as useKeyboardVisible).
+      if (!touch.matches || Math.abs(vv.scale - 1) > 0.05) {
         document.documentElement.style.removeProperty("--app-h");
         return;
       }

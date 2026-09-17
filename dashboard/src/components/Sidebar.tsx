@@ -435,7 +435,8 @@ export default function Sidebar({
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // A dialog opened from the drawer (rename, pet settings) owns Escape.
+      if (e.key === "Escape" && !document.querySelector('[role="dialog"][data-state="open"]')) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

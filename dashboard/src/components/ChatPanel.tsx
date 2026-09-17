@@ -473,7 +473,9 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
           size="icon"
           onClick={onClose}
           aria-label="Close image"
-          className="absolute top-2 right-2 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg"
+          // Phones: inside the corner (the outside-corner offset is clipped at
+          // the viewport edge); desktop keeps the original outside-corner button.
+          className="absolute max-md:top-2 max-md:right-2 md:-top-3 md:-right-3 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg"
         >
           <RiCloseLine size={16} />
         </Button>

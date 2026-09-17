@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import ChatPanel from "./ChatPanel";
 import type { ChatItem } from "./ChatPanel";
 import type { ChatFile } from "../lib/api";
@@ -157,6 +157,19 @@ export default function ChatWithArtifacts({
   // on the sheet's handle closes it.
   const isMobile = useIsMobile();
   useBodyScrollLock(isMobile && showArtifactPanel);
+  // The phone sheet is a modal dialog: move focus into it (its close button)
+  // on open, keep the chat behind the scrim inert, and hand focus back to the
+  // artifact card that opened it on close.
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const sheetModal = isMobile && showArtifactPanel;
+  useEffect(() => {
+    if (!sheetModal) return;
+    const previous = document.activeElement as HTMLElement | null;
+    sheetRef.current?.querySelector<HTMLElement>('[aria-label="Close artifact"]')?.focus({ preventScroll: true });
+    return () => {
+      if (previous && previous.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, [sheetModal]);
   const sheetSwipeStartY = useRef<number | null>(null);
   const handleSheetTouchStart = (e: React.TouchEvent) => {
     sheetSwipeStartY.current = e.touches[0].clientY;
@@ -171,6 +184,7 @@ export default function ChatWithArtifacts({
     <div ref={containerRef} className="flex-1 min-h-0 h-full overflow-hidden flex">
       {/* Chat panel (left; full width on phones) */}
       <div
+        inert={sheetModal || undefined}
         className="h-full w-full overflow-hidden bg-muted/30 flex-shrink-0"
         style={isMobile ? undefined : {
           width: showArtifactPanel ? `${chatPanelPercent}%` : "100%",
@@ -216,6 +230,7 @@ export default function ChatWithArtifacts({
 
           {/* Artifact viewer: split pane on desktop, bottom sheet on phones */}
           <div
+            ref={sheetRef}
             role={isMobile ? "dialog" : undefined}
             aria-modal={isMobile ? true : undefined}
             aria-label={isMobile ? activeArtifact!.title : undefined}
