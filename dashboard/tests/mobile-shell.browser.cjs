@@ -76,7 +76,7 @@ const hitArea = async (page, locator) => {
 
     // 01 empty chat
     await page.goto(`${base}/chat`, { waitUntil: 'networkidle' });
-    await page.getByPlaceholder('What do you need to get done?').waitFor();
+    await page.getByPlaceholder(EXPECT_NEW ? 'Ask Loma anything...' : 'What do you need to get done?').waitFor();
     await page.screenshot({ path: `${shots}/01-chat-empty.png` });
     await noHorizontalOverflow(page, '/chat');
     const appH = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-h').trim());
@@ -146,14 +146,19 @@ const hitArea = async (page, locator) => {
     await page.evaluate(() => document.documentElement.style.removeProperty('--app-h'));
 
     // 07 composer pickers are bottom sheets
+    if (EXPECT_NEW) await page.getByRole('button', {name:'Chat settings',exact:true}).tap();
     const toolsTrigger = page.getByRole('button', { name: /^Tools:/ }).first();
     await toolsTrigger.tap();
-    const sheet = page.locator('[data-slot=sheet-content]');
+    const sheet = page.getByRole('dialog', {name:'Tools selection'});
     await sheet.waitFor({ timeout: 10000 });
     record('tools picker opens as a bottom sheet', true);
     await page.screenshot({ path: `${shots}/07-tools-sheet.png` });
     await page.keyboard.press('Escape');
     await sheet.waitFor({ state: 'detached' });
+    if (EXPECT_NEW) {
+      await page.keyboard.press('Escape');
+      await page.getByRole('dialog', {name:'Chat settings',exact:true}).waitFor({state:'hidden'});
+    }
     const modelTrigger = page.locator('button[title="Choose model"], button[title^="Model list unavailable"]').first();
     if (await modelTrigger.count() && await modelTrigger.isEnabled()) {
       await modelTrigger.tap();
