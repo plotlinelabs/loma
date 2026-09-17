@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -14,6 +14,7 @@ import PetCompanion, { usePetSettings } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import ChatContextMenu from "./ChatContextMenu";
 import { useTheme } from "../lib/ThemeContext";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -429,10 +430,36 @@ export default function Sidebar({
 
   const openPetSettings = usePetSettings();
 
+  // Phone drawer: lock the page behind it, close on Escape and on a leftward swipe.
+  useBodyScrollLock(isOpen);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      // A dialog opened from the drawer (rename, pet settings) owns Escape.
+      if (e.key === "Escape" && !document.querySelector('[role="dialog"][data-state="open"]')) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    swipeStart.current = { x: t.clientX, y: t.clientY };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start || !isOpen) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 1.5) onClose();
+  };
+
   const sidebarContent = (
     <>
       {/* Logo + collapse toggle + close button */}
-      <div className={cn("flex items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-5 pt-6 pb-5")}>
+      <div className={cn("flex shrink-0 items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-5 pt-6 pb-5")}>
         <div className={cn("flex items-center gap-2", collapsed && "justify-center")}>
           <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 20} /></Link>} />
           {!collapsed && (
@@ -467,8 +494,16 @@ export default function Sidebar({
         <SidebarSkeleton />
       ) : (
         <>
+          {/* One scroll region for the nav plus projects, pinned and recents,
+              with the account footer pinned below it. `min-h-0` lets the
+              region shrink and scroll instead of overflowing. The nav must
+              live inside it: on phones the roomier 10-item nav alone is taller
+              than a short viewport (360x640), so a non-shrinking nav above
+              this region collapsed the lists to 0px and pushed the theme and
+              account rows off-screen with nothing to scroll. */}
+          <ScrollArea className="flex-1 min-h-0">
           {/* Navigation */}
-          <nav className="px-3 space-y-0.5 shrink-0 pb-1">
+          <nav className="px-3 space-y-0.5 pb-1">
             {visibleNav.map((item) => {
               const isActive = item.href === "/"
                 ? pathname === "/" || pathname === ""
@@ -510,9 +545,6 @@ export default function Sidebar({
             })}
           </nav>
 
-          {/* Scrollable middle: projects, pinned, recents. `min-h-0` lets this region
-              shrink and scroll instead of overflowing on top of the footer below. */}
-          <ScrollArea className="flex-1 min-h-0">
             {/* Projects */}
             {!collapsed && projects.length > 0 && (
               <div className="mt-6 flex flex-col">
@@ -572,7 +604,7 @@ export default function Sidebar({
                         >
                           {displayTitle}
                         </Link>
-                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <ChatContextMenu
                             conversationId={c.conversation_id}
                             conversationTitle={title}
@@ -628,7 +660,7 @@ export default function Sidebar({
                         >
                           {displayTitle}
                         </Link>
-                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <ChatContextMenu
                             conversationId={c.conversation_id}
                             conversationTitle={title}
@@ -785,8 +817,13 @@ export default function Sidebar({
       )}
 
       <aside
+        aria-label="Navigation"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
         className={cn(
-          "loma-sidebar fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] flex flex-col z-50 transition-all duration-200 ease-out bg-sidebar",
+          // Safe-area padding on both ends so the brand row clears the notch
+          // and the account row clears the iPhone home indicator.
+          "loma-sidebar fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col z-50 transition-all duration-200 ease-out bg-sidebar",
           isOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
           collapsed ? "w-[56px]" : "w-[300px] md:w-[220px]"

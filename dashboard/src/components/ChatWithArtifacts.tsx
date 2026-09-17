@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import ChatPanel from "./ChatPanel";
 import type { ChatItem } from "./ChatPanel";
 import type { ChatFile } from "../lib/api";
 import ArtifactViewer from "./ArtifactViewer";
 import type { Artifact } from "./ArtifactViewer";
+import { useIsMobile } from "@/hooks/useIsMobile";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { cn } from "@/lib/utils";
 
 // ── Draggable Resizer ───────────────────────────────────────────────────────
 
@@ -149,12 +152,41 @@ export default function ChatWithArtifacts({
 
   const showArtifactPanel = activeArtifact !== null;
 
+  // Phones: the artifact is a bottom sheet over a full-width chat (the split
+  // pane is desktop-only), with the page locked behind it. A downward swipe
+  // on the sheet's handle closes it.
+  const isMobile = useIsMobile();
+  useBodyScrollLock(isMobile && showArtifactPanel);
+  // The phone sheet is a modal dialog: move focus into it (its close button)
+  // on open, keep the chat behind the scrim inert, and hand focus back to the
+  // artifact card that opened it on close.
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const sheetModal = isMobile && showArtifactPanel;
+  useEffect(() => {
+    if (!sheetModal) return;
+    const previous = document.activeElement as HTMLElement | null;
+    sheetRef.current?.querySelector<HTMLElement>('[aria-label="Close artifact"]')?.focus({ preventScroll: true });
+    return () => {
+      if (previous && previous.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, [sheetModal]);
+  const sheetSwipeStartY = useRef<number | null>(null);
+  const handleSheetTouchStart = (e: React.TouchEvent) => {
+    sheetSwipeStartY.current = e.touches[0].clientY;
+  };
+  const handleSheetTouchEnd = (e: React.TouchEvent) => {
+    const start = sheetSwipeStartY.current;
+    sheetSwipeStartY.current = null;
+    if (start !== null && e.changedTouches[0].clientY - start > 60) handleArtifactClose();
+  };
+
   return (
     <div ref={containerRef} className="flex-1 min-h-0 h-full overflow-hidden flex">
-      {/* Chat panel (left) */}
+      {/* Chat panel (left; full width on phones) */}
       <div
-        className="h-full overflow-hidden bg-muted/30 flex-shrink-0"
-        style={{
+        inert={sheetModal || undefined}
+        className="h-full w-full overflow-hidden bg-muted/30 flex-shrink-0"
+        style={isMobile ? undefined : {
           width: showArtifactPanel ? `${chatPanelPercent}%` : "100%",
           transition: showArtifactPanel ? "none" : "width 0.3s ease-out",
         }}
@@ -189,18 +221,36 @@ export default function ChatWithArtifacts({
             <PanelResizer onResize={handleResize} onDoubleClick={handleResetSplit} />
           </div>
 
-          {/* Artifact viewer panel */}
+          {/* Mobile scrim: sits behind the sheet so a tap anywhere outside closes it */}
           <div
-            className="flex-1 min-w-0 overflow-hidden
-              fixed inset-0 z-[80] md:static md:z-auto
-              animate-artifact-slide-in"
+            className="md:hidden fixed inset-0 z-[79] bg-black/30 animate-fade-in"
+            onClick={handleArtifactClose}
+            aria-hidden="true"
+          />
+
+          {/* Artifact viewer: split pane on desktop, bottom sheet on phones */}
+          <div
+            ref={sheetRef}
+            role={isMobile ? "dialog" : undefined}
+            aria-modal={isMobile ? true : undefined}
+            aria-label={isMobile ? activeArtifact!.title : undefined}
+            className={cn(
+              "flex-1 min-w-0 overflow-hidden md:static md:z-auto md:animate-artifact-slide-in",
+              "max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[80] max-md:flex max-md:flex-col",
+              "max-md:h-[min(92dvh,calc(var(--app-h,100dvh)-max(env(safe-area-inset-top),0.75rem)))]",
+              "max-md:rounded-t-2xl max-md:bg-card max-md:shadow-2xl max-md:pb-[env(safe-area-inset-bottom)]",
+              "max-md:animate-artifact-slide-up",
+            )}
           >
-            {/* Mobile close overlay */}
+            {/* Drag handle (phones): swipe down to close */}
             <div
-              className="absolute inset-0 bg-black/30 md:hidden"
-              onClick={handleArtifactClose}
-            />
-            <div className="relative h-full md:h-full">
+              className="md:hidden flex shrink-0 justify-center pt-2 pb-1 touch-none"
+              onTouchStart={handleSheetTouchStart}
+              onTouchEnd={handleSheetTouchEnd}
+            >
+              <div className="h-1.5 w-10 rounded-full bg-muted-foreground/30" />
+            </div>
+            <div className="relative h-full max-md:h-auto max-md:min-h-0 max-md:flex-1">
               <ArtifactViewer
                 artifact={activeArtifact!}
                 onClose={handleArtifactClose}

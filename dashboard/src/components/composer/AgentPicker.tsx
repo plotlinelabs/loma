@@ -5,6 +5,8 @@ import Link from "next/link";
 import { RiArrowDownSLine, RiCheckLine, RiAddLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   Command,
   CommandEmpty,
@@ -31,6 +33,9 @@ interface AgentPickerProps {
 export function AgentPicker({ agents, selectedAgentId, onSelect, loadState, disabled }: AgentPickerProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  // Bottom sheet on phones (a popover anchored to the composer moves with the
+  // keyboard and clips at 390px); popover on desktop.
+  const isMobile = useIsMobile();
 
   const selectedAgent = useMemo(
     () => agents.find((a) => a.agent_id === selectedAgentId) || null,
@@ -79,38 +84,32 @@ export function AgentPicker({ agents, selectedAgentId, onSelect, loadState, disa
     );
   };
 
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled}
-          title="Choose agent"
-          className="group inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-55"
-        >
-          {selectedAgent ? (
-            <AgentAvatar avatar={selectedAgent.avatar} size={16} />
-          ) : (
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500" />
-          )}
-          <span className="min-w-0 truncate text-xs text-muted-foreground">
-            {selectedAgent ? selectedAgent.name : "Loma"}
-          </span>
-          <RiArrowDownSLine
-            size={14}
-            className={cn(
-              "shrink-0 text-gray-400 transition-transform",
-              open && "rotate-180",
-            )}
-          />
-        </button>
-      </PopoverTrigger>
+  const trigger = (
+    <button
+      type="button"
+      disabled={disabled}
+      title="Choose agent"
+      className="group touch-target inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-55"
+    >
+      {selectedAgent ? (
+        <AgentAvatar avatar={selectedAgent.avatar} size={16} />
+      ) : (
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500" />
+      )}
+      <span className="min-w-0 truncate text-xs text-muted-foreground">
+        {selectedAgent ? selectedAgent.name : "Loma"}
+      </span>
+      <RiArrowDownSLine
+        size={14}
+        className={cn(
+          "shrink-0 text-gray-400 transition-transform",
+          open && "rotate-180",
+        )}
+      />
+    </button>
+  );
 
-      <PopoverContent
-        side="top"
-        align="start"
-        className="w-[min(80vw,300px)] p-0 overflow-hidden rounded-xl"
-      >
+  const content = (
         <Command shouldFilter={false}>
           <div className="border-b border-border p-1.5">
             <CommandInput
@@ -120,7 +119,7 @@ export function AgentPicker({ agents, selectedAgentId, onSelect, loadState, disa
             />
           </div>
           <CommandList>
-            <ScrollArea className="max-h-64">
+            <ScrollArea className="max-h-64 max-md:max-h-[55dvh]">
               <CommandEmpty className="px-3 py-6 text-center text-[13px] text-muted-foreground">
                 No agents match that search.
               </CommandEmpty>
@@ -161,6 +160,37 @@ export function AgentPicker({ agents, selectedAgentId, onSelect, loadState, disa
             </Link>
           </div>
         </Command>
+  );
+
+  if (isMobile) {
+    return (
+      <Sheet open={open} onOpenChange={(next) => { setOpen(next); if (!next) setSearch(""); }}>
+        <SheetTrigger asChild>{trigger}</SheetTrigger>
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          aria-describedby={undefined}
+          // Don't auto-focus the search field: the keyboard would open on top
+          // of the sheet before the user has seen the list.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          className="max-h-[85dvh] gap-0 overflow-hidden rounded-t-2xl p-0 pb-[env(safe-area-inset-bottom)]"
+        >
+          <SheetTitle className="sr-only">Choose agent</SheetTitle>
+          {content}
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        className="w-[min(80vw,300px)] p-0 overflow-hidden rounded-xl"
+      >
+        {content}
       </PopoverContent>
     </Popover>
   );

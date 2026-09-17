@@ -10,9 +10,11 @@ import { useAgentModels } from "@/hooks/useAgentModels";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { ModelPicker } from "@/components/composer/ModelPicker";
 import { ToolsPicker } from "@/components/composer/ToolsPicker";
+import { ComposerSettings } from "@/components/composer/ComposerSettings";
 import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
 import { useFileDrop } from "@/components/composer/useFileDrop";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { cn } from "@/lib/utils";
 
 interface QuickAddTaskProps {
@@ -30,6 +32,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
   const { models, selectedModel, selectModel, loadState } = useAgentModels();
   const {
     tools: availableTools,
@@ -126,20 +129,39 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
           className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
           style={{ maxHeight: "120px" }}
         />
-        <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:flex-wrap">
-          <div className="flex min-w-0 items-center gap-1 max-md:w-full max-md:flex-wrap">
-            <ModelPicker
-              models={models}
-              selectedModel={selectedModel}
-              onSelect={selectModel}
-              loadState={loadState}
-            />
-            <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} />
+        {/* Phones: the same one-row toolbar as the chat composer (attach,
+            model, settings sheet, mic/Send). The old wrapping toolbar stacked
+            Model, Tools/Skills and a 48px mic into three rows, which is what
+            pushed the composer down onto the bottom nav. */}
+        <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:gap-0">
+          <div className="flex min-w-0 items-center gap-1 max-md:flex-1 max-md:gap-0.5">
+            {isMobile && (
+              <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" className="size-11 shrink-0 rounded-full text-muted-foreground">
+                <RiAttachmentLine size={18} />
+              </Button>
+            )}
+            <div className="min-w-0 max-md:flex-1 max-md:[&_button]:h-11">
+              <ModelPicker
+                models={models}
+                selectedModel={selectedModel}
+                onSelect={selectModel}
+                loadState={loadState}
+              />
+            </div>
+            {isMobile ? (
+              <ComposerSettings title="Task settings" description="Choose the tools and skills for this task.">
+                <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} />
+              </ComposerSettings>
+            ) : (
+              <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} />
+            )}
           </div>
-          <div className="ml-auto flex items-center gap-1 max-md:gap-2 shrink-0">
+          <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
             <DictationButton
               onText={(t) => setValue((prev) => appendDictation(prev, t))}
               mobileProminent
+              hideIdleOnMobile={!!value.trim() || files.length > 0}
+              compactMobile
             />
             <Button
               type="button"
@@ -147,7 +169,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               size="icon-sm"
               onClick={() => fileInputRef.current?.click()}
               title="Attach files"
-              className="text-muted-foreground hover:text-foreground max-md:size-11 max-md:rounded-xl"
+              className="text-muted-foreground hover:text-foreground max-md:hidden"
             >
               <RiAttachmentLine size={16} />
             </Button>
@@ -158,7 +180,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
               disabled={(!value.trim() && files.length === 0) || busy}
               aria-label="Add task"
               className={cn(
-                "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
+                "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-11 max-md:rounded-full",
                 !value.trim() && files.length === 0 && "max-md:hidden",
               )}
             >

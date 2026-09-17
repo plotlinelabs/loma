@@ -566,8 +566,31 @@
   }
 }
 
-.animate-artifact-slide-in {
-  animation: artifactSlideIn 0.25s ease-out both;
+/* `@utility` (not a plain class) so responsive variants such as
+   `md:animate-artifact-slide-in` work. Fill mode is `backwards`, not `both`:
+   `forwards` keeps the final `transform` applied after the animation, and any
+   transform turns the animated wrapper into the containing block for the
+   viewer's `position: fixed` fullscreen container, trapping fullscreen inside
+   the pane / phone sheet. The `to` state equals the natural state, so nothing
+   is lost by releasing it. */
+@utility animate-artifact-slide-in {
+  animation: artifactSlideIn 0.25s ease-out backwards;
+}
+
+/* Artifact bottom sheet (phones) */
+@keyframes artifactSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-artifact-slide-up {
+  animation: artifactSlideUp 0.25s ease-out backwards;
 }
 
 /* Steps expand */
@@ -631,8 +654,32 @@
 @media (max-width: 767px) {
   /* iOS Safari auto-zooms into inputs with font-size < 16px, which is the
      "zooms out and hides the send button" chat bug. 16px kills the zoom. */
-  textarea, input[type="text"], input[type="email"], input[type="password"], input:not([type]) {
+  textarea, select,
+  input[type="text"], input[type="email"], input[type="password"], input[type="search"],
+  input[type="number"], input[type="url"], input[type="tel"], input:not([type]) {
     font-size: 16px;
+  }
+}
+
+/* ── Touch targets ───────────────────────────────────────────────────────── */
+
+/* Grow the hit area of small controls to 44px on touch devices without
+   changing their visual size or the layout around them. The pseudo-element
+   only extends outward when the element is smaller than 44px on that axis.
+   Lives in the base layer: Tailwind v4 keeps `@layer base` verbatim (it
+   compiles `@layer components` away), and base sits below utilities so
+   positioning utilities (`fixed`, `absolute`) on the same element still win
+   over the `relative` here. */
+@layer base {
+  @media (pointer: coarse) {
+    .touch-target {
+      position: relative;
+    }
+    .touch-target::after {
+      content: "";
+      position: absolute;
+      inset: min(0px, calc((100% - 44px) / 2));
+    }
   }
 }
 
@@ -958,6 +1005,13 @@
   --border: var(--sidebar-border);
   --ring: var(--sidebar-ring);
   color: var(--sidebar-foreground);
+}
+
+/* Phone drawer: scrolling the nav/recents region must not chain into the page
+   behind it (Android Chrome turns an over-scroll at the top into
+   pull-to-refresh, which reloads the app under the open drawer). */
+.loma-sidebar [data-slot="scroll-area-viewport"] {
+  overscroll-behavior: contain;
 }
 
 ::selection { background: #DDF7A8; color: #061B20; }
