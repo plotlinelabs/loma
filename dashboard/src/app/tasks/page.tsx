@@ -228,8 +228,12 @@ export default function TasksPage() {
   }
   const activeTagFilterCount = includedTagIds.length + excludedTagIds.length;
 
-  return (
-    <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
+  // Everything above the board. On phones this is handed to MobileTaskBoard
+  // so it scrolls with the list: the page column is fixed-height and these
+  // rows cannot shrink, so leaving them outside the scroll region collapses
+  // the list to 0 and pushes the pinned composer down over the bottom nav.
+  const topBar = (
+    <div className="flex flex-col gap-2">
       <div className="pwa-header-offset flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold">Tasks</h1>
@@ -361,6 +365,12 @@ export default function TasksPage() {
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col space-y-2 p-4 lg:p-6">
+      {!(board && isMobile) && topBar}
 
       {board ? (
         isMobile ? (
@@ -373,6 +383,7 @@ export default function TasksPage() {
             onError={setError}
             includedTagIds={includedTagIds}
             excludedTagIds={excludedTagIds}
+            header={topBar}
           />
         ) : (
           <>
