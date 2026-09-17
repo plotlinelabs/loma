@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { fetchBoardSettings, saveBoardSettings } from "@/lib/api";
@@ -36,6 +37,8 @@ interface BoardSettingsDialogProps {
 }
 
 export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }: BoardSettingsDialogProps) {
+  const [showAgentWork, setShowAgentWork] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [prompt, setPrompt] = useState("");
   const [defaultContext, setDefaultContext] = useState("");
   const [showDefault, setShowDefault] = useState(false);
@@ -46,11 +49,14 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
 
   useEffect(() => {
     if (!open) return;
+    setLoading(true);
     setError(null);
     setRemovedWithTasks([]);
     setShowDefault(false);
     fetchBoardSettings()
       .then((settings) => {
+        setShowAgentWork(settings.show_agent_work !== false);
+        setLoading(false);
         setPrompt(settings.prompt);
         setDefaultContext(settings.default_context ?? "");
         setLanes(settings.lanes.map(({ id, name }) => ({ id, name })));
@@ -83,7 +89,7 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
     setBusy(true);
     setError(null);
     try {
-      await saveBoardSettings({ prompt, lanes });
+      await saveBoardSettings({ prompt, lanes, show_agent_work: showAgentWork });
       onOpenChange(false);
       onSaved();
     } catch (e) {
@@ -104,6 +110,13 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
           <SheetDescription>Context and columns for your tasks board.</SheetDescription>
         </SheetHeader>
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="show-agent-work">Show Agent work card</Label>
+              <p className="text-xs text-muted-foreground">Show live agent work above your tasks. Hiding it does not stop any work.</p>
+            </div>
+            <Switch id="show-agent-work" checked={showAgentWork} onCheckedChange={setShowAgentWork} disabled={loading || busy} />
+          </div>
           {defaultContext && (
             <div className="space-y-1.5">
               <button
@@ -197,7 +210,7 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={busy}>Save</Button>
+          <Button onClick={save} disabled={busy || loading}>Save</Button>
         </SheetFooter>
       </SheetContent>
     </Sheet>

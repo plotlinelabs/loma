@@ -1138,6 +1138,7 @@ export interface Task {
 }
 
 export interface TasksBoardResponse {
+  show_agent_work?: boolean;
   lanes: BoardLane[];
   tags: TaskTag[];
   tasks: Task[];
@@ -1145,6 +1146,7 @@ export interface TasksBoardResponse {
 }
 
 export interface BoardSettings {
+  show_agent_work?: boolean;
   prompt: string;
   lanes: BoardLane[];
   /** Global default context (Admin > Settings), resolved for the caller. Read-only. */
@@ -1249,8 +1251,9 @@ export async function fetchBoardSettings(): Promise<BoardSettings> {
 }
 
 export async function saveBoardSettings(settings: {
-  prompt: string;
-  lanes: Array<{ id?: string; name: string }>;
+  prompt?: string;
+  lanes?: Array<{ id?: string; name: string }>;
+  show_agent_work?: boolean;
 }): Promise<BoardSettings & { migrated: number }> {
   const res = await fetch(`${API_BASE}/api/tasks/board-settings`, {
     method: "PUT",
