@@ -24,8 +24,14 @@ logger = logging.getLogger(__name__)
 # generic "server restarted" interruption copy.
 STOPPED_BY_USER_REASON = "Stopped by user"
 
+# A stop can arrive before the runtime has registered its handle (server or
+# session warm-up). Remember it briefly so register() applies it; the TTL
+# guarantees a stale request can never abort a later run of the conversation.
+PENDING_STOP_TTL_SECONDS = 120.0
+
 _lock = asyncio.Lock()
 _streams: dict[str, "ActiveStream"] = {}
+_pending_stops: dict[str, float] = {}
 
 
 @dataclass
@@ -71,13 +77,27 @@ async def register(conversation_id: str, client: Any, user_email: str) -> Active
     )
     async with _lock:
         _streams[conversation_id] = stream
+        requested_at = _pending_stops.pop(conversation_id, None)
     logger.info("Registered active stream for conversation %s", conversation_id)
+    if requested_at is not None and monotonic() - requested_at <= PENDING_STOP_TTL_SECONDS:
+        # The runtime checks `.stopped` before starting (or right after
+        # sending) its turn, so the run ends as interrupted without work.
+        stream.stop_requested.set()
+        logger.info("Applied pending stop to conversation %s", conversation_id)
     return stream
+
+
+async def request_pending_stop(conversation_id: str) -> None:
+    """Record a stop for a run that has not registered its handle yet."""
+    async with _lock:
+        _pending_stops[conversation_id] = monotonic()
+    logger.info("Stop requested for conversation %s before its runtime registered", conversation_id)
 
 
 async def unregister(conversation_id: str) -> None:
     async with _lock:
         removed = _streams.pop(conversation_id, None)
+        _pending_stops.pop(conversation_id, None)
     if removed:
         logger.info("Unregistered active stream for conversation %s", conversation_id)
 

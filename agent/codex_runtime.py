@@ -725,6 +725,12 @@ def _rate_limit_cooldown_seconds(event: dict) -> int | None:
 # ── Dashboard-facing turn runner ─────────────────────────────────────────
 
 
+async def _no_events() -> AsyncGenerator[dict, None]:
+    """Empty turn used when the user stopped the run before it started."""
+    return
+    yield  # pragma: no cover
+
+
 async def run_codex_agent(
     *,
     full_prompt: str,
@@ -807,7 +813,12 @@ async def run_codex_agent(
         if include_steps:
             yield {"type": "turn", "turn_number": turn_count}
 
-        async for event in worker.run_turn(full_prompt):
+        if active_stream is not None and active_stream.stopped:
+            logger.info("Stop requested before the Codex turn started; skipping turn")
+            turn_events = _no_events()
+        else:
+            turn_events = worker.run_turn(full_prompt)
+        async for event in turn_events:
             etype = event.get("type")
 
             if etype == "agent_message_delta":

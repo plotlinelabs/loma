@@ -1193,6 +1193,10 @@ async def _stream_agent(
             if observer and observer.conversation_id:
                 from agent.active_streams import register
                 active_stream = await register(observer.conversation_id, client, user_email or "")
+                if active_stream.stopped:
+                    # Stop arrived before we registered; the query is already
+                    # sent, so abort it now.
+                    await client.interrupt()
 
             streamed_in_turn = False
             streamed_first_chunk = False

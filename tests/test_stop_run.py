@@ -126,6 +126,61 @@ async def test_run_codex_agent_persists_user_stop_as_interrupted(monkeypatch):
     pool.release.assert_awaited_once_with(worker)
 
 
+@pytest.mark.asyncio
+async def test_pending_stop_is_applied_when_the_runtime_registers(monkeypatch):
+    await active_streams.request_pending_stop("convo-early")
+    stream = await active_streams.register("convo-early", SimpleNamespace(interrupt=AsyncMock()), "o@x")
+    try:
+        assert stream.stopped, "stop requested before registration must apply"
+    finally:
+        await active_streams.unregister("convo-early")
+
+    # Expired requests are ignored so a stale stop never aborts a later run.
+    await active_streams.request_pending_stop("convo-stale")
+    requested_at = active_streams._pending_stops["convo-stale"]
+    monkeypatch.setattr(active_streams, "monotonic",
+                        lambda: requested_at + active_streams.PENDING_STOP_TTL_SECONDS + 1)
+    stream = await active_streams.register("convo-stale", SimpleNamespace(interrupt=AsyncMock()), "o@x")
+    try:
+        assert not stream.stopped
+    finally:
+        await active_streams.unregister("convo-stale")
+    assert "convo-stale" not in active_streams._pending_stops
+
+
+@pytest.mark.asyncio
+async def test_run_codex_agent_skips_turn_when_stopped_before_start(monkeypatch):
+    from agent import codex_pool, codex_runtime
+
+    class Worker:
+        account = {"email": "dev@example.test", "config_dir": "/nonexistent"}
+        last_rate_limits = None
+        started = False
+
+        async def run_turn(self, prompt):
+            self.started = True
+            yield {"type": "agent_message", "message": "should not run"}
+
+        async def interrupt(self):
+            raise AssertionError("nothing to interrupt")
+
+    worker = Worker()
+    pool = SimpleNamespace(acquire=AsyncMock(return_value=worker), release=AsyncMock(),
+                           safe_disconnect=AsyncMock(), mark_account_exhausted=lambda *a, **k: None,
+                           status=lambda: {"available": 0, "pool_size": 1})
+    monkeypatch.setattr(codex_pool, "get_codex_pool", lambda: pool)
+    observer = _observer("convo-early-codex")
+    await active_streams.request_pending_stop("convo-early-codex")
+
+    events = [e async for e in codex_runtime.run_codex_agent(
+        full_prompt="hi", selected_model="codex/gpt-test", observer=observer, user_email="o@x")]
+
+    assert not worker.started
+    assert events == []
+    observer.mark_interrupted.assert_awaited_once_with(STOPPED_BY_USER_REASON)
+    observer.finish.assert_not_awaited()
+
+
 def test_opencode_abort_error_is_recognised():
     from agent.opencode_runtime import _is_abort_error
 

@@ -919,6 +919,23 @@ async def handle_interrupt_agent(request: web.Request) -> web.Response:
 
     stream = await get_for_user(cid, user_email)
     if not stream:
+        # The run may still be warming up (OpenCode server/session, Codex
+        # worker) and not have registered yet. If the caller owns a running
+        # conversation, park the stop so register() applies it.
+        db = request.app["db"]
+        conversation = await db.conversations.find_one(
+            {"conversation_id": cid, "deleted": {"$ne": True}},
+            {"status": 1, "metadata.user_name": 1},
+        ) if db is not None else None
+        owner = ((conversation or {}).get("metadata") or {}).get("user_name", "")
+        if (
+            conversation
+            and conversation.get("status") == "running"
+            and (owner == user_email or get_system_role(request) == "admin")
+        ):
+            from agent.active_streams import request_pending_stop
+            await request_pending_stop(cid)
+            return web.json_response({"interrupted": True, "pending": True, "conversation_id": cid})
         return web.json_response({"error": "No active stream for this conversation"}, status=404)
 
     try:

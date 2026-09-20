@@ -1535,6 +1535,9 @@ async def _run_opencode_agent(
     attempt = 1
     try:
         while True:
+            if active_stream is not None and active_stream.stopped:
+                logger.info("Stop requested before the OpenCode turn started; skipping prompt")
+                break
             try:
                 async for event in _iter_opencode_turn_events(
                     base_url,
