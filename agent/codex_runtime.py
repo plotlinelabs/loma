@@ -258,6 +258,8 @@ class CodexWorker:
         self._stderr_task: asyncio.Task | None = None
         self._stderr_tail = b""
         self.thread_id: str | None = None
+        # Id of the in-flight turn (set by run_turn) — needed for turn/interrupt.
+        self.turn_id: str | None = None
         self.available_models: list[dict] = []
         self.last_rate_limits: dict | None = None
         # Pool bookkeeping (mirrors client._pool_account on ClaudeSDKClient)
@@ -493,7 +495,7 @@ class CodexWorker:
         if not self.thread_id:
             raise CodexError("Codex worker has no thread")
 
-        await self._request(
+        result = await self._request(
             "turn/start",
             {
                 "threadId": self.thread_id,
@@ -501,28 +503,46 @@ class CodexWorker:
             },
             timeout=60,
         )
+        self.turn_id = ((result or {}).get("turn") or {}).get("id")
 
         deadline = time.monotonic() + CODEX_TURN_TIMEOUT_SECONDS
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise CodexError(f"Codex turn timed out after {CODEX_TURN_TIMEOUT_SECONDS}s")
-            try:
-                msg = await asyncio.wait_for(
-                    self._events.get(), timeout=min(remaining, CODEX_EVENT_IDLE_TIMEOUT_SECONDS)
-                )
-            except asyncio.TimeoutError:
-                raise CodexError(
-                    f"Timed out waiting for Codex events after {CODEX_EVENT_IDLE_TIMEOUT_SECONDS}s"
-                )
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CodexError(f"Codex turn timed out after {CODEX_TURN_TIMEOUT_SECONDS}s")
+                try:
+                    msg = await asyncio.wait_for(
+                        self._events.get(), timeout=min(remaining, CODEX_EVENT_IDLE_TIMEOUT_SECONDS)
+                    )
+                except asyncio.TimeoutError:
+                    raise CodexError(
+                        f"Timed out waiting for Codex events after {CODEX_EVENT_IDLE_TIMEOUT_SECONDS}s"
+                    )
 
-            if msg.get("method") == "__closed":
-                raise self._closed_error()
+                if msg.get("method") == "__closed":
+                    raise self._closed_error()
+                if msg.get("method") == "turn/started" and not self.turn_id:
+                    turn = (msg.get("params") or {}).get("turn") or {}
+                    self.turn_id = turn.get("id")
 
-            for event in _normalize_v2_event(msg, self.thread_id):
-                yield event
-                if event.get("type") in ("task_complete", "error", "turn_aborted"):
-                    return
+                for event in _normalize_v2_event(msg, self.thread_id):
+                    yield event
+                    if event.get("type") in ("task_complete", "error", "turn_aborted"):
+                        return
+        finally:
+            self.turn_id = None
+
+    async def interrupt(self) -> None:
+        """Abort the in-flight turn; the worker then emits turn/completed
+        with status "interrupted", which run_turn surfaces as turn_aborted."""
+        if not self.thread_id or not self.turn_id:
+            raise CodexError("Codex worker has no active turn to interrupt")
+        await self._request(
+            "turn/interrupt",
+            {"threadId": self.thread_id, "turnId": self.turn_id},
+            timeout=30,
+        )
 
 
 def _classify_rpc_error(error: dict) -> CodexError:
@@ -705,6 +725,12 @@ def _rate_limit_cooldown_seconds(event: dict) -> int | None:
 # ── Dashboard-facing turn runner ─────────────────────────────────────────
 
 
+async def _no_events() -> AsyncGenerator[dict, None]:
+    """Empty turn used when the user stopped the run before it started."""
+    return
+    yield  # pragma: no cover
+
+
 async def run_codex_agent(
     *,
     full_prompt: str,
@@ -755,10 +781,18 @@ async def run_codex_agent(
                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     emitted_tool_results: set[str] = set()
     failed: Exception | None = None
+    active_stream = None
+    conversation_id = getattr(observer, "conversation_id", None)
 
     try:
         if observer and account_email:
             await observer.record_account(account_email)
+        if conversation_id:
+            # Stop handle for POST /conversations/{id}/interrupt.
+            from agent.active_streams import RunHandle, register
+            active_stream = await register(
+                conversation_id, RunHandle(worker.interrupt, "Codex"), user_email or ""
+            )
 
         pool_status = pool.status()
         if include_steps:
@@ -779,7 +813,12 @@ async def run_codex_agent(
         if include_steps:
             yield {"type": "turn", "turn_number": turn_count}
 
-        async for event in worker.run_turn(full_prompt):
+        if active_stream is not None and active_stream.stopped:
+            logger.info("Stop requested before the Codex turn started; skipping turn")
+            turn_events = _no_events()
+        else:
+            turn_events = worker.run_turn(full_prompt)
+        async for event in turn_events:
             etype = event.get("type")
 
             if etype == "agent_message_delta":
@@ -847,6 +886,9 @@ async def run_codex_agent(
                     last_text = final
                 break
 
+            elif etype == "turn_aborted":
+                break
+
             elif etype == "error":
                 raise _classify_rpc_error({"message": event.get("message") or "Codex error"})
 
@@ -859,9 +901,16 @@ async def run_codex_agent(
         pool.mark_account_exhausted(account_email, cooldown_override=e.resets_in_seconds)
         raise
     except Exception as e:
-        failed = e
-        raise
+        if active_stream is not None and active_stream.stopped:
+            # The abort itself can surface as a stream error; it is not a failure.
+            logger.info("Codex turn ended after user stop: %s", e)
+        else:
+            failed = e
+            raise
     finally:
+        if active_stream is not None:
+            from agent.active_streams import unregister
+            await unregister(conversation_id)
         if execution_home:
             await pool.safe_disconnect(worker)
             execution_home.cleanup()
@@ -873,7 +922,12 @@ async def run_codex_agent(
                 usage_payload = total_usage if any(total_usage.values()) else None
                 # ChatGPT-plan usage has no per-token cost — report tokens only.
                 await observer.record_usage(usage_payload, None)
-                await observer.finish(final_response=last_text)
+                if active_stream is not None and active_stream.stopped:
+                    from agent.active_streams import STOPPED_BY_USER_REASON
+                    await observer.mark_interrupted(STOPPED_BY_USER_REASON)
+                else:
+                    await observer.finish(final_response=last_text)
 
-    if not last_text and not streamed_text:
+    stopped_by_user = active_stream is not None and active_stream.stopped
+    if not last_text and not streamed_text and not stopped_by_user:
         yield "I didn't generate a response. Please try again."

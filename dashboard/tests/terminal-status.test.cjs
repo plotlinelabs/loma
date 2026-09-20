@@ -11,7 +11,7 @@ vm.runInContext(
   ).outputText,
   context,
 );
-const { withTerminalStatus, terminalStatusItem, INTERRUPTED_MESSAGE } = context.exports;
+const { withTerminalStatus, terminalStatusItem, INTERRUPTED_MESSAGE, STOPPED_BY_USER_MESSAGE } = context.exports;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const user = { role: "user", content: "hi" };
 
@@ -32,6 +32,12 @@ test("completed and running conversations get nothing appended", () => {
 
 test("interrupted conversation explains the restart", () => {
   assert.deepEqual(plain(withTerminalStatus([user], { status: "interrupted" })), [user, { role: "assistant", content: INTERRUPTED_MESSAGE }]);
+});
+
+test("conversation stopped by the user says so instead of blaming a restart", () => {
+  const conversation = { status: "interrupted", error: "Stopped by user" };
+  assert.deepEqual(plain(withTerminalStatus([user], conversation)), [user, { role: "assistant", content: STOPPED_BY_USER_MESSAGE }]);
+  assert.deepEqual(plain(withTerminalStatus(withTerminalStatus([user], conversation), conversation)).length, 2);
 });
 
 test("appending is idempotent across recovery polls", () => {

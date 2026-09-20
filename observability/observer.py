@@ -341,7 +341,10 @@ class ConversationObserver:
             update_fields["duration_ms"] = duration_ms  # latest run duration
 
         try:
-            update: dict = {"$set": update_fields}
+            # A resumed conversation that was previously interrupted (user
+            # stop, restart) or errored must not keep the stale reason once
+            # it completes — the detail page renders `error` verbatim.
+            update: dict = {"$set": update_fields, "$unset": {"error": ""}}
             if final_response:
                 update["$push"] = {"messages": {
                     "role": "assistant",

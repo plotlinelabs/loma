@@ -1157,6 +1157,9 @@ async def _stream_agent(
 
     # --- Main conversation loop with transparent retry on rate limit ---
     hit_rate_limit = False
+    # Registered stop handle for this run; `.stopped` distinguishes a user
+    # stop from a normal completion when the loop ends.
+    active_stream = None
 
     for attempt in range(MAX_ACCOUNT_RETRIES):
         if attempt > 0:
@@ -1189,7 +1192,11 @@ async def _stream_agent(
 
             if observer and observer.conversation_id:
                 from agent.active_streams import register
-                await register(observer.conversation_id, client, user_email or "")
+                active_stream = await register(observer.conversation_id, client, user_email or "")
+                if active_stream.stopped:
+                    # Stop arrived before we registered; the query is already
+                    # sent, so abort it now.
+                    await client.interrupt()
 
             streamed_in_turn = False
             streamed_first_chunk = False
@@ -1399,6 +1406,9 @@ async def _stream_agent(
                     logger.info("[USAGE] cost=%.6f usage=%s", msg_cost or 0, msg_usage)
                     logger.info("[RESULT] %s", _truncate_json(vars(message) if hasattr(message, '__dict__') else str(message)))
                     if not pending_subagent_tool_ids and not pending_background_tool_ids:
+                        break
+                    if active_stream is not None and active_stream.stopped:
+                        # User stopped the run: don't wait on sub-agents.
                         break
                     # Keep the stream open: foreground Agent results arrive in
                     # UserMessages; background Agent completion arrives as a
@@ -1615,11 +1625,17 @@ async def _stream_agent(
         logger.info("SKILLS USED: none (answered from core context only)")
     logger.info("=" * 60)
 
+    stopped_by_user = active_stream is not None and active_stream.stopped
+
     if observer:
         await observer.record_usage(last_usage, last_total_cost_usd)
-        await observer.finish(final_response=last_text)
+        if stopped_by_user:
+            from agent.active_streams import STOPPED_BY_USER_REASON
+            await observer.mark_interrupted(STOPPED_BY_USER_REASON)
+        else:
+            await observer.finish(final_response=last_text)
 
-    if not yielded_any:
+    if not yielded_any and not stopped_by_user:
         yield "I didn't generate a response. Please try again."
 
 

@@ -212,6 +212,11 @@ def _is_retryable_turn_error(exc: BaseException) -> bool:
     return isinstance(exc, (OpenCodeError, aiohttp.ClientError, asyncio.TimeoutError))
 
 
+def _is_abort_error(error: object) -> bool:
+    """True for the error OpenCode attaches to a message after /session/{id}/abort."""
+    return isinstance(error, dict) and error.get("name") == "MessageAbortedError"
+
+
 def _format_opencode_error(error: object) -> str:
     if isinstance(error, dict):
         data = error.get("data")
@@ -1302,6 +1307,26 @@ async def _run_opencode_agent(
         logger.info("Reusing OpenCode session %s for conversation=%s model=%s", session_id, conversation_id, selected_model)
     session_created_at = time.perf_counter()
 
+    # Register a stop handle so POST /conversations/{id}/interrupt can abort
+    # this turn. The target is mutable because a retry swaps the session.
+    active_stream = None
+    abort_target = {"session_id": session_id, "base_url": base_url}
+    if conversation_id:
+        from agent.active_streams import RunHandle, register
+
+        async def _abort_turn() -> None:
+            await _request_json(
+                "POST",
+                f"/session/{abort_target['session_id']}/abort",
+                params={"directory": str(PROJECT_ROOT)},
+                timeout=30,
+                base_url=abort_target["base_url"],
+            )
+
+        active_stream = await register(
+            conversation_id, RunHandle(_abort_turn, "OpenCode"), user_email or ""
+        )
+
     pool_status = get_opencode_pool_status()
     model_pool = next((model for model in pool_status["models"] if model["model"] == selected_model), None)
     if include_steps:
@@ -1510,6 +1535,9 @@ async def _run_opencode_agent(
     attempt = 1
     try:
         while True:
+            if active_stream is not None and active_stream.stopped:
+                logger.info("Stop requested before the OpenCode turn started; skipping prompt")
+                break
             try:
                 async for event in _iter_opencode_turn_events(
                     base_url,
@@ -1522,6 +1550,10 @@ async def _run_opencode_agent(
                         first_event_at = time.perf_counter()
                     event_type = event.get("type")
                     if event_type == "__status":
+                        if active_stream is not None and active_stream.stopped:
+                            # Aborted but no terminal message arrived (e.g. the
+                            # model never started): don't sit out the idle timeout.
+                            break
                         if include_steps:
                             yield {
                                 "type": "status",
@@ -1568,7 +1600,12 @@ async def _run_opencode_agent(
 
                         assistant_message_ids.add(message_id)
                         if info.get("error"):
-                            raise OpenCodeModelError(_format_opencode_error(info["error"]))
+                            stopped = active_stream is not None and active_stream.stopped
+                            if not (stopped or _is_abort_error(info["error"])):
+                                raise OpenCodeModelError(_format_opencode_error(info["error"]))
+                            # /session/{id}/abort ends the message with
+                            # MessageAbortedError; that is the expected stop.
+                            stream_completed = True
                         for pending_part in pending_parts.pop(message_id, []):
                             async for output_event in handle_part(pending_part):
                                 yield output_event
@@ -1604,6 +1641,9 @@ async def _run_opencode_agent(
                         yield output_event
                 break
             except Exception as exc:
+                if active_stream is not None and active_stream.stopped:
+                    logger.info("OpenCode turn ended after user stop: %s", exc)
+                    break
                 can_retry = (
                     attempt < OPENCODE_TURN_MAX_ATTEMPTS
                     and first_text_at is None
@@ -1647,7 +1687,12 @@ async def _run_opencode_agent(
                 if conversation_id:
                     session_cache_key = (server.config_hash, conversation_id, selected_model)
                     _opencode_session_cache[session_cache_key] = session_id
+                abort_target["session_id"] = session_id
+                abort_target["base_url"] = base_url
     finally:
+        if active_stream is not None:
+            from agent.active_streams import unregister
+            await unregister(conversation_id)
         server.active_turns = max(0, server.active_turns - 1)
         server.touch()
         if (user_mcp_overrides or {}).get("loma-recall"):
@@ -1658,10 +1703,16 @@ async def _run_opencode_agent(
                     _opencode_config_cache.pop(key, None)
             shutil.rmtree(server.config_home, ignore_errors=True)
 
+    stopped_by_user = active_stream is not None and active_stream.stopped
+
     if observer:
         usage_payload = total_usage if total_usage["input_tokens"] or total_usage["output_tokens"] else None
         await observer.record_usage(usage_payload, total_cost if total_cost else None)
-        await observer.finish(final_response=last_text)
+        if stopped_by_user:
+            from agent.active_streams import STOPPED_BY_USER_REASON
+            await observer.mark_interrupted(STOPPED_BY_USER_REASON)
+        else:
+            await observer.finish(final_response=last_text)
 
     completed_at = time.perf_counter()
     logger.info(
@@ -1674,7 +1725,7 @@ async def _run_opencode_agent(
         total_usage.get("output_tokens"),
     )
 
-    if not last_text:
+    if not last_text and not stopped_by_user:
         yield "I didn't generate a response. Please try again."
 
 
