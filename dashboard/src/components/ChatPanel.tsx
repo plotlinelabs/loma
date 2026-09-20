@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { withTerminalStatus } from "../lib/terminal-status";
+import { withTerminalStatus, STOPPED_BY_USER_MESSAGE } from "../lib/terminal-status";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
 import { useAgentModels } from "@/hooks/useAgentModels";
@@ -785,17 +785,32 @@ export default function ChatPanel({
   }, []);
 
   const handleStop = useCallback(() => {
-    if (conversationId) {
-      interruptAgent(conversationId).catch(() => {});
-    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-    } else if (isRecovering) {
-      setIsRecovering(false);
-      setIsStreaming(false);
-      setStreamStartedAt(null);
     }
+    if (!conversationId) {
+      if (isRecovering) {
+        setIsRecovering(false);
+        setIsStreaming(false);
+        setStreamStartedAt(null);
+      }
+      return;
+    }
+    // Ask the server to abort the runtime turn. While recovering, keep
+    // polling: the poller ends once the server records the stop.
+    interruptAgent(conversationId).catch((error) => {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (isRecovering) {
+        setIsRecovering(false);
+        setIsStreaming(false);
+        setStreamStartedAt(null);
+      }
+      setItems((prev) => [
+        ...prev,
+        { role: "assistant", content: `Could not stop the agent: ${message}` },
+      ]);
+    });
   }, [isRecovering, conversationId]);
 
   useEffect(() => {
@@ -1139,10 +1154,7 @@ export default function ChatPanel({
       if (error instanceof DOMException && error.name === "AbortError") {
         setItems((prev) => [
           ...prev,
-          {
-            role: "assistant",
-            content: "*Stopped by user.* You can provide additional context or corrections below.",
-          },
+          { role: "assistant", content: STOPPED_BY_USER_MESSAGE },
         ]);
       } else if (activeConversationId) {
         // Stream broke but agent may still be running — enter recovery mode

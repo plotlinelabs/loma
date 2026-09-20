@@ -1,18 +1,28 @@
 """
 Registry of active streaming sessions.
 
-Maps conversation_id -> active SDK client so that mid-stream endpoints
-(inject, interrupt) can find the right client while the agent is working.
+Maps conversation_id -> the handle that can interrupt (and, for the Claude SDK
+runtime, inject into) the run so that mid-stream endpoints (inject, interrupt)
+can find the right runtime while the agent is working.
+
+Every runtime registers here: the Claude SDK path registers its
+``ClaudeSDKClient``; OpenCode and Codex register a ``RunHandle`` that aborts
+their turn. ``ActiveStream.stopped`` lets the run loop tell a user stop apart
+from a normal completion so the conversation is persisted as ``interrupted``.
 """
 
 import asyncio
 import logging
 from dataclasses import dataclass, field
 from time import monotonic
-
-from claude_agent_sdk import ClaudeSDKClient
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
+
+# Reason persisted on the conversation document for a user-initiated stop.
+# The dashboard matches on this to render "Stopped by user" rather than the
+# generic "server restarted" interruption copy.
+STOPPED_BY_USER_REASON = "Stopped by user"
 
 _lock = asyncio.Lock()
 _streams: dict[str, "ActiveStream"] = {}
@@ -21,19 +31,48 @@ _streams: dict[str, "ActiveStream"] = {}
 @dataclass
 class ActiveStream:
     conversation_id: str
-    client: ClaudeSDKClient
+    # Anything with ``async interrupt()``; ``async query(message)`` is optional
+    # (only the Claude SDK client supports mid-stream injection).
+    client: Any
     user_email: str
     started_at: float = field(default_factory=monotonic)
+    stop_requested: asyncio.Event = field(default_factory=asyncio.Event)
+
+    @property
+    def stopped(self) -> bool:
+        """True once the user asked to stop this run."""
+        return self.stop_requested.is_set()
+
+    async def interrupt(self) -> None:
+        """Record the stop request, then abort the runtime's current turn."""
+        self.stop_requested.set()
+        await self.client.interrupt()
 
 
-async def register(conversation_id: str, client: ClaudeSDKClient, user_email: str) -> None:
+class RunHandle:
+    """Stop-only handle for runtimes without mid-stream injection (OpenCode, Codex)."""
+
+    def __init__(self, interrupt: Callable[[], Awaitable[None]], runtime: str):
+        self._interrupt = interrupt
+        self.runtime = runtime
+
+    async def interrupt(self) -> None:
+        await self._interrupt()
+
+    async def query(self, message: str) -> None:
+        raise RuntimeError(f"Mid-stream injection is not supported for {self.runtime} runs")
+
+
+async def register(conversation_id: str, client: Any, user_email: str) -> ActiveStream:
+    stream = ActiveStream(
+        conversation_id=conversation_id,
+        client=client,
+        user_email=user_email,
+    )
     async with _lock:
-        _streams[conversation_id] = ActiveStream(
-            conversation_id=conversation_id,
-            client=client,
-            user_email=user_email,
-        )
+        _streams[conversation_id] = stream
     logger.info("Registered active stream for conversation %s", conversation_id)
+    return stream
 
 
 async def unregister(conversation_id: str) -> None:

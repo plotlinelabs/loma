@@ -922,7 +922,9 @@ async def handle_interrupt_agent(request: web.Request) -> web.Response:
         return web.json_response({"error": "No active stream for this conversation"}, status=404)
 
     try:
-        await stream.client.interrupt()
+        # Flags the run as stopped-by-user, then aborts the runtime's turn
+        # (Claude SDK interrupt, OpenCode session abort, Codex turn/interrupt).
+        await stream.interrupt()
         return web.json_response({"interrupted": True, "conversation_id": cid})
     except Exception as e:
         logger.exception("Failed to interrupt conversation %s", cid)

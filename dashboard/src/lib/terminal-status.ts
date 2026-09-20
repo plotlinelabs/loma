@@ -21,9 +21,15 @@ export interface TerminalStatusSource {
 export const INTERRUPTED_MESSAGE =
   "The server restarted while processing your request. You can send a follow-up to continue.";
 
+/** Reason the backend persists for a user-initiated stop (agent/active_streams.py). */
+export const STOPPED_BY_USER_REASON = "Stopped by user";
+export const STOPPED_BY_USER_MESSAGE =
+  "*Stopped by user.* You can provide additional context or corrections below.";
+
 export function terminalStatusItem(conversation: TerminalStatusSource): TerminalStatusItem | null {
   if (conversation.status === "interrupted") {
-    return { role: "assistant", content: INTERRUPTED_MESSAGE };
+    const stoppedByUser = (conversation.error || "").startsWith(STOPPED_BY_USER_REASON);
+    return { role: "assistant", content: stoppedByUser ? STOPPED_BY_USER_MESSAGE : INTERRUPTED_MESSAGE };
   }
   if (conversation.status === "error" && !conversation.final_response) {
     return { role: "assistant", content: `Error: ${conversation.error || "Unknown error"}` };
