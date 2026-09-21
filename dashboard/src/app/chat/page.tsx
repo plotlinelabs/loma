@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback, Suspense } from "react";
+import { useEffect, useState, useCallback, useRef, Suspense } from "react";
 import {
   RiPencilLine,
   RiDeleteBinLine,
@@ -59,6 +59,9 @@ function ChatPageContent() {
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
   const [conversationOwner, setConversationOwner] = useState<string | null>(null);
   const [conversationShared, setConversationShared] = useState(false);
+  // IDs minted by ChatPanel on send. The URL updates before Mongo insert, so a
+  // GET /api/conversations/:id here 404s and used to stick "Failed to load".
+  const locallyCreatedIds = useRef(new Set<string>());
 
   // Track the active conversation ID — starts from URL param but also updates
   // when a fresh chat creates a new conversation (via onConversationCreated callback)
@@ -71,6 +74,8 @@ function ChatPageContent() {
 
   // Callback for ChatPanel to notify us when a new conversation is created
   const handleConversationCreated = useCallback((newId: string) => {
+    locallyCreatedIds.current.add(newId);
+    setError(null);
     setActiveConversationId(newId);
     setConversationOwner(user?.email || null);
   }, [user?.email]);
@@ -92,7 +97,14 @@ function ChatPageContent() {
     if (flowId) {
       loadFlow();
     } else if (continueId) {
+      if (locallyCreatedIds.current.has(continueId)) {
+        setError(null);
+        setLoading(false);
+        return;
+      }
       loadConversation();
+    } else {
+      setLoading(false);
     }
 
     async function loadFlow() {
@@ -122,55 +134,68 @@ function ChatPageContent() {
     }
 
     async function loadConversation() {
-      try {
-        const data = await fetchConversation(continueId!);
-        setConversationOwner(data.conversation.metadata?.user_name || null);
-        setConversationShared(data.conversation.metadata?.visibility === "shared");
-        setPinnedAgentId(data.conversation.metadata?.agent_id || null);
-        setTaskStatus(data.conversation.task_status || null);
-        if (data.conversation.task_status === "todo" && !data.conversation.status) {
-          // Unstarted board draft: nothing has been sent yet. Don't rebuild
-          // items (the fallback would render the draft prompt as an already-
-          // sent message) — put the draft in the composer instead. Parked
-          // chats (staged after running) fall through to the normal rebuild.
-          setInitialItems([]);
-          setTaskDraftPrompt(data.conversation.prompt);
-          setTaskDraftFiles(data.conversation.draft_files || null);
-          setTaskModel(data.conversation.model || null);
-          setTaskToolConfig(data.conversation.tool_config || null);
+      const maxAttempts = 5;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const data = await fetchConversation(continueId!);
+          setError(null);
+          setConversationOwner(data.conversation.metadata?.user_name || null);
+          setConversationShared(data.conversation.metadata?.visibility === "shared");
+          setPinnedAgentId(data.conversation.metadata?.agent_id || null);
+          setTaskStatus(data.conversation.task_status || null);
+          if (data.conversation.task_status === "todo" && !data.conversation.status) {
+            // Unstarted board draft: nothing has been sent yet. Don't rebuild
+            // items (the fallback would render the draft prompt as an already-
+            // sent message) — put the draft in the composer instead. Parked
+            // chats (staged after running) fall through to the normal rebuild.
+            setInitialItems([]);
+            setTaskDraftPrompt(data.conversation.prompt);
+            setTaskDraftFiles(data.conversation.draft_files || null);
+            setTaskModel(data.conversation.model || null);
+            setTaskToolConfig(data.conversation.tool_config || null);
+            setConversationTitle(data.conversation.title || null);
+            setPromptPreview(
+              data.conversation.prompt.length > 80
+                ? data.conversation.prompt.slice(0, 80) + "..."
+                : data.conversation.prompt
+            );
+            setLoading(false);
+            return;
+          }
+          const { items, artifacts: restoredArtifacts } = rebuildItemsFromConversation(
+            data.conversation.messages,
+            data.conversation.prompt,
+            data.conversation.final_response,
+            data.turns,
+            data.artifacts,
+          );
+          // Surface a persisted error/interruption exactly as the recovery
+          // poller does, so a refresh never drops the outcome the user saw.
+          setInitialItems(withTerminalStatus(items, data.conversation) as ChatItem[]);
+          setInitialArtifacts(restoredArtifacts);
+          setInitialStatus(data.conversation.status);
           setConversationTitle(data.conversation.title || null);
+          setProjectId(data.conversation.project_id || null);
           setPromptPreview(
             data.conversation.prompt.length > 80
               ? data.conversation.prompt.slice(0, 80) + "..."
               : data.conversation.prompt
           );
+          setLoading(false);
+          return;
+        } catch (e) {
+          const isMissing = e instanceof Error && /404/.test(e.message);
+          if (isMissing && attempt < maxAttempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+            continue;
+          }
+          console.error("Failed to load conversation for continuation:", e);
+          setError("Failed to load conversation");
+          setLoading(false);
           return;
         }
-        const { items, artifacts: restoredArtifacts } = rebuildItemsFromConversation(
-          data.conversation.messages,
-          data.conversation.prompt,
-          data.conversation.final_response,
-          data.turns,
-          data.artifacts,
-        );
-        // Surface a persisted error/interruption exactly as the recovery
-        // poller does, so a refresh never drops the outcome the user saw.
-        setInitialItems(withTerminalStatus(items, data.conversation) as ChatItem[]);
-        setInitialArtifacts(restoredArtifacts);
-        setInitialStatus(data.conversation.status);
-        setConversationTitle(data.conversation.title || null);
-        setProjectId(data.conversation.project_id || null);
-        setPromptPreview(
-          data.conversation.prompt.length > 80
-            ? data.conversation.prompt.slice(0, 80) + "..."
-            : data.conversation.prompt
-        );
-      } catch (e) {
-        console.error("Failed to load conversation for continuation:", e);
-        setError("Failed to load conversation");
-      } finally {
-        setLoading(false);
       }
+      setLoading(false);
     }
   }, [continueId, flowId, taskId]);
 

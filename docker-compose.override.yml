@@ -1,0 +1,29 @@
+# Local-only: Mongo is not bundled in the repo compose file.
+# The work-trial PDF allows Atlas or a local container — this is the local container.
+services:
+  loma-mongo:
+    image: mongo:7
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - loma-mongo-data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  loma-backend:
+    depends_on:
+      loma-mongo:
+        condition: service_healthy
+
+  loma-dashboard:
+    depends_on:
+      loma-mongo:
+        condition: service_healthy
+
+volumes:
+  loma-mongo-data:

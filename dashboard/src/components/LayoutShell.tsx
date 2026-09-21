@@ -100,7 +100,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
       )}>
         <div className={cn(
           "flex-1 w-full flex flex-col min-h-0",
-          pathname.startsWith("/skills") ? "overflow-hidden" : "px-3 md:px-6 lg:px-8 py-4 md:py-6"
+          pathname.startsWith("/skills") || pathname.startsWith("/library") ? "overflow-hidden" : "px-3 md:px-6 lg:px-8 py-4 md:py-6"
         )}>{children}</div>
         <BottomNav />
       </main>

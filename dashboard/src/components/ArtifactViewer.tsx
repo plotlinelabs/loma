@@ -361,15 +361,85 @@ function ReactRenderer({ content }: { content: string }) {
   );
 }
 
-// ── PDF Renderer (iframe) ───────────────────────────────────────────────────
+// ── PDF Renderer ────────────────────────────────────────────────────────────
+// Native iframe/embed PDF plugins stay blank here (streamed no-store + Electron).
+// Render pages to canvas with PDF.js instead.
 
 function PdfRenderer({ fileUrl }: { fileUrl: string }) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function render() {
+      setLoading(true);
+      setError(null);
+      const host = hostRef.current;
+      if (host) host.replaceChildren();
+      try {
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error(`Failed to fetch file: ${response.status}`);
+        const data = new Uint8Array(await response.arrayBuffer());
+        const pdfjs = await import("pdfjs-dist");
+        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+        const pdf = await pdfjs.getDocument({ data }).promise;
+        if (cancelled) return;
+        const target = hostRef.current;
+        if (!target) return;
+        const maxWidth = Math.max((frameRef.current?.clientWidth ?? 800) - 24, 320);
+        for (let n = 1; n <= pdf.numPages; n++) {
+          const page = await pdf.getPage(n);
+          if (cancelled) return;
+          const unscaled = page.getViewport({ scale: 1 });
+          const scale = Math.min(2, maxWidth / unscaled.width);
+          const viewport = page.getViewport({ scale: Math.max(scale, 0.5) });
+          const canvas = document.createElement("canvas");
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.className = "mx-auto mb-3 max-w-full h-auto bg-white shadow-sm";
+          canvas.setAttribute("aria-label", `Page ${n}`);
+          await page.render({ canvas, viewport }).promise;
+          target.appendChild(canvas);
+        }
+        setLoading(false);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to render PDF");
+          setLoading(false);
+        }
+      }
+    }
+
+    render();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileUrl]);
+
   return (
-    <iframe
-      src={fileUrl}
-      className="w-full h-full border-0 bg-white rounded-b-lg"
-      title="PDF Preview"
-    />
+    <div ref={frameRef} className="relative h-full overflow-auto bg-background rounded-b-lg p-3">
+      {loading ? (
+        <div className="flex items-center justify-center h-full">
+          <div className="flex items-center gap-2 text-muted-foreground text-[13px]">
+            <RiLoader4Line size={16} className="animate-spin" />
+            Loading preview...
+          </div>
+        </div>
+      ) : null}
+      {error ? (
+        <Alert variant="destructive">
+          <RiErrorWarningLine size={16} />
+          <AlertDescription>
+            <div className="font-medium mb-2">PDF Error</div>
+            <pre className="text-xs whitespace-pre-wrap font-mono">{error}</pre>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      <div ref={hostRef} className={loading || error ? "hidden" : undefined} />
+    </div>
   );
 }
 
@@ -442,7 +512,7 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
 
 function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full bg-white rounded-b-lg gap-3 p-6">
+    <div className="flex flex-col items-center justify-center h-full bg-background rounded-b-lg gap-3 p-6">
       <div className="w-16 h-16 bg-orange-50 rounded-2xl flex items-center justify-center">
         <span className="text-3xl">📊</span>
       </div>
@@ -464,7 +534,7 @@ function PptxRenderer({ fileUrl, title }: { fileUrl: string; title: string }) {
 
 function FileDownloadRenderer({ fileUrl, title, fileSize }: { fileUrl: string; title: string; fileSize?: number }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full bg-white rounded-b-lg gap-3 p-6">
+    <div className="flex flex-col items-center justify-center h-full bg-background rounded-b-lg gap-3 p-6">
       <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center">
         <span className="text-3xl">📄</span>
       </div>
@@ -731,7 +801,7 @@ export default function ArtifactViewer({
       </div>
 
       {/* Content area */}
-      <div className="flex-1 overflow-hidden min-h-0">
+      <div className="flex-1 overflow-hidden min-h-0 bg-background">
         {viewMode === "preview" ? (
           // File artifact renderers (file_url-based) — check these first
           artifact.file_url && artifact.language === "pdf" ? (

@@ -1,0 +1,7 @@
+node_modules
+.next
+.env
+.env.*
+*.md
+tests
+public/pdf.worker.min.mjs
