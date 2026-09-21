@@ -120,3 +120,10 @@ done
 [ "$ok" = 1 ] || { echo "[preview] health check failed for ${COMPOSE_PROJECT_NAME}" >&2; docker compose ps; exit 1; }
 
 echo "[preview] ready: ${URL}"
+
+# --- TEMP DIAGNOSTICS (login debug for PR #199 — remove before closing) ---
+tok_hash=$(printf '%s' "$setup_value" | sha256sum | cut -d' ' -f1)
+echo "[diag] secrets-file LOMA_SETUP_TOKEN: len=${#setup_value} sha256=${tok_hash}"
+echo "[diag] mongo host: $(printf '%s' "$MONGO_URI" | sed -E 's#^mongodb(\+srv)?://([^@/]*@)?([^/?]+).*#\3#')"
+docker compose exec -T loma-dashboard sh -c 'printf "[diag] dashboard env token: len=%s sha256=%s\n" "${#LOMA_SETUP_TOKEN}" "$(printf %s "$LOMA_SETUP_TOKEN" | sha256sum | cut -d" " -f1)"' || echo "[diag] dashboard env probe failed"
+docker compose exec -T loma-mongo mongosh --quiet "$MONGO_URI" --eval "print('[diag] users count in loma_pr_${PR}: ' + db.getSiblingDB('loma_pr_${PR}').users.countDocuments({}))" 2>/dev/null || echo "[diag] mongo users probe failed"
