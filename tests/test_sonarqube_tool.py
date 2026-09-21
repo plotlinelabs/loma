@@ -129,9 +129,28 @@ def test_run_pr_waits_then_reads_each_touched_project(monkeypatch, capsys):
     assert "[web] ERROR" in capsys.readouterr().out
 
 
-def test_run_pr_timeout_is_unknown(monkeypatch):
-    _stub_pr_flow(monkeypatch, ["apps/api/x.go"], ("in_progress", None), {"api": "OK"})
-    assert asyncio.run(sq.run_pr("acme/mono", 42, wait=True, timeout_s=1, as_json=False)) == 2
+def test_run_pr_still_running_is_pending(monkeypatch, capsys):
+    calls = _stub_pr_flow(monkeypatch, ["apps/api/x.go"], ("in_progress", None), {"api": "OK"})
+    assert asyncio.run(sq.run_pr("acme/mono", 42, wait=True, timeout_s=1, as_json=False)) == sq.PENDING == 3
+    assert calls["projects"] == []  # no half-baked Sonar read while CI is running
+    assert "Run the same command again" in capsys.readouterr().out
+
+
+def test_wait_for_gate_returns_within_timeout(monkeypatch):
+    monkeypatch.setattr(sq, "POLL_SECONDS", 0.2)
+
+    async def fake_github(session, path, params=None):
+        return {"check_runs": [{"started_at": "t", "status": "in_progress", "conclusion": None}]}
+
+    monkeypatch.setattr(sq, "_github_get", fake_github)
+    import time as _t
+    start = _t.monotonic()
+    assert asyncio.run(sq.wait_for_gate(None, "acme/mono", "sha", 1)) == ("in_progress", None)
+    assert _t.monotonic() - start < 3
+
+
+def test_default_wait_fits_agent_shell_limit():
+    assert sq.DEFAULT_WAIT_SECONDS < 120
 
 
 def test_run_pr_skips_gate_wait_when_nothing_gated(monkeypatch, capsys):

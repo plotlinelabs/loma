@@ -30,10 +30,14 @@ Only repos listed there are gated. For any other repo, skip this skill.
 
 ```bash
 python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number>           # current result
-python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number> --wait    # wait for CI first (up to 30 min)
+python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number> --wait    # wait for CI (≤100 s per call)
 ```
 
-Exit code: `0` passed · `1` failed · `2` unknown (still running, no analysis, or a config problem).
+Exit code: `0` passed · `1` failed · `2` unknown (no analysis, or a config problem) · `3` CI still running.
+
+**Waiting for CI:** a gate run takes about 5–15 minutes. Each `--wait` call returns within ~100 seconds,
+so it never trips your shell tool's time limit. While it exits `3` ("PENDING"), run the exact same
+command again. Stop after 20 tries (about 30 minutes) and report the gate as still running.
 
 Output, per Sonar project the PR touches:
 
@@ -53,7 +57,7 @@ Output, per Sonar project the PR touches:
 
 ## Clear the gate (after you pushed code to a PR)
 
-1. `python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number> --wait`
+1. `python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number> --wait`, repeated while it exits `3`
 2. If it passed (exit 0): done. Say so in your summary, e.g. "SonarQube gate: passed".
 3. If it failed (exit 1): fix **every** listed issue in the files and lines shown. Common rules:
    - `S3776` cognitive complexity: extract helpers or return early. Don't just move code around.
@@ -63,13 +67,16 @@ Output, per Sonar project the PR touches:
    - Coverage on new code: add tests for the new lines. The gate measures lines you added or changed.
    - A pre-existing issue on a line you edited counts as new. Fix it too.
 4. Commit and push to the same branch; CI re-runs on push. Go back to step 1.
-5. **Stop after 3 fix rounds.** If the gate still fails, report the remaining issues and what you tried.
+5. **Stop after 2 fix rounds.** Each round waits on a full CI run (~10 min) and agent runs are time-boxed
+   (~30 min). If the gate still fails, report the remaining issues and what you tried; if CI is still
+   running when you must stop, say the gate is still running and link the PR.
 
 ### Never
 - Mark issues as Accepted / False Positive in Sonar, or ask for the gate to be widened. That's a human
   decision; mention it as an option in your summary if an issue really isn't actionable.
 - Add suppression comments (`NOSONAR`, `// eslint-disable`) to get past the gate.
-- Claim the gate passed when the tool returned `2` (unknown). Say it's still unknown.
+- Claim the gate passed when the tool returned `2` (unknown) or `3` (still running). Say so instead.
+- Raise `--timeout` above 100: long single commands get killed by the shell tool. Re-run instead.
 
 ---
 

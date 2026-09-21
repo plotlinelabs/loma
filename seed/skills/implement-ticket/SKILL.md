@@ -267,10 +267,10 @@ opened, and a failing gate blocks the merge. Clear it now, so the reviewer gets 
 
 ```bash
 python3 tools/loma_skills.py get --slug sonarqube      # the full procedure
-python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number> --wait
+python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number> --wait   # re-run while it exits 3 (CI still running)
 ```
 
-Fix every listed issue, push to the same branch, and re-check, for at most 3 rounds (details in the
+Fix every listed issue, push to the same branch, and re-check, for at most 2 rounds (details in the
 `sonarqube` skill). Never accept issues in Sonar or add suppression comments to get past the gate.
 Skip this step for repos not in `SONAR_PROJECTS`.
 

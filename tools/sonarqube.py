@@ -19,9 +19,12 @@ Optional:
 
 CLI:
   python3 tools/sonarqube.py check
-  python3 tools/sonarqube.py pr --repo owner/repo --pr 123 [--wait] [--timeout 1800] [--json]
+  python3 tools/sonarqube.py pr --repo owner/repo --pr 123 [--wait] [--timeout 100] [--json]
 
-Exit codes for ``pr``: 0 gate passed, 1 gate failed, 2 unknown (timeout, no analysis, config).
+``--wait`` polls for at most ``--timeout`` seconds (default 100) so one call stays under agent
+shell-command limits; while CI is still running it exits 3 and the caller simply re-runs it.
+
+Exit codes for ``pr``: 0 gate passed, 1 gate failed, 2 unknown (no analysis, config), 3 CI still running.
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ GITHUB_API = "https://api.github.com"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 DEFAULT_GATE_CHECK = "SonarQube gate"
 POLL_SECONDS = 20
+DEFAULT_WAIT_SECONDS = 100  # agent shell tools kill commands at ~120 s by default
+PENDING = 3
 TIMEOUT = aiohttp.ClientTimeout(total=60)
 
 
@@ -184,7 +189,8 @@ async def wait_for_gate(session: aiohttp.ClientSession, repo: str, sha: str, tim
         status, conclusion = gate_state(runs.get("check_runs", []))
         if status == "completed" or time.time() >= deadline:
             return status, conclusion
-        await asyncio.sleep(POLL_SECONDS)
+        print(f"  gate check: {status}, waiting...", flush=True)  # keeps idle-output watchdogs quiet
+        await asyncio.sleep(min(POLL_SECONDS, max(1, deadline - time.time())))
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +268,8 @@ async def run_pr(repo: str, pr: int, wait: bool, timeout_s: int, as_json: bool) 
         keys = projects_for_files(files, prefix_map)
         gate = await wait_for_gate(session, repo, sha, timeout_s) if wait and keys else None
         if gate and gate[0] != "completed":
-            print(f"Gate still {gate[0]} after {timeout_s}s; result unknown.")
-            return 2
+            print(f"PENDING: CI gate still {gate[0]}. Run the same command again to keep waiting.")
+            return PENDING
         results = [await project_result(session, key, str(pr)) for key in keys]
     code = verdict(results, gate[1] if gate else None)
     if as_json:
@@ -290,7 +296,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--repo", required=True, help="owner/repo")
     pr.add_argument("--pr", required=True, type=int)
     pr.add_argument("--wait", action="store_true", help="Wait for the CI gate check to finish first")
-    pr.add_argument("--timeout", type=int, default=1800, help="Seconds to wait with --wait")
+    pr.add_argument("--timeout", type=int, default=DEFAULT_WAIT_SECONDS,
+                    help="Max seconds this call waits with --wait (keep under the shell tool's limit)")
     pr.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
     try:
