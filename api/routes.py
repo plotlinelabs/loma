@@ -17,6 +17,13 @@ from agent.client import stream_agent
 from agent.opencode_runtime import get_agent_models, get_opencode_pool_status
 from agent.pool import ClientPool, get_pool
 from agent.prompt import refresh_loma_skill_index_from_db
+from observability.assets import (
+    AssetDescriptor,
+    bind_asset_recording,
+    current_recording,
+    record_asset,
+    reset_asset_recording,
+)
 from observability.db import get_db
 from observability.observer import ConversationObserver
 from api.auth_helpers import (
@@ -74,6 +81,8 @@ def register_served_file(
         "size": size,
     }
     _served_files[file_id] = entry
+    conversation_id, source = current_recording()
+    record_asset(AssetDescriptor(file_id, owner_email, conversation_id, source))
 
     return {
         "file_id": file_id,
@@ -159,16 +168,22 @@ async def _stream_registered_file(request, fd, entry):
         mime_type = entry["mime_type"]
         filename = re.sub(r'[\x00-\x1f\x7f"\\]', "_", entry["original_name"])
         disposition = "inline" if mime_type in _INLINE_MIME_TYPES else "attachment"
-        response = web.StreamResponse(status=status, headers={
+        headers = {
             "Content-Disposition": f'{disposition}; filename="{filename}"',
             "Content-Type": mime_type,
             "Content-Length": str(stop - start),
             "Accept-Ranges": "bytes",
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
-            # Generated HTML/SVG must not execute with dashboard privileges.
-            "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
-        })
+        }
+        # Sandbox stops generated HTML/SVG executing with dashboard privileges.
+        # Chrome's in-iframe PDF viewer stays blank under CSP sandbox, so PDFs
+        # skip it. They still get nosniff + inline disposition.
+        if mime_type != "application/pdf":
+            headers["Content-Security-Policy"] = (
+                "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+            )
+        response = web.StreamResponse(status=status, headers=headers)
         if status == 206:
             response.headers["Content-Range"] = f"bytes {start}-{stop - 1}/{size}"
         await response.prepare(request)
@@ -1153,6 +1168,9 @@ async def handle_chat(request: web.Request) -> web.Response:
             pass
 
     keepalive_task = asyncio.create_task(_send_keepalive())
+    recording_token = bind_asset_recording(
+        observer.conversation_id if observer else None,
+    )
 
     try:
         async for event in stream_agent(
@@ -1194,6 +1212,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             except Exception:
                 pass
     finally:
+        reset_asset_recording(recording_token)
         if keepalive_task:
             keepalive_task.cancel()
 
@@ -2213,6 +2232,10 @@ async def handle_delete_conversation(request: web.Request) -> web.Response:
         {"$pull": {"pinned_conversations": {"conversation_id": cid}}},
     )
 
+    from observability.assets import delete_assets_for_conversation
+
+    await delete_assets_for_conversation(cid)
+
     return web.json_response({"deleted": True})
 
 
@@ -2329,6 +2352,10 @@ def setup_api_routes(app: web.Application):
     # Personal AI-usage routes (my spend + per-chat cost)
     from api.my_usage_routes import setup_my_usage_routes
     setup_my_usage_routes(app)
+
+    # Asset Library list (owner-scoped file-backed outputs)
+    from api.asset_routes import setup_asset_routes
+    setup_asset_routes(app)
 
     # File serving routes (binary artifact previews)
     from api.file_routes import setup_file_routes

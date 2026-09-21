@@ -11,16 +11,46 @@ _client: AsyncIOMotorClient | None = None
 _db = None
 
 
-async def init_observability():
-    """Initialize the observability MongoDB connection. Call once at startup."""
-    global _client, _db
+def _observability_uri() -> str:
     uri = os.environ.get("OBSERVABILITY_MONGODB_URI", "").strip()
-    if not uri or not uri.startswith("mongodb"):
-        logger.warning("OBSERVABILITY_MONGODB_URI not set or invalid — observability disabled")
-        return
+    if uri:
+        return uri
+    # Agent/script shells often inherit no compose env — fall back to .env.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    return os.environ.get("OBSERVABILITY_MONGODB_URI", "").strip()
 
+
+def _connect() -> None:
+    """Open the Motor client if needed. Does not create indexes."""
+    global _client, _db
+    if _db is not None:
+        return
+    uri = _observability_uri()
+    if not uri or not uri.startswith("mongodb"):
+        return
     _client = AsyncIOMotorClient(uri)
     _db = _client[OBSERVABILITY_DB_NAME]
+
+
+async def connect_db():
+    """Ensure a connection without creating indexes.
+
+    For one-off agent/script shells that call get_db() outside app startup.
+    """
+    _connect()
+    return _db
+
+
+async def init_observability():
+    """Initialize the observability MongoDB connection. Call once at startup."""
+    _connect()
+    if _db is None:
+        logger.warning("OBSERVABILITY_MONGODB_URI not set or invalid — observability disabled")
+        return
 
     if recall_enabled():
         from api.recall_controls import ensure_control_indexes
@@ -241,5 +271,11 @@ async def init_observability():
 
 
 def get_db():
-    """Get the observability database. Returns None if not initialized."""
+    """Get the observability database.
+
+    Connects lazily when the app has not called init_observability() yet
+    (python -c / agent bash). Returns None if the URI is missing or invalid.
+    """
+    if _db is None:
+        _connect()
     return _db

@@ -198,3 +198,14 @@ async def test_active_content_sandboxed(client, tmp_path):
     assert response.status == 200
     assert response.headers['Content-Security-Policy'].startswith('sandbox;')
     assert response.headers['X-Content-Type-Options'] == 'nosniff'
+
+
+@pytest.mark.asyncio
+async def test_pdf_inline_preview_is_not_sandboxed(client, tmp_path):
+    """Chrome's PDF viewer in an iframe stays blank under CSP sandbox."""
+    artifact = register(tmp_path)
+    response = await client.get(artifact['url'], headers={'Test-User': OWNER})
+    assert response.status == 200
+    assert response.headers['Content-Type'] == 'application/pdf'
+    assert response.headers['Content-Disposition'].startswith('inline;')
+    assert 'sandbox' not in response.headers.get('Content-Security-Policy', '')

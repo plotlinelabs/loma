@@ -529,3 +529,217 @@ async def test_stream_agent_adds_no_slack_reminder_for_dashboard(monkeypatch):
         pass
 
     assert "[Reply format:" not in captured["full_prompt"]
+
+
+def test_clarify_questions_from_question_tool_input():
+    from agent.opencode_runtime import _clarify_questions_from_tool_input
+
+    questions = _clarify_questions_from_tool_input({
+        "questions": [
+            {
+                "header": "Skill topic",
+                "question": "What should this skill do?",
+                "options": [
+                    {"label": "A workflow/runbook", "description": "A recurring process"},
+                    {"label": "An external API integration"},
+                ],
+            },
+            {
+                "question": "Do you already have a name?",
+                "multiple": True,
+                "options": ["You suggest one", {"title": "I'll type it"}],
+            },
+        ]
+    })
+
+    assert questions == [
+        {
+            "question": "What should this skill do?",
+            "options": [
+                {"label": "A workflow/runbook", "description": "A recurring process"},
+                {"label": "An external API integration"},
+            ],
+            "multiSelect": False,
+        },
+        {
+            "question": "Do you already have a name?",
+            "options": [
+                {"label": "You suggest one"},
+                {"label": "I'll type it"},
+            ],
+            "multiSelect": True,
+        },
+    ]
+    assert _clarify_questions_from_tool_input({}) is None
+    assert _clarify_questions_from_tool_input("nope") is None
+
+
+class _FakeObserver:
+    conversation_id = "conv-1"
+    metadata = {}
+    turn_count = 0
+
+    async def record_usage(self, *args, **kwargs):
+        return None
+
+    async def finish(self, final_response=""):
+        return None
+
+    async def record_text(self, *args, **kwargs):
+        return None
+
+    async def record_tool_call(self, *args, **kwargs):
+        return None
+
+
+def _install_opencode_agent_fakes(monkeypatch, ocr, fake_iter, *, inflight=None, cache=None):
+    from pathlib import Path
+
+    monkeypatch.setattr(ocr, "_opencode_session_cache", cache if cache is not None else {})
+    monkeypatch.setattr(ocr, "_opencode_inflight_sessions", inflight if inflight is not None else set())
+
+    server = ocr._OpenCodeServer(
+        config_hash="hash",
+        config_home=Path("/tmp"),
+        host="127.0.0.1",
+        port=1,
+        process=None,
+    )
+
+    async def fake_ensure(user_mcp_overrides=None):
+        return server
+
+    monkeypatch.setattr(ocr, "_ensure_server_instance", fake_ensure)
+    monkeypatch.setattr(ocr, "is_known_model", lambda model_id: _async_true())
+    monkeypatch.setattr(ocr, "_checkout_warm_session", lambda server, model_id: _async_none())
+    monkeypatch.setattr(ocr, "_schedule_prewarm", lambda server, model_id: None)
+    monkeypatch.setattr(ocr, "_iter_opencode_turn_events", fake_iter)
+    return server
+
+
+async def _async_true():
+    return True
+
+
+async def _async_none():
+    return None
+
+
+@pytest.mark.asyncio
+async def test_run_opencode_agent_emits_clarify_for_question_tool(monkeypatch):
+    import agent.opencode_runtime as ocr
+
+    aborted = []
+
+    async def fake_create_session(title, *, base_url=None):
+        return "ses_question"
+
+    async def fake_abort(session_id, *, base_url):
+        aborted.append((session_id, base_url))
+
+    async def fake_iter(base_url, *, session_id, body, idle_timeout_seconds, request_timeout_seconds):
+        yield {
+            "type": "message.updated",
+            "properties": {"info": {"id": "m1", "role": "assistant", "sessionID": session_id}},
+        }
+        yield {
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "id": "p-question",
+                    "type": "tool",
+                    "tool": "question",
+                    "callID": "q1",
+                    "messageID": "m1",
+                    "sessionID": session_id,
+                    "state": {
+                        "status": "running",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "What should this skill do?",
+                                    "options": [{"label": "A workflow/runbook"}],
+                                }
+                            ]
+                        },
+                    },
+                }
+            },
+        }
+        raise AssertionError("turn should stop after the question tool")
+
+    server = _install_opencode_agent_fakes(monkeypatch, ocr, fake_iter)
+    monkeypatch.setattr(ocr, "_create_session", fake_create_session)
+    monkeypatch.setattr(ocr, "_abort_opencode_session", fake_abort)
+
+    events = [
+        event
+        async for event in ocr.run_opencode_agent(
+            full_prompt="create a skill",
+            selected_model="opencode-go/glm-5.3-flash",
+            observer=_FakeObserver(),
+            include_steps=True,
+        )
+    ]
+
+    clarify = [event for event in events if isinstance(event, dict) and event.get("type") == "clarify"]
+    assert clarify == [{
+        "type": "clarify",
+        "questions": [{
+            "question": "What should this skill do?",
+            "options": [{"label": "A workflow/runbook"}],
+            "multiSelect": False,
+        }],
+    }]
+    assert aborted == [("ses_question", server.base_url)]
+    assert server.active_turns == 0
+    assert ocr._opencode_inflight_sessions == set()
+
+
+@pytest.mark.asyncio
+async def test_run_opencode_agent_does_not_reuse_inflight_session(monkeypatch):
+    import agent.opencode_runtime as ocr
+
+    created = []
+
+    async def fake_create_session(title, *, base_url=None):
+        created.append(title)
+        return f"ses_fresh_{len(created)}"
+
+    async def fake_iter(base_url, *, session_id, body, idle_timeout_seconds, request_timeout_seconds):
+        assert session_id == "ses_fresh_1"
+        yield {
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "id": "m1",
+                    "role": "assistant",
+                    "sessionID": session_id,
+                    "time": {"completed": 1},
+                    "finish": "stop",
+                }
+            },
+        }
+
+    cache = {("hash", "conv-1", "opencode-go/glm-5.3-flash"): "ses_busy"}
+    server = _install_opencode_agent_fakes(
+        monkeypatch,
+        ocr,
+        fake_iter,
+        inflight={"ses_busy"},
+        cache=cache,
+    )
+    monkeypatch.setattr(ocr, "_create_session", fake_create_session)
+
+    async for _ in ocr.run_opencode_agent(
+        full_prompt="follow up",
+        selected_model="opencode-go/glm-5.3-flash",
+        observer=_FakeObserver(),
+    ):
+        pass
+
+    assert created == ["follow up"]
+    assert cache[("hash", "conv-1", "opencode-go/glm-5.3-flash")] == "ses_fresh_1"
+    assert server.active_turns == 0
+    assert "ses_fresh_1" not in ocr._opencode_inflight_sessions
+    assert "ses_busy" in ocr._opencode_inflight_sessions

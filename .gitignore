@@ -16,6 +16,7 @@ build/
 node_modules/
 dashboard/.next/
 dashboard/node_modules/
+dashboard/public/pdf.worker.min.mjs
 secrets/
 private/
 .loma-private/
@@ -24,3 +25,4 @@ private/
 .idea/
 .pytest_cache/
 .gstack/
+.agents/skills/
