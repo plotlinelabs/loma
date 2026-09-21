@@ -30,6 +30,9 @@ Use GitHub MCP to fetch:
 - Linked issues or tickets
 - Labels and milestone
 - CI/CD status (if available)
+- SonarQube gate, if the repo is in `SONAR_PROJECTS`: `python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number>`.
+  Report each listed issue as a blocking finding at its `file:line` (the gate blocks the merge), and don't
+  duplicate them in your own line comments. See the `sonarqube` skill.
 
 ### 1.2 Understand the Scope
 
