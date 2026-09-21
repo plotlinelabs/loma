@@ -260,6 +260,22 @@ If none of the above apply (e.g. a small single-file fix, copy change, or config
 
 ---
 
+## Step 6c: Clear the SonarQube Gate (gated repos only)
+
+If the target repo is listed in `SONAR_PROJECTS`, CI runs a SonarQube quality gate on the draft PR you just
+opened, and a failing gate blocks the merge. Clear it now, so the reviewer gets a PR that can actually merge:
+
+```bash
+python3 tools/loma_skills.py get --slug sonarqube      # the full procedure
+python3 tools/sonarqube.py pr --repo <owner>/<repo> --pr <number> --wait   # re-run while it exits 3 (CI still running)
+```
+
+Fix every listed issue, push to the same branch, and re-check, for at most 2 rounds (details in the
+`sonarqube` skill). Never accept issues in Sonar or add suppression comments to get past the gate.
+Skip this step for repos not in `SONAR_PROJECTS`.
+
+---
+
 ## Step 7: Share the Result
 
 Post back in Slack:
@@ -272,6 +288,8 @@ Post back in Slack:
 *Changes*:
 • `path/to/file1.ts` — <brief description>
 • `path/to/file2.ts` — <brief description>
+
+*SonarQube gate*: <passed | failed: N issues left, listed below | not gated>
 
 This is a *draft PR* — please review the changes before marking it ready for review.
 ```
