@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { RiArrowDownSLine, RiCheckLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   Command,
   CommandEmpty,
@@ -35,6 +37,8 @@ interface ModelPickerProps {
 export function ModelPicker({ models, selectedModel, onSelect, loadState, disabled }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  // Bottom sheet on phones, popover on desktop (see AgentPicker).
+  const isMobile = useIsMobile();
 
   const selectedModelInfo = useMemo(
     () => models.find((model) => model.id === selectedModel) || null,
@@ -111,34 +115,28 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
     );
   };
 
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={isDisabled}
-          title={title}
-          className="group inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-55"
-        >
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-          <span className="min-w-0 truncate text-xs text-muted-foreground">
-            {modelLabel}
-          </span>
-          <RiArrowDownSLine
-            size={14}
-            className={cn(
-              "shrink-0 text-gray-400 transition-transform",
-              open && "rotate-180"
-            )}
-          />
-        </button>
-      </PopoverTrigger>
+  const trigger = (
+    <button
+      type="button"
+      disabled={isDisabled}
+      title={title}
+      className="group touch-target inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-55"
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+      <span className="min-w-0 truncate text-xs text-muted-foreground">
+        {modelLabel}
+      </span>
+      <RiArrowDownSLine
+        size={14}
+        className={cn(
+          "shrink-0 text-gray-400 transition-transform",
+          open && "rotate-180"
+        )}
+      />
+    </button>
+  );
 
-      <PopoverContent
-        side="top"
-        align="start"
-        className="w-[min(80vw,280px)] p-0 overflow-hidden rounded-xl"
-      >
+  const content = (
         <Command shouldFilter={false}>
           {recommended.length > 0 && !search && (
             <div className="border-b border-border p-2">
@@ -179,7 +177,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
             />
           </div>
           <CommandList>
-            <ScrollArea className="max-h-64">
+            <ScrollArea className="max-h-64 max-md:max-h-[50dvh]">
               <CommandEmpty className="px-3 py-6 text-center text-[13px] text-muted-foreground">
                 No models match that search.
               </CommandEmpty>
@@ -197,6 +195,35 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
             </ScrollArea>
           </CommandList>
         </Command>
+  );
+
+  if (isMobile) {
+    return (
+      <Sheet open={open} onOpenChange={(next) => { setOpen(next); if (!next) setSearch(""); }}>
+        <SheetTrigger asChild>{trigger}</SheetTrigger>
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          aria-describedby={undefined}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          className="max-h-[85dvh] gap-0 overflow-hidden rounded-t-2xl p-0 pb-[env(safe-area-inset-bottom)]"
+        >
+          <SheetTitle className="sr-only">Choose model</SheetTitle>
+          {content}
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        className="w-[min(80vw,280px)] p-0 overflow-hidden rounded-xl"
+      >
+        {content}
       </PopoverContent>
     </Popover>
   );

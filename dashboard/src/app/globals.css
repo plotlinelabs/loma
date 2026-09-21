@@ -566,8 +566,26 @@
   }
 }
 
-.animate-artifact-slide-in {
+/* `@utility` (not a plain class) so responsive variants such as
+   `md:animate-artifact-slide-in` work. */
+@utility animate-artifact-slide-in {
   animation: artifactSlideIn 0.25s ease-out both;
+}
+
+/* Artifact bottom sheet (phones) */
+@keyframes artifactSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-artifact-slide-up {
+  animation: artifactSlideUp 0.25s ease-out both;
 }
 
 /* Steps expand */
@@ -631,8 +649,32 @@
 @media (max-width: 767px) {
   /* iOS Safari auto-zooms into inputs with font-size < 16px, which is the
      "zooms out and hides the send button" chat bug. 16px kills the zoom. */
-  textarea, input[type="text"], input[type="email"], input[type="password"], input:not([type]) {
+  textarea, select,
+  input[type="text"], input[type="email"], input[type="password"], input[type="search"],
+  input[type="number"], input[type="url"], input[type="tel"], input:not([type]) {
     font-size: 16px;
+  }
+}
+
+/* ── Touch targets ───────────────────────────────────────────────────────── */
+
+/* Grow the hit area of small controls to 44px on touch devices without
+   changing their visual size or the layout around them. The pseudo-element
+   only extends outward when the element is smaller than 44px on that axis.
+   Lives in the base layer: Tailwind v4 keeps `@layer base` verbatim (it
+   compiles `@layer components` away), and base sits below utilities so
+   positioning utilities (`fixed`, `absolute`) on the same element still win
+   over the `relative` here. */
+@layer base {
+  @media (pointer: coarse) {
+    .touch-target {
+      position: relative;
+    }
+    .touch-target::after {
+      content: "";
+      position: absolute;
+      inset: min(0px, calc((100% - 44px) / 2));
+    }
   }
 }
 
