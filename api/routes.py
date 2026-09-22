@@ -27,6 +27,7 @@ from api.auth_helpers import (
     require_maintainer_or_above,
 )
 from api.dashboard_ingestion import ingest_dashboard_chat
+from api.chat_attachments import validate_attachments, cache_chat_images
 from api.drain import DRAIN_MESSAGE, is_draining
 from api import skill_service
 from api.agent_identity_routes import build_agent_context_block, resolve_agent_for_chat
@@ -960,8 +961,17 @@ async def handle_chat(request: web.Request) -> web.Response:
     """
     body = await request.json()
     message = body.get("message", "")
-    if not message:
-        return web.json_response({"error": "Missing message"}, status=400)
+    files = body.get("files") or []
+    if not isinstance(message, str):
+        return web.json_response({"error": "message must be a string"}, status=400)
+    try:
+        validate_attachments(files)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    if not message.strip() and not files:
+        return web.json_response({"error": "Missing message or attachments"}, status=400)
+    if not message.strip():
+        message = "Please inspect the attached files and ask what I would like to do with them."
     selected_model = body.get("model")
     if selected_model is not None and not isinstance(selected_model, str):
         return web.json_response({"error": "model must be a provider/model string"}, status=400)
@@ -1020,11 +1030,11 @@ async def handle_chat(request: web.Request) -> web.Response:
             # Check if conversation already exists (resume) or is client-generated (start)
             existing = await db.conversations.find_one(
                 {"conversation_id": existing_conversation_id},
-                {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1},
+                {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1, "deleted": 1},
             )
-            if existing and not _check_conversation_access(
+            if existing and (existing.get("deleted") or not _check_conversation_access(
                 existing, user_email, get_system_role(request)
-            ):
+            )):
                 return web.json_response({"error": "Not found"}, status=404)
 
         # Agent identity: an explicit selection wins; resumed conversations fall
@@ -1052,6 +1062,18 @@ async def handle_chat(request: web.Request) -> web.Response:
                         "metadata.agent_name": agent_identity["name"],
                     }},
                 )
+
+        # Cache before starting/resuming the observer: a storage failure must
+        # not leave a conversation marked running when no agent was launched.
+        attachment_conversation_id = existing_conversation_id or str(uuid.uuid4())
+        try:
+            incoming_count = len(files or [])
+            files = await cache_chat_images(db, user_email, attachment_conversation_id, files or [])
+            if len(files) > incoming_count:
+                conversation_context += "\nSome attached images are earlier uploads from this conversation, retained for follow-up questions."
+        except Exception:
+            logger.exception("Dashboard image cache unavailable")
+            return web.json_response({"error": "Could not load or save chat images. Please retry."}, status=503)
 
         if existing_conversation_id:
             observer = ConversationObserver(
@@ -1082,7 +1104,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             else:
                 await observer.start()
         else:
-            observer = ConversationObserver(db, metadata=metadata)
+            observer = ConversationObserver(db, metadata=metadata, conversation_id=attachment_conversation_id)
             await observer.start()
 
         # Persist tool_config on the conversation document
@@ -2212,6 +2234,8 @@ async def handle_delete_conversation(request: web.Request) -> web.Response:
         {"pinned_conversations.conversation_id": cid},
         {"$pull": {"pinned_conversations": {"conversation_id": cid}}},
     )
+
+    await db.chat_images.delete_many({"conversation_id": cid})
 
     return web.json_response({"deleted": True})
 

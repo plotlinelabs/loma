@@ -43,6 +43,12 @@ async def init_observability():
     await _db.flows.create_index([("created_at", -1)])
     await _db.flows.create_index([("next_run_at", 1)])
 
+    # Image bytes are separate from conversation documents and expire after 7 days.
+    await _db.chat_images.create_index("expires_at", expireAfterSeconds=0)
+    await _db.chat_images.create_index(
+        [("user_email", 1), ("conversation_id", 1), ("created_at", -1)],
+    )
+
     # Chat isolation — index for filtering conversations by user
     await _db.conversations.create_index("metadata.user_name")
 

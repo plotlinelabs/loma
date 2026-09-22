@@ -1014,6 +1014,8 @@ export async function interruptAgent(
   return res.json();
 }
 
+export class ChatRequestError extends Error {}
+
 export async function* streamChat(
   message: string,
   conversationHistory?: ChatMessage[],
@@ -1045,7 +1047,7 @@ export async function* streamChat(
     // Surface the backend's message (e.g. "restarting for a deploy") instead
     // of a bare status code.
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Chat request failed: ${res.status}`);
+    throw new ChatRequestError(body.error || `Chat request failed: ${res.status}`);
   }
   if (!res.body) throw new Error("No response body");
 
