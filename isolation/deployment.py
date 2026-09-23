@@ -74,7 +74,17 @@ class RemoteDeployment:
     budget_nusd: int
 
     def accounts_for(self, runtime):
-        return {'claude': self.claude_accounts, 'codex': self.codex_accounts}.get(runtime, ())
+        configured = {'claude': self.claude_accounts, 'codex': self.codex_accounts}.get(runtime, ())
+        if runtime != 'claude':
+            return configured
+        from isolation.claude_login import shared_accounts
+        # Explicit operator entries win on duplicate owners.
+        try:
+            merged = {a.email: a for a in shared_accounts()}
+        except (OSError, ValueError):
+            raise DeploymentError("Claude account store is unavailable") from None
+        merged.update({a.email: a for a in configured})
+        return tuple(merged[key] for key in sorted(merged))
 
 
 def _require(name):
@@ -141,8 +151,10 @@ def load_deployment():
         chat_endpoint=chat_endpoint, chat_headers=chat_headers,
         default_model=os.environ.get('LOMA_REMOTE_DEFAULT_MODEL', '').strip() or None,
         budget_nusd=budget_nusd)
-    if not (deployment.claude_accounts or deployment.codex_accounts or deployment.chat_endpoint):
-        raise DeploymentError('Remote mode needs at least one account list or a chat endpoint')
+    if not (deployment.accounts_for('claude') or deployment.codex_accounts or deployment.chat_endpoint):
+        from isolation.claude_login import enabled
+        if not enabled():
+            raise DeploymentError('Remote mode needs at least one account list or a chat endpoint')
     return deployment
 
 

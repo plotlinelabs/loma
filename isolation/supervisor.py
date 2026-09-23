@@ -113,6 +113,9 @@ class Supervisor:
         if not hmac.compare_digest(request.headers.get('Authorization', '').encode(), expected.encode()):
             raise web.HTTPUnauthorized()
 
+    def container_command(self, name):
+        return docker_command(self.settings, name)
+
     async def run(self, request):
         self.authenticate(request)
         if self.unhealthy or len(self.active) >= self.settings.max_workers:
@@ -133,7 +136,7 @@ class Supervisor:
                 if set(value) != {'type', 'input'} or value['type'] != 'start' or not isinstance(value['input'], dict):
                     raise ProtocolError('Invalid run input')
                 launched = True
-                proc = await asyncio.create_subprocess_exec(*docker_command(self.settings, name),
+                proc = await asyncio.create_subprocess_exec(*self.container_command(name),
                     env=process_environment(), stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                     limit=MAX_FRAME + 1)
