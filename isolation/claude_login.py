@@ -11,11 +11,11 @@ import os
 from pathlib import Path
 import re
 import time
-from urllib.parse import urlsplit
 import uuid
 
 import aiohttp
 
+from isolation.login_urls import authorization_url
 from isolation.accounts import SubscriptionAccount, _read
 from isolation.client import transport_context
 from isolation.oauth import _atomic, _locked, _number, _string
@@ -164,20 +164,6 @@ class Login:
     def public(self):
         return {'id': self.id, 'state': self.state, 'url': self.url,
                 'error': self.error, 'expires_at': self.expires}
-
-
-def authorization_url(text):
-    # CLI terminal output is never sent to a browser. Only its exact HTTPS OAuth
-    # link on Anthropic's allowlist survives (no terminal escapes or HTML).
-    clean = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
-    for raw in re.findall(r'https://[^\s\x1b<>]+', clean):
-        parsed = urlsplit(raw)
-        if (parsed.hostname in {'claude.ai', 'platform.claude.com', 'console.anthropic.com'}
-                and parsed.path == '/oauth/authorize' and not parsed.username
-                and not parsed.password and parsed.port in (None, 443)
-                and 'code_challenge=' in parsed.query and 'state=' in parsed.query):
-            return raw
-    return None
 
 
 async def run_login(login, connection, authorize):

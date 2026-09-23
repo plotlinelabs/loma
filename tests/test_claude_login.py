@@ -288,3 +288,25 @@ async def test_deployment_merges_live_connections_and_pool_status(monkeypatch, t
     assert 'synthetic-access' not in json.dumps(status)
     await mod.disconnect(OWNER)
     assert config.accounts_for('claude') == ()
+
+
+@pytest.mark.parametrize('endpoint', [
+    'https://claude.com/cai/oauth/authorize',
+    'https://claude.ai/oauth/authorize',
+    'https://platform.claude.com/oauth/authorize',
+    'https://console.anthropic.com/oauth/authorize',
+])
+def test_pinned_cli_authorization_endpoints(endpoint):
+    url = endpoint + '?code=true&code_challenge=synthetic&state=synthetic'
+    assert mod.authorization_url('Opening browser to sign in...\n' + url + '\n') == url
+
+
+@pytest.mark.parametrize('endpoint', [
+    'https://claude.com.evil.test/cai/oauth/authorize',
+    'https://claude.com/cai/redirect',
+    'https://claude.com/oauth/authorize',
+    'https://user:password@claude.com/cai/oauth/authorize',
+    'https://claude.com:444/cai/oauth/authorize',
+])
+def test_new_endpoint_keeps_exact_host_path_and_authority(endpoint):
+    assert mod.authorization_url(endpoint + '?code_challenge=x&state=y') is None

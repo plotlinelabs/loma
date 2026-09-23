@@ -22,7 +22,7 @@ COPY --from=runtime / /sandbox/
 RUN rm -f /sandbox/etc/resolv.conf && touch /sandbox/etc/resolv.conf \
     && mkdir -p /sandbox/sessions /sandbox/proc /run/loma-login
 COPY isolation/__init__.py isolation/protocol.py isolation/supervisor.py \
-    isolation/claude_login_worker.py isolation/bundled_login.py isolation/bundled_login_child.py /opt/login/isolation/
+    isolation/login_urls.py isolation/claude_login_worker.py isolation/bundled_login.py isolation/bundled_login_child.py /opt/login/isolation/
 ENV PYTHONPATH=/opt/login PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /opt/login
 ENTRYPOINT ["python", "-m", "isolation.bundled_login"]

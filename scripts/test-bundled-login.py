@@ -13,6 +13,8 @@ import sys
 
 import aiohttp
 
+from isolation.login_urls import authorization_url
+
 
 async def smoke():
     root = Path('/sandbox/sessions')
@@ -30,7 +32,7 @@ async def smoke():
                     frame = json.loads(message.data)
                     if frame['type'] == 'text':
                         text += frame['text']
-                        if '/oauth/authorize?' in text and 'code_challenge=' in text and 'state=' in text:
+                        if authorization_url(text):
                             break  # deliberately cancel; do not print PKCE/state
                 else:
                     # This isolated stack has no credentials and never submitted
