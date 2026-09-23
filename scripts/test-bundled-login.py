@@ -6,6 +6,7 @@ startup and cancellation, then chroot/UID/network denials on the built image.
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -32,7 +33,11 @@ async def smoke():
                         if '/oauth/authorize?' in text and 'code_challenge=' in text and 'state=' in text:
                             break  # deliberately cancel; do not print PKCE/state
                 else:
-                    raise AssertionError('Official CLI did not produce its authorization URL')
+                    # This isolated stack has no credentials and never submitted
+                    # a login code. Still redact provider links/PKCE parameters.
+                    safe = re.sub(r'https?://\S+', '[URL redacted]', text)
+                    safe = re.sub(r'(state|code_challenge)=[^\s&]+', r'\1=[redacted]', safe)
+                    raise AssertionError('Official CLI failed before authorization: ' + safe[-1200:])
         for _ in range(100):
             if not list(root.iterdir()):
                 break

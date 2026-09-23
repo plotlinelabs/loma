@@ -41,5 +41,7 @@ def main(name, uid):
 if __name__ == '__main__':
     try:
         main(sys.argv[1], int(sys.argv[2]))
-    except Exception:
+    except Exception as error:
+        # Static classification only; never reflect paths, environment or tokens.
+        print(f'Login sandbox setup failed: {type(error).__name__} (errno={getattr(error, "errno", None)})', file=sys.stderr)
         sys.exit(1)
