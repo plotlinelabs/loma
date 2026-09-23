@@ -14,14 +14,7 @@ import {
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { AgentModel } from "@/lib/api";
-import { favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks/useAgentModels";
-
-const FAVORITE_LABELS: Record<string, string> = {
-  "codex/gpt-6-astra": "GPT 6 Astra",
-  "codex/gpt-5.6-sol": "GPT 5.6 Sol",
-  "opencode-go/glm-5.3-flash": "GLM 5.3 Flash",
-  "anthropic/claude-fable-5-1": "Claude Fable 5.1",
-};
+import { FAVORITE_MODEL_LABELS, favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks/useAgentModels";
 
 interface ModelPickerProps {
   models: AgentModel[];
@@ -45,7 +38,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
     const query = search.trim().toLowerCase();
     if (!query) return models;
     return models.filter((model) => {
-      const haystack = `${model.label} ${model.id} ${model.provider_id} ${model.model_id}`.toLowerCase();
+      const haystack = `${FAVORITE_MODEL_LABELS[model.id] || ""} ${model.label} ${model.id} ${model.provider_id} ${model.model_id}`.toLowerCase();
       return haystack.includes(query);
     });
   }, [models, search]);
@@ -90,7 +83,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
 
   const renderItem = (model: AgentModel) => {
     const isSelected = model.id === selectedModel;
-    const itemModelLabel = model.label.split("·").pop()?.trim() || model.model_id;
+    const itemModelLabel = FAVORITE_MODEL_LABELS[model.id] || model.label.split("·").pop()?.trim() || model.model_id;
     return (
       <CommandItem
         key={model.id}
@@ -102,7 +95,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
           isSelected ? "text-foreground font-medium" : "text-muted-foreground"
         )}
       >
-        <span className="min-w-0 flex-1 truncate">{itemModelLabel}</span>
+        <span className="min-w-0 flex-1 whitespace-normal break-words">{itemModelLabel}</span>
         {model.supports_reasoning && (
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-500/60" title="reasoning" />
         )}
@@ -161,8 +154,8 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
                       )}
                     >
                       <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {FAVORITE_LABELS[model.id] || model.model_id}
+                      <span className="min-w-0 flex-1 whitespace-normal break-words">
+                        {FAVORITE_MODEL_LABELS[model.id] || model.model_id}
                       </span>
                       {isSelected && <RiCheckLine size={15} className="shrink-0 text-brand-600" />}
                     </button>

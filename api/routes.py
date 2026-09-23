@@ -187,10 +187,11 @@ async def _stream_registered_file(request, fd, entry):
 
 logger = logging.getLogger(__name__)
 
-# Claude Agent SDK models surfaced in the dashboard picker, newest first.
-# The first entry is treated as the headline/default Claude model.
+# Claude Agent SDK models surfaced in the dashboard picker.
+# Preserve the existing first entry; favorites are ordered separately below.
 SUPPORTED_CLAUDE_MODEL_IDS = (
     "claude-opus-5",
+    "claude-opus-5-5",
     "claude-opus-4-8",
     "claude-fable-5-1",
     "claude-fable-5",
@@ -199,10 +200,9 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 )
 
 FAVORITE_MODEL_IDS = (
+    "anthropic/claude-opus-5-5",
+    "codex/gpt-6-sol",
     "codex/gpt-6-astra",
-    "codex/gpt-5.6-sol",
-    "anthropic/claude-fable-5-1",
-    "opencode-go/glm-5.3-flash",
 )
 
 FAVORITE_MODEL_TEMPLATES = {

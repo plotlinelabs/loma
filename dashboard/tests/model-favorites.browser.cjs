@@ -1,0 +1,63 @@
+// Isolated local stack only. Requires local-auth env and a test Codex account entry.
+// No provider calls; creates a paused flow fixture in the throwaway database.
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const base=process.env.AUTH_URL;
+const shots=process.env.SHOTS_DIR || '/tmp/loma-model-shots';
+assert.match(base, /^http:\/\/localhost:/);
+assert.match(process.env.OBSERVABILITY_DB_NAME, /^loma_local_/);
+fs.mkdirSync(shots,{recursive:true});
+(async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE,args:['--no-sandbox']});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});
+ await page.goto(base+'/login');
+ await page.waitForLoadState('networkidle');
+ await page.evaluate(()=>fetch('/api/auth/csrf'));
+ await page.waitForTimeout(1000);
+ await page.fill('#signin-email',process.env.USER_NAME);await page.fill('#signin-password',process.env.PASSWORD);await page.fill('#setup-token',process.env.LOMA_SETUP_TOKEN);await page.click('button[type=submit]');
+ await page.waitForURL(u=>!u.pathname.includes('/login'),{timeout:30000});
+ await page.waitForTimeout(3000);
+ console.log('Logged in:',page.url());
+ const catalog=await page.evaluate(async()=>{const r=await fetch('/api/agent-models');return r.json()});
+ assert.deepEqual(catalog.models.filter(m=>m.recommended).map(m=>m.id),['anthropic/claude-opus-5-5','codex/gpt-6-sol','codex/gpt-6-astra']);
+ await page.getByTitle('Choose model',{exact:true}).click();
+ const labels=['Claude-Opus-5.5 (For Coding)','GPT-6-Sol (For Writing)','GPT-6-Astra (For Complex Tasks)'];
+ for(const label of labels) await page.getByRole('button',{name:label,exact:true}).waitFor();
+ await page.screenshot({path:shots+'/desktop.png'});
+ await page.getByRole('button',{name:labels[1],exact:true}).click();
+ assert.equal(await page.evaluate(()=>localStorage.getItem('dashboard-chat-selected-model')),'codex/gpt-6-sol');
+ await page.reload(); await page.getByTitle('Choose model',{exact:true}).filter({hasText:'gpt-6-sol'}).waitFor();
+ assert.match(await page.getByTitle('Choose model',{exact:true}).innerText(),/gpt-6-sol/);
+ await page.getByTitle('Choose model',{exact:true}).click();
+ await page.getByPlaceholder('Search models').fill('Writing');
+ await page.getByRole('option',{name:/GPT-6-Sol/}).waitFor();
+ await page.screenshot({path:shots+'/search.png'});
+ await page.keyboard.press('Escape');
+ await page.setViewportSize({width:390,height:844});
+ await page.getByTitle('Choose model',{exact:true}).click();
+ // Search is retained on closing with Escape; clear it for mobile favorites.
+ await page.getByPlaceholder('Search models').fill('');
+ for(const label of labels) await page.getByRole('button',{name:label,exact:true}).waitFor();
+ await page.screenshot({path:shots+'/mobile.png'});
+ console.log('PASS: real backend catalog, favorite order, selection persistence, use-case search, mobile labels');
+ await page.keyboard.press('Escape');
+ await page.setViewportSize({width:1440,height:1000});
+ const created=await page.evaluate(async()=>{
+   const response=await fetch('/api/flows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Model favorites verification',prompt:'Local UI fixture only, do not execute',schedule_type:'once',status:'paused',model:'codex/gpt-5.6-sol'})});
+   if(!response.ok) throw new Error('Fixture creation failed: '+response.status);
+   return response.json();
+ });
+ await page.goto(base+'/flows/'+created.flow.flow_id);
+ const card=page.locator('div').filter({has:page.getByRole('heading',{name:'Agent Model',exact:true})}).filter({has:page.getByRole('combobox')}).last();
+ await card.getByRole('combobox').click();
+ const options=await page.getByRole('option').allTextContents();
+ assert.deepEqual(options.slice(0,3),labels.map((label,i)=>label+' ('+(i===0?'Claude Agent SDK':'Codex (subscription)')+')'));
+ await page.getByRole('option',{name:/Claude-Opus-5.5/}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:shots+'/flow.png'});
+ await page.getByRole('option',{name:/GPT-6-Sol \(For Writing\)/}).click();
+ await page.waitForTimeout(800);await page.reload();
+ await card.getByRole('combobox').filter({hasText:'GPT-6-Sol'}).waitFor();
+ console.log('PASS: flow favorites, runtime labels, saved model selection');
+ await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

@@ -57,6 +57,7 @@ DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
 # preferred over this tuple; override order: $CODEX_MODELS > model/list > this.
 DEFAULT_CODEX_MODEL_IDS = (
     "gpt-6-astra",  # requires codex CLI >= 0.153 (older CLIs get a 400 from the server)
+    "gpt-6-sol",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",

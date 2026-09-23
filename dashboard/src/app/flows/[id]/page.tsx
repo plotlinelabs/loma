@@ -47,6 +47,8 @@ import { useUser } from "../../../lib/UserContext";
 import { fetchUsers } from "../../../lib/governance-api";
 import type { User } from "../../../lib/governance-api";
 
+import { FAVORITE_MODEL_LABELS, favoriteModelRank, isFavoriteModel } from "@/hooks/useAgentModels";
+
 // Fixed palette of 10 colors for deterministic label coloring
 const LABEL_COLORS = [
   { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
@@ -60,26 +62,6 @@ const LABEL_COLORS = [
   { bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
   { bg: "bg-indigo-50", text: "text-indigo-700", border: "border-indigo-200" },
 ];
-
-const FAVORITE_MODEL_IDS = [
-  "anthropic/claude-opus-5",
-  "anthropic/claude-opus-4-8",
-  "anthropic/claude-fable-5-1",
-  "anthropic/claude-fable-5",
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-6",
-  "opencode-go/glm-5.3-flash",
-  "openai/gpt-5.5",
-] as const;
-
-function favoriteModelRank(model: AgentModel): number | null {
-  const index = FAVORITE_MODEL_IDS.indexOf(model.id as typeof FAVORITE_MODEL_IDS[number]);
-  return index === -1 ? null : index;
-}
-
-function isFavoriteModel(model: AgentModel): boolean {
-  return favoriteModelRank(model) !== null;
-}
 
 function hashString(str: string): number {
   let hash = 0;
@@ -114,6 +96,7 @@ function runtimeLabel(modelId: string | null | undefined) {
   if (!modelId) return "Claude Agent SDK";
   const provider = modelId.split("/", 1)[0];
   if (provider === "anthropic") return "Claude Agent SDK";
+  if (provider === "codex") return "Codex (subscription)";
   if (provider === "openai") return "OpenCode · OpenAI";
   if (provider === "opencode-go") return "OpenCode Go";
   return "OpenCode";
@@ -177,7 +160,7 @@ function FlowModelSelector({
               <SelectLabel>Favorites</SelectLabel>
               {recommendedModels.map((model) => (
                 <SelectItem key={model.id} value={model.id}>
-                  {model.label} ({runtimeLabel(model.id)})
+                  {FAVORITE_MODEL_LABELS[model.id] || model.label} ({runtimeLabel(model.id)})
                 </SelectItem>
               ))}
             </SelectGroup>
