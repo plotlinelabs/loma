@@ -27,10 +27,10 @@ def firewall_commands(address):
     ip = ipaddress.IPv4Address(address)
     # Resolve proxy once before denying ALL DNS and direct network egress.
     return [
-        ['iptables', '-P', 'OUTPUT', 'DROP'],
-        ['iptables', '-F', 'OUTPUT'],
-        ['iptables', '-A', 'OUTPUT', '-p', 'tcp', '-d', str(ip), '--dport', '3128', '-j', 'ACCEPT'],
-        ['ip6tables', '-P', 'OUTPUT', 'DROP'],
+        ['/usr/sbin/iptables', '-P', 'OUTPUT', 'DROP'],
+        ['/usr/sbin/iptables', '-F', 'OUTPUT'],
+        ['/usr/sbin/iptables', '-A', 'OUTPUT', '-p', 'tcp', '-d', str(ip), '--dport', '3128', '-j', 'ACCEPT'],
+        ['/usr/sbin/ip6tables', '-P', 'OUTPUT', 'DROP'],
     ]
 
 
@@ -42,7 +42,7 @@ def owned_processes(uid):
                 line = next(line for line in status.splitlines() if line.startswith('Uid:'))
                 if uid in [int(value) for value in line.split()[1:]]:
                     yield int(entry.name)
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 pass
 
 

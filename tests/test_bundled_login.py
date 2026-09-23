@@ -94,10 +94,11 @@ async def test_dns_address_pinned(monkeypatch):
 
 def test_firewall_is_deny_default_and_proxy_only():
     commands = broker.firewall_commands('172.25.0.2')
-    assert ['iptables', '-P', 'OUTPUT', 'DROP'] in commands
-    assert ['ip6tables', '-P', 'OUTPUT', 'DROP'] in commands
+    assert all(Path(command[0]).is_absolute() for command in commands)
+    assert ['/usr/sbin/iptables', '-P', 'OUTPUT', 'DROP'] in commands
+    assert ['/usr/sbin/ip6tables', '-P', 'OUTPUT', 'DROP'] in commands
     permits = [c for c in commands if 'ACCEPT' in c]
-    assert permits == [['iptables', '-A', 'OUTPUT', '-p', 'tcp', '-d', '172.25.0.2', '--dport', '3128', '-j', 'ACCEPT']]
+    assert permits == [['/usr/sbin/iptables', '-A', 'OUTPUT', '-p', 'tcp', '-d', '172.25.0.2', '--dport', '3128', '-j', 'ACCEPT']]
     assert '--dport' in permits[0] and '3128' in permits[0]
     assert 'ESTABLISHED' not in str(commands)  # not a broad inherited-session bypass
 
