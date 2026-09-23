@@ -12,3 +12,6 @@ dashboard/.next
 private
 .loma-private
 secrets
+
+qa-private
+graphify-out

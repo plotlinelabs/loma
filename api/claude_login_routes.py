@@ -5,7 +5,6 @@ import time
 from aiohttp import web
 from api.auth_helpers import get_user_email
 from isolation import claude_login as login
-from isolation.deployment import remote_workers_enabled
 from observability.db import get_db
 
 SESSIONS = web.AppKey('claude_login_sessions', dict)
@@ -44,20 +43,20 @@ async def start(request):
     if not await allowed(email):
         raise web.HTTPForbidden()
     try:
-        if not remote_workers_enabled():
-            raise ValueError('Remote workers are required')
         connection = login.transport()
     except (ValueError, KeyError, OSError):
-        return web.json_response({'error': 'Isolated Claude login is not configured. Contact your administrator.'}, status=503)
+        return web.json_response({'error': 'Claude login is unavailable. Ask your administrator to start the full Docker Compose stack, including loma-login.'}, status=503)
     sessions = request.app[SESSIONS]
     # No await between limits check and reservation; bounded even with concurrent POSTs.
     for key, item in list(sessions.items()):
-        if item.expires <= time.time():
+        if item.expires <= time.time() and not item.cancelling:
             if item.task:
                 item.task.cancel()
             del sessions[key]
+    if email in sessions and sessions[email].cancelling:
+        return web.json_response({'error': 'Cancellation in progress. Try again shortly.'}, status=409)
     if email in sessions and sessions[email].state in {'starting', 'waiting'}:
-        return web.json_response({'error': 'A login is already in progress. Cancel it first.'}, status=409)
+        return web.json_response(sessions[email].public(), headers={'Cache-Control': 'no-store'})
     if len(sessions) >= 64 and email not in sessions:
         return web.json_response({'error': 'Login service is busy. Try again later.'}, status=503)
     session = login.Login(email)
@@ -65,11 +64,23 @@ async def start(request):
     try:
         async with asyncio.timeout(10):
             await login.begin(email, session.id)
+        if sessions.get(email) is not session or session.cancelling:
+            return web.json_response({'error': 'Login was cancelled. Please start again.'}, status=409)
         session.task = asyncio.create_task(login.run_login(session, connection, lambda: allowed(email)))
     except BaseException:
-        sessions.pop(email, None)
+        if sessions.get(email) is session:
+            sessions.pop(email, None)
         raise
     return web.json_response(session.public(), status=201, headers={'Cache-Control': 'no-store'})
+
+
+async def active(request):
+    email = owner(request)
+    if not await allowed(email):
+        raise web.HTTPForbidden()
+    session = request.app[SESSIONS].get(email)
+    data = session.public() if session and session.expires > time.time() and session.state in {'starting', 'waiting'} else None
+    return web.json_response(data, headers={'Cache-Control': 'no-store'})
 
 
 async def status(request):
@@ -81,12 +92,12 @@ async def submit(request):
     session = await current(request)
     try:
         body = await request.json()
-        code = body['code']
-        if set(body) != {'code'} or not isinstance(code, str) or not login.CODE.fullmatch(code):
+        if not isinstance(body, dict) or set(body) != {'code'}:
             raise ValueError()
+        code = login.normalize_code(body['code'])
     except (ValueError, KeyError, TypeError):
         return web.json_response({'error': 'Enter the authorization code from Anthropic.'}, status=400)
-    if session.state != 'waiting' or session.submitted:
+    if session.state != 'waiting' or session.submitted or session.cancelling:
         return web.json_response({'error': 'This login is not waiting for a code.'}, status=409)
     session.submitted = True
     session.queue.put_nowait(code)
@@ -94,15 +105,27 @@ async def submit(request):
 
 
 async def cancel(request):
-    session = await current(request)
-    if session.task:
-        session.task.cancel()
-        await asyncio.gather(session.task, return_exceptions=True)
-    # Invalidate completion in any other backend process, without removing a
-    # previous successful connection when cancelling a reconnect attempt.
-    async with asyncio.timeout(10):
-        await login.begin(session.owner, 'cancelled-' + session.id)
-    request.app[SESSIONS].pop(session.owner, None)
+    email = owner(request)
+    if not await allowed(email):
+        raise web.HTTPForbidden()
+    session = request.app[SESSIONS].get(email)
+    # A retried DELETE for an already removed session must not affect a new one.
+    if session is None or session.id != request.match_info['session_id']:
+        return web.json_response({'ok': True})
+    if session.cancelling:
+        return web.json_response({'error': 'Cancellation in progress. Try again shortly.'}, status=409)
+    session.cancelling = True
+    try:
+        if session.task:
+            session.task.cancel()
+            await asyncio.gather(session.task, return_exceptions=True)
+        # Fence late completion without removing a previous successful connection.
+        async with asyncio.timeout(10):
+            await login.begin(session.owner, 'cancelled-' + session.id)
+        if request.app[SESSIONS].get(email) is session:
+            request.app[SESSIONS].pop(email)
+    finally:
+        session.cancelling = False
     return web.json_response({'ok': True})
 
 
@@ -116,6 +139,7 @@ async def cleanup(app):
 def setup_claude_login_routes(app):
     app[SESSIONS] = {}
     app.router.add_post('/api/claude-auth/login', start)
+    app.router.add_get('/api/claude-auth/login', active)
     app.router.add_get('/api/claude-auth/login/{session_id}', status)
     app.router.add_post('/api/claude-auth/login/{session_id}/code', submit)
     app.router.add_delete('/api/claude-auth/login/{session_id}', cancel)

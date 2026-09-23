@@ -11,11 +11,13 @@ import os
 from pathlib import Path
 import re
 import time
-from urllib.parse import urlsplit
 import uuid
 
 import aiohttp
 
+from urllib.parse import urlsplit
+
+from isolation.login_urls import authorization_url, AUTHORIZATION_ENDPOINTS
 from isolation.accounts import SubscriptionAccount, _read
 from isolation.client import transport_context
 from isolation.oauth import _atomic, _locked, _number, _string
@@ -26,8 +28,27 @@ EMAIL = re.compile(r'[A-Za-z0-9_+.%=-]+@[A-Za-z0-9.-]+\Z')
 CODE = re.compile(r'[A-Za-z0-9_.#~-]{1,2048}\Z')
 
 
+def normalize_code(value):
+    """Remove only the known terminal clipboard suffix, never arbitrary code bytes."""
+    if not isinstance(value, str) or len(value) > 8192:
+        raise ValueError('Invalid authorization code')
+    value = value.strip()
+    # Some terminals copy an OSC hyperlink's BEL delimiter and authorization URL.
+    match = re.fullmatch(
+        r'([A-Za-z0-9_.#~-]{1,2048})[\s\x07]*(https://[^\s\x07]+)[\s\x07]*', value)
+    if match:
+        url = urlsplit(match[2])
+        if ((url.hostname, url.path) in AUTHORIZATION_ENDPOINTS and not url.username
+                and not url.password and url.port in (None, 443) and not url.fragment):
+            value = match[1]
+    if not CODE.fullmatch(value):
+        raise ValueError('Invalid authorization code')
+    return value
+
+
 def enabled():
-    return os.getenv('LOMA_CLAUDE_SHARED_LOGIN') == 'on'
+    default = 'on' if Path(os.getenv('LOMA_LOGIN_SOCKET', '/run/loma-login/login.sock')).is_socket() else 'off'
+    return os.getenv('LOMA_CLAUDE_SHARED_LOGIN', default) == 'on'
 
 
 def directory(email):
@@ -45,6 +66,14 @@ def directory(email):
 def transport():
     if not enabled():
         raise ValueError('Isolated Claude login is not configured')
+    mode = os.getenv('LOMA_LOGIN_MODE', 'bundled')
+    if mode == 'bundled':
+        path = Path(os.getenv('LOMA_LOGIN_SOCKET', '/run/loma-login/login.sock'))
+        if not path.is_absolute() or path.is_symlink() or not path.is_socket():
+            raise ValueError('Bundled Claude login is unavailable. Rebuild and start the full Docker Compose stack.')
+        return 'http://loma-login', None, str(path)
+    if mode != 'remote':
+        raise ValueError('LOMA_LOGIN_MODE must be bundled or remote')
     url = os.environ['LOMA_LOGIN_URL']
     token = os.environ['LOMA_LOGIN_TOKEN']
     if len(token) < 32:
@@ -151,28 +180,17 @@ class Login:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1), repr=False)
     task: asyncio.Task | None = field(default=None, repr=False)
     submitted: bool = False
+    cancelling: bool = False
 
     def public(self):
         return {'id': self.id, 'state': self.state, 'url': self.url,
-                'error': self.error, 'expires_at': self.expires}
-
-
-def authorization_url(text):
-    # CLI terminal output is never sent to a browser. Only its exact HTTPS OAuth
-    # link on Anthropic's allowlist survives (no terminal escapes or HTML).
-    clean = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
-    for raw in re.findall(r'https://[^\s\x1b<>]+', clean):
-        parsed = urlsplit(raw)
-        if (parsed.hostname in {'claude.ai', 'platform.claude.com', 'console.anthropic.com'}
-                and parsed.path == '/oauth/authorize' and not parsed.username
-                and not parsed.password and parsed.port in (None, 443)
-                and 'code_challenge=' in parsed.query and 'state=' in parsed.query):
-            return raw
-    return None
+                'error': self.error, 'expires_at': self.expires, 'submitted': self.submitted}
 
 
 async def run_login(login, connection, authorize):
     url, token, tls = connection
+    connector = aiohttp.UnixConnector(path=tls) if token is None else None
+    headers = {'Authorization': 'Bearer ' + token} if token is not None else {}
     pending = None
     bundle = None
     text = ''
@@ -182,11 +200,11 @@ async def run_login(login, connection, authorize):
             raise ValueError('Login access revoked')
         await ws.send_str(response_frame({'type': 'tool_response', 'id': request_id, 'result': {'code': code}}))
     try:
-        async with asyncio.timeout(TTL), aiohttp.ClientSession(trust_env=False) as session:
+        async with asyncio.timeout(TTL), aiohttp.ClientSession(trust_env=False, connector=connector) as session:
             if not await authorize():
                 raise ValueError('Login access revoked')
-            async with session.ws_connect(url.rstrip('/') + '/v1/run', ssl=tls,
-                    headers={'Authorization': 'Bearer ' + token}, max_msg_size=131072, heartbeat=20) as ws:
+            async with session.ws_connect(url.rstrip('/') + '/v1/run', ssl=tls if token is not None else True,
+                    headers=headers, max_msg_size=131072, heartbeat=20) as ws:
                 await ws.send_json({'type': 'start', 'input': {'runtime': 'claude-login'}})
                 seen = set()
                 async for message in ws:
@@ -228,6 +246,11 @@ async def run_login(login, connection, authorize):
                         if bundle is None or not await authorize():
                             raise ValueError('Login did not complete')
                         await publish(login.owner, login.id, bundle, authorize)
+                        from agent.pool import get_pool
+                        try:
+                            get_pool().refresh_accounts()
+                        except RuntimeError:
+                            pass  # remote mode discovers accounts on each admission
                         login.state, login.url = 'connected', None
                         return
                 raise ValueError('Login ended before completion')

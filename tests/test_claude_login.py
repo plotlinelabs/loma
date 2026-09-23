@@ -158,7 +158,6 @@ async def test_revoke_and_cancel_never_publish(monkeypatch):
 @pytest.mark.asyncio
 async def test_rest_owner_binding_validation_cancel(monkeypatch):
     monkeypatch.setattr(routes, 'allowed', AsyncMock(return_value=True))
-    monkeypatch.setattr(routes, 'remote_workers_enabled', lambda: True)
     monkeypatch.setattr(mod, 'transport', lambda: ('https://test.invalid', 'x'*32, object()))
     async def wait(session, *_):
         session.state, session.url = 'waiting', URL
@@ -175,14 +174,23 @@ async def test_rest_owner_binding_validation_cancel(monkeypatch):
         assert response.status == 201
         sid = (await response.json())['id']; path = '/api/claude-auth/login/' + sid
         assert (await client.get(path, headers={'Test-User': OTHER})).status == 404
-        assert (await client.post('/api/claude-auth/login', headers={'Test-User': OWNER})).status == 409
+        assert (await (await client.post('/api/claude-auth/login', headers={'Test-User': OWNER})).json())['id'] == sid
+        assert (await (await client.get('/api/claude-auth/login', headers={'Test-User': OWNER})).json())['id'] == sid
+        assert await (await client.get('/api/claude-auth/login', headers={'Test-User': OTHER})).json() is None
         for code in ['x\nrm -rf /', '\x1b', 'x'*2049]:
             assert (await client.post(path+'/code', headers={'Test-User': OWNER}, json={'code': code})).status == 400
-        assert (await client.post(path+'/code', headers={'Test-User': OWNER}, json={'code': 'code#state'})).status == 200
+        assert (await client.post(path+'/code', headers={'Test-User': OWNER}, json={'code': 'code#state\x07https://claude.com/cai/oauth/authorize?code=true'})).status == 200
+        assert app[routes.SESSIONS][OWNER].queue.get_nowait() == 'code#state'
+        assert (await (await client.get(path, headers={'Test-User': OWNER})).json())['submitted'] is True
         assert (await client.post(path+'/code', headers={'Test-User': OWNER}, json={'code': 'again'})).status == 409
-        assert (await client.delete(path, headers={'Test-User': OTHER})).status == 404
+        assert (await client.delete(path, headers={'Test-User': OTHER})).status == 200
+        assert OWNER in app[routes.SESSIONS]
         assert (await client.delete(path, headers={'Test-User': OWNER})).status == 200
         with pytest.raises(ValueError): await mod.publish(OWNER, sid, bundle())
+        assert await (await client.get('/api/claude-auth/login', headers={'Test-User': OWNER})).json() is None
+        restarted = await client.post('/api/claude-auth/login', headers={'Test-User': OWNER})
+        assert restarted.status == 201
+        assert (await restarted.json())['id'] != sid
 
 
 @pytest.mark.asyncio
@@ -289,3 +297,78 @@ async def test_deployment_merges_live_connections_and_pool_status(monkeypatch, t
     assert 'synthetic-access' not in json.dumps(status)
     await mod.disconnect(OWNER)
     assert config.accounts_for('claude') == ()
+
+
+@pytest.mark.parametrize('endpoint', [
+    'https://claude.com/cai/oauth/authorize',
+    'https://claude.ai/oauth/authorize',
+    'https://platform.claude.com/oauth/authorize',
+    'https://console.anthropic.com/oauth/authorize',
+])
+def test_pinned_cli_authorization_endpoints(endpoint):
+    url = endpoint + '?code=true&code_challenge=synthetic&state=synthetic'
+    assert mod.authorization_url('Opening browser to sign in...\n' + url + '\n') == url
+
+
+@pytest.mark.parametrize('endpoint', [
+    'https://claude.com.evil.test/cai/oauth/authorize',
+    'https://claude.com/cai/redirect',
+    'https://claude.com/oauth/authorize',
+    'https://user:password@claude.com/cai/oauth/authorize',
+    'https://claude.com:444/cai/oauth/authorize',
+])
+def test_new_endpoint_keeps_exact_host_path_and_authority(endpoint):
+    assert mod.authorization_url(endpoint + '?code_challenge=x&state=y') is None
+
+
+@pytest.mark.parametrize('suffix', ['', '\x07https://claude.com/cai/oauth/authorize?code=true',
+    '\nhttps://claude.ai/oauth/authorize?code=true', ' https://platform.claude.com/oauth/authorize?code=true'])
+def test_normalize_clipboard_code(suffix):
+    assert mod.normalize_code('  synthetic-code#full-state' + suffix + '\n') == 'synthetic-code#full-state'
+
+
+@pytest.mark.parametrize('value', [None, {}, 'x'*8193, 'code#state\ncommands',
+    'code#state\x1b[31m', 'code#state\x07https://claude.com.evil.test/cai/oauth/authorize?code=true',
+    'code#state https://claude.com/other', 'https://claude.com/cai/oauth/authorize?code=true',
+    'code#state\x07https://claude.com/cai/oauth/authorize?code=true more', 'co\x07de#state'])
+def test_normalize_rejects_unknown_artifacts(value):
+    with pytest.raises(ValueError):
+        mod.normalize_code(value)
+
+
+@pytest.mark.asyncio
+async def test_cancel_expired_and_stale_delete_preserves_new_session(monkeypatch):
+    monkeypatch.setattr(routes, 'allowed', AsyncMock(return_value=True))
+    monkeypatch.setattr(routes, 'owner', lambda _: OWNER)
+    old = mod.Login(OWNER, expires=time.time()-1)
+    sessions = {OWNER: old}
+    req = SimpleNamespace(app={routes.SESSIONS: sessions}, match_info={'session_id': old.id})
+    assert (await routes.cancel(req)).status == 200
+    new = mod.Login(OWNER)
+    sessions[OWNER] = new
+    assert (await routes.cancel(req)).status == 200
+    assert sessions[OWNER] is new
+
+
+@pytest.mark.asyncio
+async def test_cancel_fence_blocks_concurrent_restart_even_when_expired(monkeypatch):
+    monkeypatch.setattr(routes, 'allowed', AsyncMock(return_value=True))
+    monkeypatch.setattr(routes, 'owner', lambda _: OWNER)
+    monkeypatch.setattr(mod, 'transport', lambda: ('https://test.invalid', 'x'*32, object()))
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def begin(*_):
+        entered.set()
+        await release.wait()
+    monkeypatch.setattr(mod, 'begin', begin)
+    old = mod.Login(OWNER, expires=time.time()-1)
+    sessions = {OWNER: old}
+    req = SimpleNamespace(app={routes.SESSIONS: sessions}, match_info={'session_id': old.id})
+    task = asyncio.create_task(routes.cancel(req))
+    await entered.wait()
+    try:
+        assert (await routes.start(req)).status == 409
+        assert sessions[OWNER] is old
+    finally:
+        release.set()
+        await task
+    assert OWNER not in sessions

@@ -116,6 +116,17 @@ class Supervisor:
     def container_command(self, name):
         return docker_command(self.settings, name)
 
+    async def remove_worker(self, name, proc):
+        try:
+            await command('docker', 'rm', '-f', name)
+        except (RuntimeError, TimeoutError):
+            try:
+                ids = await command('docker', 'ps', '-aq', '--filter', f'name=^/{name}$')
+                if ids.strip():
+                    self.unhealthy = True
+            except (RuntimeError, TimeoutError):
+                self.unhealthy = True
+
     async def run(self, request):
         self.authenticate(request)
         if self.unhealthy or len(self.active) >= self.settings.max_workers:
@@ -198,15 +209,9 @@ class Supervisor:
             async def cleanup():
                 try:
                     if launched:
-                        await command('docker', 'rm', '-f', name)
-                except (RuntimeError, TimeoutError):
-                    # Could be auto-removed, but inspect before allowing more work.
-                    try:
-                        ids = await command('docker', 'ps', '-aq', '--filter', f'name=^/{name}$')
-                        if ids.strip():
-                            self.unhealthy = True
-                    except (RuntimeError, TimeoutError):
-                        self.unhealthy = True
+                        await self.remove_worker(name, proc)
+                except Exception:
+                    self.unhealthy = True
                 finally:
                     if proc is not None:
                         if proc.returncode is None:
