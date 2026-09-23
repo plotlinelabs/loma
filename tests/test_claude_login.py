@@ -158,7 +158,6 @@ async def test_revoke_and_cancel_never_publish(monkeypatch):
 @pytest.mark.asyncio
 async def test_rest_owner_binding_validation_cancel(monkeypatch):
     monkeypatch.setattr(routes, 'allowed', AsyncMock(return_value=True))
-    monkeypatch.setattr(routes, 'remote_workers_enabled', lambda: True)
     monkeypatch.setattr(mod, 'transport', lambda: ('https://test.invalid', 'x'*32, object()))
     async def wait(session, *_):
         session.state, session.url = 'waiting', URL

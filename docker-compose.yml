@@ -10,6 +10,7 @@ services:
     ports:
       - "127.0.0.1:${BACKEND_HOST_PORT:-3000}:3000"
     volumes:
+      - loma-login-socket:/run/loma-login:ro
       - loma-skill-assets:/var/lib/loma/skill-assets
       # Mount the real .env so the dashboard Environment admin (/api/env) can read & edit it.
       # env_file injects values into the process env, but does not place a file at /app/.env.
@@ -30,7 +31,58 @@ services:
     # On SIGTERM the backend marks in-flight runs interrupted and notifies their
     # owners (recovery.mark_all_running_interrupted); give it time to finish
     # before Docker's SIGKILL (default grace is only 10s).
+    depends_on:
+      loma-login:
+        condition: service_healthy
     stop_grace_period: 30s
+    restart: unless-stopped
+
+  # Included in the normal deployment. No published ports, secrets, Docker
+  # socket or persistent credential mounts. Browser clients never reach it.
+  loma-login:
+    build:
+      context: .
+      dockerfile: deploy/worker/bundled-login.Dockerfile
+      target: broker
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SYS_CHROOT, SETUID, SETGID, CHOWN, DAC_OVERRIDE, KILL, NET_ADMIN, MKNOD]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 300
+    mem_limit: 2g
+    cpus: 2
+    volumes:
+      - loma-login-socket:/run/loma-login
+    tmpfs:
+      - /sandbox/dev:rw,nosuid,dev,size=1m,mode=755
+      - /sandbox/sessions:rw,nosuid,nodev,noexec,size=128m,mode=755
+      - /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777
+    networks: [login-private]
+    depends_on:
+      loma-login-proxy:
+        condition: service_started
+        restart: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.connect('/run/loma-login/login.sock'); s.sendall(b'GET /health HTTP/1.0\\r\\n\\r\\n'); assert b'200 OK' in s.recv(1024)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: unless-stopped
+
+  loma-login-proxy:
+    build:
+      context: .
+      dockerfile: deploy/worker/bundled-login.Dockerfile
+      target: proxy
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.5
+    networks: [login-private, login-egress]
     restart: unless-stopped
 
   loma-dashboard:
@@ -95,7 +147,14 @@ services:
       - ./deploy/nginx/certbot/conf:/etc/letsencrypt
       - ./deploy/nginx/certbot/www:/var/www/certbot
 
+networks:
+  login-private:
+    internal: true
+    enable_ipv6: false
+  login-egress:
+
 volumes:
+  loma-login-socket:
   loma-skill-assets:
   loma-claude-users:
   loma-codex-users:

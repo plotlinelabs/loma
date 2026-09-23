@@ -1772,7 +1772,7 @@ export default function IntegrationsPage() {
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Login with Claude Code</DialogTitle>
-                  <DialogDescription>Sign in with Anthropic in an isolated login sandbox</DialogDescription>
+                  <DialogDescription>Sign in with Anthropic to add your account to the shared pool</DialogDescription>
                 </DialogHeader>
                 {claudeLoginId && <ClaudeLogin sessionId={claudeLoginId} onConnected={handleClaudeTerminalDone} />}
                 <DialogFooter>

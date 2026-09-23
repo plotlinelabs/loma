@@ -5,7 +5,6 @@ import time
 from aiohttp import web
 from api.auth_helpers import get_user_email
 from isolation import claude_login as login
-from isolation.deployment import remote_workers_enabled
 from observability.db import get_db
 
 SESSIONS = web.AppKey('claude_login_sessions', dict)
@@ -44,11 +43,9 @@ async def start(request):
     if not await allowed(email):
         raise web.HTTPForbidden()
     try:
-        if not remote_workers_enabled():
-            raise ValueError('Remote workers are required')
         connection = login.transport()
     except (ValueError, KeyError, OSError):
-        return web.json_response({'error': 'Isolated Claude login is not configured. Contact your administrator.'}, status=503)
+        return web.json_response({'error': 'Claude login is unavailable. Ask your administrator to start the full Docker Compose stack, including loma-login.'}, status=503)
     sessions = request.app[SESSIONS]
     # No await between limits check and reservation; bounded even with concurrent POSTs.
     for key, item in list(sessions.items()):

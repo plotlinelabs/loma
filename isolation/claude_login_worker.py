@@ -5,6 +5,7 @@ from pathlib import Path
 import pty
 import re
 import selectors
+import stat
 import subprocess
 import sys
 import termios
@@ -15,7 +16,7 @@ def emit(frame):
     print(json.dumps(frame), flush=True)
 
 
-def main(home=Path('/workspace')):
+def main(home=Path('/workspace'), *, command=None, proxy=None):
     if json.loads(sys.stdin.readline()) != {'type': 'start', 'input': {'runtime': 'claude-login'}}:
         raise ValueError('Invalid login request')
     config = home / '.claude'
@@ -27,7 +28,10 @@ def main(home=Path('/workspace')):
     env = {'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(config),
            'PATH': '/usr/local/bin:/usr/bin:/bin', 'TERM': 'dumb',
            'BROWSER': '/bin/false', 'DISABLE_AUTOUPDATER': '1'}
-    proc = subprocess.Popen(['claude', 'auth', 'login'], env=env, cwd=home,
+    if proxy is not None:
+        env['HTTPS_PROXY'] = proxy
+        env['HTTP_PROXY'] = proxy
+    proc = subprocess.Popen(command or ['claude', 'auth', 'login'], env=env, cwd=home,
                             stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
     deadline, size, attempt = time.monotonic() + 600, 0, 0
@@ -65,11 +69,22 @@ def main(home=Path('/workspace')):
             raise ValueError('Claude login failed')
         # Fixed files only. No CLI history, settings, MCPs or arbitrary files leave.
         files = {}
-        for name in ('.claude.json', '.credentials.json'):
-            path = config / name
-            if path.is_symlink() or path.stat().st_size > 65536:
-                raise ValueError('Invalid credential file')
-            files[name] = json.loads(path.read_text())
+        # The CLI is untrusted: never follow even a parent-directory symlink
+        # when the bundled broker (root) reads a dropped-UID login's output.
+        fd = os.open(config, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for name in ('.claude.json', '.credentials.json'):
+                file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                with os.fdopen(file_fd, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+                        raise ValueError('Invalid credential file')
+                    raw = stream.read(65537)
+                    if len(raw) > 65536:
+                        raise ValueError('Credential file too large')
+                    files[name] = json.loads(raw)
+        finally:
+            os.close(fd)
         if attempt == 0:
             emit({'type': 'text', 'text': 'LOMA_LOGIN_FINISHED'})
             response = json.loads(sys.stdin.readline(8193))

@@ -18,7 +18,7 @@ are private/no-store and active HTML/SVG previews are sandboxed.
 
 - Browser host terminals are unavailable, including for admins. Terminal-based
   Claude/Codex terminal connection and reauthentication cannot complete.
-  Claude now has a separate opt-in [isolated login flow](claude-shared-login.md);
+  Claude now has a separate [isolated login flow](claude-shared-login.md);
   it never reopens a host shell. Codex terminal login remains unavailable.
 - Persisted encoded-path links and unowned files no longer work. Users must
   regenerate files. No automatic legacy ownership inference or backfill.

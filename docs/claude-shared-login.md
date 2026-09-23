@@ -1,42 +1,91 @@
-# Isolated Claude login and shared subscription pool
+# Claude login and shared round-robin pool
 
-This feature is **off by default**. Enable it only for an organization whose
-Anthropic agreement permits shared subscription usage. No production deployment
-or provider login is performed by this PR.
+## Standard deployment: one command
 
-## Flow
+For an organization with permission to pool its Claude subscriptions:
 
-Integrations > Personal > Claude Code > Login starts the official pinned
-`claude auth login` in a fresh gVisor container on a **separate login host**.
-The UI shows only the provider's allowlisted authorization URL and accepts a
-single authorization code, not arbitrary terminal input. The CLI performs OAuth;
-Loma does not implement a second OAuth authorization-code exchange.
+```bash
+docker compose up -d --build
+```
 
-After the CLI exits successfully, the existing authenticated supervisor protocol
-returns an allowlisted credential bundle to the backend. Credentials are never
-returned to the browser, logged, or mounted into a task worker. The login
-container is removed on completion, error, deadline or backend disconnect.
+That is the entire login infrastructure setup. Open **Integrations > Personal >
+Claude Code > Login**, open the Anthropic sign-in link, and paste its authorization
+code. Repeat for each account. Loma saves the connection and discovers it without
+restarting. Users' tasks share the connected-account pool; Google/Slack tool
+credentials remain those of the task's requester, not the Claude account owner.
 
-Backend files are private (directory 0700, files 0600) on an **encrypted volume**.
-This PR does not implement disk encryption: configuring and verifying encrypted
-storage, backups and access controls is a deployment prerequisite. Only OAuth
-identity and credential fields persist; no CLI history, hooks or MCP settings.
+The normal Compose stack now includes two small same-server components:
+`loma-login` (fixed-command login sandbox) and `loma-login-proxy` (restricted
+outbound HTTPS). They start automatically, publish no ports, and need no separate
+server, Docker daemon, gVisor installation, certificate or service token. The
+backend uses a private Unix socket. **Do deploy the full stack**, not just the
+backend image. Linux Docker Engine with normal rootful container capabilities
+is required. Rootless Docker is not supported by this sandbox.
 
-Successfully connected accounts join the existing isolated-task selector without
-a restart. New tasks rotate through eligible accounts regardless of the task
-owner. Inactive/deleted users, admin-disabled pool accounts, disconnected
-credentials, full capacity and cooldowns are skipped. Selection order is
-process-local; capacity leases and cooldowns are Mongo-backed across processes.
-An account is pinned for a run: no unsafe mid-run replay on another account.
-The existing backend refresh adapter renews access tokens; ambiguous/revoked
-refreshes require reconnect. Personal tools still use the run owner's identity.
+No new login environment variables are required. Existing
+`LOMA_CLAUDE_SHARED_LOGIN=off` deliberately disables login; remove it to use the
+bundled default. Existing dedicated-host deployments must set
+`LOMA_LOGIN_MODE=remote` to continue using their URL/token/mTLS configuration.
+Do not set `LOMA_REMOTE_WORKERS=on` just for login: that flag selects a separate
+TASK execution architecture and still requires its own worker infrastructure.
+Login works with either the existing local task pool or remote task workers.
 
-Disconnect fences pending logins and removes the local credentials. Already-sent
-provider calls cannot be undone; subsequent calls fail revalidation. Disconnect
-is local removal, not a guarantee of provider-side token revocation; revoke the
-session in Anthropic's account settings if needed.
+Credentials persist in the existing `loma-claude-users` volume. Keep the standard
+`CLAUDE_USERS_DIR=/opt/claude-users` path unless mounting an alternative. Do not run
+`docker compose down -v` unless intentionally deleting saved connections.
+Permissions are 0700/0600, not encryption: encrypt the deployment's disks/backups
+with your infrastructure controls. Never run local and remote token refreshers
+against the same account store concurrently.
 
-## Deployment prerequisites and rollout gate
+## What remains isolated
+
+- Host terminal HTTP/WebSocket endpoints remain disabled for every role.
+- Official, pinned Claude Code executes only `claude auth login`, never task
+  prompts, browser commands, project hooks or backend code.
+- Each login gets a unique unprivileged UID, a private 0700 temporary home and
+  chroot. The runtime is read-only. No backend secrets, persistent accounts,
+  control socket, `/proc`, Docker socket or host directories enter the chroot.
+- Login networking can reach only the bundled proxy. Startup installs IPv4/IPv6
+  deny-by-default rules inside the login container; if this fails the service
+  never becomes healthy. The proxy allows only exact Anthropic HTTPS hostnames,
+  rejects private/metadata addresses and connects to the IP it validated.
+- Resource/concurrency limits and a ten-minute login deadline bound abuse. On
+  completion/cancel/failure/disconnect, all processes of the session's UID are
+  killed and its temporary files deleted. Interrupted login sessions restart
+  from scratch after a backend restart; saved connections survive.
+- Only allowlisted identity/OAuth fields reach the backend. No raw terminal
+  output or credential bundle reaches a browser. Disconnect removes local
+  credentials; revoke at Anthropic separately if provider-side revocation is
+  needed. Existing active tasks may finish; disconnect blocks future selection.
+
+**Trade-off:** this shares the application host's kernel. A kernel/container
+escape has a larger blast radius than the dedicated gVisor-host option below.
+The broker has narrowly scoped capabilities inside its own container for chroot,
+UID separation and firewall setup; the CLI drops all of them. This PR does not
+upgrade the security boundary of legacy local TASK execution.
+
+Login sessions are still process-local. Multi-replica backends need sticky login
+routing and shared credential storage; the out-of-box stack is single-backend.
+
+## Verification before first production use
+
+Run `bash scripts/test-bundled-login.sh` on a Docker host to exercise bundled
+image startup, the real official CLI authorization-link step, sandbox file/network
+denials and cleanup without a paid model call or real credentials. It creates
+an ephemeral project from committed sources and never loads operator secrets.
+This image-level check is not wired into CI because the available GitHub token
+cannot update workflows. It remains a mandatory pre-merge check. Unit/browser fixtures cover successful synthetic publication,
+owner access, cancel/disconnect and pool rotation. A maintainer must still finish
+one real Anthropic login, validate refresh/restart and connect a second test
+account before calling provider authentication end-to-end verified.
+
+If login is unavailable, run `docker compose ps` and inspect `docker compose logs
+loma-login`. A failed firewall/image preflight is a hard failure, never a fallback
+to a host process. Restart the login service after replacing the proxy container
+with a different IP; the firewall intentionally pins that IP. A normal full-stack
+recreation initializes it again.
+
+## Optional dedicated-host mode (existing deployments)
 
 1. Keep `LOMA_REMOTE_WORKERS=on` and deploy the existing remote-task architecture.
    Host terminal endpoints remain 403, including for admins. No local fallback.
@@ -61,6 +110,7 @@ session in Anthropic's account settings if needed.
 6. Backend configuration:
 
    ```text
+   LOMA_LOGIN_MODE=remote
    LOMA_CLAUDE_SHARED_LOGIN=on
    LOMA_LOGIN_URL=https://login-host.example:8443
    LOMA_LOGIN_TOKEN=<separate secret>

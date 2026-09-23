@@ -164,6 +164,7 @@ class ClientPool:
 
         # Round-robin account management
         self._accounts: list[dict] = []  # [{"email": "x@y.com", "config_dir": "/path/to/x@y.com"}, ...]
+        self._request_rr_index: int = 0
         self._rr_index: int = 0  # next account index for round-robin
         self._account_cooldowns: dict[str, float] = {}  # email -> cooldown expiry timestamp
 
@@ -235,8 +236,8 @@ class ClientPool:
             self._accounts = accounts
             return
 
-        for entry in users_dir.iterdir():
-            if not entry.is_dir():
+        for entry in sorted(users_dir.iterdir()):
+            if entry.is_symlink() or not entry.is_dir():
                 continue
             config_file = entry / ".claude.json"
             if not config_file.exists():
@@ -308,7 +309,8 @@ class ClientPool:
             if db is None:
                 return set()
             cursor = db.users.find(
-                {"claude_pool_enabled": False},
+                {"$or": [{"claude_pool_enabled": False}, {"deleted": True},
+                         {"status": {"$exists": True, "$ne": "active"}}]},
                 {"email": 1},
             )
             docs = await cursor.to_list(200)
@@ -438,6 +440,38 @@ class ClientPool:
         finally:
             self._warming -= 1
 
+    def _take_ready_client(self):
+        """Round-robin eligible READY accounts, independent of warmup finish order.
+
+        Reject stale clients after disconnect/disable/cooldown rather than handing
+        the next requester a previously warmed connection to that account.
+        """
+        ready = []
+        eligible = {a['email']: a for a in self._accounts
+                    if self._account_cooldowns.get(a['email'], 0) <= time.time()}
+        while not self._available.empty():
+            client = self._available.get_nowait()
+            account = getattr(client, '_pool_account', {})
+            email = account.get('email')
+            path = Path(account.get('config_dir', '/nonexistent'))
+            if (email not in eligible or path.is_symlink()
+                    or not (path / '.claude.json').is_file()
+                    or not (path / '.credentials.json').is_file()):
+                asyncio.create_task(self._disconnect_then_warm(client))
+            else:
+                ready.append(client)
+        chosen = None
+        for _ in range(len(self._accounts)):
+            email = self._accounts[self._request_rr_index % len(self._accounts)]['email']
+            self._request_rr_index = (self._request_rr_index + 1) % len(self._accounts)
+            chosen = next((c for c in ready if c._pool_account['email'] == email), None)
+            if chosen is not None:
+                ready.remove(chosen)
+                break
+        for client in ready:
+            self._available.put_nowait(client)
+        return chosen
+
     async def acquire(self, model: str | None = None) -> ClaudeSDKClient:
         """Get a warm client from the pool.
 
@@ -473,42 +507,21 @@ class ClientPool:
                 self._in_use = max(0, self._in_use - 1)
                 raise
 
-        # 1. Try instant grab
-        try:
-            client = self._available.get_nowait()
+        client = self._take_ready_client()
+        if client is not None:
             self._in_use += 1
-            logger.info(
-                "Acquired warm client (account=%s, available=%d, in_use=%d)",
-                getattr(client, '_pool_account', {}).get('email', '?'),
-                self._available.qsize(), self._in_use,
-            )
             return client
-        except asyncio.QueueEmpty:
-            pass
 
-        # 2. Wait for a client to become available (warming or released by another conversation)
         self._queue_depth += 1
-        logger.info(
-            "Pool empty — request queued (queue_depth=%d, warming=%d, in_use=%d). "
-            "Waiting up to %ds for a free client...",
-            self._queue_depth, self._warming, self._in_use, _env_int("AGENT_QUEUE_TIMEOUT"),
-        )
         try:
-            client = await asyncio.wait_for(self._available.get(), timeout=_env_int("AGENT_QUEUE_TIMEOUT"))
-            self._in_use += 1
-            logger.info(
-                "Acquired client after queuing (account=%s, available=%d, in_use=%d)",
-                getattr(client, '_pool_account', {}).get('email', '?'),
-                self._available.qsize(), self._in_use,
-            )
-            return client
-        except asyncio.TimeoutError:
-            logger.error(
-                "Queue timeout after %ds — no client became available "
-                "(warming=%d, in_use=%d, queue_depth=%d)",
-                _env_int("AGENT_QUEUE_TIMEOUT"), self._warming, self._in_use, self._queue_depth,
-            )
-            raise
+            async with asyncio.timeout(_env_int("AGENT_QUEUE_TIMEOUT")):
+                while True:
+                    client = await self._available.get()
+                    self._available.put_nowait(client)
+                    client = self._take_ready_client()
+                    if client is not None:
+                        self._in_use += 1
+                        return client
         finally:
             self._queue_depth -= 1
 
