@@ -949,6 +949,9 @@ export interface AgentModel {
   supports_reasoning: boolean;
   status: string;
   recommended?: boolean;
+  /** Set by the backend when this model fills a favourites slot. */
+  favorite_rank?: number | null;
+  favorite_label?: string | null;
   cost?: {
     input?: number | null;
     output?: number | null;

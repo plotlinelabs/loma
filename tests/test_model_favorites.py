@@ -10,7 +10,7 @@ EXPECTED = ("anthropic/claude-opus-5-5", "codex/gpt-6-sol", "codex/gpt-6-astra")
 
 def catalog_helpers():
     tree = ast.parse((ROOT / "api/routes.py").read_text())
-    names = {"SUPPORTED_CLAUDE_MODEL_IDS", "FAVORITE_MODEL_IDS", "_recommended_model_rank", "_order_agent_models", "_catalog_default_model"}
+    names = {"SUPPORTED_CLAUDE_MODEL_IDS", "FAVORITE_MODEL_SLOTS", "_resolve_favorite_models", "_order_agent_models", "_catalog_default_model"}
     nodes = [n for n in tree.body if
              isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in n.targets)
              or isinstance(n, ast.FunctionDef) and n.name in names]
@@ -40,15 +40,39 @@ def test_live_discovery_and_explicit_override_remain_authoritative(monkeypatch):
 
 def test_favorites_order_and_no_invented_models():
     scope = catalog_helpers()
-    assert scope["FAVORITE_MODEL_IDS"] == EXPECTED
     ids = ["opencode-go/glm-5.3-flash", EXPECTED[2], "codex/gpt-5.6-sol", EXPECTED[1], EXPECTED[0]]
     original = [{"id": mid} for mid in ids]
     ordered = scope["_order_agent_models"](original)
+    # gpt-6-sol is available, so it fills the writing slot and gpt-5.6-sol is a regular model.
     assert [m["id"] for m in ordered] == list(EXPECTED) + [ids[0], ids[2]]
     assert [m["recommended"] for m in ordered] == [True, True, True, False, False]
+    assert [m.get("favorite_label") for m in ordered[:3]] == [
+        "Claude-Opus-5.5 (For Coding)", "GPT-6-Sol (For Writing)", "GPT-6-Astra (For Complex Tasks)",
+    ]
+    assert [m.get("favorite_rank") for m in ordered] == [0, 1, 2, None, None]
     assert all("recommended" not in m for m in original)
     assert scope["_order_agent_models"]([]) == []
-    assert scope["_order_agent_models"]([{"id": EXPECTED[0]}]) == [{"id": EXPECTED[0], "recommended": True}]
+    assert scope["_order_agent_models"]([{"id": EXPECTED[0]}]) == [{
+        "id": EXPECTED[0], "recommended": True, "favorite_rank": 0,
+        "favorite_label": "Claude-Opus-5.5 (For Coding)",
+    }]
+
+
+def test_writing_favorite_falls_back_to_gpt_5_6_sol_when_sol_6_missing():
+    scope = catalog_helpers()
+    ids = ["opencode-go/glm-5.3-flash", "codex/gpt-6-astra", "codex/gpt-5.6-sol", "anthropic/claude-opus-5-5"]
+    ordered = scope["_order_agent_models"]([{"id": mid} for mid in ids])
+    assert [m["id"] for m in ordered] == [
+        "anthropic/claude-opus-5-5", "codex/gpt-5.6-sol", "codex/gpt-6-astra", "opencode-go/glm-5.3-flash",
+    ]
+    assert [m.get("favorite_label") for m in ordered] == [
+        "Claude-Opus-5.5 (For Coding)", "GPT-5.6-Sol (For Writing)", "GPT-6-Astra (For Complex Tasks)", None,
+    ]
+    # Neither writing model available: slot is simply omitted, other favourites keep their rank.
+    ordered = scope["_order_agent_models"]([{"id": "codex/gpt-6-astra"}, {"id": "anthropic/claude-opus-5-5"}])
+    assert [(m["id"], m["favorite_rank"]) for m in ordered] == [
+        ("anthropic/claude-opus-5-5", 0), ("codex/gpt-6-astra", 2),
+    ]
 
 
 def test_live_catalog_cannot_reintroduce_removed_models(monkeypatch):
