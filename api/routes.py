@@ -187,58 +187,23 @@ async def _stream_registered_file(request, fd, entry):
 
 logger = logging.getLogger(__name__)
 
-# Claude Agent SDK models surfaced in the dashboard picker, newest first.
-# The first entry is treated as the headline/default Claude model.
+# Claude Agent SDK models surfaced in the dashboard picker.
 SUPPORTED_CLAUDE_MODEL_IDS = (
-    "claude-opus-5",
-    "claude-opus-4-8",
+    "claude-opus-5-5",
     "claude-fable-5-1",
-    "claude-fable-5",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
 )
 
 FAVORITE_MODEL_IDS = (
+    "anthropic/claude-opus-5-5",
+    "codex/gpt-6-sol",
     "codex/gpt-6-astra",
-    "codex/gpt-5.6-sol",
-    "anthropic/claude-fable-5-1",
-    "opencode-go/glm-5.3-flash",
 )
 
-FAVORITE_MODEL_TEMPLATES = {
-    "opencode-go/glm-5.3-flash": {
-        "id": "opencode-go/glm-5.3-flash",
-        "provider_id": "opencode-go",
-        "model_id": "glm-5.3-flash",
-        "label": "OpenCode Go · GLM 5.3 Flash",
-        "context_limit": None,
-        "supports_attachments": True,
-        "supports_reasoning": True,
-        "status": "active",
-        "cost": {},
-    },
-    "openai/gpt-5.5": {
-        "id": "openai/gpt-5.5",
-        "provider_id": "openai",
-        "model_id": "gpt-5.5",
-        "label": "OpenAI · GPT-5.5",
-        "context_limit": None,
-        "supports_attachments": True,
-        "supports_reasoning": True,
-        "status": "active",
-        "cost": {},
-    },
-}
-
-
-def _ensure_favorite_models(models: list[dict]) -> list[dict]:
-    """Ensure configured favorite provider/model aliases are available."""
-    by_id = {model.get("id"): model for model in models}
-    if os.environ.get("OPENCODE_API_KEY") and "opencode-go/glm-5.3-flash" not in by_id:
-        models.append(FAVORITE_MODEL_TEMPLATES["opencode-go/glm-5.3-flash"])
-    if os.environ.get("OPENAI_API_KEY") and "openai/gpt-5.5" not in by_id:
-        models.append(FAVORITE_MODEL_TEMPLATES["openai/gpt-5.5"])
-    return models
+def _catalog_default_model(configured: str, models: list[dict]) -> str:
+    """Keep an available configured default; never return a removed picker model."""
+    if any(model["id"] == configured for model in models):
+        return configured
+    return models[0]["id"] if models else ""
 
 
 def _recommended_model_rank(model: dict) -> int | None:
@@ -1259,7 +1224,7 @@ async def handle_agent_models(request: web.Request) -> web.Response:
                 from agent.codex_runtime import supported_codex_model_ids
                 remote_models += [_codex_entry(mid) for mid in supported_codex_model_ids([])]
             if deployment.chat_endpoint and deployment.default_model and \
-                    deployment.default_model.split("/", 1)[0] not in ("anthropic", "codex"):
+                    deployment.default_model.split("/", 1)[0] in ("opencode", "opencode-go"):
                 provider_id, _, model_id = deployment.default_model.partition("/")
                 remote_models.append({
                     "id": deployment.default_model, "provider_id": provider_id,
@@ -1274,7 +1239,7 @@ async def handle_agent_models(request: web.Request) -> web.Response:
             logger.exception("Remote worker deployment is not configured; serving Claude entries only")
             default_agent_model = f"anthropic/{default_claude_model}"
         return web.json_response({
-            "default_model": default_agent_model,
+            "default_model": _catalog_default_model(default_agent_model, remote_models),
             "models": _order_agent_models(remote_models),
         })
 
@@ -1296,30 +1261,23 @@ async def handle_agent_models(request: web.Request) -> web.Response:
         catalog = await get_agent_models()
         filtered_models = list(claude_models) + list(codex_models)
         for model in catalog.get("models", []):
-            model_id = model.get("model_id") or ""
             provider_id = model.get("provider_id") or ""
             if provider_id in ("opencode-go", "opencode"):
                 if os.environ.get("OPENCODE_API_KEY"):
                     filtered_models.append(model)
                 continue
-            if provider_id == "openai" and model_id.startswith("gpt-"):
-                if os.environ.get("OPENAI_API_KEY"):
-                    filtered_models.append({
-                        **model,
-                        "label": f"OpenAI · {model_id}",
-                    })
 
         catalog = {
             **catalog,
-            "default_model": default_agent_model,
-            "models": _order_agent_models(_ensure_favorite_models(filtered_models)),
+            "default_model": _catalog_default_model(default_agent_model, filtered_models),
+            "models": _order_agent_models(filtered_models),
         }
         return web.json_response(catalog)
     except Exception as e:
         logger.exception("Failed to load OpenCode model catalog")
         return web.json_response({
-            "default_model": default_agent_model,
-            "models": _order_agent_models(_ensure_favorite_models(claude_models + codex_models)),
+            "default_model": _catalog_default_model(default_agent_model, claude_models + codex_models),
+            "models": _order_agent_models(claude_models + codex_models),
             "warning": str(e),
         })
 

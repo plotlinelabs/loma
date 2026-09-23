@@ -6,11 +6,16 @@ import { fetchAgentModels, type AgentModel } from "@/lib/api";
 const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 
 export const FAVORITE_MODEL_IDS = [
+  "anthropic/claude-opus-5-5",
+  "codex/gpt-6-sol",
   "codex/gpt-6-astra",
-  "codex/gpt-5.6-sol",
-  "anthropic/claude-fable-5-1",
-  "opencode-go/glm-5.3-flash",
 ] as const;
+
+export const FAVORITE_MODEL_LABELS: Record<string, string> = {
+  "anthropic/claude-opus-5-5": "Claude-Opus-5.5 (For Coding)",
+  "codex/gpt-6-sol": "GPT-6-Sol (For Writing)",
+  "codex/gpt-6-astra": "GPT-6-Astra (For Complex Tasks)",
+};
 
 export function favoriteModelRank(model: AgentModel): number | null {
   const index = FAVORITE_MODEL_IDS.indexOf(model.id as typeof FAVORITE_MODEL_IDS[number]);

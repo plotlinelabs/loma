@@ -56,12 +56,10 @@ DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
 # path). The live list is fetched from ``model/list`` at worker warm time and
 # preferred over this tuple; override order: $CODEX_MODELS > model/list > this.
 DEFAULT_CODEX_MODEL_IDS = (
-    "gpt-6-astra",  # requires codex CLI >= 0.153 (older CLIs get a 400 from the server)
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-6-astra",
     "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4-mini",
 )
 
 CODEX_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("CODEX_CONNECT_TIMEOUT", "90"))
@@ -85,15 +83,16 @@ def default_codex_model() -> str:
 def supported_codex_model_ids(dynamic: list[str] | tuple[str, ...] | None = None) -> tuple[str, ...]:
     """Model ids for the dashboard catalog.
 
+    Only the curated model IDs are surfaced, including for live/override lists.
     Precedence: $CODEX_MODELS env override > ``dynamic`` (the live
     ``model/list`` result cached by the pool) > the static fallback tuple.
     """
     raw = os.environ.get("CODEX_MODELS", "")
-    if raw.strip():
-        return tuple(m.strip() for m in raw.split(",") if m.strip())
-    if dynamic:
-        return tuple(dynamic)
-    return DEFAULT_CODEX_MODEL_IDS
+    candidates = (
+        [m.strip() for m in raw.split(",") if m.strip()]
+        if raw.strip() else dynamic if dynamic else DEFAULT_CODEX_MODEL_IDS
+    )
+    return tuple(dict.fromkeys(m for m in candidates if m in DEFAULT_CODEX_MODEL_IDS))
 
 
 def selected_model_is_codex(selected_model: str | None) -> bool:
