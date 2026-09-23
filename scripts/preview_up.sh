@@ -77,7 +77,11 @@ LOMA_SETUP_TOKEN=${setup_value}
 EOF
 
 echo "[preview] up ${COMPOSE_PROJECT_NAME} (backend=${BACKEND_HOST_PORT} dashboard=${DASHBOARD_HOST_PORT} nginx=${NGINX_HOST_PORT})"
-docker compose up -d --build
+if ! docker compose up -d --build; then
+  # Login broker has no backend secrets; surface its fail-closed startup error.
+  docker compose logs --no-color --tail=60 loma-login || true
+  exit 1
+fi
 
 # --- Front-proxy vhost: route the PR subdomain to this stack's nginx ---
 mkdir -p "$VHOST_DIR"
