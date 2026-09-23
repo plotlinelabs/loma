@@ -193,11 +193,16 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
     "claude-fable-5-1",
 )
 
-FAVORITE_MODEL_IDS = (
-    "anthropic/claude-opus-5-5",
-    "codex/gpt-6-sol",
-    "codex/gpt-6-astra",
+# Dashboard favourites, in display order. Each slot lists candidate models in
+# preference order; the first one present in the live catalog fills the slot.
+# gpt-6-sol is not yet returned by Codex discovery for every account, so the
+# writing slot falls back to gpt-5.6-sol until it is.
+FAVORITE_MODEL_SLOTS = (
+    ("For Coding", (("anthropic/claude-opus-5-5", "Claude-Opus-5.5"),)),
+    ("For Writing", (("codex/gpt-6-sol", "GPT-6-Sol"), ("codex/gpt-5.6-sol", "GPT-5.6-Sol"))),
+    ("For Complex Tasks", (("codex/gpt-6-astra", "GPT-6-Astra"),)),
 )
+
 
 def _catalog_default_model(configured: str, models: list[dict]) -> str:
     """Keep an available configured default; never return a removed picker model."""
@@ -206,27 +211,33 @@ def _catalog_default_model(configured: str, models: list[dict]) -> str:
     return models[0]["id"] if models else ""
 
 
-def _recommended_model_rank(model: dict) -> int | None:
-    """Return favorite rank for the model picker, or None for regular models."""
-    full_id = (model.get("id") or "").lower()
-    for index, favorite_id in enumerate(FAVORITE_MODEL_IDS):
-        if full_id == favorite_id:
-            return index
-    return None
+def _resolve_favorite_models(models: list[dict]) -> dict[str, tuple[int, str]]:
+    """Map available model id -> (favorite rank, display label) for this catalog."""
+    available = {(model.get("id") or "").lower() for model in models}
+    resolved: dict[str, tuple[int, str]] = {}
+    for rank, (purpose, candidates) in enumerate(FAVORITE_MODEL_SLOTS):
+        for model_id, name in candidates:
+            if model_id in available and model_id not in resolved:
+                resolved[model_id] = (rank, f"{name} ({purpose})")
+                break
+    return resolved
 
 
 def _order_agent_models(models: list[dict]) -> list[dict]:
     """Put favorite dashboard models first, preserving all others after."""
-    fallback_rank = len(FAVORITE_MODEL_IDS)
+    favorites = _resolve_favorite_models(models)
+    fallback_rank = len(FAVORITE_MODEL_SLOTS)
 
     ordered = []
     for index, model in enumerate(models):
-        favorite_rank = _recommended_model_rank(model)
-        is_recommended = favorite_rank is not None
+        favorite = favorites.get((model.get("id") or "").lower())
+        entry = {**model, "recommended": favorite is not None}
+        if favorite is not None:
+            entry["favorite_rank"], entry["favorite_label"] = favorite
         ordered.append((
-            favorite_rank if favorite_rank is not None else fallback_rank + index,
+            favorite[0] if favorite is not None else fallback_rank + index,
             index,
-            {**model, "recommended": is_recommended},
+            entry,
         ))
     ordered.sort(key=lambda item: (item[0], item[1]))
     return [model for _, __, model in ordered]

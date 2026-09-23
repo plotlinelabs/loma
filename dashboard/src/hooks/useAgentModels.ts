@@ -5,25 +5,18 @@ import { fetchAgentModels, type AgentModel } from "@/lib/api";
 
 const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 
-export const FAVORITE_MODEL_IDS = [
-  "anthropic/claude-opus-5-5",
-  "codex/gpt-6-sol",
-  "codex/gpt-6-astra",
-] as const;
-
-export const FAVORITE_MODEL_LABELS: Record<string, string> = {
-  "anthropic/claude-opus-5-5": "Claude-Opus-5.5 (For Coding)",
-  "codex/gpt-6-sol": "GPT-6-Sol (For Writing)",
-  "codex/gpt-6-astra": "GPT-6-Astra (For Complex Tasks)",
-};
-
+// Favourites are resolved by the backend (/api/agent-models) so fallbacks such
+// as GPT-6-Sol -> GPT-5.6-Sol follow what the live catalog actually offers.
 export function favoriteModelRank(model: AgentModel): number | null {
-  const index = FAVORITE_MODEL_IDS.indexOf(model.id as typeof FAVORITE_MODEL_IDS[number]);
-  return index === -1 ? null : index;
+  return typeof model.favorite_rank === "number" ? model.favorite_rank : null;
 }
 
 export function isFavoriteModel(model: AgentModel): boolean {
   return favoriteModelRank(model) !== null;
+}
+
+export function favoriteModelLabel(model: AgentModel): string | null {
+  return isFavoriteModel(model) ? model.favorite_label || null : null;
 }
 
 export type ModelLoadState = "loading" | "ready" | "error";

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { AgentModel } from "@/lib/api";
-import { FAVORITE_MODEL_LABELS, favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks/useAgentModels";
+import { favoriteModelLabel, favoriteModelRank, isFavoriteModel, type ModelLoadState } from "@/hooks/useAgentModels";
 
 interface ModelPickerProps {
   models: AgentModel[];
@@ -38,7 +38,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
     const query = search.trim().toLowerCase();
     if (!query) return models;
     return models.filter((model) => {
-      const haystack = `${FAVORITE_MODEL_LABELS[model.id] || ""} ${model.label} ${model.id} ${model.provider_id} ${model.model_id}`.toLowerCase();
+      const haystack = `${favoriteModelLabel(model) || ""} ${model.label} ${model.id} ${model.provider_id} ${model.model_id}`.toLowerCase();
       return haystack.includes(query);
     });
   }, [models, search]);
@@ -83,7 +83,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
 
   const renderItem = (model: AgentModel) => {
     const isSelected = model.id === selectedModel;
-    const itemModelLabel = FAVORITE_MODEL_LABELS[model.id] || model.label.split("·").pop()?.trim() || model.model_id;
+    const itemModelLabel = favoriteModelLabel(model) || model.label.split("·").pop()?.trim() || model.model_id;
     return (
       <CommandItem
         key={model.id}
@@ -155,7 +155,7 @@ export function ModelPicker({ models, selectedModel, onSelect, loadState, disabl
                     >
                       <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
                       <span className="min-w-0 flex-1 whitespace-normal break-words">
-                        {FAVORITE_MODEL_LABELS[model.id] || model.model_id}
+                        {favoriteModelLabel(model) || model.model_id}
                       </span>
                       {isSelected && <RiCheckLine size={15} className="shrink-0 text-brand-600" />}
                     </button>

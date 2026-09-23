@@ -47,7 +47,7 @@ import { useUser } from "../../../lib/UserContext";
 import { fetchUsers } from "../../../lib/governance-api";
 import type { User } from "../../../lib/governance-api";
 
-import { FAVORITE_MODEL_LABELS, favoriteModelRank, isFavoriteModel } from "@/hooks/useAgentModels";
+import { favoriteModelLabel, favoriteModelRank, isFavoriteModel } from "@/hooks/useAgentModels";
 
 // Fixed palette of 10 colors for deterministic label coloring
 const LABEL_COLORS = [
@@ -160,7 +160,7 @@ function FlowModelSelector({
               <SelectLabel>Favorites</SelectLabel>
               {recommendedModels.map((model) => (
                 <SelectItem key={model.id} value={model.id}>
-                  {FAVORITE_MODEL_LABELS[model.id] || model.label} ({runtimeLabel(model.id)})
+                  {favoriteModelLabel(model) || model.label} ({runtimeLabel(model.id)})
                 </SelectItem>
               ))}
             </SelectGroup>
