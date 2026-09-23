@@ -20,24 +20,13 @@ export async function fetchClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
   return res.json();
 }
 
-export interface ClaudeLoginSession {
-  id: string;
-  state: "starting" | "waiting" | "connected" | "failed" | "cancelled";
-  url: string | null;
-  error: string | null;
-  expires_at: number;
-}
-
-export async function claudeLoginRequest(path = "", method = "GET", code?: string): Promise<ClaudeLoginSession> {
-  const res = await fetch(`${API_BASE}/api/claude-auth/login${path}`, {
-    method,
-    headers: code === undefined ? undefined : { "Content-Type": "application/json" },
-    body: code === undefined ? undefined : JSON.stringify({ code }),
-    cache: "no-store",
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Login session ended. Please start again.");
-  return data;
+export async function getClaudeLoginTerminalToken(): Promise<{ token: string; autoCommand: string }> {
+  const res = await fetch(`${API_BASE}/api/claude-auth/terminal-token`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(err.error || `Failed to get terminal token: ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function disconnectClaude(): Promise<void> {

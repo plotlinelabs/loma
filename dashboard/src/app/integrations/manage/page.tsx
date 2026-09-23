@@ -16,7 +16,7 @@ import {
 import {
   fetchClaudeAuthStatus,
   disconnectClaude,
-  claudeLoginRequest,
+  getClaudeLoginTerminalToken,
   type ClaudeAuthStatus,
 } from "../../../lib/claude-auth-api";
 import {
@@ -56,7 +56,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RiCloseLine, RiFileCopyLine, RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
-import ClaudeLogin from "../../../components/ClaudeLogin";
 import ApiKeysPanel from "../../../components/ApiKeysPanel";
 
 const INTEGRATION_TABS = ["org", "system", "custom", "personal", "api-keys"] as const;
@@ -462,8 +461,7 @@ export default function IntegrationsPage() {
 
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
   const [showClaudeTerminal, setShowClaudeTerminal] = useState(false);
-  const [claudeLoginId, setClaudeLoginId] = useState<string | null>(null);
-  const [startingClaude, setStartingClaude] = useState(false);
+  const [claudeAutoCommand, setClaudeAutoCommand] = useState<string | undefined>();
   const [disconnectingClaude, setDisconnectingClaude] = useState(false);
 
   const [codexAuth, setCodexAuth] = useState<CodexAuthStatus | null>(null);
@@ -532,7 +530,21 @@ export default function IntegrationsPage() {
     loadConnections();
   }, [loadConnections]);
 
-
+  useEffect(() => {
+    if (!showClaudeTerminal) return;
+    const interval = setInterval(async () => {
+      try {
+        const status = await fetchClaudeAuthStatus();
+        if (status.connected) {
+          setClaudeAuth(status);
+          setShowClaudeTerminal(false);
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [showClaudeTerminal]);
 
   useEffect(() => {
     if (!showCodexTerminal) return;
@@ -736,19 +748,16 @@ export default function IntegrationsPage() {
   const handleConnectClaude = async () => {
     setError(null);
     try {
-      setStartingClaude(true);
-      const session = await claudeLoginRequest("", "POST");
-      setClaudeLoginId(session.id);
+      const { autoCommand } = await getClaudeLoginTerminalToken();
+      setClaudeAutoCommand(autoCommand);
       setShowClaudeTerminal(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start Claude login");
-    } finally {
-      setStartingClaude(false);
     }
   };
 
   const handleDisconnectClaude = async () => {
-    if (!confirm("Remove your Claude connection from the shared pool? New tasks will use the remaining available connections.")) return;
+    if (!confirm("Disconnect your Claude Code account? Tasks you trigger will use the shared account instead.")) return;
     setDisconnectingClaude(true);
     setError(null);
     try {
@@ -1616,8 +1625,8 @@ export default function IntegrationsPage() {
                         {disconnectingClaude ? "..." : "Disconnect"}
                       </Button>
                     ) : (
-                      <Button size="xs" onClick={handleConnectClaude} disabled={showClaudeTerminal || startingClaude}>
-                        {showClaudeTerminal || startingClaude ? "..." : "Login"}
+                      <Button size="xs" onClick={handleConnectClaude} disabled={showClaudeTerminal}>
+                        {showClaudeTerminal ? "..." : "Login"}
                       </Button>
                     )}
                   </div>
@@ -1772,9 +1781,9 @@ export default function IntegrationsPage() {
               <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Login with Claude Code</DialogTitle>
-                  <DialogDescription>Sign in with Anthropic in an isolated login sandbox</DialogDescription>
+                  <DialogDescription>Complete the OAuth flow in the terminal below</DialogDescription>
                 </DialogHeader>
-                {claudeLoginId && <ClaudeLogin sessionId={claudeLoginId} onConnected={handleClaudeTerminalDone} />}
+                <WebTerminal autoCommand={claudeAutoCommand} tokenEndpoint="/api/terminal/token" />
                 <DialogFooter>
                   <Button variant="outline" onClick={handleClaudeTerminalDone}>Done</Button>
                 </DialogFooter>
