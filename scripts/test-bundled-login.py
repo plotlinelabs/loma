@@ -46,6 +46,13 @@ async def smoke():
             raise AssertionError('Cancelled login left temporary credentials/processes')
         async with client.get('http://login/health') as response:
             assert response.status == 200, 'Cleanup must not leave broker unhealthy'
+    # No root-owned namespace waiter may survive cancellation (UID-only checks
+    # would miss it). Check argv without logging any process environments.
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit(): continue
+        try: argv = (entry / 'cmdline').read_bytes().split(b'\0')
+        except (FileNotFoundError, ProcessLookupError): continue
+        assert b'/opt/login/isolation/bundled_login_child.py' not in argv, 'Orphaned login launcher'
     print('PASS: official CLI authorization URL, Unix transport, cancellation/cleanup')
 
 
@@ -56,9 +63,19 @@ def boundaries():
     (root / 'peer/credential').write_text('synthetic')
     code = r'''
 const fs = require('fs'), net = require('net'), assert = require('assert');
-for (const path of ['/app/.env', '/run/loma-login/login.sock', '/proc/self/environ', '/sessions/peer/credential']) {
+for (const path of ['/app/.env', '/run/loma-login/login.sock', '/sessions/peer/credential']) {
   assert.throws(() => fs.readFileSync(path));
 }
+assert(fs.readFileSync('/proc/self/maps', 'utf8').includes('[stack]'));
+assert.deepStrictEqual(fs.readdirSync('/proc').filter(x => /^\d+$/.test(x)), ['1']);
+assert.strictEqual(process.pid, 1);
+assert.strictEqual(process.getuid(), 50000);
+const status = fs.readFileSync('/proc/self/status', 'utf8');
+for (const cap of ['CapEff', 'CapPrm', 'CapInh', 'CapAmb']) assert(new RegExp(cap + ':\\s+0+\\n').test(status));
+assert(/NoNewPrivs:\s+1/.test(status));
+const mount = fs.readFileSync('/proc/mounts', 'utf8').split('\n').find(l => l.split(' ')[1] === '/proc');
+assert(mount && ['ro','nosuid','nodev','noexec'].every(f => mount.split(' ')[3].split(',').includes(f)));
+assert.throws(() => fs.writeFileSync('/proc/sys/kernel/hostname', 'bad'));
 assert.throws(() => fs.writeFileSync('/usr/local/escape', 'bad'));
 fs.writeFileSync('/sessions/probe/allowed', 'ok');
 async function denied(host, port) {
@@ -71,15 +88,18 @@ async function denied(host, port) {
 }
 (async () => {
   for (const host of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '1.1.1.1', '::1']) await denied(host, 443);
-  console.log('PASS: chroot, peer credentials, read-only runtime, private/public direct egress denied');
+  console.log('PASS: private PID/proc, zero CLI capabilities, chroot, peer credentials, read-only runtime, direct egress denied');
 })().catch(e => {console.error(e.message); process.exit(1);});
 '''
     # Fresh interpreter, same chroot and UID removal as launcher; intentionally
     # substitutes a fixed test script for the CLI to probe the actual boundary.
-    launch = """import os,sys,ctypes
+    launch = """import os,sys
+from isolation.bundled_login_child import guard_parent, isolate_processes, drop_privileges
+guard_parent()
+parent_fd = isolate_processes()
 os.chroot('/sandbox'); os.chdir('/sessions/probe')
-os.setgroups([]); os.setgid(50000); os.setuid(50000)
-assert ctypes.CDLL(None).prctl(38,1,0,0,0) == 0
+drop_privileges(50000)
+guard_parent(parent_fd); os.close(parent_fd)
 os.execve('/usr/local/bin/node',['node','-e',sys.argv[1]],{'HOME':'/sessions/probe'})
 """
     subprocess.run([sys.executable, '-c', launch, code], check=True, timeout=20)

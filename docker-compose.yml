@@ -47,8 +47,11 @@ services:
     init: true
     read_only: true
     cap_drop: [ALL]
-    cap_add: [SYS_CHROOT, SETUID, SETGID, CHOWN, DAC_OVERRIDE, KILL, NET_ADMIN, MKNOD]
-    security_opt: ["no-new-privileges:true"]
+    cap_add: [SYS_ADMIN, SYS_CHROOT, SETUID, SETGID, CHOWN, DAC_OVERRIDE, KILL, NET_ADMIN, MKNOD]
+    # Only the trusted login broker mounts a private procfs; Docker
+    # default AppArmor denies all mounts. CLI drops capabilities before exec.
+    # Default seccomp stays enabled; never use privileged or host PID mode.
+    security_opt: ["no-new-privileges:true", "apparmor:unconfined"]
     pids_limit: 300
     mem_limit: 2g
     cpus: 2

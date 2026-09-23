@@ -44,7 +44,10 @@ against the same account store concurrently.
   prompts, browser commands, project hooks or backend code.
 - Each login gets a unique unprivileged UID, a private 0700 temporary home and
   chroot. The runtime is read-only. No backend secrets, persistent accounts,
-  control socket, `/proc`, Docker socket or host directories enter the chroot.
+  control socket, Docker socket or host directories enter the chroot. Each login
+  has a private PID/mount namespace and read-only `/proc` containing only its own
+  processes. Claude's runtime needs `/proc/self/maps` to initialize its stack;
+  hiding procfs entirely crashes it before the sign-in prompt.
 - Login networking can reach only the bundled proxy. Startup installs IPv4/IPv6
   deny-by-default rules inside the login container; if this fails the service
   never becomes healthy. The proxy allows only exact Anthropic HTTPS hostnames,
@@ -60,8 +63,13 @@ against the same account store concurrently.
 
 **Trade-off:** this shares the application host's kernel. A kernel/container
 escape has a larger blast radius than the dedicated gVisor-host option below.
-The broker has narrowly scoped capabilities inside its own container for chroot,
-UID separation and firewall setup; the CLI drops all of them. This PR does not
+The trusted broker additionally needs `SYS_ADMIN` to create PID/mount namespaces
+and mount procfs. Only this broker uses `apparmor:unconfined` because Docker's
+default AppArmor profile denies mounts; default seccomp and no-new-privileges
+remain enabled. This broadens the broker's security exposure and deserves review.
+The CLI drops capabilities before exec and never receives a host procfs, Docker
+socket, host PID mode or privileged container. Namespace/mount failures stop
+login rather than falling back to a less-isolated process. This PR does not
 upgrade the security boundary of legacy local TASK execution.
 
 Login sessions are still process-local. Multi-replica backends need sticky login

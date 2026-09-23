@@ -143,3 +143,61 @@ async def test_ready_pool_round_robin_disconnect_and_cooldown(tmp_path, monkeypa
     assert pool._take_ready_client() is None
     await asyncio.sleep(0)
     assert cleanup.await_count == 2
+
+
+def test_namespace_mount_order_and_flags(monkeypatch):
+    from isolation import bundled_login_child as child
+    from unittest.mock import Mock
+    libc = Mock()
+    libc.unshare.return_value = libc.mount.return_value = 0
+    monkeypatch.setattr(child.ctypes, 'CDLL', lambda *a, **k: libc)
+    monkeypatch.setattr(child.os, 'pipe2', lambda flags: (91, 92))
+    monkeypatch.setattr(child.os, 'fork', lambda: 0)
+    close = Mock(); monkeypatch.setattr(child.os, 'close', close)
+    guard = Mock(); monkeypatch.setattr(child, 'guard_parent', guard)
+    assert child.isolate_processes() == 91
+    libc.unshare.assert_called_once_with(child.CLONE_NEWNS | child.CLONE_NEWPID)
+    assert libc.mount.call_args_list[0].args == (None, b'/', None, child.MS_REC | child.MS_PRIVATE, None)
+    assert libc.mount.call_args_list[1].args == (b'proc', b'/sandbox/proc', b'proc', 15, None)
+    close.assert_called_once_with(92)
+    guard.assert_called_once_with(91)
+
+
+@pytest.mark.parametrize('failure', ['unshare', 'private_mount', 'proc_mount'])
+def test_namespace_setup_fail_closed(monkeypatch, failure):
+    from isolation import bundled_login_child as child
+    from unittest.mock import Mock
+    libc = Mock()
+    libc.unshare.return_value = -1 if failure == 'unshare' else 0
+    libc.mount.side_effect = [-1] if failure == 'private_mount' else [0, -1]
+    monkeypatch.setattr(child.ctypes, 'CDLL', lambda *a, **k: libc)
+    monkeypatch.setattr(child.os, 'pipe2', lambda flags: (91, 92))
+    monkeypatch.setattr(child.os, 'close', Mock())
+    monkeypatch.setattr(child.os, 'fork', lambda: 0)
+    monkeypatch.setattr(child, 'guard_parent', Mock())
+    with pytest.raises(OSError): child.isolate_processes()
+
+
+def test_dead_parent_fails_closed(monkeypatch):
+    from isolation import bundled_login_child as child
+    from unittest.mock import Mock
+    libc = Mock(); libc.prctl.return_value = 0
+    monkeypatch.setattr(child.ctypes, 'CDLL', lambda *a, **k: libc)
+    monkeypatch.setattr(child.os, 'getppid', lambda: 0)
+    monkeypatch.setattr(child.select, 'select', lambda *args: ([91], [], []))
+    with pytest.raises(RuntimeError, match='parent exited'): child.guard_parent(91)
+
+
+def test_namespace_compose_capabilities_are_broker_only():
+    import yaml
+    data = yaml.safe_load((Path(__file__).parents[1] / 'docker-compose.yml').read_text())
+    for name, service in data['services'].items():
+        assert not service.get('privileged')
+        assert service.get('pid') != 'host'
+        if name == 'loma-login':
+            assert 'SYS_ADMIN' in service['cap_add']
+            assert 'apparmor:unconfined' in service['security_opt']
+            assert not any('seccomp' in opt for opt in service['security_opt'])
+        else:
+            assert 'SYS_ADMIN' not in service.get('cap_add', [])
+            assert 'apparmor:unconfined' not in service.get('security_opt', [])
