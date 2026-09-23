@@ -148,6 +148,11 @@ def _selector_for(db, deployment, runtime):
 
     key = (id(db), runtime, accounts)
     if key not in _selectors:
+        # Drop obsolete cache entries when logins change; active runs retain
+        # their selector directly and still revalidate account/user access.
+        for old in list(_selectors):
+            if old[:2] == key[:2]:
+                del _selectors[old]
         # Hold the db reference alongside the selector so the id() key can
         # never be recycled by a different database object while cached.
         _selectors[key] = (db, SubscriptionAccounts(db, accounts, check_access=policy))
