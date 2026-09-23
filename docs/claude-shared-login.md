@@ -73,8 +73,9 @@ Run `bash scripts/test-bundled-login.sh` on a Docker host to exercise bundled
 image startup, the real official CLI authorization-link step, sandbox file/network
 denials and cleanup without a paid model call or real credentials. It creates
 an ephemeral project from committed sources and never loads operator secrets.
-This image-level check is not wired into CI because the available GitHub token
-cannot update workflows. It remains a mandatory pre-merge check. Unit/browser fixtures cover successful synthetic publication,
+The existing preview deployment script runs this image-level check in a
+separate throwaway project before starting the actual preview. It never uses
+preview credentials and remains a mandatory pre-merge check. Unit/browser fixtures cover successful synthetic publication,
 owner access, cancel/disconnect and pool rotation. A maintainer must still finish
 one real Anthropic login, validate refresh/restart and connect a second test
 account before calling provider authentication end-to-end verified.

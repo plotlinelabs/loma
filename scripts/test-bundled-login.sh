@@ -10,6 +10,7 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
 # Committed sources only; deliberately excludes local secrets and working files.
 git archive HEAD | tar -x -C "$work"
 touch "$work/.env" "$work/dashboard/.env"
