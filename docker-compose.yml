@@ -55,6 +55,7 @@ services:
     volumes:
       - loma-login-socket:/run/loma-login
     tmpfs:
+      - /run:rw,nosuid,nodev,noexec,size=1m,mode=755
       - /sandbox/dev:rw,nosuid,dev,size=1m,mode=755
       - /sandbox/sessions:rw,nosuid,nodev,noexec,size=128m,mode=755
       - /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777
