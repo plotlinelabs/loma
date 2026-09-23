@@ -15,7 +15,9 @@ import uuid
 
 import aiohttp
 
-from isolation.login_urls import authorization_url
+from urllib.parse import urlsplit
+
+from isolation.login_urls import authorization_url, AUTHORIZATION_ENDPOINTS
 from isolation.accounts import SubscriptionAccount, _read
 from isolation.client import transport_context
 from isolation.oauth import _atomic, _locked, _number, _string
@@ -24,6 +26,24 @@ from isolation.protocol import worker_frame, response_frame
 TTL = 600
 EMAIL = re.compile(r'[A-Za-z0-9_+.%=-]+@[A-Za-z0-9.-]+\Z')
 CODE = re.compile(r'[A-Za-z0-9_.#~-]{1,2048}\Z')
+
+
+def normalize_code(value):
+    """Remove only the known terminal clipboard suffix, never arbitrary code bytes."""
+    if not isinstance(value, str) or len(value) > 8192:
+        raise ValueError('Invalid authorization code')
+    value = value.strip()
+    # Some terminals copy an OSC hyperlink's BEL delimiter and authorization URL.
+    match = re.fullmatch(
+        r'([A-Za-z0-9_.#~-]{1,2048})[\s\x07]*(https://[^\s\x07]+)[\s\x07]*', value)
+    if match:
+        url = urlsplit(match[2])
+        if ((url.hostname, url.path) in AUTHORIZATION_ENDPOINTS and not url.username
+                and not url.password and url.port in (None, 443) and not url.fragment):
+            value = match[1]
+    if not CODE.fullmatch(value):
+        raise ValueError('Invalid authorization code')
+    return value
 
 
 def enabled():
@@ -160,10 +180,11 @@ class Login:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1), repr=False)
     task: asyncio.Task | None = field(default=None, repr=False)
     submitted: bool = False
+    cancelling: bool = False
 
     def public(self):
         return {'id': self.id, 'state': self.state, 'url': self.url,
-                'error': self.error, 'expires_at': self.expires}
+                'error': self.error, 'expires_at': self.expires, 'submitted': self.submitted}
 
 
 async def run_login(login, connection, authorize):

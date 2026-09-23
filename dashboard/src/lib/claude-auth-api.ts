@@ -26,6 +26,7 @@ export interface ClaudeLoginSession {
   url: string | null;
   error: string | null;
   expires_at: number;
+  submitted: boolean;
 }
 
 export async function claudeLoginRequest(path = "", method = "GET", code?: string): Promise<ClaudeLoginSession> {

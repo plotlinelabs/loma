@@ -466,6 +466,17 @@ export default function IntegrationsPage() {
   const [startingClaude, setStartingClaude] = useState(false);
   const [disconnectingClaude, setDisconnectingClaude] = useState(false);
 
+  useEffect(() => {
+    let stopped = false;
+    void claudeLoginRequest().then((session) => {
+      if (!stopped && session?.id) {
+        setClaudeLoginId(session.id);
+        setShowClaudeTerminal(true);
+      }
+    }).catch(() => {});
+    return () => { stopped = true; };
+  }, []);
+
   const [codexAuth, setCodexAuth] = useState<CodexAuthStatus | null>(null);
   const [showCodexTerminal, setShowCodexTerminal] = useState(false);
   const [codexAutoCommand, setCodexAutoCommand] = useState<string | undefined>();
@@ -1774,7 +1785,7 @@ export default function IntegrationsPage() {
                   <DialogTitle>Login with Claude Code</DialogTitle>
                   <DialogDescription>Sign in with Anthropic to add your account to the shared pool</DialogDescription>
                 </DialogHeader>
-                {claudeLoginId && <ClaudeLogin sessionId={claudeLoginId} onConnected={handleClaudeTerminalDone} />}
+                {claudeLoginId && <ClaudeLogin key={claudeLoginId} sessionId={claudeLoginId} onConnected={handleClaudeTerminalDone} onRestart={setClaudeLoginId} />}
                 <DialogFooter>
                   <Button variant="outline" onClick={handleClaudeTerminalDone}>Done</Button>
                 </DialogFooter>

@@ -156,3 +156,19 @@ login transport**, not real Anthropic authentication. The live gVisor login imag
 and network firewall must be verified on the dedicated deployment host.
 
 Official command reference: https://code.claude.com/docs/en/cli-reference
+
+
+### Recovering login and pasted codes
+
+The Personal integrations page recovers the current owner's active login after a
+refresh. Clicking Login again resumes that session instead of returning a conflict.
+Closing the dialog leaves it resumable until its 10-minute expiry. Use **Cancel
+login** or **Cancel & restart** to terminate it immediately; cancelling a reconnect
+does not remove an existing saved connection. Sessions still require sticky routing
+and do not survive a backend restart.
+
+Validation errors leave the code input editable. The backend removes a trailing
+allowlisted Anthropic authorization URL, including the terminal BEL delimiter and
+surrounding whitespace, while preserving the complete `code#state`. Unknown URLs,
+embedded controls, extra prose and overlong input are rejected rather than guessed.
+No pasted codes are logged or included in test fixtures.
