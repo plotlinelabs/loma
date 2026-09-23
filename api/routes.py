@@ -1936,10 +1936,11 @@ def _remote_pool_status() -> dict:
     except DeploymentError as error:
         status["remote_workers"]["error"] = str(error)
         return status
-    status["accounts"] = [a.email for a in (*deployment.claude_accounts, *deployment.codex_accounts)]
+    claude_accounts = deployment.accounts_for("claude")
+    status["accounts"] = list(dict.fromkeys(a.email for a in (*claude_accounts, *deployment.codex_accounts)))
     status["remote_workers"].update({
         "configured": True,
-        "claude_accounts": len(deployment.claude_accounts),
+        "claude_accounts": len(claude_accounts),
         "codex_accounts": len(deployment.codex_accounts),
         "chat_endpoint": bool(deployment.chat_endpoint),
         "default_model": deployment.default_model,
