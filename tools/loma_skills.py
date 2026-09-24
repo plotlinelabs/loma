@@ -208,7 +208,7 @@ def main() -> int:
         p.add_argument("--auth-token", default=argparse.SUPPRESS)
 
     add_auth(sub.add_parser("list"))
-    sync_cmd = sub.add_parser("sync", help="Reconcile a linked skill from Google Docs")
+    sync_cmd = sub.add_parser("sync", help="Reconcile a linked skill from Google Docs or Sheets")
     sync_cmd.add_argument("--slug", required=True)
     add_auth(sync_cmd)
     search = sub.add_parser("search")

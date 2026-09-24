@@ -1353,8 +1353,12 @@ export async function fetchConversationCost(conversationId: string): Promise<Con
 }
 
 export interface GoogleSkillSource {
-  type: "google_doc";
-  document_id: string;
+  type: "google_doc" | "google_sheet";
+  spreadsheet_id?: string;
+  sheet_id?: number;
+  sync_mode?: "pull_only";
+  header_row?: boolean;
+  document_id?: string;
   tab_id: string;
   tab_title: string;
   title: string;
@@ -1368,7 +1372,9 @@ export interface GoogleSkillSource {
 }
 
 export interface GoogleSkillPreview {
-  document_id: string;
+  sync_mode?: "pull_only";
+  disclosure?: string;
+  document_id?: string;
   title: string;
   tabs: { id: string; title: string }[];
   can_edit: boolean;
@@ -1383,6 +1389,6 @@ export async function skillSourceRequest<T>(path: string, body?: object): Promis
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   } : undefined);
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Google Docs skill request failed");
+  if (!res.ok) throw new Error(data.error || "Google skill request failed");
   return data;
 }

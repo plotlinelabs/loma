@@ -243,7 +243,7 @@ async def _load_files(db, slug: str, *, include_disabled: bool = False) -> list[
     result = [serialize_doc(doc) or {} for doc in docs]
     skill = await db.skills.find_one({"slug": slug})
     source = (skill or {}).get("source") or {}
-    if source.get("type") == "google_doc":
+    if source.get("type") in ("google_doc", "google_sheet"):
         result = [f for f in result if f["path"] != "SKILL.md"]
         result.insert(0, validate_text_file("SKILL.md", source["published_content"]))
     return result
@@ -258,7 +258,7 @@ skill_dashboard = ContextVar("skill_dashboard", default=False)
 
 
 def _controlled(skill):
-    return (skill.get("source") or {}).get("type") == "google_doc" or skill.get("access_controlled")
+    return (skill.get("source") or {}).get("type") in ("google_doc", "google_sheet") or skill.get("access_controlled")
 
 
 def _visible(skill, actor):
@@ -294,7 +294,7 @@ def _serialize_linked_mutation(fn):
         slug = slugify(kwargs["slug"])
         await check_linked_access(db, slug, actor=kwargs.get("actor"), write=True)
         skill = await db.skills.find_one({"slug": slug})
-        linked = (skill or {}).get("source", {}).get("type") == "google_doc"
+        linked = (skill or {}).get("source", {}).get("type") in ("google_doc", "google_sheet")
         main_edit = fn.__name__ == "update_skill_file" and kwargs.get("file_doc", {}).get("path") == "SKILL.md"
         if linked and not main_edit:
             from api.skill_sync_service import lease
@@ -315,7 +315,7 @@ async def get_skill(db, slug: str) -> dict[str, Any]:
     skill_doc["scope"] = skill_doc.get("scope") or ("system" if skill_doc.get("created_by") in ("system", "import") else "personal")
     skill_doc["folder"] = skill_doc.get("folder") or None
     skill_doc["folder_source"] = skill_doc.get("folder_source") or None
-    if (skill_doc.get("source") or {}).get("type") == "google_doc":
+    if (skill_doc.get("source") or {}).get("type") in ("google_doc", "google_sheet"):
         from api.skill_sync_service import public_source
         skill_doc["source"] = public_source(skill_doc["source"])
     skill_doc["files"] = files
@@ -348,7 +348,7 @@ async def list_skills(db) -> list[dict[str, Any]]:
     ):
         counts.setdefault(file_doc["skill_slug"], []).append(serialize_doc(file_doc) or {})
     for doc in docs:
-        if (doc.get("source") or {}).get("type") == "google_doc":
+        if (doc.get("source") or {}).get("type") in ("google_doc", "google_sheet"):
             from api.skill_sync_service import public_source
             doc["source"] = public_source(doc["source"])
         files = sorted(counts.get(doc["slug"], []), key=lambda f: f["path"])
@@ -380,7 +380,7 @@ async def search_skills(db, query: str) -> list[dict[str, Any]]:
         if needle in haystack:
             matches.append(skill)
             continue
-        if (skill.get("source") or {}).get("type") == "google_doc":
+        if (skill.get("source") or {}).get("type") in ("google_doc", "google_sheet"):
             skill_md = await get_skill_file(db, skill["slug"], "SKILL.md")
         else:
             skill_md = await db.skill_files.find_one(
@@ -446,7 +446,7 @@ async def upsert_skill(
     timestamp = now_utc()
     existing = await db.skills.find_one({"slug": slug})
     await check_linked_access(db, slug, actor=actor, write=True)
-    if (existing or {}).get("source", {}).get("type") == "google_doc":
+    if (existing or {}).get("source", {}).get("type") in ("google_doc", "google_sheet"):
         raise SkillError("Package replacement is disabled for linked skills. Use update-file with a base hash.", status=409)
     if existing and existing.get("scope"):
         scope = existing["scope"]
@@ -499,7 +499,7 @@ async def update_skill_file(
     if not skill:
         raise SkillError("Skill not found", status=404)
     await check_linked_access(db, slug, actor=actor, write=True)
-    if (skill.get("source") or {}).get("type") == "google_doc" and file_doc["path"] == "SKILL.md":
+    if (skill.get("source") or {}).get("type") in ("google_doc", "google_sheet") and file_doc["path"] == "SKILL.md":
         from api.skill_sync_service import write_instructions
         return await write_instructions(db, slug, file_doc["content"], actor, base_hash)
     current_files = await _load_files(db, slug)
@@ -637,7 +637,7 @@ async def auto_organize_skills(db, *, owner=None) -> dict[str, Any]:
     logger = logging.getLogger("loma.skill_organize")
 
     unorganized = await db.skills.find({
-        "source.type": {"$ne": "google_doc"},
+        "source.type": {"$nin": ["google_doc", "google_sheet"]},
         "access_controlled": {"$ne": True},
         "enabled": {"$ne": False},
         "scope": {"$ne": "system"},
@@ -758,7 +758,7 @@ async def get_skill_file(db, slug: str, path: str) -> dict[str, Any]:
     path = normalize_file_path(path)
     if path == "SKILL.md":
         skill = await db.skills.find_one({"slug": slug})
-        if (skill or {}).get("source", {}).get("type") == "google_doc":
+        if (skill or {}).get("source", {}).get("type") in ("google_doc", "google_sheet"):
             return validate_text_file(path, skill["source"]["published_content"])
     doc = await db.skill_files.find_one(
         {"skill_slug": slug, "path": path, "deleted": {"$ne": True}},
@@ -810,7 +810,7 @@ async def import_skill_directory(db, source_dir: Path, *, actor: str = "import")
     slug = slugify(source_dir.name)
     await check_linked_access(db, slug, actor=actor, write=True)
     existing = await db.skills.find_one({"slug": slug})
-    if (existing or {}).get("source", {}).get("type") == "google_doc":
+    if (existing or {}).get("source", {}).get("type") in ("google_doc", "google_sheet"):
         raise SkillError("Directory import cannot replace a linked skill. Use update-file with a base hash.", status=409)
     files: list[dict[str, Any]] = []
     for path in sorted(p for p in source_dir.rglob("*") if p.is_file()):
