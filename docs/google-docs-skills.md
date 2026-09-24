@@ -130,3 +130,9 @@ explicit per-skill action. Monitor `source.status`, `source.next_check`,
 deployments with an explicit false override remain disabled until that override is
 removed. Retain the emergency off switch and verify concurrency, access and recovery
 before merging.
+
+## Other linked sources
+
+Google Sheets uses the shared lifecycle and privacy protections but is pull-only.
+See [Google Sheets linked skills](google-sheets-skills.md) for its independent
+feature flag, conversion contract, limits and validation.

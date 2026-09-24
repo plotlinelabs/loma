@@ -20,7 +20,7 @@ async def skill_context(request, handler):
 
 async def capabilities(request):
     require_analyst_or_above(request)
-    return web.json_response({"enabled": sync.enabled()})
+    return web.json_response({"enabled": sync.enabled("google_sheet" if "google-sheets" in request.path else "google_doc")})
 
 
 async def source_action(request):
@@ -32,14 +32,18 @@ async def source_action(request):
     body = await request.json()
     if not isinstance(body, dict):
         raise skill_service.SkillError("Expected a JSON object")
+    source_type = "google_sheet" if "google-sheets" in request.path else "google_doc"
     action = request.match_info["action"]
     if action == "preview":
-        result = await sync.preview(db, actor, body.get("url", ""), body.get("tab_id"))
+        if source_type == "google_sheet":
+            result = await sync.preview_sheet(db, actor, body.get("url", ""), body.get("tab_id"), body.get("header_row", False))
+        else:
+            result = await sync.preview(db, actor, body.get("url", ""), body.get("tab_id"))
     elif action == "import":
         fields = {key: body.get(key) for key in ("url", "tab_id", "slug", "name", "description", "preview_hash")}
         if not all(isinstance(fields[k], str) for k in fields):
             raise skill_service.SkillError("Import fields must be strings")
-        result = await sync.import_doc(db, actor, **fields, scope=body.get("scope", "personal"), confirm_workspace=body.get("confirm_workspace") is True)
+        result = await sync.import_doc(db, actor, **fields, scope=body.get("scope", "personal"), confirm_workspace=body.get("confirm_workspace") is True, source_type=source_type, header_row=body.get("header_row", False))
     else:
         raise web.HTTPNotFound()
     return web.json_response(result)
@@ -72,5 +76,7 @@ async def sync_history(request):
 def setup_skill_source_routes(app):
     app.router.add_get("/api/skill-sources/google-docs", capabilities)
     app.router.add_post("/api/skill-sources/google-docs/{action}", source_action)
+    app.router.add_get("/api/skill-sources/google-sheets", capabilities)
+    app.router.add_post("/api/skill-sources/google-sheets/{action}", source_action)
     app.router.add_post("/api/skills/{name}/source", manage_source)
     app.router.add_get("/api/skills/{name}/source/history", sync_history)

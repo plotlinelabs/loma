@@ -1,4 +1,4 @@
-"""Optional Google Docs skill source. Normal skills never enter this module.
+"""Optional Google Docs and pull-only Sheets skill sources. Normal skills never enter this module.
 
 Published instructions live atomically on the skill record. File reads overlay this
 snapshot rather than exposing a partially written skill_files/skill_versions pair.
@@ -11,6 +11,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
 import os
+import random
 import uuid
 
 import aiohttp
@@ -19,16 +20,19 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from api import skill_service as skills
+from integrations import google_sheets_skill_source as sheets
 from integrations.google_docs_skill_source import GoogleDocsSource, SourceError, all_tabs, block_key, build_requests, parse_markdown, parse_url, read_tab
 
 
-def enabled():
+def enabled(source_type="google_doc"):
+    if source_type == "google_sheet":
+        return os.environ.get("LOMA_GOOGLE_SHEETS_SKILLS_ENABLED", "false").lower() == "true"
     return os.environ.get("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", "true").lower() == "true"
 
 
-def require_enabled():
-    if not enabled():
-        raise SourceError("Google Docs skill integration is not enabled.", status=403)
+def require_enabled(source_type="google_doc"):
+    if not enabled(source_type):
+        raise SourceError("Google skill integration is not enabled.", status=403)
 
 
 async def adapter(actor):
@@ -40,9 +44,66 @@ async def adapter(actor):
         raise SourceError("Connect or reconnect your Google account in Integrations.", status=403, code="connection_required") from exc
 
 
+
+async def sheets_rate_limit(db, actor):
+    """Shared fixed-minute buckets across workers, including manual previews.
+
+    Conservative half-quota budgets also bound bursts across window boundaries.
+    A denied request is deferred rather than sleeping while holding a source lease.
+    """
+    now = skills.now_utc()
+    minute = int(now.timestamp()) // 60
+    for key, limit in (("actor:" + actor, 25), ("project", 140)):
+        bucket = f"sheets:{key}:{minute}"
+        result = await db.skill_source_quotas.find_one_and_update(
+            {"_id": bucket}, {"$inc": {"count": 1}, "$setOnInsert": {"expires_at": now + timedelta(minutes=5)}},
+            upsert=True, return_document=ReturnDocument.AFTER)
+        if result["count"] > limit:
+            raise SourceError("Google Sheets request budget reached. Retry in a minute.", status=429, code="temporary_error")
+
+
+async def sheets_adapter(db, actor):
+    from tools._google_auth import get_google_access_token
+    try:
+        token = await get_google_access_token(actor)
+    except ValueError as exc:
+        raise SourceError("Connect or reconnect your Google account in Integrations.", status=403, code="connection_required") from exc
+    await db.skill_source_quotas.create_index("expires_at", expireAfterSeconds=0)
+    return sheets.GoogleSheetsSource(token, lambda: sheets_rate_limit(db, actor))
+
+
+async def sheet_snapshot(source, spreadsheet_id, selected_id, header_row):
+    metadata = await source.metadata(spreadsheet_id)
+    tabs = [{"id": str(t["properties"].get("sheetId", 0)), "title": t["properties"].get("title", "")} for t in metadata.get("sheets", [])]
+    result = {"spreadsheet_id": spreadsheet_id, "title": metadata.get("properties", {}).get("title", ""), "tabs": tabs,
+              "can_edit": False, "sync_mode": "pull_only", "header_row": header_row, "disclosure": sheets.DISCLOSURE}
+    if selected_id is None and len(tabs) == 1:
+        selected_id = int(tabs[0]["id"])
+    if selected_id is not None:
+        tab = next((t for t in metadata.get("sheets", []) if t["properties"].get("sheetId", 0) == selected_id), None)
+        if tab is None:
+            raise SourceError("The selected spreadsheet tab no longer exists.", code="access_revoked")
+        sheets.validate_tab(tab)  # Bound the grid before fetching cell data.
+        doc = await source.read(spreadsheet_id, selected_id)
+        result.update(sheets.read_tab(doc, spreadsheet_id, selected_id, header_row=header_row))
+    return result
+
+
+async def preview_sheet(db, actor, url, tab_id=None, header_row=False):
+    require_enabled("google_sheet")
+    if not isinstance(header_row, bool):
+        raise SourceError("header_row must be a boolean.")
+    spreadsheet_id, gid = sheets.parse_url(url)
+    selected_id = sheets.sheet_id(tab_id) if tab_id is not None else gid
+    source = await sheets_adapter(db, actor)
+    result = await sheet_snapshot(source, spreadsheet_id, selected_id, header_row)
+    result["connection_owner"] = actor
+    return result
+
+
 def public_source(source):
     return {k: source.get(k) for k in (
-        "type", "document_id", "tab_id", "tab_title", "title", "connection_owner",
+        "type", "document_id", "spreadsheet_id", "sheet_id", "sync_mode", "header_row", "renderer_version", "tab_id", "tab_title", "title", "connection_owner",
         "auto_sync_enabled", "status", "last_checked", "last_published", "hash", "error", "runtime_refresh_pending",
     )}
 
@@ -65,6 +126,9 @@ async def ensure_indexes(db):
     await db.skills.create_index("slug", unique=True)
     await db.skills.create_index([("source.document_id", 1), ("source.tab_id", 1)], unique=True,
                                  partialFilterExpression={"source.type": "google_doc"})
+    await db.skills.create_index([("source.spreadsheet_id", 1), ("source.sheet_id", 1)], unique=True,
+                                 partialFilterExpression={"source.type": "google_sheet"})
+    await db.skill_source_quotas.create_index("expires_at", expireAfterSeconds=0)
     await db.skill_sync_history.create_index([("skill_slug", 1), ("created_at", -1)])
 
 
@@ -73,7 +137,7 @@ async def lease(db, slug):
     token = uuid.uuid4().hex
     now = skills.now_utc()
     doc = await db.skills.find_one_and_update({"slug": slug, "enabled": {"$ne": False},
-        "source.type": "google_doc", "$or": [{"source.lease_until": {"$lt": now}}, {"source.lease_until": {"$exists": False}}]},
+        "source.type": {"$in": ["google_doc", "google_sheet"]}, "$or": [{"source.lease_until": {"$lt": now}}, {"source.lease_until": {"$exists": False}}]},
         {"$set": {"source.lease_token": token, "source.lease_until": now + timedelta(seconds=120)}}, return_document=ReturnDocument.AFTER)
     if not doc:
         raise SourceError("Another sync is running. Retry shortly.", status=409, code="busy")
@@ -102,13 +166,13 @@ async def preview(db, actor, url, tab_id=None):
     return result
 
 
-async def import_doc(db, actor, *, url, tab_id, slug, name, description, tags=None, scope="personal", preview_hash=None, confirm_workspace=False):
-    require_enabled()
+async def import_doc(db, actor, *, url, tab_id, slug, name, description, tags=None, scope="personal", preview_hash=None, confirm_workspace=False, source_type="google_doc", header_row=False):
+    require_enabled(source_type)
     if scope not in ("personal", "workspace") or (scope == "workspace" and not confirm_workspace):
         raise SourceError("Confirm workspace publication or choose personal visibility.")
     slug = skills.slugify(slug)
-    info = await preview(db, actor, url, tab_id)
-    if not info.get("can_edit"):
+    info = await preview_sheet(db, actor, url, tab_id, header_row) if source_type == "google_sheet" else await preview(db, actor, url, tab_id)
+    if source_type == "google_doc" and not info.get("can_edit"):
         raise SourceError("Two-way linking requires edit access to this Google Doc.", status=403)
     if not preview_hash or preview_hash != info.get("hash"):
         raise SourceError("The source changed since preview. Preview it again before importing.", status=409, code="conflict")
@@ -122,15 +186,20 @@ async def import_doc(db, actor, *, url, tab_id, slug, name, description, tags=No
     version_id = uuid.uuid4().hex
     record = {"slug": slug, **metadata, "scope": scope, "enabled": True, "created_at": now, "updated_at": now,
         "created_by": actor, "updated_by": actor, "latest_version_id": version_id, "source": {
-            "type": "google_doc", "document_id": info["document_id"], "tab_id": info["tab_id"],
+            "type": source_type, "tab_id": info["tab_id"],
             "tab_title": info["tab_title"], "title": info["title"], "connection_owner": actor,
             "auto_sync_enabled": True, "status": "up_to_date", "hash": info["hash"],
             "published_content": content, "last_checked": now, "last_published": now,
-            "next_check": now + timedelta(seconds=300), "runtime_refresh_pending": True}}
+            "next_check": now + timedelta(seconds=300 + random.randint(0, 30)), "runtime_refresh_pending": True}}
+    if source_type == "google_sheet":
+        record["source"].update(spreadsheet_id=info["spreadsheet_id"], sheet_id=info["sheet_id"],
+                                sync_mode="pull_only", header_row=header_row, renderer_version=sheets.RENDERER_VERSION)
+    else:
+        record["source"]["document_id"] = info["document_id"]
     try:
         await db.skills.insert_one(record)
     except DuplicateKeyError as exc:
-        raise SourceError("That slug or document tab is already linked. Choose the existing skill.", status=409) from exc
+        raise SourceError("That slug or source tab is unavailable. Choose a different slug or tab.", status=409) from exc
     await repair_version(db, record, actor)
     await audit(db, slug, actor, "imported")
     await refresh_runtime(db, slug)
@@ -145,7 +214,7 @@ async def repair_version(db, record, actor):
     files.insert(0, skills.validate_text_file("SKILL.md", record["source"]["published_content"]))
     await db.skill_versions.update_one({"version_id": version_id}, {"$setOnInsert": {
         "version_id": version_id, "skill_slug": record["slug"], "actor_email": actor,
-        "source": "google_doc", "message": "Synced Google Docs instructions", "files_snapshot": files,
+        "source": record["source"]["type"], "message": "Synced Google instructions", "files_snapshot": files,
         "created_at": record["source"]["last_published"]}}, upsert=True)
 
 
@@ -163,7 +232,7 @@ async def refresh_runtime(db, slug):
 async def publish(db, record, guard, snapshot, actor):
     source = record["source"]
     now = skills.now_utc()
-    changes = {"source.last_checked": now, "source.next_check": now + timedelta(seconds=300),
+    changes = {"source.last_checked": now, "source.next_check": now + timedelta(seconds=300 + random.randint(0, 30)),
         "source.status": "up_to_date", "source.error": None, "source.failures": 0,
         "source.title": snapshot["title"], "source.tab_title": snapshot["tab_title"], "source.revision": snapshot["revision"]}
     if source.get("hash") != snapshot["hash"]:
@@ -183,17 +252,22 @@ async def publish(db, record, guard, snapshot, actor):
 
 
 async def sync(db, slug, actor=None):
-    require_enabled()
     slug = skills.slugify(slug)
     if actor:
         await skills.check_linked_access(db, slug, actor=actor, write=True)
     async with lease(db, slug) as (record, guard):
-        owner = record["source"]["connection_owner"]
+        config = record["source"]
+        require_enabled(config["type"])
+        owner = config["connection_owner"]
         try:
-            source = await adapter(owner)
-            await source.can_edit(record["source"]["document_id"])
-            doc = await source.read(record["source"]["document_id"])
-            snapshot = read_tab(doc, record["source"]["tab_id"])
+            if config["type"] == "google_sheet":
+                source = await sheets_adapter(db, owner)
+                snapshot = await sheet_snapshot(source, config["spreadsheet_id"], config["sheet_id"], config["header_row"])
+            else:
+                source = await adapter(owner)
+                await source.can_edit(config["document_id"])
+                doc = await source.read(config["document_id"])
+                snapshot = read_tab(doc, config["tab_id"])
             await publish(db, record, guard, snapshot, owner)
             await audit(db, slug, actor or owner, "synced")
         except (SourceError, TimeoutError, aiohttp.ClientError) as exc:
@@ -202,7 +276,7 @@ async def sync(db, slug, actor=None):
             status = "suspended" if code in ("access_revoked", "connection_required") else "invalid" if code == "invalid_source" else "stale"
             await db.skills.update_one(guard, {"$set": {"source.status": status, "source.error": str(exc) or "Google request timed out",
                 "source.last_checked": skills.now_utc(), "source.failures": failures,
-                "source.next_check": skills.now_utc() + timedelta(seconds=min(3600, 60 * 2 ** min(failures, 6)))}})
+                "source.next_check": skills.now_utc() + timedelta(seconds=min(3600, 60 * 2 ** min(failures, 6)) + random.randint(0, 30))}})
             await audit(db, slug, actor or owner, status)
             raise
     if actor:
@@ -210,10 +284,12 @@ async def sync(db, slug, actor=None):
 
 
 async def write_instructions(db, slug, content, actor, base_hash):
-    require_enabled()
     await skills.check_linked_access(db, slug, actor=actor, write=True)
     async with lease(db, slug) as (record, guard):
         source_config = record["source"]
+        if source_config["type"] == "google_sheet":
+            raise SourceError("Sheets-linked instructions are read-only. Edit the source in Google Sheets.", status=403)
+        require_enabled()
         if source_config.get("pending"):
             raise SourceError("Reconcile the pending save with Sync now before editing again.", status=409)
         body = instruction_body(content)
@@ -259,7 +335,7 @@ async def configure(db, slug, actor, action):
             # Retain enforced access even after disconnect; do not downgrade to legacy public reads.
             await db.skills.update_one(guard, {"$unset": {"source": ""}, "$set": {"access_controlled": True}})
         elif action in ("pause", "resume"):
-            require_enabled()
+            require_enabled(record["source"]["type"])
             await db.skills.update_one(guard, {"$set": {"source.auto_sync_enabled": action == "resume", "source.next_check": skills.now_utc()}})
         else:
             raise SourceError("Unknown source action.")

@@ -1365,7 +1365,7 @@ async def handle_update_skill(request: web.Request) -> web.Response:
     try:
         body = await request.json()
         current = await skill_service.get_skill(db, name)
-        if (current.get("source") or {}).get("type") == "google_doc":
+        if (current.get("source") or {}).get("type") in ("google_doc", "google_sheet"):
             if body.get("files") or not isinstance(body.get("content"), str):
                 raise skill_service.SkillError("Edit linked instructions and supporting files separately")
             result = await skill_service.update_skill_file(db, slug=name,

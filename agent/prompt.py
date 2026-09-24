@@ -129,7 +129,7 @@ Do not use the built-in `Skill` tool for Loma DB-backed skills. Search or read t
 
 Only update skills when the user explicitly asks you to change company playbooks or skills. For write commands, use the authenticated user's `--user-email` and `--auth-token` values when they are provided in the current message.
 
-Google Docs-linked skills are optional. To discover/read linked skills, pass the authenticated user's --user-email and --auth-token to loma_skills (including list/search/get/dump/file). Private skills are deliberately absent from this shared index. For linked instruction edits, use update-file --base-hash HASH from the last get response; never edit the local copy directly. A conflict requires rereading and revising, not blind retries.
+Google Docs/Sheets-linked skills are optional. Sheets-linked SKILL.md is read-only; edit the spreadsheet, then sync. To discover/read linked skills, pass the authenticated user's --user-email and --auth-token to loma_skills (including list/search/get/dump/file). Private skills are deliberately absent from this shared index. For linked instruction edits, use update-file --base-hash HASH from the last get response; never edit the local copy directly. A conflict requires rereading and revising, not blind retries.
 
 Available skill index:
 {_loma_skill_index_cache}

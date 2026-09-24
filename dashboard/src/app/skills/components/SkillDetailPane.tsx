@@ -106,8 +106,10 @@ export default function SkillDetailPane({
     }
   }
 
+  const isSheetInstructions = skill?.source?.type === "google_sheet" && filePath === "SKILL.md";
+
   async function handleSave() {
-    if (!skill || saving) return;
+    if (!skill || saving || isSheetInstructions) return;
     const slug = skill.slug || skill.name;
     setSaving(true);
     setSaveError("");
@@ -246,8 +248,8 @@ export default function SkillDetailPane({
                 <details><summary>Latest published instructions</summary><pre className="text-xs whitespace-pre-wrap">{fileContent}</pre></details>
                 <Button variant="outline" size="sm" onClick={() => { setBaseHash(skill.source?.hash); setSaveError(""); }}>Use latest source as my edit base</Button></>}
               </div>}
-              {skill.source && filePath === "SKILL.md" && <p className="text-xs text-muted-foreground">Saving updates the Google Doc. Keep the metadata header unchanged.</p>}
-              {!isSystemSkill && (
+              {skill.source && filePath === "SKILL.md" && <p className="text-xs text-muted-foreground">{isSheetInstructions ? "Read-only. Edit the source in Google Sheets, then sync." : "Saving updates the Google Doc. Keep the metadata header unchanged."}</p>}
+              {!isSystemSkill && !isSheetInstructions && (
                 <div className="flex justify-end">
                   <Button size="sm" onClick={handleSave} disabled={saving}>
                     {saving ? "Saving..." : skill.source && filePath === "SKILL.md" ? "Save to Google Docs" : "Save"}
@@ -263,7 +265,7 @@ export default function SkillDetailPane({
                 <Textarea
                   value={editorContent}
                   onChange={(e) => setEditorContent(e.target.value)}
-                  readOnly={isSystemSkill}
+                  readOnly={isSystemSkill || isSheetInstructions}
                   className={cn(
                     "min-h-[500px] font-mono text-xs leading-relaxed resize-y",
                     isSystemSkill && "cursor-default"

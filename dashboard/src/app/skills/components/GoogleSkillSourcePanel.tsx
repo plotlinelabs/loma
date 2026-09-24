@@ -4,19 +4,22 @@ import { skillSourceRequest, type GoogleSkillSource } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
 export default function GoogleSkillSourcePanel({ source, slug, onUpdated, disabled = false, statusUnknown = false }: { statusUnknown?: boolean; disabled?: boolean; source: GoogleSkillSource; slug: string; onUpdated: () => Promise<void> }) {
+  const isSheet = source.type === "google_sheet";
+  const label = isSheet ? "Google Sheets" : "Google Docs";
+  const sourceUrl = isSheet ? `https://docs.google.com/spreadsheets/d/${source.spreadsheet_id}/edit#gid=${source.sheet_id}` : `https://docs.google.com/document/d/${source.document_id}/edit?tab=${source.tab_id}`;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [history, setHistory] = useState<{ status: string; created_at: string }[] | null>(null);
   async function action(action: string) {
-    if (action === "disconnect" && !window.confirm("Keep the last validated instructions as a regular skill? The Google Doc will not be deleted.")) return;
+    if (action === "disconnect" && !window.confirm("Keep the last validated instructions as a regular skill? The Google source will not be deleted.")) return;
     setBusy(true); setError("");
     try { await skillSourceRequest(`skills/${encodeURIComponent(slug)}/source`, { action }); await onUpdated(); }
     catch (e) { setError((e as Error).message); await onUpdated().catch(() => {}); } finally { setBusy(false); }
   }
-  return <section aria-label="Google Docs source" className="border-b px-5 py-3 space-y-2 text-xs">
-    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">Google Docs</span><span className="rounded bg-muted px-2 py-1">{statusUnknown ? "status unavailable" : source.status.replaceAll("_", " ")}{!source.auto_sync_enabled && " · auto-sync paused"}</span>
-      <a className="text-primary hover:underline" href={`https://docs.google.com/document/d/${source.document_id}/edit?tab=${source.tab_id}`} target="_blank" rel="noreferrer">{source.title} / {source.tab_title} ↗</a></div>
-    <p className="text-muted-foreground">Sync connection: {source.connection_owner}. Saves use your own Google account.</p>
+  return <section aria-label={`${label} source`} className="border-b px-5 py-3 space-y-2 text-xs">
+    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{label}</span><span className="rounded bg-muted px-2 py-1">{statusUnknown ? "status unavailable" : source.status.replaceAll("_", " ")}{!source.auto_sync_enabled && " · auto-sync paused"}</span>
+      <a className="text-primary hover:underline" href={sourceUrl} target="_blank" rel="noreferrer">Open in {label}: {source.title} / {source.tab_title} ↗</a></div>
+    <p className="text-muted-foreground">Sync connection: {source.connection_owner}. {isSheet ? "Read-only in Loma. Edit the source in Google Sheets." : "Saves use your own Google account."}</p>
     <p className="text-muted-foreground">Last checked: {source.last_checked ? new Date(source.last_checked).toLocaleString() : "Not yet"} · Last published: {source.last_published ? new Date(source.last_published).toLocaleString() : "Not yet"}</p>
     {(error || source.error) && <p role="alert" className="text-destructive">{error || source.error}</p>}
     <div className="flex flex-wrap gap-2">
