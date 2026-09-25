@@ -1,3 +1,3 @@
-from observability.db import init_observability, get_db
+from observability.db import connect_db, get_db, init_observability
 
-__all__ = ["init_observability", "get_db"]
+__all__ = ["connect_db", "get_db", "init_observability"]

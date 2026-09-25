@@ -136,6 +136,10 @@ _opencode_model_catalog: dict | None = None
 _opencode_model_catalog_checked_at: float = 0.0
 # Session reuse cache keyed by (config_hash, conversation_id, model).
 _opencode_session_cache: dict[tuple[str, str, str], str] = {}
+# Sessions that currently have a Loma turn waiting on OpenCode. Reusing one
+# for a second POST /api/chat deadlocks both turns (the first is often blocked
+# on OpenCode's interactive `question` tool).
+_opencode_inflight_sessions: set[str] = set()
 # Warm session pools keyed by (config_hash, model).
 _opencode_warm_sessions: dict[tuple[str, str], list[str]] = {}
 _opencode_prewarm_tasks: dict[tuple[str, str], asyncio.Task] = {}
@@ -147,6 +151,7 @@ async def reset_opencode_runtime(reason: str = "") -> None:
     global _opencode_model_catalog, _opencode_model_catalog_checked_at
 
     _opencode_session_cache.clear()
+    _opencode_inflight_sessions.clear()
     _opencode_warm_sessions.clear()
     _opencode_config_cache.clear()
     _opencode_model_catalog = None
@@ -947,6 +952,62 @@ def _event_session_id(properties: dict) -> str | None:
     return None
 
 
+def _clarify_questions_from_tool_input(tool_input: object) -> list[dict] | None:
+    """Map OpenCode's interactive `question` tool into dashboard clarify cards."""
+    if not isinstance(tool_input, dict):
+        return None
+    raw = tool_input.get("questions")
+    if not isinstance(raw, list) or not raw:
+        return None
+
+    questions: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("question") or item.get("header") or "").strip()
+        if not text:
+            continue
+        options: list[dict] = []
+        for opt in item.get("options") or []:
+            if isinstance(opt, str) and opt.strip():
+                options.append({"label": opt.strip()})
+                continue
+            if not isinstance(opt, dict):
+                continue
+            label = str(opt.get("label") or opt.get("title") or "").strip()
+            if not label:
+                continue
+            entry: dict = {"label": label}
+            description = str(opt.get("description") or "").strip()
+            if description:
+                entry["description"] = description
+            options.append(entry)
+        questions.append({
+            "question": text,
+            "options": options,
+            "multiSelect": bool(item.get("multiple") or item.get("multiSelect")),
+        })
+    return questions or None
+
+
+async def _abort_opencode_session(session_id: str, *, base_url: str) -> None:
+    """Stop an in-flight OpenCode turn (e.g. a blocking `question` tool)."""
+    for path in (f"/session/{session_id}/abort", f"/session/{session_id}/interrupt"):
+        try:
+            await _request_json(
+                "POST",
+                path,
+                json_body={},
+                params={"directory": str(PROJECT_ROOT)},
+                timeout=10,
+                base_url=base_url,
+            )
+            logger.info("Aborted OpenCode session %s via %s", session_id, path)
+            return
+        except Exception:
+            logger.debug("OpenCode abort %s failed for session=%s", path, session_id, exc_info=True)
+
+
 def _tool_display_input(tool_name: str, state: dict) -> str:
     title = state.get("title")
     if title:
@@ -1052,7 +1113,9 @@ async def _iter_opencode_turn_events(
                                     "message": "Still waiting for OpenCode events...",
                                     "elapsed_seconds": round(now - last_event_at),
                                 }
-                            if prompt_task is None and loop.time() - last_event_at > idle_timeout_seconds:
+                            if loop.time() - last_event_at > idle_timeout_seconds:
+                                if prompt_task is not None and not prompt_task.done():
+                                    prompt_task.cancel()
                                 raise OpenCodeError(
                                     "Timed out waiting for OpenCode response events "
                                     f"after {idle_timeout_seconds}s"
@@ -1102,7 +1165,9 @@ async def _iter_opencode_turn_events(
                                 "message": "Still waiting for OpenCode events...",
                                 "elapsed_seconds": round(now - last_event_at),
                             }
-                        if prompt_task is None and now - last_event_at > idle_timeout_seconds:
+                        if now - last_event_at > idle_timeout_seconds:
+                            if prompt_task is not None and not prompt_task.done():
+                                prompt_task.cancel()
                             raise OpenCodeError(
                                 "Timed out waiting for OpenCode response events "
                                 f"after {idle_timeout_seconds}s"
@@ -1119,9 +1184,13 @@ async def _iter_opencode_turn_events(
         except asyncio.TimeoutError as exc:
             raise OpenCodeError(_describe_turn_timeout(request_timeout_seconds)) from exc
         finally:
+            if prompt_task is not None and not prompt_task.done():
+                prompt_task.cancel()
             if prompt_task is not None:
                 try:
                     await prompt_task
+                except asyncio.CancelledError:
+                    pass
                 except Exception:
                     logger.exception("OpenCode prompt_async request failed")
                     raise
@@ -1289,6 +1358,13 @@ async def _run_opencode_agent(
         (server.config_hash, conversation_id, selected_model) if conversation_id else None
     )
     session_id = _opencode_session_cache.get(session_cache_key) if session_cache_key else None
+    if session_id and session_id in _opencode_inflight_sessions:
+        logger.warning(
+            "Cached OpenCode session %s is still in flight for conversation=%s; starting a fresh session",
+            session_id,
+            conversation_id,
+        )
+        session_id = None
     warm_session_used = False
     reused_session = bool(session_id)
     if not session_id:
@@ -1404,11 +1480,12 @@ async def _run_opencode_agent(
     total_usage = {"input_tokens": 0, "output_tokens": 0}
     total_cost = 0.0
     stream_completed = False
+    abort_after_question = False
     first_event_at: float | None = None
     first_text_at: float | None = None
 
     async def handle_part(part: dict) -> AsyncGenerator[str | dict, None]:
-        nonlocal last_text, first_text_at
+        nonlocal last_text, first_text_at, stream_completed, abort_after_question
 
         part_type = part.get("type")
         part_id = part.get("id") or hashlib.sha256(str(part).encode()).hexdigest()[:12]
@@ -1467,6 +1544,22 @@ async def _run_opencode_agent(
             tool_name = part.get("tool") or "tool"
             tool_use_id = part.get("callID") or part_id
             raw_state = part.get("state") or {}
+            if tool_name == "question":
+                # OpenCode's question tool blocks the session until a TUI
+                # answer arrives. Loma has no TUI — surface the questions as
+                # dashboard clarify cards and end the turn so chat cannot hang.
+                tool_input = raw_state.get("input") if isinstance(raw_state, dict) else {}
+                questions = _clarify_questions_from_tool_input(tool_input)
+                if questions:
+                    if include_steps:
+                        yield {"type": "clarify", "questions": questions}
+                    elif not last_text:
+                        last_text = "\n".join(
+                            str(q.get("question") or "") for q in questions if q.get("question")
+                        )
+                stream_completed = True
+                abort_after_question = True
+                return
             if isinstance(raw_state, dict):
                 state = raw_state
                 status = state.get("status")
@@ -1532,6 +1625,7 @@ async def _run_opencode_agent(
         yield {"type": "text", "text": delta, "append": True}
 
     server.active_turns += 1
+    _opencode_inflight_sessions.add(session_id)
     attempt = 1
     try:
         while True:
@@ -1609,6 +1703,8 @@ async def _run_opencode_agent(
                         for pending_part in pending_parts.pop(message_id, []):
                             async for output_event in handle_part(pending_part):
                                 yield output_event
+                        if stream_completed:
+                            break
 
                         if info.get("time", {}).get("completed") and message_id not in completed_usage_messages:
                             completed_usage_messages.add(message_id)
@@ -1639,6 +1735,10 @@ async def _run_opencode_agent(
 
                     async for output_event in handle_part(part):
                         yield output_event
+                    if stream_completed:
+                        break
+                if abort_after_question:
+                    await _abort_opencode_session(session_id, base_url=base_url)
                 break
             except Exception as exc:
                 if active_stream is not None and active_stream.stopped:
@@ -1676,14 +1776,17 @@ async def _run_opencode_agent(
                 ):
                     container.clear()
                 stream_completed = False
+                abort_after_question = False
                 first_event_at = None
                 server.active_turns = max(0, server.active_turns - 1)
+                _opencode_inflight_sessions.discard(session_id)
                 server = await _ensure_server_instance(user_mcp_overrides=user_mcp_overrides)
                 server.active_turns += 1
                 base_url = server.base_url
                 session_id = await _create_session(
                     full_prompt[:80] or "Dashboard chat", base_url=base_url
                 )
+                _opencode_inflight_sessions.add(session_id)
                 if conversation_id:
                     session_cache_key = (server.config_hash, conversation_id, selected_model)
                     _opencode_session_cache[session_cache_key] = session_id
@@ -1693,6 +1796,7 @@ async def _run_opencode_agent(
         if active_stream is not None:
             from agent.active_streams import unregister
             await unregister(conversation_id)
+        _opencode_inflight_sessions.discard(session_id)
         server.active_turns = max(0, server.active_turns - 1)
         server.touch()
         if (user_mcp_overrides or {}).get("loma-recall"):
