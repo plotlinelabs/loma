@@ -8,13 +8,14 @@ import { useAgentModels } from "@/hooks/useAgentModels";
 import { useAgentIdentities } from "@/hooks/useAgentIdentities";
 import { AgentPicker } from "@/components/composer/AgentPicker";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
+import { readChatDraft, writeChatDraft } from "@/lib/chatDrafts";
 import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
 import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { useFileDrop } from "./composer/useFileDrop";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
-import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath } from "../lib/api";
+import { ChatRequestError, streamChat, fetchConversation, injectMessage, interruptAgent, basePath } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
@@ -577,8 +578,8 @@ export default function ChatPanel({
   autoSend?: boolean;
   systemContext?: string;
   initialStatus?: string;
-  /** When set, unsent composer text is persisted to localStorage under this
-   * key and restored on mount — an accidental close never loses a draft. */
+  /** Optional draft scope; text and attachments are persisted in IndexedDB,
+   * namespaced by the authenticated user, and restored on mount. */
   draftStorageKey?: string;
   /** Currently active artifact ID (for highlighting the active card) */
   activeArtifactId?: string | null;
@@ -699,42 +700,38 @@ export default function ChatPanel({
     inputRef.current?.focus();
   }, []);
 
-  // Restore an unsent draft (e.g. the task drawer was closed by mistake).
-  // Server-provided prompts (staged board drafts) win over the local draft.
+  // Scope drafts to the signed-in user and conversation (including new chats).
+  // IndexedDB accommodates images without localStorage's small synchronous quota.
+  const draftKey = session?.user?.email
+    ? `${session.user.email}:${draftStorageKey || `chat-${conversationId || "new"}`}`
+    : null;
+  const [loadedDraftKey, setLoadedDraftKey] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
   useEffect(() => {
-    if (!draftStorageKey || initialPrompt) return;
-    try {
-      const saved = window.localStorage.getItem(draftStorageKey);
-      if (saved) setInput((prev) => prev || saved);
-    } catch {
-      // localStorage unavailable (private mode) — drafts just don't persist.
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftStorageKey]);
+    if (!draftKey) return;
+    let cancelled = false;
+    readChatDraft(draftKey).then((saved) => {
+      if (cancelled) return;
+      if (!initialPrompt && !initialFiles?.length && saved) {
+        setInput((current) => current || saved.text);
+        setPendingFiles((current) => current.length ? current : saved.files);
+      }
+    }).catch(() => {
+      if (!cancelled) setDraftError("Draft storage is unavailable. Keep this chat open until you send your attachments.");
+    }).finally(() => {
+      if (!cancelled) setLoadedDraftKey(draftKey);
+    });
+    return () => { cancelled = true; };
+  }, [draftKey, initialPrompt, initialFiles]);
 
-  // Persist unsent composer text; sending (or clearing) removes the draft.
   useEffect(() => {
-    if (!draftStorageKey) return;
-    try {
-      if (input.trim()) window.localStorage.setItem(draftStorageKey, input);
-      else window.localStorage.removeItem(draftStorageKey);
-    } catch {
-      // Ignore quota/private-mode failures.
-    }
-  }, [input, draftStorageKey]);
+    if (!draftKey || loadedDraftKey !== draftKey) return;
+    writeChatDraft(draftKey, input, pendingFiles).catch(() => {
+      setDraftError("Couldn't save this draft. Keep this chat open until you send your attachments.");
+    });
+  }, [draftKey, loadedDraftKey, input, pendingFiles]);
 
-  // Write through during typing as well as in the effect above. This keeps a
-  // draft safe even when the drawer is closed immediately after the last key.
-  const updateComposerInput = (value: string) => {
-    setInput(value);
-    if (!draftStorageKey) return;
-    try {
-      if (value.trim()) window.localStorage.setItem(draftStorageKey, value);
-      else window.localStorage.removeItem(draftStorageKey);
-    } catch {
-      // Ignore quota/private-mode failures.
-    }
-  };
+  const updateComposerInput = (value: string) => setInput(value);
 
   useEffect(() => {
     if (!isStreaming) {
@@ -757,10 +754,11 @@ export default function ChatPanel({
     return () => window.clearInterval(interval);
   }, [isStreaming, streamStartedAt]);
 
+  const hasMessages = items.length > 0;
   const adjustTextareaHeight = useCallback(() => {
     const textarea = inputRef.current;
     if (!textarea) return;
-    textarea.style.height = "auto";
+    textarea.style.height = "0px";
     const maxHeight = 160;
     textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
@@ -768,7 +766,7 @@ export default function ChatPanel({
 
   useEffect(() => {
     adjustTextareaHeight();
-  }, [input, adjustTextareaHeight]);
+  }, [input, hasMessages, adjustTextareaHeight]);
 
   const addFiles = useCallback(async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
@@ -880,7 +878,7 @@ export default function ChatPanel({
     // Wait for the model catalog so the send uses the intended model (e.g. a
     // board task's chosen model) instead of racing the default.
     if (autoSend && initialPrompt && !autoSendFired.current && !isStreaming && session
-        && modelLoadState !== "loading") {
+        && modelLoadState !== "loading" && draftKey === loadedDraftKey) {
       autoSendFired.current = true;
       setInput("");
       // Call directly — a deferred setTimeout gets cancelled by this effect's
@@ -893,12 +891,17 @@ export default function ChatPanel({
 
   const handleSend = async (
     overrideMessage?: string,
-    { fromQueue, includePendingFiles }: { fromQueue?: boolean; includePendingFiles?: boolean } = {},
+    { fromQueue, includePendingFiles, queuedFiles }: { fromQueue?: boolean; includePendingFiles?: boolean; queuedFiles?: ChatFile[] } = {},
   ) => {
     const displayText = overrideMessage ?? input.trim();
-    if (!displayText && pendingFiles.length === 0) return;
+    if (!displayText && !(queuedFiles?.length || pendingFiles.length)) return;
+    if (!fromQueue && draftKey !== loadedDraftKey) return;
 
-    if (isStreaming) {
+    if (!fromQueue && draftKey && (overrideMessage === undefined || includePendingFiles)) {
+      void writeChatDraft(draftKey, "", []).catch(() => setDraftError("Could not clear the saved draft."));
+    }
+
+    if (isStreaming && !fromQueue) {
       const isOverride = overrideMessage !== undefined;
       const filesToQueue = !isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined;
       const fileNames = filesToQueue?.map((f) => f.name);
@@ -943,9 +946,9 @@ export default function ChatPanel({
       : displayText;
 
     const isOverride = overrideMessage !== undefined;
-    const filesToSend = (!isOverride || includePendingFiles) && pendingFiles.length > 0
+    const filesToSend = queuedFiles ?? ((!isOverride || includePendingFiles) && pendingFiles.length > 0
       ? [...pendingFiles]
-      : undefined;
+      : undefined);
     const fileNames = filesToSend?.map((f) => f.name);
     const displayMessage = displayText || `[${fileNames?.join(", ")}]`;
 
@@ -1156,6 +1159,12 @@ export default function ChatPanel({
           ...prev,
           { role: "assistant", content: STOPPED_BY_USER_MESSAGE },
         ]);
+      } else if (error instanceof ChatRequestError) {
+        // A rejected request never started an agent. Preserve its attachments
+        // for retry instead of polling a conversation that may not exist.
+        setInput((current) => current || displayText);
+        if (filesToSend?.length) setPendingFiles((current) => [...filesToSend, ...current]);
+        setItems((prev) => [...prev, { role: "assistant", content: `Error: ${error.message}` }]);
       } else if (activeConversationId) {
         // Stream broke but agent may still be running — enter recovery mode
         enteredRecovery = true;
@@ -1209,10 +1218,7 @@ export default function ChatPanel({
           if (toSend.length > 0) {
             const combinedText = toSend.map((q) => q.text).join("\n\n");
             const combinedFiles = toSend.flatMap((q) => q.files || []);
-            if (combinedFiles.length) {
-              setPendingFiles(combinedFiles);
-            }
-            requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+            requestAnimationFrame(() => sendRef.current(combinedText, { fromQueue: true, queuedFiles: combinedFiles }));
           }
         } else {
           queuedMessagesRef.current = [];
@@ -1222,10 +1228,7 @@ export default function ChatPanel({
           ));
           const combinedText = queued.map((q) => q.text).join("\n\n");
           const combinedFiles = queued.flatMap((q) => q.files || []);
-          if (combinedFiles.length) {
-            setPendingFiles(combinedFiles);
-          }
-          requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+          requestAnimationFrame(() => sendRef.current(combinedText, { fromQueue: true, queuedFiles: combinedFiles }));
         }
       } else if (!enteredRecovery) {
         requestAnimationFrame(() => {
@@ -1234,6 +1237,9 @@ export default function ChatPanel({
       }
     }
   };
+
+  const sendRef = useRef(handleSend);
+  useEffect(() => { sendRef.current = handleSend; });
 
   const handleClarifySubmit = useCallback(
     (itemIndex: number, selectedLabels: string[], otherText: string) => {
@@ -1344,6 +1350,14 @@ export default function ChatPanel({
         </div>
       )}
 
+      {draftError && (
+        <div role="alert" className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-destructive">
+          {draftError}
+          <button type="button" aria-label="Dismiss draft warning" onClick={() => setDraftError(null)}>
+            <RiCloseLine size={16} />
+          </button>
+        </div>
+      )}
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -1360,7 +1374,7 @@ export default function ChatPanel({
 
       {isEmptyState ? (
         /* Empty state */
-        <div className="flex flex-col items-center justify-center h-full px-4 md:px-6 animate-fade-in-up">
+        <div className="flex flex-col items-center justify-center h-full overflow-y-auto px-4 md:px-6 animate-fade-in-up">
           <div className="mb-8 flex flex-col items-center gap-4 text-center">
             <PetCompanion size={56} />
             <h2 className="editorial-heading text-[26px] md:text-[34px] text-foreground">
@@ -1391,8 +1405,8 @@ export default function ChatPanel({
                   }}
                   placeholder={isStreaming ? "Type your next message..." : "What do you need to get done?"}
                   rows={2}
-                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
-                  style={{ maxHeight: "200px" }}
+                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-y-auto field-sizing-fixed overscroll-contain leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  style={{ maxHeight: "160px" }}
                 />
                 <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:flex-wrap">
                   <div className="flex min-w-0 items-center gap-0.5 max-md:w-full max-md:flex-wrap">
@@ -1417,7 +1431,7 @@ export default function ChatPanel({
                     </Button>
                     <Button
                       type="submit"
-                      disabled={!input.trim() && pendingFiles.length === 0}
+                      disabled={draftKey !== loadedDraftKey || (!input.trim() && pendingFiles.length === 0)}
                       className={cn(
                         "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
                         !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
@@ -1473,7 +1487,7 @@ export default function ChatPanel({
             </div>
           )}
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 py-4" onScroll={handleMessagesScroll}>
+          <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4" onScroll={handleMessagesScroll}>
             <div className="space-y-2 max-w-3xl mx-auto">
               {items.map((item, i) => {
                 if (item.role === "steps") {
@@ -1716,7 +1730,7 @@ export default function ChatPanel({
                   }}
                   placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : "Type a follow-up while agent is working...") : "Ask the agent something..."}
                   rows={1}
-                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-y-auto field-sizing-fixed overscroll-contain border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "160px" }}
                 />
                 <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:flex-wrap">
@@ -1755,7 +1769,7 @@ export default function ChatPanel({
                     <Button
                       type="submit"
                       size="icon-sm"
-                      disabled={!input.trim() && pendingFiles.length === 0}
+                      disabled={draftKey !== loadedDraftKey || (!input.trim() && pendingFiles.length === 0)}
                       className={cn(
                         "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-12 max-md:rounded-xl",
                         !input.trim() && pendingFiles.length === 0 && "max-md:hidden",

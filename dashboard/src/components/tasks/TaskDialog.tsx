@@ -157,6 +157,9 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="What should the agent do?"
               rows={6}
+              // Cap growth so a long prompt scrolls inside the box instead of
+              // pushing the centered dialog's top off-screen.
+              className="max-h-[40dvh] overflow-y-auto overscroll-contain"
             />
           </div>
           <ToolsPicker tools={picker.tools} skills={picker.skills} selection={picker.selection} onSetEnabled={picker.setEnabled} onSetAll={picker.setAll} onOpen={picker.loadCatalog} loadState={picker.loadState} disabled={busy} />
