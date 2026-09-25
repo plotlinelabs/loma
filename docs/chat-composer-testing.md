@@ -4,7 +4,7 @@
 
 The previous `/api/chat` rejects a genuinely empty image-only prompt with HTTP 400 before inspecting files. The new regression suite fails on that baseline and passes with this change. Previously, queued files were staged back into React state but an override-message closure did not read them; images on the server were temporary files deleted after a turn.
 
-The exact reported wheel-scrolling failure was not reliably reproduced in local Chromium. This change makes composer sizing deterministic (`field-sizing: fixed`, 160px cap), adds overflow containment, and checks actual mouse-wheel movement with long drafts on desktop and mobile-sized viewports. It is not a claim of iOS Safari/device validation.
+The reported "chat box won't scroll" failure was reproduced on the Tasks board quick-add composer ("What do you need done?"): it used `overflow: hidden` with a 120px cap, so a long prompt was clipped and mouse-wheel scrolling moved it 0px; only arrow keys reached the top. It now uses `overflow-y: auto`. The main chat composers already scrolled in local Chromium on `main`; This change makes composer sizing deterministic (`field-sizing: fixed`, 160px cap), adds overflow containment, and checks actual mouse-wheel movement with long drafts on desktop and mobile-sized viewports. It is not a claim of iOS Safari/device validation.
 
 ## Automated tests
 

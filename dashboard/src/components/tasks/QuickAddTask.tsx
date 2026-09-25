@@ -123,7 +123,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
           }}
           placeholder="What do you need done?"
           rows={1}
-          className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+          className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-y-auto overscroll-contain border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
           style={{ maxHeight: "120px" }}
         />
         <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:flex-wrap">

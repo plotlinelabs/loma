@@ -45,3 +45,24 @@ for (const [width,height,label] of [[1440,1000,'desktop'],[390,844,'mobile']]) {
 }
 assert.deepEqual(errors,[]);await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});
+
+// Tasks-board quick-add composer ("What do you need done?"): a long prompt must
+// scroll inside the box with the mouse wheel (previously overflow:hidden, so the
+// top was reachable only with arrow keys).
+(async()=>{
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH || undefined,args:['--no-sandbox']});
+const context=await browser.newContext({storageState:process.env.CHAT_AUTH_STATE});const page=await context.newPage();
+for (const [width,height,label] of [[1440,900,'desktop'],[390,844,'mobile']]) {
+ await page.setViewportSize({width,height});
+ await page.goto(`${process.env.CHAT_BASE_URL || 'http://localhost:13001'}/tasks`,{timeout:120000});
+ const box=page.locator('textarea[placeholder="What do you need done?"]').first();await box.waitFor({timeout:30000});
+ await box.fill(Array.from({length:80},(_,i)=>`Line ${i+1}: long task prompt`).join('\n'));await page.waitForTimeout(300);
+ const start=await box.evaluate(e=>{e.scrollTop=e.scrollHeight;return e.scrollTop});
+ await box.hover();for(let i=0;i<15;i++){await page.mouse.wheel(0,-600);await page.waitForTimeout(50);}await page.waitForTimeout(300);
+ const m=await box.evaluate(e=>({height:e.clientHeight,scrollHeight:e.scrollHeight,top:e.scrollTop,overflowY:getComputedStyle(e).overflowY}));
+ assert(start>0 && m.top===0 && m.overflowY!=='hidden', JSON.stringify(m));
+ await page.screenshot({path:`/tmp/chat-quickadd-scroll-${label}.png`});
+ console.log(`PASS ${label} task quick-add wheel scrolling`,m);
+}
+await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});
