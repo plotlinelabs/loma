@@ -282,6 +282,10 @@ _TASK_PROJECTION = {
     "forked_from_conversation_id": 1,
 }
 
+# Done is the only column that grows without bound, so it is the only one we
+# cap. Todo/active cards must never be dropped from the board.
+DONE_TASKS_LIMIT = 500
+
 
 async def handle_create_task(request: web.Request) -> web.Response:
     """POST /api/tasks — create a staged (draft) task."""
@@ -523,10 +527,22 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
             {"final_response": pattern},
         ]
 
-    tasks = await db.conversations.find(
-        query,
-        _TASK_PROJECTION,
-    ).to_list(500)
+    # Load todo/active in full and cap only Done (newest first). A single
+    # unsorted .to_list(500) over all statuses let old Done tasks crowd out
+    # live cards, which then only reappeared when a search narrowed the match.
+    active_query = {**query, "task_status": {"$in": ["todo", "active"]}}
+    done_query = {**query, "task_status": "done"}
+    active_cursor = db.conversations.find(active_query, _TASK_PROJECTION)
+    done_cursor = (
+        db.conversations.find(done_query, _TASK_PROJECTION)
+        .sort([("task_done_at", -1), ("_id", -1)])
+        .limit(DONE_TASKS_LIMIT)
+    )
+    active_tasks, done_tasks = await asyncio.gather(
+        active_cursor.to_list(None),
+        done_cursor.to_list(DONE_TASKS_LIMIT),
+    )
+    tasks = active_tasks + done_tasks
 
     # Every column orders by effective rank (manual rank, or recency fallback
     # baked in by _task_view) — so all columns are manually reorderable.
