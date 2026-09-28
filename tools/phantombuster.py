@@ -13,7 +13,7 @@ Requires environment variables:
   - PHANTOMBUSTER_LI_SESSION_COOKIE: LinkedIn session cookie (li_at value)
 
 Usage:
-  python3 tools/phantombuster.py send <linkedin_profile_url> <message>
+  python3 tools/phantombuster.py send <linkedin_profile_url> [message]   # omit message to send without a note
   python3 tools/phantombuster.py message <linkedin_profile_url> <message>
   python3 tools/phantombuster.py inbox [--type all|archived|unread|inMail|spam] [--count N]
   python3 tools/phantombuster.py status [connect|message|inbox]
@@ -91,17 +91,21 @@ def sanitize_message(message: str) -> str:
     return message
 
 
-async def send_connection(linkedin_url: str, message: str) -> dict:
-    """Launch the LinkedIn Auto Connect Phantom for a single profile."""
+async def send_connection(linkedin_url: str, message: str = "") -> dict:
+    """Launch the LinkedIn Auto Connect Phantom for a single profile.
+
+    The note is optional. When ``message`` is empty or whitespace-only, the
+    invite is sent without a note (no ``message`` key in the launch argument).
+    """
     if not linkedin_url:
         return {"error": "linkedin_url is required."}
-    if not message:
-        return {"error": "message is required."}
     if not LINKEDIN_PROFILE_PATTERN.match(linkedin_url):
         return {"error": f"Invalid LinkedIn URL: {linkedin_url}. Expected: https://www.linkedin.com/in/username/"}
 
     # Sanitize the message before sending (PA-43)
-    message = sanitize_message(message)
+    message = sanitize_message(message or "").strip()
+    if len(message) > 300:
+        return {"error": f"Connection note is {len(message)} characters. LinkedIn allows at most 300."}
 
     try:
         api_key = _env("PHANTOMBUSTER_API_KEY")
@@ -121,9 +125,10 @@ async def send_connection(linkedin_url: str, message: str) -> dict:
             "sessionCookie": session_cookie,
             "userAgent": user_agent,
             "profileUrl": linkedin_url,
-            "message": message,
         },
     }
+    if message:
+        payload["argument"]["message"] = message
 
     headers = {
         "Content-Type": "application/json",
@@ -153,7 +158,8 @@ async def send_connection(linkedin_url: str, message: str) -> dict:
     return {
         "success": True,
         "target": linkedin_url,
-        "message": message,
+        "message": message or None,
+        "with_note": bool(message),
         "phantom_id": phantom_id,
         "container_id": data.get("containerId", "N/A"),
     }
@@ -336,7 +342,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print("Usage:")
-        print('  python3 tools/phantombuster.py send <linkedin_url> "<message>"')
+        print('  python3 tools/phantombuster.py send <linkedin_url> ["<message>"]   (omit message for no note)')
         print('  python3 tools/phantombuster.py message <linkedin_url> "<message>"')
         print("  python3 tools/phantombuster.py inbox [--type all|archived|unread|inMail|spam] [--count N]")
         print("  python3 tools/phantombuster.py status [connect|message|inbox]")
@@ -345,10 +351,11 @@ if __name__ == "__main__":
     cmd = sys.argv[1]
 
     if cmd == "send":
-        if len(sys.argv) < 4:
-            print("Error: send requires <linkedin_url> and <message>")
+        if len(sys.argv) < 3:
+            print("Error: send requires <linkedin_url> (message is optional)")
             sys.exit(1)
-        result = asyncio.run(send_connection(sys.argv[2], sys.argv[3]))
+        note = sys.argv[3] if len(sys.argv) > 3 else ""
+        result = asyncio.run(send_connection(sys.argv[2], note))
     elif cmd == "message":
         if len(sys.argv) < 4:
             print("Error: message requires <linkedin_url> and <message>")
