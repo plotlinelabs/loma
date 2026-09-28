@@ -73,8 +73,8 @@ def sanitize_message(message: str) -> str:
     Removes escape artifacts and normalizes special characters that can
     render incorrectly on LinkedIn:
       - Strips all backslash characters (escape artifacts)
-      - Replaces em dashes (—) with regular dashes (-)
-      - Replaces en dashes (–) with regular dashes (-)
+      - Replaces em dashes (\u2014) with regular dashes (-)
+      - Replaces en dashes (\u2013) with regular dashes (-)
 
     Args:
         message: The raw message string.
@@ -85,9 +85,9 @@ def sanitize_message(message: str) -> str:
     # Strip backslashes (escape artifacts from string processing)
     message = message.replace("\\", "")
     # Replace em dashes with regular dashes
-    message = message.replace("—", "-")
+    message = message.replace("\u2014", "-")
     # Replace en dashes with regular dashes
-    message = message.replace("–", "-")
+    message = message.replace("\u2013", "-")
     return message
 
 
