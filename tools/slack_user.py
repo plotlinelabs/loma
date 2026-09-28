@@ -17,6 +17,8 @@ Commands:
   slack_user.py --auth-token T --user-email E react --channel CH --ts TS --emoji NAME
   slack_user.py --auth-token T --user-email E unreact --channel CH --ts TS --emoji NAME
   slack_user.py --auth-token T --user-email E upload-file --channels CH1,CH2 --file PATH [--title T] [--message M]
+  slack_user.py --auth-token T --user-email E list-shared-channels [--include-internal-shared]
+  slack_user.py --auth-token T --user-email E channel-members --channel CH [--external-only] [--include-bots]
 """
 
 import asyncio
@@ -508,6 +510,144 @@ def upload_file(
         return {"error": f"Failed to upload file: {e.response['error']}"}
 
 
+def _client_with_retries(token: str) -> WebClient:
+    """WebClient that waits and retries on Slack rate limits (429)."""
+    from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
+    client = WebClient(token=token)
+    client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
+    return client
+
+
+def list_shared_channels(user_email: str, include_internal_shared: bool = False) -> dict[str, Any]:
+    """List Slack Connect channels (shared with other orgs) the user is a member of.
+
+    By default only externally shared channels (is_ext_shared) are returned.
+    With include_internal_shared, channels shared across the user's own
+    Enterprise Grid workspaces (is_shared) are also included.
+    """
+    token = _get_user_token(user_email)
+    client = _client_with_retries(token)
+
+    channels: list[dict[str, Any]] = []
+    cursor = None
+    try:
+        while True:
+            kwargs: dict[str, Any] = {
+                "types": "public_channel,private_channel",
+                "exclude_archived": True,
+                "limit": 200,
+            }
+            if cursor:
+                kwargs["cursor"] = cursor
+            result = client.users_conversations(**kwargs)
+            for ch in result.get("channels", []):
+                ext = bool(ch.get("is_ext_shared") or ch.get("is_pending_ext_shared"))
+                shared = bool(ch.get("is_shared"))
+                if not (ext or (include_internal_shared and shared)):
+                    continue
+                channels.append({
+                    "id": ch.get("id", ""),
+                    "name": ch.get("name", ""),
+                    "is_private": bool(ch.get("is_private")),
+                    "is_ext_shared": bool(ch.get("is_ext_shared")),
+                    "is_pending_ext_shared": bool(ch.get("is_pending_ext_shared")),
+                    "created": _format_ts(str(ch.get("created", ""))),
+                })
+            cursor = result.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+    except SlackApiError as e:
+        err = e.response.get("error", str(e))
+        if err == "missing_scope":
+            return {"error": "Your Slack connection is missing channels:read / groups:read. "
+                             "Reconnect Slack on the Loma Integrations page."}
+        return {"error": f"Slack API error: {err}"}
+
+    channels.sort(key=lambda c: c["name"])
+    return {"count": len(channels), "channels": channels}
+
+
+def channel_members(user_email: str, channel: str, external_only: bool = False,
+                    include_bots: bool = False) -> dict[str, Any]:
+    """List members of a channel with name, title, email and org.
+
+    Each member is flagged is_external when they belong to a different Slack
+    team than the requesting user (e.g. client users in a Slack Connect channel).
+    Emails can be empty when the other org hides them from external users.
+    """
+    token = _get_user_token(user_email)
+    client = _client_with_retries(token)
+
+    channel_id, error = _resolve_channel_id(client, channel)
+    if error:
+        return {"error": error}
+
+    try:
+        my_team = client.auth_test().get("team_id", "")
+    except SlackApiError as e:
+        return {"error": f"Slack auth error: {e.response.get('error', str(e))}"}
+
+    member_ids: list[str] = []
+    cursor = None
+    try:
+        while True:
+            kwargs: dict[str, Any] = {"channel": channel_id, "limit": 200}
+            if cursor:
+                kwargs["cursor"] = cursor
+            result = client.conversations_members(**kwargs)
+            member_ids.extend(result.get("members", []))
+            cursor = result.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+    except SlackApiError as e:
+        err = e.response.get("error", str(e))
+        if err in ("channel_not_found", "not_in_channel"):
+            return {"error": f"Channel not found or you are not a member: {channel}"}
+        if err == "missing_scope":
+            return {"error": "Your Slack connection is missing channels:read / groups:read. "
+                             "Reconnect Slack on the Loma Integrations page."}
+        return {"error": f"Slack API error: {err}"}
+
+    members: list[dict[str, Any]] = []
+    lookup_errors: list[str] = []
+    for uid in member_ids:
+        try:
+            user = client.users_info(user=uid).get("user", {})
+        except SlackApiError as e:
+            lookup_errors.append(f"{uid}: {e.response.get('error', str(e))}")
+            continue
+        if user.get("deleted"):
+            continue
+        is_bot = bool(user.get("is_bot")) or uid == "USLACKBOT"
+        if is_bot and not include_bots:
+            continue
+        profile = user.get("profile", {}) or {}
+        team_id = user.get("team_id", "") or profile.get("team", "")
+        is_external = bool(team_id and my_team and team_id != my_team)
+        if external_only and not is_external:
+            continue
+        members.append({
+            "id": uid,
+            "name": profile.get("real_name") or user.get("real_name") or user.get("name", ""),
+            "display_name": profile.get("display_name", ""),
+            "title": profile.get("title", ""),
+            "email": profile.get("email", ""),
+            "team_id": team_id,
+            "is_external": is_external,
+            "is_bot": is_bot,
+        })
+
+    out: dict[str, Any] = {
+        "channel": _get_channel_name(client, channel_id),
+        "channel_id": channel_id,
+        "count": len(members),
+        "members": members,
+    }
+    if lookup_errors:
+        out["lookup_errors"] = lookup_errors
+    return out
+
+
 # ── CLI entry point ───────────────────────────────────────────────────────
 
 
@@ -523,6 +663,8 @@ def _print_usage():
     print("  react --channel CH --ts TS --emoji NAME                        Add emoji reaction")
     print("  unreact --channel CH --ts TS --emoji NAME                      Remove emoji reaction")
     print("  upload-file --channels CH1,CH2 --file PATH [--title T] [--message M]  Upload a file")
+    print("  list-shared-channels [--include-internal-shared]               List Slack Connect channels you're in")
+    print("  channel-members --channel CH [--external-only] [--include-bots]  List member names/emails")
     sys.exit(1)
 
 
@@ -640,6 +782,22 @@ if __name__ == "__main__":
         title = _parse_single(rest, "--title", "")
         message = _parse_single(rest, "--message", "")
         result = upload_file(user_email, channels, file, title, message)
+        print(json.dumps(result, indent=2))
+
+    elif command == "list-shared-channels":
+        result = list_shared_channels(user_email, "--include-internal-shared" in rest)
+        print(json.dumps(result, indent=2))
+
+    elif command == "channel-members":
+        channel = _parse_single(rest, "--channel")
+        if not channel:
+            print(json.dumps({"error": "channel-members requires --channel"}))
+            sys.exit(1)
+        result = channel_members(
+            user_email, channel,
+            external_only="--external-only" in rest,
+            include_bots="--include-bots" in rest,
+        )
         print(json.dumps(result, indent=2))
 
     else:
