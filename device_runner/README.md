@@ -45,7 +45,7 @@ python3 loma_device_runner.py install-service
 ```json
 "policy": {
   "allow_physical_devices": false,
-  "allowed_app_ids": ["so.plotline.demo"],
+  "allowed_app_ids": ["com.example.demo"],
   "allow_maestro_scripts": false
 }
 ```

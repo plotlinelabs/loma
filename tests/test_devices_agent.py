@@ -15,7 +15,7 @@ from isolation.catalog import CATALOG
 from isolation.gateway import ToolGateway, GatewayDenied
 from isolation.protocol import RunAuthority
 
-OWNER = 'vamsi@plotline.so'
+OWNER = 'owner@example.com'
 AUTH = RunAuthority('run1', OWNER, frozenset(TOOLS))
 
 
@@ -68,17 +68,17 @@ async def test_device_tools_map_to_service_with_backend_scope():
     await tools(AUTH, 'device.lease', {'platform': 'android'})
     await tools(AUTH, 'device.input', {'device_id': device, 'action': 'tap', 'x': 1, 'y': 2})
     await tools(AUTH, 'device.input', {'device_id': device, 'action': 'open_url', 'url': 'demo://x'})
-    await tools(AUTH, 'device.app', {'device_id': device, 'action': 'launch', 'app_id': 'so.plotline.demo'})
-    await tools(AUTH, 'device.install', {'device_id': device, 'repo': 'plotlinehq/plotline-sdk',
-                                         'artifact_name': 'app-native-android', 'pr': 366, 'app_id': 'so.plotline.demo'})
-    await tools(AUTH, 'device.observe', {'device_id': device, 'what': 'logs', 'filter': 'Plotline'})
+    await tools(AUTH, 'device.app', {'device_id': device, 'action': 'launch', 'app_id': 'com.example.demo'})
+    await tools(AUTH, 'device.install', {'device_id': device, 'repo': 'example-org/mobile-sdk',
+                                         'artifact_name': 'app-native-android', 'pr': 366, 'app_id': 'com.example.demo'})
+    await tools(AUTH, 'device.observe', {'device_id': device, 'what': 'logs', 'filter': 'ExampleSDK'})
     assert all(call[2] == 'conv:conv-42' for call in service.calls)
     ops = [(c[4], c[5]) for c in service.calls if c[0] == 'call']
     assert ('tap', {'x': 1, 'y': 2}) in ops and ('open_url', {'url': 'demo://x'}) in ops
-    assert ('launch', {'app_id': 'so.plotline.demo'}) in ops
-    assert ('install', {'build': {'repo': 'plotlinehq/plotline-sdk', 'artifact_name': 'app-native-android', 'pr': 366},
-                        'app_id': 'so.plotline.demo'}) in ops
-    assert ('logs', {'filter': 'Plotline'}) in ops
+    assert ('launch', {'app_id': 'com.example.demo'}) in ops
+    assert ('install', {'build': {'repo': 'example-org/mobile-sdk', 'artifact_name': 'app-native-android', 'pr': 366},
+                        'app_id': 'com.example.demo'}) in ops
+    assert ('logs', {'filter': 'ExampleSDK'}) in ops
 
 
 @pytest.mark.asyncio
@@ -166,11 +166,11 @@ def test_cli_build_body(tmp_path):
     from tools import device
     p = device.parser()
     body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'conv-1',
-                                           'install', '--device-id', 'r_0123456789abcdef/e', '--repo', 'plotlinehq/plotline-sdk',
-                                           '--artifact-name', 'app-native-android', '--pr', '366', '--app-id', 'so.plotline.demo']))
+                                           'install', '--device-id', 'r_0123456789abcdef/e', '--repo', 'example-org/mobile-sdk',
+                                           '--artifact-name', 'app-native-android', '--pr', '366', '--app-id', 'com.example.demo']))
     assert body == {'scope': 'conv:conv-1', 'action': 'call', 'device_id': 'r_0123456789abcdef/e', 'op': 'install',
-                    'args': {'app_id': 'so.plotline.demo',
-                             'build': {'repo': 'plotlinehq/plotline-sdk', 'artifact_name': 'app-native-android', 'pr': 366}}}
+                    'args': {'app_id': 'com.example.demo',
+                             'build': {'repo': 'example-org/mobile-sdk', 'artifact_name': 'app-native-android', 'pr': 366}}}
     flow = tmp_path / 'f.yaml'
     flow.write_text('- launchApp')
     with pytest.raises(SystemExit):
@@ -179,8 +179,8 @@ def test_cli_build_body(tmp_path):
                                            '--device-id', 'r_0123456789abcdef/e', '--flow-file', str(flow)]))
     assert body['op'] == 'run_flow' and body['args'] == {'flow': '- launchApp'} and body['scope'] == 'conv:cli'
     body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'c', 'logs',
-                                           '--device-id', 'r_0123456789abcdef/e', '--filter', 'Plotline', '--clear']))
-    assert body['args'] == {'lines': 300, 'clear': True, 'filter': 'Plotline'}
+                                           '--device-id', 'r_0123456789abcdef/e', '--filter', 'ExampleSDK', '--clear']))
+    assert body['args'] == {'lines': 300, 'clear': True, 'filter': 'ExampleSDK'}
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,7 @@ from devices.service import DeviceService, _validate
 sys.path.insert(0, 'tests')
 from test_device_runner import FAKE_ADB, PNG, UI_XML  # noqa: E402
 
-OWNER = 'vamsi@plotline.so'
+OWNER = 'owner@example.com'
 
 
 @pytest.fixture
@@ -151,7 +151,7 @@ async def test_offline_and_empty_messages(db):
 async def test_github_builds_need_allowlisted_repo(db, monkeypatch):
     monkeypatch.delenv('LOMA_DEVICE_BUILD_REPOS', raising=False)
     with pytest.raises(DeviceError, match='LOMA_DEVICE_BUILD_REPOS'):
-        await BlobStore().from_github(OWNER, 'plotlinehq/plotline-sdk', 'app-native-android', pr=366)
+        await BlobStore().from_github(OWNER, 'example-org/mobile-sdk', 'app-native-android', pr=366)
 
 
 # ── End to end: HTTP enroll → WebSocket → runner → fake adb ───────────────
@@ -234,7 +234,7 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
                 import hashlib
                 upload_id = test_blobs.add_file(apk, 'app-debug.apk', OWNER, hashlib.sha256(b'fake apk bytes').hexdigest(), 14)
                 result = await service.call(OWNER, 'conv-1', device, 'install',
-                                            {'upload_id': upload_id, 'app_id': 'so.plotline.demo'})
+                                            {'upload_id': upload_id, 'app_id': 'com.example.demo'})
                 assert result['installed'] == 'app-debug.apk' and result['build']['size'] == 14
                 assert "'install'" in adb_log.read_text()
                 # Another user cannot use my upload; another runner cannot fetch my blob.
@@ -314,8 +314,8 @@ def test_blob_budget_and_orphan_cleanup(tmp_path, monkeypatch):
 
 
 def test_sharing_is_case_insensitive():
-    runner = {'owner_email': 'Vamsi@Plotline.so', 'shared_with': ['pm@x.com']}
-    assert store.can_use(runner, 'vamsi@plotline.so') and store.can_use(runner, 'PM@x.com')
+    runner = {'owner_email': 'Owner@Example.com', 'shared_with': ['pm@x.com']}
+    assert store.can_use(runner, 'owner@example.com') and store.can_use(runner, 'PM@x.com')
     assert not store.can_use(runner, 'other@x.com') and not store.can_use(runner, '')
 
 

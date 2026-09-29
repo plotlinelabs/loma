@@ -14,7 +14,7 @@ from device_runner import loma_device_runner as ldr
 PNG = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR' + (1080).to_bytes(4, 'big') + (2400).to_bytes(4, 'big') + b'\x08\x06\x00\x00\x00'
 UI_XML = b'''<?xml version="1.0"?><hierarchy rotation="0">
 <node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
-  <node class="android.widget.Button" text="Show modal" resource-id="so.plotline.demo:id/show" clickable="true" bounds="[100,200][500,300]"/>
+  <node class="android.widget.Button" text="Show modal" resource-id="com.example.demo:id/show" clickable="true" bounds="[100,200][500,300]"/>
   <node class="android.view.View" bounds="[0,0][10,10]"/>
 </node></hierarchy>'''
 
@@ -44,7 +44,7 @@ elif args[2:6] == ['shell', 'pm', 'list', 'packages']:
     if os.path.exists(state):
         print('package:' + open(state).read().strip())
 elif args[2] == 'install':
-    open(os.environ['FAKE_ADB_LOG'] + '.installed', 'w').write(os.environ.get('FAKE_INSTALL_PKG', 'so.plotline.demo'))
+    open(os.environ['FAKE_ADB_LOG'] + '.installed', 'w').write(os.environ.get('FAKE_INSTALL_PKG', 'com.example.demo'))
     print('Success')
 '''
 
@@ -96,7 +96,7 @@ async def test_input_ops_build_fixed_argv(adb):
     r = runner(driver)
     await r.call('tap', 'emulator-5554', {'x': 300, 'y': 250})
     await r.call('type', 'emulator-5554', {'text': "it's a test; rm -rf /"})
-    await r.call('open_url', 'emulator-5554', {'url': 'plotlinedemo://track?event=loma_test&x=1'})
+    await r.call('open_url', 'emulator-5554', {'url': 'exampledemo://track?event=loma_test&x=1'})
     await r.call('key', 'emulator-5554', {'key': 'back'})
     shell = [c for c in calls() if c[:3] == ['-s', 'emulator-5554', 'shell']]
     assert ['-s', 'emulator-5554', 'shell', 'input', 'tap', '300', '250'] in shell
@@ -104,7 +104,7 @@ async def test_input_ops_build_fixed_argv(adb):
     # Quoted as ONE device-side shell word, spaces encoded as %s.
     assert typed[5] == "'it'\"'\"'s%sa%stest;%srm%s-rf%s/'"
     opened = next(c for c in shell if c[3:5] == ['am', 'start'])
-    assert opened[-1] == "'plotlinedemo://track?event=loma_test&x=1'"
+    assert opened[-1] == "'exampledemo://track?event=loma_test&x=1'"
     assert ['-s', 'emulator-5554', 'shell', 'input', 'keyevent', '4'] in shell
 
 
@@ -131,8 +131,8 @@ async def test_non_ascii_text_rejected_on_android(adb):
 @pytest.mark.asyncio
 async def test_allowed_app_ids_policy(adb):
     driver, calls = adb
-    r = runner(driver, allowed_app_ids=['so.plotline.demo'])
-    await r.call('launch', 'emulator-5554', {'app_id': 'so.plotline.demo'})
+    r = runner(driver, allowed_app_ids=['com.example.demo'])
+    await r.call('launch', 'emulator-5554', {'app_id': 'com.example.demo'})
     with pytest.raises(ldr.OpError, match='allowed_app_ids'):
         await r.call('launch', 'emulator-5554', {'app_id': 'com.android.settings'})
     with pytest.raises(ldr.OpError, match='allowed_app_ids'):
@@ -150,12 +150,12 @@ async def test_screenshot_and_ui_tree(adb):
     assert base64.b64decode(shot['png_base64']) == PNG
     tree = await r.call('ui_tree', 'emulator-5554', {})
     assert tree['units'] == 'pixels'
-    assert tree['elements'] == [{'type': 'Button', 'text': 'Show modal', 'id': 'so.plotline.demo:id/show',
+    assert tree['elements'] == [{'type': 'Button', 'text': 'Show modal', 'id': 'com.example.demo:id/show',
                                  'clickable': True, 'bounds': [100, 200, 500, 300], 'center': [300, 250]}]
 
 
 def test_flow_screening():
-    ok = 'appId: so.plotline.demo\n---\n- launchApp\n- tapOn: "Show modal"\n- assertVisible: "Hello"\n'
+    ok = 'appId: com.example.demo\n---\n- launchApp\n- tapOn: "Show modal"\n- assertVisible: "Hello"\n'
     ldr.screen_flow(ok, {})
     for bad in ['- runScript: x.js', '  - evalScript: ${http.get("http://10.0.0.1")}', '- runFlow: ../x.yaml',
                 '- inputText: ${output.secret}', '- addMedia:\n  - ~/Pictures/a.png']:
@@ -163,7 +163,7 @@ def test_flow_screening():
             ldr.screen_flow(ok + bad, {})
     ldr.screen_flow(ok + '- runScript: x.js', {'allow_maestro_scripts': True})
     with pytest.raises(ldr.OpError, match='allowed_app_ids'):
-        ldr.screen_flow('appId: com.other\n---\n- launchApp', {'allowed_app_ids': ['so.plotline.demo']})
+        ldr.screen_flow('appId: com.other\n---\n- launchApp', {'allowed_app_ids': ['com.example.demo']})
 
 
 def test_zip_slip_and_symlinks_rejected(tmp_path):
@@ -234,7 +234,7 @@ def test_config_is_private(tmp_path, monkeypatch):
     '- takeScreenshot: ../../etc/x',
     '- openLink: file:///Users/me/.ssh/id_rsa',
     '- repeat:\n    times: 2\n    commands:\n      - runScript: x.js',
-    'appId: so.plotline.demo\nonFlowStart:\n  - runScript: x.js\n---\n- launchApp',
+    'appId: com.example.demo\nonFlowStart:\n  - runScript: x.js\n---\n- launchApp',
     'not: [valid',
 ])
 def test_flow_screening_blocks_bypasses(flow):
@@ -251,20 +251,20 @@ def test_flow_screening_blocks_bypasses(flow):
 ])
 def test_flow_app_allowlist(flow):
     with pytest.raises(ldr.OpError, match='allowed_app_ids'):
-        ldr.screen_flow(flow, {'allowed_app_ids': ['so.plotline.demo']})
+        ldr.screen_flow(flow, {'allowed_app_ids': ['com.example.demo']})
 
 
 def test_flow_allows_normal_commands():
-    ldr.screen_flow('appId: so.plotline.demo\n---\n- launchApp\n- tapOn:\n    id: show\n'
+    ldr.screen_flow('appId: com.example.demo\n---\n- launchApp\n- tapOn:\n    id: show\n'
                     '- repeat:\n    times: 2\n    commands:\n      - swipe:\n          direction: UP\n'
-                    '- openLink: plotlinedemo://track?event=x\n- takeScreenshot: after_modal\n',
-                    {'allowed_app_ids': ['so.plotline.demo']})
+                    '- openLink: exampledemo://track?event=x\n- takeScreenshot: after_modal\n',
+                    {'allowed_app_ids': ['com.example.demo']})
 
 
 def test_file_urls_rejected():
     with pytest.raises(ldr.OpError, match='not allowed'):
         ldr.check_url('file:///etc/passwd')
-    assert ldr.check_url('plotlinedemo://x') == 'plotlinedemo://x'
+    assert ldr.check_url('exampledemo://x') == 'exampledemo://x'
 
 
 def test_dotdot_member_rejected(tmp_path):
@@ -309,14 +309,14 @@ async def test_install_allowlist_verifies_real_package(adb, tmp_path, monkeypatc
     apk.write_bytes(b'apk')
     monkeypatch.setenv('FAKE_INSTALL_PKG', 'com.evil')
     with pytest.raises(ldr.OpError, match='not in allowed_app_ids'):
-        await driver.install('emulator-5554', apk, 'so.plotline.demo', ('so.plotline.demo',))
+        await driver.install('emulator-5554', apk, 'com.example.demo', ('com.example.demo',))
     assert ['-s', 'emulator-5554', 'uninstall', 'com.evil'] in calls()
     install = next(c for c in calls() if c[2:3] == ['install'])
     assert '-r' not in install
     import os as _os
     _os.unlink(_os.environ['FAKE_ADB_LOG'] + '.installed')
-    monkeypatch.setenv('FAKE_INSTALL_PKG', 'so.plotline.demo')
-    result = await driver.install('emulator-5554', apk, 'so.plotline.demo', ('so.plotline.demo',))
+    monkeypatch.setenv('FAKE_INSTALL_PKG', 'com.example.demo')
+    result = await driver.install('emulator-5554', apk, 'com.example.demo', ('com.example.demo',))
     assert result['installed'] == 'app.apk'
 
 
@@ -324,5 +324,5 @@ def test_ios_bundle_identifier(tmp_path):
     import plistlib
     app = tmp_path / 'Demo.app'
     app.mkdir()
-    (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'so.plotline.demo'}, fmt=plistlib.FMT_BINARY))
-    assert ldr.bundle_identifier(app) == 'so.plotline.demo'
+    (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.demo'}, fmt=plistlib.FMT_BINARY))
+    assert ldr.bundle_identifier(app) == 'com.example.demo'
