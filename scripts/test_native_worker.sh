@@ -3,11 +3,11 @@
 # All provider responses are synthetic local HTTP; no account or API key needed.
 set -euo pipefail
 if ! command -v codex >/dev/null 2>&1; then
-  echo 'Install @openai/codex@0.153.3 before running native worker tests.' >&2
+  echo 'Install @openai/codex@0.159.0 before running native worker tests.' >&2
   exit 1
 fi
-if ! codex --version 2>/dev/null | grep -qx 'codex-cli 0.153.3'; then
-  echo 'Native worker tests require codex-cli 0.153.3.' >&2
+if ! codex --version 2>/dev/null | grep -qx 'codex-cli 0.159.0'; then
+  echo 'Native worker tests require codex-cli 0.159.0.' >&2
   exit 1
 fi
 for native in claude opencode; do

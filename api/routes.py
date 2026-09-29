@@ -195,11 +195,11 @@ SUPPORTED_CLAUDE_MODEL_IDS = (
 
 # Dashboard favourites, in display order. Each slot lists candidate models in
 # preference order; the first one present in the live catalog fills the slot.
-# gpt-6-sol is not yet returned by Codex discovery for every account, so the
-# writing slot falls back to gpt-5.6-sol until it is.
+# gpt-6.1-sol is not yet returned by Codex discovery for every account, so the
+# writing slot falls back to gpt-6-sol until it is.
 FAVORITE_MODEL_SLOTS = (
     ("For Coding", (("anthropic/claude-opus-5-5", "Claude-Opus-5.5"),)),
-    ("For Writing", (("codex/gpt-6-sol", "GPT-6-Sol"), ("codex/gpt-5.6-sol", "GPT-5.6-Sol"))),
+    ("For Writing", (("codex/gpt-6.1-sol", "GPT-6.1-Sol"), ("codex/gpt-6-sol", "GPT-6-Sol"))),
     ("For Complex Tasks", (("codex/gpt-6-astra", "GPT-6-Astra"),)),
 )
 
