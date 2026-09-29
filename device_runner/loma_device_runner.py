@@ -1,0 +1,792 @@
+#!/usr/bin/env python3
+"""Loma Device Runner: lets a Loma agent drive local Android emulators and iOS simulators.
+
+The runner runs on a machine you control (for example your Mac). It makes ONE
+outbound WebSocket connection to your Loma server. It never listens on a port,
+so no tunnel, DNS record or firewall change is needed.
+
+Security model (read before running):
+- The runner executes a FIXED allowlist of device operations (install, launch,
+  open_url, screenshot, ui_tree, tap, swipe, type, key, logs, run_flow, ...).
+  There is no shell or file-read operation. Every argument is type-checked here
+  as well as on the server.
+- Physical devices are hidden unless you set allow_physical_devices=true, so a
+  personal phone plugged in over USB is never exposed by accident.
+- Optional allowed_app_ids restricts which app ids the agent may install, launch,
+  stop, reset or uninstall.
+- Maestro flows are screened: runScript/evalScript/runFlow/addMedia and inline
+  JavaScript (${...}) are rejected unless allow_maestro_scripts=true, because
+  Maestro JavaScript can make HTTP calls from this machine.
+- Revoking the runner in the Loma dashboard (or stopping this process) cuts off
+  access immediately.
+
+Usage:
+  python3 loma_device_runner.py enroll --server https://loma.example.com --token lde_...
+  python3 loma_device_runner.py doctor
+  python3 loma_device_runner.py run
+  python3 loma_device_runner.py install-service   # launchd (macOS) or systemd --user (Linux)
+
+Requires Python 3.10+ and aiohttp (pip install aiohttp). Device tooling is
+optional and detected at runtime: adb (Android), xcrun simctl (iOS simulators),
+idb (iOS taps / UI tree), maestro (run_flow).
+"""
+import argparse
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import platform
+import random
+import re
+import shlex
+import shutil
+import socket
+import stat
+import struct
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+from urllib.parse import urlparse
+
+VERSION = '1.0.0'
+PROTOCOL = 1
+CONFIG_DIR = Path(os.environ.get('LOMA_DEVICE_RUNNER_HOME', Path.home() / '.loma-device-runner'))
+CONFIG_PATH = CONFIG_DIR / 'config.json'
+HEARTBEAT_SECONDS = 15
+MAX_WS_MESSAGE = 24 * 1024 * 1024
+MAX_BLOB = 500 * 1024 * 1024
+MAX_OUTPUT = 8 * 1024 * 1024
+MAX_FLOW = 64 * 1024
+MAX_TEXT = 500
+MAX_UI_ELEMENTS = 400
+LABEL = 'so.loma.device-runner'
+
+SERIAL = re.compile(r'[A-Za-z0-9._:-]{1,128}\Z')
+APP_ID = re.compile(r'[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*\Z')
+BLOB_ID = re.compile(r'[A-Za-z0-9_-]{8,64}\Z')
+SHA256 = re.compile(r'[a-f0-9]{64}\Z')
+FILENAME = re.compile(r'[A-Za-z0-9._-]{1,128}\Z')
+ANDROID_KEYS = {'back': 4, 'home': 3, 'enter': 66, 'delete': 67, 'tab': 61, 'app_switch': 187,
+                'volume_up': 24, 'volume_down': 25, 'power': 26}
+IOS_BUTTONS = {'home': 'HOME', 'lock': 'LOCK', 'siri': 'SIRI', 'side': 'SIDE_BUTTON', 'apple_pay': 'APPLE_PAY'}
+BLOCKED_FLOW_PATTERNS = (
+    re.compile(r'^\s*-?\s*(runScript|evalScript|runFlow|addMedia)\b', re.M),
+    re.compile(r'\$\{'),
+)
+
+
+class OpError(Exception):
+    """A user-facing operation failure. The message is returned to the agent."""
+
+
+# ── Config ────────────────────────────────────────────────────────────────
+
+
+def load_config():
+    if not CONFIG_PATH.exists():
+        raise SystemExit(f'Not enrolled. Run: {sys.argv[0]} enroll --server URL --token TOKEN')
+    if CONFIG_PATH.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        raise SystemExit(f'{CONFIG_PATH} is readable by other users; run: chmod 600 {CONFIG_PATH}')
+    config = json.loads(CONFIG_PATH.read_text())
+    config.setdefault('policy', {})
+    return config
+
+
+def save_config(config):
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.with_suffix('.tmp')
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as handle:
+        json.dump(config, handle, indent=2)
+    os.replace(tmp, CONFIG_PATH)
+
+
+def normalize_server(value, allow_http=False):
+    parsed = urlparse(value.strip().rstrip('/'))
+    local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
+    if parsed.scheme not in ('https', 'http') or not parsed.hostname:
+        raise SystemExit('Server must be a URL like https://loma.example.com')
+    if parsed.scheme == 'http' and not (local or allow_http):
+        raise SystemExit('Refusing plain http for a non-local server; use https (or --allow-http for testing)')
+    return f'{parsed.scheme}://{parsed.netloc}'
+
+
+def default_policy():
+    return {'allow_physical_devices': False, 'allowed_app_ids': [], 'allow_maestro_scripts': False}
+
+
+# ── Subprocess helper ─────────────────────────────────────────────────────
+
+
+async def run(args, *, timeout=60, check=True):
+    """Run a fixed argv (never a host shell string). Returns (code, stdout bytes, stderr text)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    except FileNotFoundError:
+        raise OpError(f'{args[0]} is not installed on the runner machine') from None
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise OpError(f'{Path(args[0]).name} timed out after {timeout}s') from None
+    out = out[:MAX_OUTPUT]
+    err_text = err.decode('utf-8', 'replace')[-4000:]
+    if check and proc.returncode != 0:
+        detail = (err_text or out.decode('utf-8', 'replace')[-2000:]).strip()
+        raise OpError(f'{Path(args[0]).name} failed (exit {proc.returncode}): {detail[:1500]}')
+    return proc.returncode, out, err_text
+
+
+def png_size(data):
+    if data[:8] != b'\x89PNG\r\n\x1a\n' or len(data) < 24:
+        raise OpError('Device returned an invalid screenshot')
+    return struct.unpack('>II', data[16:24])
+
+
+# ── Validation (runner-side; the server validates too) ────────────────────
+
+
+def need_str(args, key, pattern=None, max_len=1000, optional=False):
+    value = args.get(key)
+    if value is None and optional:
+        return None
+    if not isinstance(value, str) or not value or len(value) > max_len or '\x00' in value:
+        raise OpError(f'Invalid {key}')
+    if pattern is not None and not pattern.fullmatch(value):
+        raise OpError(f'Invalid {key}')
+    return value
+
+
+def need_int(args, key, low, high, default=None):
+    value = args.get(key, default)
+    if type(value) is not int or not low <= value <= high:
+        raise OpError(f'Invalid {key}')
+    return value
+
+
+def check_url(url):
+    if (len(url) > 2000 or any(c.isspace() for c in url) or any(c in url for c in '"\'`\\')
+            or not re.match(r'[A-Za-z][A-Za-z0-9+.-]*:', url)):
+        raise OpError('Invalid url')
+    return url
+
+
+def screen_flow(flow, policy):
+    if len(flow.encode()) > MAX_FLOW:
+        raise OpError('Flow is too large (64 KiB max)')
+    if not policy.get('allow_maestro_scripts'):
+        for pattern in BLOCKED_FLOW_PATTERNS:
+            if pattern.search(flow):
+                raise OpError('Flow uses scripts/sub-flows/media, which this runner does not allow '
+                              '(set allow_maestro_scripts=true in the runner config to permit)')
+    allowed = policy.get('allowed_app_ids') or []
+    if allowed:
+        for app_id in re.findall(r'^\s*appId\s*:\s*["\']?([^"\'\s#]+)', flow, re.M):
+            if app_id not in allowed:
+                raise OpError(f"App {app_id} is not in this runner's allowed_app_ids")
+
+
+# ── Android ───────────────────────────────────────────────────────────────
+
+
+class Android:
+    platform = 'android'
+
+    def __init__(self, adb='adb'):
+        self.adb = adb
+
+    def available(self):
+        return shutil.which(self.adb) is not None
+
+    async def list(self):
+        _, out, _ = await run([self.adb, 'devices', '-l'], timeout=15)
+        devices = []
+        for line in out.decode('utf-8', 'replace').splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 2 or parts[1] != 'device' or not SERIAL.fullmatch(parts[0]):
+                continue
+            serial = parts[0]
+            info = dict(p.split(':', 1) for p in parts[2:] if ':' in p)
+            emulator = serial.startswith('emulator-')
+            if not emulator:
+                code, qemu, _ = await run([self.adb, '-s', serial, 'shell', 'getprop', 'ro.kernel.qemu'],
+                                          timeout=10, check=False)
+                emulator = code == 0 and qemu.strip() == b'1'
+            _, release, _ = await run([self.adb, '-s', serial, 'shell', 'getprop', 'ro.build.version.release'],
+                                      timeout=10, check=False)
+            devices.append({'serial': serial, 'platform': 'android', 'virtual': emulator,
+                            'name': info.get('model', serial).replace('_', ' '),
+                            'os_version': release.decode('utf-8', 'replace').strip()})
+        return devices
+
+    def _sh(self, serial, *argv):
+        return [self.adb, '-s', serial, 'shell', *argv]
+
+    async def install(self, serial, path, app_id):
+        if app_id:
+            # Debug keys differ between CI runs: always start from a clean install.
+            await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60, check=False)
+        apk = find_file(path, '.apk')
+        _, out, err = await run([self.adb, '-s', serial, 'install', '-r', '-t', '-g', str(apk)], timeout=300)
+        return {'installed': apk.name, 'output': (out.decode('utf-8', 'replace') + err).strip()[-500:]}
+
+    async def uninstall(self, serial, app_id):
+        await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60)
+        return {'uninstalled': app_id}
+
+    async def launch(self, serial, app_id):
+        await run(self._sh(serial, 'monkey', '-p', app_id, '-c', 'android.intent.category.LAUNCHER', '1'), timeout=30)
+        return {'launched': app_id}
+
+    async def stop(self, serial, app_id):
+        await run(self._sh(serial, 'am', 'force-stop', app_id), timeout=30)
+        return {'stopped': app_id}
+
+    async def reset_app(self, serial, app_id):
+        await run(self._sh(serial, 'pm', 'clear', app_id), timeout=60)
+        return {'cleared': app_id}
+
+    async def open_url(self, serial, url):
+        # adb joins shell args into one device-side shell string: quote the URL.
+        _, out, _ = await run(self._sh(serial, 'am', 'start', '-W', '-a', 'android.intent.action.VIEW',
+                                       '-d', shlex.quote(url)), timeout=30)
+        text = out.decode('utf-8', 'replace')
+        if 'Error' in text:
+            raise OpError(text.strip()[-500:])
+        return {'opened': url}
+
+    async def screenshot(self, serial):
+        _, out, _ = await run([self.adb, '-s', serial, 'exec-out', 'screencap', '-p'], timeout=30)
+        return out
+
+    async def ui_tree(self, serial):
+        path = '/sdcard/loma_ui.xml'
+        await run(self._sh(serial, 'uiautomator', 'dump', '--compressed', path), timeout=30)
+        _, out, _ = await run([self.adb, '-s', serial, 'exec-out', 'cat', path], timeout=30)
+        return {'units': 'pixels', 'elements': parse_uiautomator(out)}
+
+    async def tap(self, serial, x, y):
+        await run(self._sh(serial, 'input', 'tap', str(x), str(y)), timeout=15)
+        return {'tapped': [x, y]}
+
+    async def swipe(self, serial, x1, y1, x2, y2, duration_ms):
+        await run(self._sh(serial, 'input', 'swipe', str(x1), str(y1), str(x2), str(y2), str(duration_ms)), timeout=30)
+        return {'swiped': [x1, y1, x2, y2]}
+
+    async def type_text(self, serial, text):
+        if not all(32 <= ord(c) < 127 for c in text):
+            raise OpError('Android text input supports printable ASCII only')
+        await run(self._sh(serial, 'input', 'text', shlex.quote(text.replace(' ', '%s'))), timeout=30)
+        return {'typed': len(text)}
+
+    async def key(self, serial, key):
+        if key not in ANDROID_KEYS:
+            raise OpError('Unsupported key on Android: ' + ', '.join(sorted(ANDROID_KEYS)))
+        await run(self._sh(serial, 'input', 'keyevent', str(ANDROID_KEYS[key])), timeout=15)
+        return {'key': key}
+
+    async def logs(self, serial, lines, clear):
+        if clear:
+            await run([self.adb, '-s', serial, 'logcat', '-c'], timeout=15)
+            return []
+        _, out, _ = await run([self.adb, '-s', serial, 'logcat', '-d', '-v', 'time', '-t', str(lines)], timeout=30)
+        return out.decode('utf-8', 'replace').splitlines()
+
+
+def parse_uiautomator(xml_bytes):
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        raise OpError('Could not parse the Android UI hierarchy') from None
+    elements = []
+    for node in root.iter('node'):
+        text, rid, desc = node.get('text', ''), node.get('resource-id', ''), node.get('content-desc', '')
+        clickable = node.get('clickable') == 'true'
+        if not (text or desc or rid or clickable):
+            continue
+        match = re.fullmatch(r'\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]', node.get('bounds', ''))
+        if not match:
+            continue
+        x1, y1, x2, y2 = map(int, match.groups())
+        element = {'type': node.get('class', '').rsplit('.', 1)[-1], 'text': text[:200],
+                   'id': rid, 'label': desc[:200], 'clickable': clickable,
+                   'bounds': [x1, y1, x2, y2], 'center': [(x1 + x2) // 2, (y1 + y2) // 2]}
+        elements.append({k: v for k, v in element.items() if v not in ('', False)})
+        if len(elements) >= MAX_UI_ELEMENTS:
+            break
+    return elements
+
+
+# ── iOS simulators ────────────────────────────────────────────────────────
+
+
+class IOS:
+    platform = 'ios'
+
+    def available(self):
+        return sys.platform == 'darwin' and shutil.which('xcrun') is not None
+
+    async def list(self):
+        _, out, _ = await run(['xcrun', 'simctl', 'list', 'devices', 'booted', '--json'], timeout=20)
+        devices = []
+        for runtime, items in json.loads(out or b'{}').get('devices', {}).items():
+            version = runtime.rsplit('.', 1)[-1].replace('iOS-', '').replace('-', '.')
+            for item in items:
+                if item.get('state') == 'Booted' and SERIAL.fullmatch(item.get('udid', '')):
+                    devices.append({'serial': item['udid'], 'platform': 'ios', 'virtual': True,
+                                    'name': item.get('name', 'Simulator'), 'os_version': version})
+        return devices
+
+    def _idb(self):
+        if shutil.which('idb') is None:
+            raise OpError('iOS UI control needs idb on the runner: brew install idb-companion && pip install fb-idb')
+        return 'idb'
+
+    async def install(self, serial, path, app_id):
+        if app_id:
+            await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60, check=False)
+        app = find_file(path, '.app')
+        await run(['xcrun', 'simctl', 'install', serial, str(app)], timeout=300)
+        return {'installed': app.name}
+
+    async def uninstall(self, serial, app_id):
+        await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60)
+        return {'uninstalled': app_id}
+
+    async def launch(self, serial, app_id):
+        await run(['xcrun', 'simctl', 'launch', serial, app_id], timeout=60)
+        return {'launched': app_id}
+
+    async def stop(self, serial, app_id):
+        await run(['xcrun', 'simctl', 'terminate', serial, app_id], timeout=30, check=False)
+        return {'stopped': app_id}
+
+    async def reset_app(self, serial, app_id):
+        raise OpError("iOS simulators cannot clear one app's data; reinstall it with install instead")
+
+    async def open_url(self, serial, url):
+        await run(['xcrun', 'simctl', 'openurl', serial, url], timeout=30)
+        return {'opened': url}
+
+    async def screenshot(self, serial):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'shot.png'
+            await run(['xcrun', 'simctl', 'io', serial, 'screenshot', '--type=png', str(target)], timeout=30)
+            return target.read_bytes()
+
+    async def ui_tree(self, serial):
+        _, out, _ = await run([self._idb(), 'ui', 'describe-all', '--udid', serial, '--json'], timeout=30)
+        try:
+            raw = json.loads(out)
+        except ValueError:
+            raw = [json.loads(line) for line in out.decode().splitlines() if line.strip().startswith('{')]
+        elements = []
+        for node in raw if isinstance(raw, list) else []:
+            frame = node.get('frame') or {}
+            x, y, w, h = (float(frame.get(k, 0)) for k in ('x', 'y', 'width', 'height'))
+            element = {'type': node.get('type', ''), 'text': str(node.get('AXValue') or '')[:200],
+                       'label': str(node.get('AXLabel') or '')[:200], 'id': node.get('AXUniqueId') or '',
+                       'bounds': [round(x), round(y), round(x + w), round(y + h)],
+                       'center': [round(x + w / 2), round(y + h / 2)]}
+            elements.append({k: v for k, v in element.items() if v not in ('', None)})
+            if len(elements) >= MAX_UI_ELEMENTS:
+                break
+        return {'units': 'points', 'elements': elements}
+
+    async def tap(self, serial, x, y):
+        await run([self._idb(), 'ui', 'tap', '--udid', serial, str(x), str(y)], timeout=15)
+        return {'tapped': [x, y]}
+
+    async def swipe(self, serial, x1, y1, x2, y2, duration_ms):
+        await run([self._idb(), 'ui', 'swipe', '--udid', serial, '--duration', str(duration_ms / 1000),
+                   str(x1), str(y1), str(x2), str(y2)], timeout=30)
+        return {'swiped': [x1, y1, x2, y2]}
+
+    async def type_text(self, serial, text):
+        await run([self._idb(), 'ui', 'text', '--udid', serial, text], timeout=30)
+        return {'typed': len(text)}
+
+    async def key(self, serial, key):
+        if key not in IOS_BUTTONS:
+            raise OpError('Unsupported key on iOS: ' + ', '.join(sorted(IOS_BUTTONS)))
+        await run([self._idb(), 'ui', 'button', '--udid', serial, IOS_BUTTONS[key]], timeout=15)
+        return {'key': key}
+
+    async def logs(self, serial, lines, clear):
+        if clear:
+            return []  # the unified log cannot be cleared; read a recent window instead
+        _, out, _ = await run(['xcrun', 'simctl', 'spawn', serial, 'log', 'show', '--last', '2m',
+                               '--style', 'compact'], timeout=60)
+        return out.decode('utf-8', 'replace').splitlines()[-lines:]
+
+
+# ── Build files ───────────────────────────────────────────────────────────
+
+
+def safe_extract(archive, target):
+    target = Path(target).resolve()
+    with zipfile.ZipFile(archive) as zf:
+        total = 0
+        for member in zf.infolist():
+            destination = (target / member.filename).resolve()
+            if member.filename.startswith('/') or '\\' in member.filename or not destination.is_relative_to(target):
+                raise OpError('Build archive contains an unsafe path')
+            if stat.S_ISLNK(member.external_attr >> 16):
+                raise OpError('Build archive contains a symlink; refusing to extract')
+            total += member.file_size
+            if total > 2 * MAX_BLOB:
+                raise OpError('Build archive expands beyond the size limit')
+        zf.extractall(target)
+        # Preserve the executable bit so iOS .app bundles still launch.
+        for member in zf.infolist():
+            mode = (member.external_attr >> 16) & 0o777
+            if mode:
+                os.chmod(target / member.filename, mode | stat.S_IRUSR | stat.S_IWUSR)
+
+
+def find_file(path, suffix):
+    """Resolve an .apk file or an .app bundle inside a downloaded build (zips nested once)."""
+    path = Path(path)
+    if path.suffix == suffix:
+        return path
+    if path.is_file() and zipfile.is_zipfile(path):
+        out = path.parent / (path.stem + '-x')
+        safe_extract(path, out)
+        def shallow(items):
+            return sorted((p for p in items if '__MACOSX' not in p.parts), key=lambda p: (len(p.parts), str(p)))
+        matches = shallow(out.rglob('*' + suffix))
+        if matches:
+            return matches[0]
+        for nested in sorted(out.rglob('*.zip')):
+            inner = nested.parent / (nested.stem + '-x')
+            safe_extract(nested, inner)
+            matches = shallow(inner.rglob('*' + suffix))
+            if matches:
+                return matches[0]
+        raise OpError(f'No {suffix} found in the build archive')
+    raise OpError(f'Build is not an {suffix} or a zip containing one')
+
+
+# ── Runner ────────────────────────────────────────────────────────────────
+
+
+class Runner:
+    OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
+           'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow'}
+    APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
+
+    def __init__(self, config, drivers=None, session=None):
+        self.config = config
+        self.policy = {**default_policy(), **config.get('policy', {})}
+        self.drivers = drivers if drivers is not None else [d for d in (Android(), IOS()) if d.available()]
+        self.session = session
+        self.locks = {}
+        self.inventory = {}
+        self.send_lock = asyncio.Lock()
+
+    def capabilities(self):
+        caps = [d.platform for d in self.drivers]
+        caps += [tool for tool in ('maestro', 'idb') if shutil.which(tool)]
+        return caps
+
+    async def refresh(self):
+        inventory = {}
+        for driver in self.drivers:
+            try:
+                devices = await driver.list()
+            except (OpError, ValueError):
+                continue
+            for device in devices:
+                if device['virtual'] or self.policy['allow_physical_devices']:
+                    inventory[device['serial']] = (driver, device)
+        self.inventory = inventory
+        return [device for _, device in inventory.values()]
+
+    async def call(self, op, serial, args):
+        if op not in self.OPS:
+            raise OpError('Unsupported operation')
+        if not isinstance(serial, str) or not SERIAL.fullmatch(serial) or not isinstance(args, dict):
+            raise OpError('Invalid device or arguments')
+        if serial not in self.inventory:
+            await self.refresh()
+        if serial not in self.inventory:
+            raise OpError('Device is not connected to this runner (is the emulator/simulator running?)')
+        driver, _ = self.inventory[serial]
+        app_id = None
+        if op in self.APP_OPS:
+            app_id = need_str(args, 'app_id', APP_ID, 255, optional=op == 'install')
+            allowed = self.policy.get('allowed_app_ids') or []
+            if allowed and app_id not in allowed:
+                raise OpError(f"App {app_id} is not in this runner's allowed_app_ids (install needs app_id)")
+        lock = self.locks.setdefault(serial, asyncio.Lock())
+        async with lock:
+            return await self._dispatch(driver, op, serial, args, app_id)
+
+    async def _dispatch(self, driver, op, serial, args, app_id):
+        if op == 'install':
+            with tempfile.TemporaryDirectory(prefix='loma-build-') as tmp:
+                path = await self.download(args, Path(tmp))
+                return await driver.install(serial, path, app_id)
+        if op in ('uninstall', 'launch', 'stop', 'reset_app'):
+            return await getattr(driver, op)(serial, app_id)
+        if op == 'open_url':
+            return await driver.open_url(serial, check_url(need_str(args, 'url', max_len=2000)))
+        if op == 'screenshot':
+            data = await driver.screenshot(serial)
+            width, height = png_size(data)
+            return {'png_base64': base64.b64encode(data).decode(), 'width': width, 'height': height}
+        if op == 'ui_tree':
+            return await driver.ui_tree(serial)
+        if op == 'tap':
+            return await driver.tap(serial, need_int(args, 'x', 0, 10000), need_int(args, 'y', 0, 10000))
+        if op == 'swipe':
+            return await driver.swipe(serial, *(need_int(args, k, 0, 10000) for k in ('x1', 'y1', 'x2', 'y2')),
+                                      need_int(args, 'duration_ms', 50, 5000, default=300))
+        if op == 'type':
+            return await driver.type_text(serial, need_str(args, 'text', max_len=MAX_TEXT))
+        if op == 'key':
+            return await driver.key(serial, need_str(args, 'key', max_len=32))
+        if op == 'logs':
+            lines = need_int(args, 'lines', 1, 2000, default=300)
+            clear = args.get('clear', False)
+            if type(clear) is not bool:
+                raise OpError('Invalid clear')
+            needle = need_str(args, 'filter', max_len=200, optional=True)
+            output = await driver.logs(serial, 5000 if needle else lines, clear)
+            if needle:
+                output = [line for line in output if needle.lower() in line.lower()]
+            return {'lines': [line[:2000] for line in output[-lines:]], 'cleared': clear}
+        if op == 'run_flow':
+            return await self.run_flow(serial, need_str(args, 'flow', max_len=MAX_FLOW))
+        raise OpError('Unsupported operation')
+
+    async def download(self, args, target):
+        blob_id = need_str(args, 'blob_id', BLOB_ID)
+        expected = need_str(args, 'sha256', SHA256)
+        name = need_str(args, 'filename', FILENAME)
+        if self.session is None:
+            raise OpError('Runner has no HTTP session')
+        url = f"{self.config['server']}/device-runner/blobs/{blob_id}"
+        digest, size = hashlib.sha256(), 0
+        path = target / name
+        async with self.session.get(url, headers=self.auth_headers()) as response:
+            if response.status != 200:
+                raise OpError(f'Build download failed (HTTP {response.status})')
+            with open(path, 'wb') as handle:
+                async for chunk in response.content.iter_chunked(1 << 20):
+                    size += len(chunk)
+                    if size > MAX_BLOB:
+                        raise OpError('Build is larger than the 500 MB limit')
+                    digest.update(chunk)
+                    handle.write(chunk)
+        if digest.hexdigest() != expected:
+            raise OpError('Build checksum mismatch; refusing to install')
+        return path
+
+    async def run_flow(self, serial, flow):
+        screen_flow(flow, self.policy)
+        if shutil.which('maestro') is None:
+            raise OpError('maestro is not installed on the runner: curl -fsSL "https://get.maestro.mobile.dev" | bash')
+        with tempfile.TemporaryDirectory(prefix='loma-flow-') as tmp:
+            flow_path, report = Path(tmp) / 'flow.yaml', Path(tmp) / 'report.xml'
+            flow_path.write_text(flow)
+            code, out, err = await run(['maestro', '--device', serial, 'test', str(flow_path), '--format', 'junit',
+                                        '--output', str(report)], timeout=600, check=False)
+            return {'passed': code == 0, 'exit_code': code,
+                    'report': report.read_text()[-20000:] if report.exists() else '',
+                    'output': (out.decode('utf-8', 'replace') + err)[-8000:]}
+
+    def auth_headers(self):
+        return {'Authorization': 'Bearer ' + self.config['secret'], 'X-Loma-Runner-Id': self.config['runner_id']}
+
+    async def send(self, ws, frame):
+        async with self.send_lock:
+            if not ws.closed:
+                await ws.send_str(json.dumps(frame))
+
+    async def handle_call(self, ws, frame):
+        call_id = frame.get('id')
+        try:
+            data = await self.call(frame.get('op'), frame.get('device'), frame.get('args') or {})
+            reply = {'type': 'result', 'id': call_id, 'ok': True, 'data': data}
+        except OpError as exc:
+            reply = {'type': 'result', 'id': call_id, 'ok': False, 'error': str(exc)[:2000]}
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # one bad call must never drop the connection
+            reply = {'type': 'result', 'id': call_id, 'ok': False, 'error': f'Runner error: {type(exc).__name__}'}
+        await self.send(ws, reply)
+
+    async def heartbeat(self, ws):
+        while not ws.closed:
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+            try:
+                devices = await self.refresh()
+            except Exception:
+                devices = [device for _, device in self.inventory.values()]
+            await self.send(ws, {'type': 'devices', 'devices': devices})
+
+    async def connect_once(self):
+        import aiohttp
+        url = self.config['server'].replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)
+        async with self.session.ws_connect(url + '/device-runner/ws', headers=self.auth_headers(),
+                                           heartbeat=30, max_msg_size=MAX_WS_MESSAGE) as ws:
+            devices = await self.refresh()
+            await self.send(ws, {
+                'type': 'hello', 'protocol': PROTOCOL, 'version': VERSION, 'hostname': socket.gethostname(),
+                'os': f'{platform.system()} {platform.release()}', 'capabilities': self.capabilities(),
+                'devices': devices})
+            print(f'Connected to {self.config["server"]} with {len(devices)} device(s)', flush=True)
+            beat = asyncio.create_task(self.heartbeat(ws))
+            tasks = set()
+            try:
+                async for message in ws:
+                    if message.type != aiohttp.WSMsgType.TEXT:
+                        break
+                    try:
+                        frame = json.loads(message.data)
+                    except ValueError:
+                        continue
+                    if not isinstance(frame, dict):
+                        continue
+                    if frame.get('type') == 'call':
+                        task = asyncio.create_task(self.handle_call(ws, frame))
+                        tasks.add(task)
+                        task.add_done_callback(tasks.discard)
+                    elif frame.get('type') == 'revoked':
+                        raise PermissionError('Runner was revoked in Loma')
+            finally:
+                beat.cancel()
+                for task in list(tasks):
+                    task.cancel()
+
+    async def serve(self):
+        import aiohttp
+        delay = 1
+        async with aiohttp.ClientSession() as session:
+            self.session = session
+            while True:
+                try:
+                    await self.connect_once()
+                    delay = 1
+                except aiohttp.WSServerHandshakeError as exc:
+                    if exc.status in (401, 403):
+                        print('Loma rejected this runner (revoked or invalid secret). Re-enroll to continue.', flush=True)
+                        return 0  # exit 0 so launchd/systemd do not restart-loop
+                    print(f'Handshake failed: HTTP {exc.status}', flush=True)
+                except PermissionError as exc:
+                    print(str(exc), flush=True)
+                    return 0
+                except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
+                    print(f'Connection lost: {type(exc).__name__}', flush=True)
+                await asyncio.sleep(delay + random.random())
+                delay = min(delay * 2, 60)
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────
+
+
+async def enroll(server, token, name):
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        async with session.post(server + '/device-runner/enroll', json={
+                'token': token, 'name': name, 'hostname': socket.gethostname(),
+                'os': f'{platform.system()} {platform.release()}', 'version': VERSION}) as response:
+            body = await response.json(content_type=None)
+            if response.status != 200:
+                raise SystemExit(f'Enrollment failed: {body.get("error", response.status)}')
+    config = {'server': server, 'runner_id': body['runner_id'], 'secret': body['secret'],
+              'name': body.get('name', name), 'policy': default_policy()}
+    save_config(config)
+    print(f'Enrolled as {config["runner_id"]} ({config["name"]}). Config: {CONFIG_PATH}')
+
+
+def install_service():
+    script = Path(__file__).resolve()
+    python = sys.executable
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    log = CONFIG_DIR / 'runner.log'
+    if sys.platform == 'darwin':
+        plist = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        path_env = ':'.join(['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin',
+                             str(Path.home() / '.maestro/bin'), str(Path.home() / 'Library/Android/sdk/platform-tools')])
+        plist.write_text(f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{LABEL}</string>
+  <key>ProgramArguments</key><array><string>{python}</string><string>{script}</string><string>run</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>{path_env}</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict></plist>
+''')
+        print(f'Wrote {plist}\nStart it with: launchctl bootstrap gui/$(id -u) {plist}')
+    else:
+        unit = Path.home() / '.config/systemd/user/loma-device-runner.service'
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        unit.write_text(f'''[Unit]
+Description=Loma Device Runner
+After=network-online.target
+
+[Service]
+ExecStart={python} {script} run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+''')
+        print(f'Wrote {unit}\nStart it with: systemctl --user daemon-reload && systemctl --user enable --now loma-device-runner')
+
+
+async def doctor():
+    for tool in ('adb', 'xcrun', 'idb', 'maestro'):
+        where = shutil.which(tool)
+        print(f'{tool:8} {"found at " + where if where else "not found"}')
+    policy = load_config()['policy'] if CONFIG_PATH.exists() else {}
+    runner = Runner({'server': '', 'secret': '', 'runner_id': '', 'policy': policy})
+    devices = await runner.refresh()
+    print(f'{len(devices)} usable device(s) (physical devices are hidden unless allow_physical_devices=true):')
+    for device in devices:
+        print(f"  {device['platform']:8} {device['serial']:40} {device['name']} {device['os_version']}")
+    if CONFIG_PATH.exists():
+        config = load_config()
+        print(f"Enrolled as {config['runner_id']} against {config['server']}")
+    else:
+        print('Not enrolled yet.')
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Loma Device Runner ' + VERSION)
+    sub = parser.add_subparsers(dest='command', required=True)
+    p_enroll = sub.add_parser('enroll', help='Register this machine with Loma')
+    p_enroll.add_argument('--server', required=True)
+    p_enroll.add_argument('--token', required=True)
+    p_enroll.add_argument('--name', default=socket.gethostname())
+    p_enroll.add_argument('--allow-http', action='store_true', help='Allow plain http (testing only)')
+    sub.add_parser('run', help='Connect to Loma and serve device requests')
+    sub.add_parser('doctor', help='Check tooling and list usable devices')
+    sub.add_parser('install-service', help='Install as a launchd/systemd user service')
+    args = parser.parse_args(argv)
+    if args.command == 'enroll':
+        return asyncio.run(enroll(normalize_server(args.server, args.allow_http), args.token.strip(), args.name[:80]))
+    if args.command == 'run':
+        return asyncio.run(Runner(load_config()).serve())
+    if args.command == 'doctor':
+        return asyncio.run(doctor())
+    if args.command == 'install-service':
+        return install_service()
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
