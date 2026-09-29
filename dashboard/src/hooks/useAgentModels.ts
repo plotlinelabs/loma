@@ -6,7 +6,7 @@ import { fetchAgentModels, type AgentModel } from "@/lib/api";
 const MODEL_STORAGE_KEY = "dashboard-chat-selected-model";
 
 // Favourites are resolved by the backend (/api/agent-models) so fallbacks such
-// as GPT-6-Sol -> GPT-5.6-Sol follow what the live catalog actually offers.
+// as GPT-6.1-Sol -> GPT-6-Sol follow what the live catalog actually offers.
 export function favoriteModelRank(model: AgentModel): number | null {
   return typeof model.favorite_rank === "number" ? model.favorite_rank : null;
 }

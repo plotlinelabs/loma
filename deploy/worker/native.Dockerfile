@@ -1,7 +1,7 @@
 # Build on a dedicated CI host, test containment, then pin the output digest.
 # This image contains native CLIs, NOT the backend or personal-account stores.
 FROM node:22-bookworm-slim AS native
-RUN npm install --prefix /opt/native --omit=dev @openai/codex@0.153.3 @anthropic-ai/claude-code@2.1.261 opencode-ai@1.18.28 \
+RUN npm install --prefix /opt/native --omit=dev @openai/codex@0.159.0 @anthropic-ai/claude-code@2.1.261 opencode-ai@1.18.28 \
     && mkdir /out \
     && find /opt/native/node_modules -type f -name codex -path '*/vendor/*' > /out/paths \
     && test "$(wc -l < /out/paths)" -eq 1 \
@@ -18,7 +18,7 @@ COPY --from=native /out/codex /usr/local/bin/codex
 RUN ln -s /opt/native/node_modules/.bin/claude /usr/local/bin/claude \
     && ln -s /opt/native/node_modules/.bin/opencode /usr/local/bin/opencode
 # Fail the build if a native binary or its shared-library dependencies are absent.
-RUN codex --version | grep -qx 'codex-cli 0.153.3' \
+RUN codex --version | grep -qx 'codex-cli 0.159.0' \
     && claude --version | grep -qx '2.1.261 (Claude Code)' \
     && opencode --version | grep -qx '1.18.28'
 WORKDIR /opt/worker

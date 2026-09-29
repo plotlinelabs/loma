@@ -56,6 +56,7 @@ DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
 # path). The live list is fetched from ``model/list`` at worker warm time and
 # preferred over this tuple; override order: $CODEX_MODELS > model/list > this.
 DEFAULT_CODEX_MODEL_IDS = (
+    "gpt-6.1-sol",
     "gpt-6-sol",
     "gpt-6-luna",
     "gpt-6-astra",

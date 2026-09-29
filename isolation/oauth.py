@@ -24,7 +24,7 @@ import aiohttp
 from isolation.accounts import _read
 from isolation.models import ModelDenied
 
-# Protocols from Codex rust-v0.153.3 and Claude Code's OAuth client.
+# Protocols from Codex rust-v0.159.0 and Claude Code's OAuth client.
 PROVIDERS = {
     'codex': ('https://auth.openai.com/oauth/token', 'app_EMoamEEZ73f0CkXaXp7hrann'),
     'claude': ('https://platform.claude.com/v1/oauth/token', '9d1c250a-e61b-44d9-88ed-5944d1962f5e'),
