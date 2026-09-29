@@ -315,11 +315,64 @@ async def test_install_allowlist_verifies_real_package(adb, tmp_path, monkeypatc
     assert result['installed'] == 'app.apk'
 
 
-def test_ios_bundle_identifier(tmp_path):
+def test_ios_app_bundle_id_and_executable_bit(tmp_path):
     app = tmp_path / 'Demo.app'
     app.mkdir()
-    (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.demo'}, fmt=plistlib.FMT_BINARY))
-    assert ldr.bundle_identifier(app) == 'com.example.demo'
+    (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.demo',
+                                                     'CFBundleExecutable': 'Demo'}, fmt=plistlib.FMT_BINARY))
+    (app / 'Demo').write_bytes(b'binary')
+    (app / 'Demo').chmod(0o644)  # CI artifact zips drop unix modes
+    found, bundle_id = ldr.prepare_app_bundle(app)
+    assert found == app and bundle_id == 'com.example.demo'
+    assert (app / 'Demo').stat().st_mode & 0o111
+
+
+def test_flow_rejects_yaml_aliases():
+    bomb = 'a: &a ["x", "x"]\nb: &b [*a, *a]\n---\n- launchApp\n'
+    with pytest.raises(ldr.OpError, match='aliases'):
+        ldr.screen_flow(bomb, {})
+
+
+@pytest.mark.asyncio
+async def test_calls_past_the_server_deadline_are_dropped(monkeypatch):
+    class Slow(ldr.Runner):
+        async def call(self, op, serial, args):
+            await asyncio.sleep(30)
+
+    class WS:
+        closed, sent = False, []
+
+        async def send_str(self, data):
+            self.sent.append(data)
+
+    runner, ws = Slow({'policy': {}}, drivers=[]), WS()
+    runner.send_lock = asyncio.Lock()
+    original = asyncio.wait_for
+
+    async def fast_wait_for(awaitable, timeout):
+        assert timeout == 55  # a 60 s server deadline leaves the runner 55 s
+        return await original(awaitable, 0.01)
+
+    monkeypatch.setattr(ldr.asyncio, 'wait_for', fast_wait_for)
+    await runner.handle_call(ws, {'id': 'c1', 'op': 'tap', 'device': 'e', 'args': {}, 'timeout': 60})
+    assert 'Timed out on the runner' in ws.sent[-1]
+
+
+@pytest.mark.asyncio
+async def test_ios_log_clear_starts_a_new_window(monkeypatch):
+    seen = []
+
+    async def fake_run(args, **kwargs):
+        seen.append(args)
+        return 0, b'line\n', ''
+
+    monkeypatch.setattr(ldr, 'run', fake_run)
+    ios = ldr.IOS()
+    assert await ios.logs('SIM', 10, True) == []
+    await ios.logs('SIM', 10, False)
+    assert '--start' in seen[-1] and '--last' not in seen[-1]
+    await ios.logs('OTHER', 10, False)
+    assert '--last' in seen[-1]
 
 
 @pytest.fixture
@@ -484,3 +537,12 @@ def test_extend_path_adds_default_tool_dirs_once(monkeypatch, tmp_path):
     ldr.extend_path()
     path = ldr.extend_path().split(os.pathsep)
     assert path[0] == '/usr/bin' and path.count(str(tmp_path / 'sdk' / 'platform-tools')) == 1
+
+
+def test_second_runner_instance_is_refused(home):
+    import fcntl
+    home.mkdir()
+    with open(home / 'runner.lock', 'w') as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(SystemExit, match='already running'):
+            ldr.run_forever()

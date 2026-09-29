@@ -13,7 +13,7 @@ import time
 logger = logging.getLogger(__name__)
 
 STALE_SECONDS = 60  # no heartbeat for this long => treat as offline
-OP_TIMEOUTS = {'install': 900, 'run_flow': 660, 'logs': 90}
+OP_TIMEOUTS = {'install': 900, 'run_flow': 660, 'logs': 90, 'ui_tree': 90}
 DEFAULT_TIMEOUT = 60
 MAX_PENDING = 32
 
@@ -94,8 +94,10 @@ class RunnerHub:
         future = asyncio.get_running_loop().create_future()
         conn.pending[call_id] = future
         try:
-            await conn.send({'type': 'call', 'id': call_id, 'op': op, 'device': serial, 'args': args})
-            return await asyncio.wait_for(future, OP_TIMEOUTS.get(op, DEFAULT_TIMEOUT))
+            timeout = OP_TIMEOUTS.get(op, DEFAULT_TIMEOUT)
+            # The runner gets the deadline too, so it drops calls this side has given up on.
+            await conn.send({'type': 'call', 'id': call_id, 'op': op, 'device': serial, 'args': args, 'timeout': timeout})
+            return await asyncio.wait_for(future, timeout)
         except asyncio.TimeoutError:
             raise DeviceError(f'Device operation {op} timed out') from None
         except ConnectionResetError:

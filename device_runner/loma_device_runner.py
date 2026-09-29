@@ -219,6 +219,9 @@ def screen_flow(flow, policy):
     except ImportError:
         raise OpError('run_flow needs PyYAML on the runner: python3 -m pip install --user pyyaml') from None
     try:
+        # Aliases expand exponentially while screening walks the tree (a ~1 KiB "billion laughs").
+        if any(isinstance(event, yaml.AliasEvent) for event in yaml.parse(flow)):
+            raise OpError('YAML anchors/aliases are not supported in flows')
         docs = [d for d in yaml.safe_load_all(flow) if d is not None]
     except yaml.YAMLError as exc:
         raise OpError(f'Flow is not valid YAML: {str(exc)[:300]}') from None
@@ -229,6 +232,9 @@ def screen_flow(flow, policy):
         raise OpError('Flow must be a config mapping followed by a list of commands')
     scripts = bool(policy.get('allow_maestro_scripts'))
     allowed_apps = set(policy.get('allowed_app_ids') or [])
+
+    def arg(args, key):  # a step's argument is either a scalar or a mapping
+        return args if isinstance(args, str) else args.get(key) if isinstance(args, dict) else None
 
     def check_app(app_id):
         if allowed_apps and app_id not in allowed_apps:
@@ -260,13 +266,11 @@ def screen_flow(flow, policy):
                 raise OpError(f'Maestro command {command!r} is not allowed on this runner '
                               '(set allow_maestro_scripts=true in the runner config to permit it)')
             if command in APP_COMMANDS:
-                app = args if isinstance(args, str) else (args or {}).get('appId') if isinstance(args, dict) else None
-                check_app(app or config.get('appId'))
+                check_app(arg(args, 'appId') or config.get('appId'))
             if command == 'openLink':
-                link = args if isinstance(args, str) else (args or {}).get('link') if isinstance(args, dict) else None
-                check_url(str(link or ''))
+                check_url(str(arg(args, 'link') or ''))
             if command == 'takeScreenshot':
-                name = args if isinstance(args, str) else (args or {}).get('path') if isinstance(args, dict) else None
+                name = arg(args, 'path')
                 if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name):
                     raise OpError('takeScreenshot needs a simple name (letters, digits, - and _)')
             if isinstance(args, dict) and 'file' in args and not scripts:
@@ -309,12 +313,15 @@ class Android:
             serial = parts[0]
             info = dict(p.split(':', 1) for p in parts[2:] if ':' in p)
             emulator = serial.startswith('emulator-')
-            if not emulator:
-                code, qemu, _ = await run([self.adb, '-s', serial, 'shell', 'getprop', 'ro.kernel.qemu'],
+            try:  # one unresponsive device must not hide the others
+                if not emulator:
+                    code, qemu, _ = await run([self.adb, '-s', serial, 'shell', 'getprop', 'ro.kernel.qemu'],
+                                              timeout=10, check=False)
+                    emulator = code == 0 and qemu.strip() == b'1'
+                _, release, _ = await run([self.adb, '-s', serial, 'shell', 'getprop', 'ro.build.version.release'],
                                           timeout=10, check=False)
-                emulator = code == 0 and qemu.strip() == b'1'
-            _, release, _ = await run([self.adb, '-s', serial, 'shell', 'getprop', 'ro.build.version.release'],
-                                      timeout=10, check=False)
+            except OpError:
+                continue
             devices.append({'serial': serial, 'platform': 'android', 'virtual': emulator,
                             'name': info.get('model', serial).replace('_', ' '),
                             'os_version': release.decode('utf-8', 'replace').strip()})
@@ -328,7 +335,7 @@ class Android:
         return {line[8:].strip() for line in out.decode('utf-8', 'replace').splitlines() if line.startswith('package:')}
 
     async def install(self, serial, path, app_id, allowed=()):
-        apk = find_file(path, '.apk')
+        apk = await asyncio.to_thread(find_file, path, '.apk')  # big archives: keep the loop (heartbeats) free
         if app_id:
             # Debug keys differ between CI runs: always start from a clean install.
             await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60, check=False)
@@ -443,6 +450,9 @@ def parse_uiautomator(xml_bytes):
 class IOS:
     platform = 'ios'
 
+    def __init__(self):
+        self.log_start = {}  # serial -> local time of the last logs clear (the unified log cannot be cleared)
+
     def available(self):
         return sys.platform == 'darwin' and shutil.which('xcrun') is not None
 
@@ -463,8 +473,7 @@ class IOS:
         return 'idb'
 
     async def install(self, serial, path, app_id, allowed=()):
-        app = find_file(path, '.app')
-        bundle_id = bundle_identifier(app)
+        app, bundle_id = await asyncio.to_thread(prepare_app_bundle, path)
         if allowed and bundle_id not in allowed:
             raise OpError(f'Bundle {bundle_id} is not in allowed_app_ids; not installed')
         if app_id:
@@ -537,8 +546,10 @@ class IOS:
 
     async def logs(self, serial, lines, clear):
         if clear:
-            return []  # the unified log cannot be cleared; read a recent window instead
-        _, out, _ = await run(['xcrun', 'simctl', 'spawn', serial, 'log', 'show', '--last', '2m',
+            self.log_start[serial] = time.strftime('%Y-%m-%d %H:%M:%S')
+            return []
+        window = ['--start', self.log_start[serial]] if serial in self.log_start else ['--last', '2m']
+        _, out, _ = await run(['xcrun', 'simctl', 'spawn', serial, 'log', 'show', *window,
                                '--style', 'compact'], timeout=60, keep='tail')
         return out.decode('utf-8', 'replace').splitlines()[-lines:]
 
@@ -546,12 +557,19 @@ class IOS:
 # ── Build files ───────────────────────────────────────────────────────────
 
 
-def bundle_identifier(app):
+def prepare_app_bundle(path):
+    """Find the .app in a build; return (app, bundle id). CI artifact zips carry no unix
+    modes, so restore the executable bit on the app's main binary."""
+    app = find_file(path, '.app')
     try:
-        with open(Path(app) / 'Info.plist', 'rb') as handle:
-            return str(plistlib.load(handle).get('CFBundleIdentifier') or '')
+        with open(app / 'Info.plist', 'rb') as handle:
+            info = plistlib.load(handle)
     except (OSError, ValueError, plistlib.InvalidFileException):
         raise OpError('Could not read the app bundle identifier (Info.plist)') from None
+    executable = app / str(info.get('CFBundleExecutable') or '')
+    if executable != app and executable.is_file():
+        executable.chmod(executable.stat().st_mode | 0o755)
+    return app, str(info.get('CFBundleIdentifier') or '')
 
 
 class ExtractBudget:
@@ -628,7 +646,7 @@ class Runner:
         self.session = session
         self.locks = {}
         self.inventory = {}
-        self.send_lock = asyncio.Lock()
+        self.send_lock = None  # created per connection: on 3.9 a Lock binds to the loop current at creation
         self.cf_headers = {}
 
     def capabilities(self):
@@ -757,9 +775,16 @@ class Runner:
 
     async def handle_call(self, ws, frame):
         call_id = frame.get('id')
+        timeout = frame.get('timeout')
+        # Finish (or give up) before the server's deadline, so a call it already timed out
+        # never runs later, e.g. a tap queued behind a slow install on the device lock.
+        deadline = timeout - 5 if type(timeout) is int and 15 <= timeout <= 3600 else 55
         try:
-            data = await self.call(frame.get('op'), frame.get('device'), frame.get('args') or {})
+            data = await asyncio.wait_for(self.call(frame.get('op'), frame.get('device'), frame.get('args') or {}),
+                                          deadline)
             reply = {'type': 'result', 'id': call_id, 'ok': True, 'data': data}
+        except asyncio.TimeoutError:
+            reply = {'type': 'result', 'id': call_id, 'ok': False, 'error': f'Timed out on the runner after {deadline}s'}
         except OpError as exc:
             reply = {'type': 'result', 'id': call_id, 'ok': False, 'error': str(exc)[:2000]}
         except Exception as exc:  # one bad call must never drop the connection
@@ -770,8 +795,8 @@ class Runner:
         while not ws.closed:
             await asyncio.sleep(HEARTBEAT_SECONDS)
             try:
-                devices = await self.refresh()
-            except Exception:
+                devices = await asyncio.wait_for(self.refresh(), HEARTBEAT_SECONDS * 2)
+            except Exception:  # slow or failing scan: still heartbeat with the last inventory
                 devices = [device for _, device in self.inventory.values()]
             await self.send(ws, {'type': 'devices', 'devices': devices})
 
@@ -779,15 +804,18 @@ class Runner:
         import aiohttp
         url = self.config['server'].replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)
         self.cf_headers = await asyncio.to_thread(cf_access_headers, self.config)  # per connect; cloudflared caches it
+        self.send_lock = asyncio.Lock()
+        devices = await self.refresh()  # before connecting: the server waits only 10 s for hello
         async with self.session.ws_connect(url + '/device-runner/ws', headers=self.auth_headers(),
                                            heartbeat=30, max_msg_size=MAX_WS_MESSAGE) as ws:
-            devices = await self.refresh()
             await self.send(ws, {
                 'type': 'hello', 'protocol': PROTOCOL, 'version': VERSION, 'hostname': socket.gethostname(),
                 'os': f'{platform.system()} {platform.release()}', 'capabilities': self.capabilities(),
                 'devices': devices})
             print(f'Connected to {self.config["server"]} with {len(devices)} device(s)', flush=True)
             beat = asyncio.create_task(self.heartbeat(ws))
+            # A dead heartbeat would leave a silent socket the server marks offline: reconnect instead.
+            beat.add_done_callback(lambda task: task.cancelled() or asyncio.ensure_future(ws.close()))
             tasks = set()
             try:
                 async for message in ws:
@@ -821,7 +849,7 @@ class Runner:
                 try:
                     await self.connect_once()
                 except aiohttp.WSServerHandshakeError as exc:
-                    if exc.status in (401, 403):
+                    if exc.status == 401:  # 403 can come from a proxy/WAF or an expired SSO login: retry
                         print('Loma rejected this runner (revoked or invalid secret). Re-enroll to continue.', flush=True)
                         return 0  # exit 0 so launchd/systemd do not restart-loop
                     print(f'Handshake failed: HTTP {exc.status}'
@@ -1021,6 +1049,19 @@ async def doctor():
     print(f"Enrolled as {config['runner_id']} against {config['server']}" if config else 'Not enrolled yet.')
 
 
+def run_forever():
+    """Serve until revoked. One runner per config: two processes sharing a runner identity
+    would keep replacing each other's connection on the server."""
+    import fcntl
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(CONFIG_DIR / 'runner.lock', 'w') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise SystemExit('Another runner is already running on this machine (the login service or a terminal).')
+        return asyncio.run(Runner(load_config()).serve())
+
+
 def setup(args, argv):
     server = normalize_server(args.server, args.allow_http) if args.server else None
     if args.token and not server:
@@ -1032,7 +1073,7 @@ def setup(args, argv):
         asyncio.run(enroll(server, args.token.strip(), args.name[:80]))
     asyncio.run(doctor())
     if args.foreground:
-        return asyncio.run(Runner(load_config()).serve())
+        return run_forever()
     return install_service()
 
 
@@ -1054,7 +1095,7 @@ def main(argv=None):
     if args.command == 'setup':
         return setup(args, argv)
     if args.command == 'run':
-        return asyncio.run(Runner(load_config()).serve())
+        return run_forever()
     if args.command == 'doctor':
         return asyncio.run(doctor())
     return uninstall()

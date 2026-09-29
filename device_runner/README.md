@@ -81,4 +81,4 @@ Run `setup` again after editing the policy to restart the runner.
 - Use a **dedicated** emulator/simulator for Loma, with no personal Google/Apple account signed in.
 - Run `caffeinate -dimsu` (macOS) during long sessions so the machine does not sleep.
 - Emulators can run headless: `emulator -avd loma-test -no-window -no-snapshot-save`.
-- Revoke the runner from **Loma → Devices** at any time; it stops within seconds.
+- Revoke the runner under **Integrations → Devices** at any time; it stops within seconds.

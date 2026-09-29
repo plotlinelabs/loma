@@ -19,7 +19,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from api.auth_helpers import get_user_email
+from api.auth_helpers import get_user_email, is_loopback
 from devices import store
 from devices.builds import blobs, FILENAME, MAX_BLOB
 from devices.hub import DeviceError, hub
@@ -47,6 +47,15 @@ def _error(message, status=400):
     return web.json_response({'error': message}, status=status)
 
 
+async def _json_object(request):
+    """The JSON object body, or None when it is missing, invalid or not an object."""
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
 def _bearer(request):
     header = request.headers.get('Authorization', '')
     return header[7:].strip() if header.startswith('Bearer ') else ''
@@ -65,6 +74,8 @@ def _clean_device(device):
 
 
 def _clean_devices(devices):
+    if not isinstance(devices, list):
+        return []
     return [d for d in (_clean_device(x) for x in (devices or [])[:50]) if d is not None]
 
 
@@ -73,11 +84,8 @@ def _clean_devices(devices):
 
 async def handle_enroll(request):
     db = _db_or_503()
-    try:
-        body = await request.json()
-    except (ValueError, UnicodeError):
-        return _error('Invalid JSON')
-    if not isinstance(body, dict):
+    body = await _json_object(request)
+    if body is None:
         return _error('Invalid JSON')
     result = await store.redeem_enrollment(db, body.get('token'), body)
     if result is None:
@@ -105,6 +113,7 @@ async def handle_runner_ws(request):
         await ws.close(code=4002, message=b'expected hello')
         return ws
     devices = _clean_devices(hello.get('devices'))
+    capabilities = hello.get('capabilities') if isinstance(hello.get('capabilities'), list) else []
     conn = await hub.attach(runner_id, ws, devices)
     try:
         if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
@@ -114,7 +123,7 @@ async def handle_runner_ws(request):
             'devices': devices, 'last_seen': store.now(), 'connected_at': store.now(),
             'version': str(hello.get('version') or '')[:40], 'hostname': str(hello.get('hostname') or '')[:120],
             'os': str(hello.get('os') or '')[:120],
-            'capabilities': [str(c)[:20] for c in (hello.get('capabilities') or [])[:10]]}})
+            'capabilities': [str(c)[:20] for c in capabilities[:10]]}})
         logger.info('Device runner %s connected with %d device(s)', runner_id, len(devices))
         last_persist = asyncio.get_running_loop().time()
         async for message in ws:
@@ -191,11 +200,8 @@ async def handle_create_enrollment(request):
     user_email = get_user_email(request)
     if not user_email:
         return _error('Authentication required', 401)
-    try:
-        body = await request.json()
-    except (ValueError, UnicodeError):
-        body = None
-    name = (str(body.get('name') or '').strip()[:80] if isinstance(body, dict) else '') or 'My machine'
+    body = await _json_object(request) or {}
+    name = str(body.get('name') or '').strip()[:80] or 'My machine'
     token, expires = await store.create_enrollment(db, user_email, name)
     base = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/') or f'{request.scheme}://{request.host}'
     download = shlex.quote(base + '/device-runner/download')
@@ -222,11 +228,8 @@ async def _owned_runner(db, request):
 async def handle_update_runner(request):
     db = _db_or_503()
     user_email, runner = await _owned_runner(db, request)
-    try:
-        body = await request.json()
-    except (ValueError, UnicodeError):
-        return _error('Invalid JSON')
-    if not isinstance(body, dict):
+    body = await _json_object(request)
+    if body is None:
         return _error('Invalid JSON')
     update = {}
     if 'name' in body:
@@ -262,11 +265,8 @@ async def handle_force_release(request):
     user_email = get_user_email(request)
     if not user_email:
         return _error('Authentication required', 401)
-    try:
-        body = await request.json()
-    except (ValueError, UnicodeError):
-        return _error('Invalid JSON')
-    if not isinstance(body, dict):
+    body = await _json_object(request)
+    if body is None:
         return _error('Invalid JSON')
     try:
         return web.json_response(await DeviceService(db).force_release(user_email, body.get('device_id')))
@@ -278,7 +278,7 @@ async def handle_force_release(request):
 
 
 def _internal_identity(request):
-    if request.remote not in ('127.0.0.1', '::1'):
+    if not is_loopback(request):
         raise web.HTTPForbidden(text=json.dumps({'error': 'Loopback only'}), content_type='application/json')
     user_email = request.headers.get('X-Loma-User', '').strip()
     token = request.headers.get('X-Loma-Auth-Token', '').strip()
@@ -290,11 +290,8 @@ def _internal_identity(request):
 async def handle_internal_call(request):
     db = _db_or_503()
     user_email = _internal_identity(request)
-    try:
-        body = await request.json()
-    except (ValueError, UnicodeError):
-        return _error('Invalid JSON')
-    if not isinstance(body, dict):
+    body = await _json_object(request)
+    if body is None:
         return _error('Invalid JSON')
     service = DeviceService(db)
     scope = body.get('scope')
@@ -322,17 +319,18 @@ async def handle_internal_upload(request):
     if not FILENAME.fullmatch(filename) or not filename.endswith(('.apk', '.zip', '.ipa')):
         return _error('filename must be a simple name ending in .apk, .zip or .ipa')
     try:
-        declared = int(request.headers.get('Content-Length', '0'))
-        blobs.reserve(user_email, declared)
-    except (ValueError, DeviceError) as exc:
-        return _error(str(exc) if isinstance(exc, DeviceError) else 'Invalid Content-Length')
+        declared = int(request.headers.get('Content-Length', ''))
+    except ValueError:
+        declared = 0
+    if not 0 < declared <= MAX_BLOB:
+        return _error('A Content-Length of at most 500 MB is required')
     path, size, digest = blobs.new_path(), 0, hashlib.sha256()
     try:
-        with open(path, 'wb') as handle:
+        with blobs.reservation(user_email, declared), open(path, 'wb') as handle:
             async for chunk in request.content.iter_chunked(1 << 20):
                 size += len(chunk)
-                if size > MAX_BLOB:
-                    raise DeviceError('Build is larger than 500 MB')
+                if size > declared:
+                    raise DeviceError('Upload is larger than its Content-Length')
                 digest.update(chunk)
                 handle.write(chunk)
         blob_id = blobs.add_file(path, filename, user_email, digest.hexdigest(), size, meta={'uploaded': filename})

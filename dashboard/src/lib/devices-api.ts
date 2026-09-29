@@ -3,7 +3,7 @@
  * simulators they expose to the agent.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
+import { basePath } from "@/lib/api";
 
 export interface DeviceRunner {
   runner_id: string;
@@ -40,7 +40,7 @@ export interface Enrollment {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${basePath}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
   });

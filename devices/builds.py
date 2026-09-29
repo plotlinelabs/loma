@@ -5,6 +5,8 @@ build (repo + artifact name + PR or run id). The backend downloads the artifact
 with its own token, stores it as a checksummed blob, and the runner fetches the
 blob over HTTPS with its runner secret. Blobs are bound to one runner and expire.
 """
+import asyncio
+import contextlib
 import hashlib
 import os
 import re
@@ -17,12 +19,14 @@ from urllib.parse import quote
 import aiohttp
 
 from devices.hub import DeviceError
+from tools._integration_key import get_integration_key
 
 MAX_BLOB = 500 * 1024 * 1024
 BLOB_TTL = 30 * 60
 MAX_DOWNLOADS = 5  # per bind (one install), not per blob lifetime
 MAX_TOTAL_BYTES = 3 * 1024 * 1024 * 1024
 MAX_OWNER_BYTES = 1536 * 1024 * 1024
+GITHUB_FETCH_TIMEOUT = 600
 FILENAME = re.compile(r'[A-Za-z0-9._-]{1,128}\Z')
 GITHUB_API = 'https://api.github.com'
 
@@ -37,6 +41,7 @@ class BlobStore:
         self.root = Path(root or os.environ.get('LOMA_DEVICE_BLOB_DIR') or Path(tempfile.gettempdir()) / 'loma-device-blobs')
         self.blobs = {}
         self.cache = {}
+        self.inflight = {}  # builds still streaming in: counted against the disk budget too
         self.cleaned = False
 
     def _prune(self):
@@ -64,10 +69,22 @@ class BlobStore:
     def reserve(self, owner, size):
         """Reject new builds that would exceed the per-owner or global disk budget."""
         self._prune()
-        total = sum(b['size'] for b in self.blobs.values())
-        mine = sum(b['size'] for b in self.blobs.values() if b['owner'] == owner)
+        held = [(b['owner'], b['size']) for b in self.blobs.values()] + list(self.inflight.values())
+        total = sum(held_size for _, held_size in held)
+        mine = sum(held_size for held_owner, held_size in held if held_owner == owner)
         if total + size > MAX_TOTAL_BYTES or mine + size > MAX_OWNER_BYTES:
             raise DeviceError('Build storage is full; wait for recent builds to expire (30 min) and retry')
+
+    @contextlib.contextmanager
+    def reservation(self, owner, size):
+        """Hold `size` bytes of budget while a build streams in; the caller must not write more."""
+        self.reserve(owner, size)
+        key = object()
+        self.inflight[key] = (owner, size)
+        try:
+            yield
+        finally:
+            del self.inflight[key]
 
     def _register(self, path, sha256, size, filename, owner, cache_key=None, meta=None):
         self._prune()
@@ -118,7 +135,8 @@ class BlobStore:
         if repo.lower() not in repos:
             raise DeviceError('Builds from this repository are not allowed. An operator can add it to '
                               'LOMA_DEVICE_BUILD_REPOS' + (f' (allowed: {", ".join(sorted(repos))})' if repos else ''))
-        token = os.environ.get('GITHUB_API_KEY') or os.environ.get('GITHUB_TOKEN')
+        # Same lookup as isolation/automation.request: env var, else the dashboard-managed integration.
+        token = os.environ.get('GITHUB_API_KEY') or await asyncio.to_thread(get_integration_key, 'github')
         if not token:
             raise DeviceError('No GitHub token is configured on the Loma backend')
         headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json',
@@ -129,27 +147,28 @@ class BlobStore:
             raise DeviceError(f'Could not fetch the build from GitHub ({type(exc).__name__}); retry') from None
 
     async def _from_github(self, owner, repo, artifact_name, pr, run_id, headers):
-        timeout = aiohttp.ClientTimeout(total=600, sock_read=120)
+        timeout = aiohttp.ClientTimeout(total=GITHUB_FETCH_TIMEOUT, sock_read=120)
         async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
             artifact, head_sha = await self._find_artifact(session, repo, artifact_name, pr, run_id)
             cache_key = (owner, repo.lower(), artifact['id'])
             cached = self.cache.get(cache_key)
             if cached in self.blobs:
                 return cached, self.blobs[cached]
-            self.reserve(owner, int(artifact.get('size_in_bytes') or 0))
+            declared = min(int(artifact.get('size_in_bytes') or MAX_BLOB), MAX_BLOB)
             path = self.new_path()
             digest, size = hashlib.sha256(), 0
             try:
-                async with session.get(artifact['archive_download_url']) as response:
-                    if response.status != 200:
-                        raise DeviceError(f'GitHub artifact download failed (HTTP {response.status})')
-                    with open(path, 'wb') as handle:
-                        async for chunk in response.content.iter_chunked(1 << 20):
-                            size += len(chunk)
-                            if size > MAX_BLOB:
-                                raise DeviceError('Artifact is larger than 500 MB')
-                            digest.update(chunk)
-                            handle.write(chunk)
+                with self.reservation(owner, declared):
+                    async with session.get(artifact['archive_download_url']) as response:
+                        if response.status != 200:
+                            raise DeviceError(f'GitHub artifact download failed (HTTP {response.status})')
+                        with open(path, 'wb') as handle:
+                            async for chunk in response.content.iter_chunked(1 << 20):
+                                size += len(chunk)
+                                if size > declared:
+                                    raise DeviceError('Artifact is larger than GitHub reported (or than 500 MB)')
+                                digest.update(chunk)
+                                handle.write(chunk)
             except BaseException:
                 path.unlink(missing_ok=True)
                 raise

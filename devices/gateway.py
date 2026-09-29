@@ -10,7 +10,15 @@ images, so the model asserts on device.observe ui_tree instead.
 
 Results are capped well below the worker frame limit: an oversized tool
 result would otherwise abort the whole run (isolation/protocol.MAX_FRAME).
+
+Two more worker limits shape the results (isolation/worker_entry.Broker.rpc):
+- A result containing an 'error' key is a fatal broker denial that poisons the
+  rest of the run, so recoverable device failures use failure() instead.
+- Each tool call must answer within 120 s. Longer operations (install, Maestro
+  flows) keep running here and report pending; calling the same tool again on the
+  same device waits for that result.
 """
+import asyncio
 import json
 import logging
 
@@ -20,12 +28,18 @@ from devices.service import DeviceService
 logger = logging.getLogger(__name__)
 MAX_RESULT = 200 * 1024
 MAX_SCREENSHOTS = 8  # per run; shares the run's 20-file artifact budget with workspace.publish
+WAIT_SECONDS = 90  # below the worker's 120 s per-call RPC timeout
 
 TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'device.app',
          'device.input', 'device.observe', 'device.run_flow'}
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
 INPUT_ACTIONS = {'tap', 'swipe', 'type', 'key', 'open_url'}
 OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs'}
+
+
+def failure(message, **extra):
+    """A recoverable device outcome the agent should read and act on (never an 'error' key)."""
+    return {'ok': False, 'device_error': message, **extra}
 
 
 def _pick(arguments, required, optional, label):
@@ -52,20 +66,35 @@ class DeviceTools:
         self.on_artifact = on_artifact
         self.screenshots = 0
         self.service = service or DeviceService(db)
+        self.pending = {}  # device_id -> (tool, task) still running past WAIT_SECONDS
 
     async def __call__(self, authority, tool, arguments):
         if authority != self.authority or tool not in TOOLS or not isinstance(arguments, dict):
             raise DeviceError('Invalid device request')
         owner, args = authority.user_email, dict(arguments)
+        key = args.get('device_id') if isinstance(args.get('device_id'), str) else None
         try:
-            return cap_result(await self._dispatch(owner, tool, args))
+            if key in self.pending:
+                busy_tool, task = self.pending[key]
+                if busy_tool != tool:
+                    return failure(f'This device is still busy with {busy_tool}; call {busy_tool} again with the '
+                                   'same device_id to wait for its result', pending=True)
+            else:
+                task = asyncio.ensure_future(self._dispatch(owner, tool, args))
+                task.add_done_callback(lambda t: t.cancelled() or t.exception())  # never "never retrieved"
+            done, _ = await asyncio.wait({task}, timeout=WAIT_SECONDS)
+            if not done:
+                self.pending[key] = (tool, task)
+                return failure(f'{tool} is still running on the device. Call {tool} again with the same '
+                               'device_id to wait for the result.', pending=True)
+            self.pending.pop(key, None)
+            return cap_result(task.result())
         except DeviceError as exc:
-            # Device problems are normal, recoverable outcomes the agent should see and act on.
-            return {'error': str(exc)}
+            return failure(str(exc))
         except Exception:
             # Never let an infrastructure error (Mongo, network) abort the whole run.
             logger.exception('Device tool %s failed', tool)
-            return {'error': 'Device operation failed unexpectedly; retry, or check Loma → Devices'}
+            return failure('Device operation failed unexpectedly; retry, or check Integrations → Devices')
 
     async def _dispatch(self, owner, tool, args):
         service, scope = self.service, self.scope
@@ -131,5 +160,5 @@ def cap_result(result, limit=MAX_RESULT):
             result[key] = text[-(limit // 4):]
     result['truncated'] = True
     if len(json.dumps(result, default=str).encode()) > limit:
-        return {'error': 'Device result too large; narrow it (e.g. logs with filter and fewer lines)'}
+        return failure('Device result too large; narrow it (e.g. logs with filter and fewer lines)')
     return result

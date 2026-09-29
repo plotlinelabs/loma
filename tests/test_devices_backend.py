@@ -313,6 +313,51 @@ def test_blob_budget_and_orphan_cleanup(tmp_path, monkeypatch):
     blobs.reserve('other@x.com', 5)
 
 
+def test_inflight_builds_count_against_the_budget(tmp_path, monkeypatch):
+    blobs = BlobStore(tmp_path / 'b')
+    monkeypatch.setattr('devices.builds.MAX_OWNER_BYTES', 10)
+    with blobs.reservation(OWNER, 8):
+        with pytest.raises(DeviceError, match='storage is full'):
+            blobs.reserve(OWNER, 5)
+    blobs.reserve(OWNER, 5)  # released once the transfer finished
+
+
+@pytest.mark.asyncio
+async def test_long_ops_hold_the_lease_for_their_worst_case(db):
+    runner = await enroll(db)
+    service = DeviceService(db, hub=FakeHub({runner['runner_id']}), blobs=BlobStore())
+    device = store.device_id(runner['runner_id'], 'emulator-5554')
+    await db.device_runners.update_one({'runner_id': runner['runner_id']}, {'$set': {
+        'devices': [{'serial': 'emulator-5554', 'platform': 'android'}]}})
+    await service.call(OWNER, 'conv-1', device, 'run_flow', {'flow': '- launchApp'})
+    lease = await db.device_leases.find_one({'_id': device})
+    assert store.aware(lease['expires_at']) - store.now() > timedelta(minutes=25)
+
+
+@pytest.mark.asyncio
+async def test_github_token_falls_back_to_the_integration(monkeypatch):
+    monkeypatch.setenv('LOMA_DEVICE_BUILD_REPOS', 'example-org/mobile-sdk')
+    monkeypatch.delenv('GITHUB_API_KEY', raising=False)
+    monkeypatch.setattr('devices.builds.get_integration_key', lambda provider: '')
+    with pytest.raises(DeviceError, match='No GitHub token'):
+        await BlobStore().from_github(OWNER, 'example-org/mobile-sdk', 'app', pr=1)
+    seen = {}
+
+    async def fake_fetch(self, owner, repo, artifact_name, pr, run_id, headers):
+        seen.update(headers)
+        return 'b_x', {}
+
+    monkeypatch.setattr('devices.builds.get_integration_key', lambda provider: 'ghp_integration')
+    monkeypatch.setattr(BlobStore, '_from_github', fake_fetch)
+    await BlobStore().from_github(OWNER, 'example-org/mobile-sdk', 'app', pr=1)
+    assert seen['Authorization'] == 'Bearer ghp_integration'
+
+
+def test_malformed_runner_frames_are_ignored():
+    from api.device_routes import _clean_devices
+    assert _clean_devices({'serial': 'x'}) == [] and _clean_devices(None) == []
+
+
 def test_sharing_is_case_insensitive():
     runner = {'owner_email': 'Owner@Example.com', 'shared_with': ['pm@x.com']}
     assert store.can_use(runner, 'owner@example.com') and store.can_use(runner, 'PM@x.com')

@@ -3,6 +3,8 @@ import argparse
 import base64
 from unittest.mock import patch
 
+import asyncio
+
 import pytest
 import aiohttp
 from aiohttp import web
@@ -99,7 +101,7 @@ async def test_screenshot_is_registered_for_the_user_not_returned_as_base64():
     for _ in range(7):
         await tools(AUTH, 'device.observe', {'device_id': 'r_0123456789abcdef/e', 'what': 'screenshot'})
     limited = await tools(AUTH, 'device.observe', {'device_id': 'r_0123456789abcdef/e', 'what': 'screenshot'})
-    assert 'limit' in limited['error']
+    assert 'limit' in limited['device_error']
 
 
 @pytest.mark.asyncio
@@ -117,7 +119,45 @@ async def test_large_results_are_capped_and_unexpected_errors_contained():
 
     tools = DeviceTools(None, AUTH, 'c', service=Broken())
     result = await tools(AUTH, 'device.input', {'device_id': 'r_0123456789abcdef/e', 'action': 'tap', 'x': 1, 'y': 1})
-    assert 'unexpectedly' in result['error']
+    assert 'unexpectedly' in result['device_error']
+
+
+@pytest.mark.asyncio
+async def test_device_failures_do_not_poison_the_worker_broker():
+    """A recoverable failure must pass isolation/worker_entry.Broker.rpc and leave it usable."""
+    import json as _json
+    from isolation.worker_entry import Broker
+    tools = DeviceTools(None, AUTH, 'c', service=FakeService())
+    failed = await tools(AUTH, 'device.input', {'device_id': 'r_0123456789abcdef/e', 'action': 'shell'})
+    reader = asyncio.StreamReader()
+    for request_id, result in (('1', failed), ('2', {'devices': []})):
+        reader.feed_data((_json.dumps({'type': 'tool_response', 'id': request_id, 'result': result}) + '\n').encode())
+    broker = Broker(reader, lambda data: None)
+    assert (await broker.rpc('device.input', {}))['ok'] is False
+    assert await broker.rpc('device.list', {}) == {'devices': []} and not broker.failed
+
+
+@pytest.mark.asyncio
+async def test_long_operations_report_pending_then_deliver(monkeypatch):
+    import devices.gateway as gateway
+    monkeypatch.setattr(gateway, 'WAIT_SECONDS', 0.05)
+    release = asyncio.Event()
+
+    class Slow(FakeService):
+        async def call(self, *a, **k):
+            await release.wait()
+            return {'installed': 'app.apk'}
+
+    tools = DeviceTools(None, AUTH, 'c', service=Slow())
+    device = 'r_0123456789abcdef/e'
+    install = {'device_id': device, 'repo': 'example-org/mobile-sdk', 'artifact_name': 'app-native-android', 'pr': 1}
+    first = await tools(AUTH, 'device.install', install)
+    assert first['pending'] is True and 'error' not in first
+    busy = await tools(AUTH, 'device.input', {'device_id': device, 'action': 'tap', 'x': 1, 'y': 1})
+    assert busy['pending'] is True and 'device.install' in busy['device_error']
+    release.set()
+    assert await tools(AUTH, 'device.install', install) == {'installed': 'app.apk'}
+    assert not tools.pending
 
 
 @pytest.mark.asyncio
@@ -132,7 +172,7 @@ async def test_bad_arguments_and_device_errors_are_returned_not_raised():
                        ('device.release', {}),
                        ('device.input', {'device_id': device, 'action': 'tap', 'x': 9999, 'y': 1})]:
         result = await tools(AUTH, tool, args)
-        assert 'error' in result, (tool, args)
+        assert result['ok'] is False and 'device_error' in result and 'error' not in result, (tool, args)
     with pytest.raises(DeviceError):
         await tools(RunAuthority('other', OWNER, frozenset(TOOLS)), 'device.list', {})
 

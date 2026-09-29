@@ -22,6 +22,12 @@ this chat. Screenshots from the CLI are saved to a PNG path you can open with Re
 In isolated workers you cannot view screenshots: they are shown to the user as evidence,
 and you assert on `ui_tree`.
 
+In isolated workers a failed call returns `{"ok": false, "device_error": "..."}`: read the
+message and act on it (see Troubleshooting). A long call (install, a Maestro flow) returns
+`"pending": true` after about 90 seconds while it keeps running; call the **same tool with the
+same `device_id`** again to wait for its result. Other calls on that device report it busy
+until then.
+
 ## The loop
 
 1. **Find a device**: `list`. If nothing is online, stop and tell the user exactly what
@@ -83,6 +89,8 @@ explicitly want that.
 | "not in this runner's allowed_app_ids" | The runner owner restricted apps; use an allowed app id |
 | "uiautomator could not capture the screen" | UI not idle (animation/video); wait a second and retry |
 | iOS "needs idb" | iOS taps, swipes, typing, keys and ui_tree need `idb` on the runner machine; screenshots, install, launch and deep links still work |
+| `"pending": true` | Still running on the device; repeat the same tool call on the same device to wait |
+| "Timed out on the runner" | The device did not finish in time; check `ui_tree`/`logs`, then retry once |
 | "Builds from this repository are not allowed" | An operator must add the repo to `LOMA_DEVICE_BUILD_REPOS` |
 
 ## Isolated-worker tool mapping

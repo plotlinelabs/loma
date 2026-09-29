@@ -33,8 +33,8 @@ Loma Device Runner (device_runner/loma_device_runner.py) on the user's machine
 
 1. Operator: optionally set `LOMA_DEVICE_BUILD_REPOS=owner/repo,...` (repos whose GitHub
    Actions artifacts may be installed; empty = no CI installs) and `LOMA_DEVICE_BLOB_DIR`
-   (defaults to the system temp dir). The backend's `GITHUB_API_KEY` must be able to read
-   those repos' artifacts. nginx must route `/device-runner/` to the backend (included in
+   (defaults to the system temp dir). The backend's GitHub token (`GITHUB_API_KEY`, or the
+   GitHub integration configured in the dashboard) must be able to read those repos' artifacts. nginx must route `/device-runner/` to the backend (included in
    `deploy/nginx`). If Loma sits behind an SSO proxy (e.g. Cloudflare Access), exempt
    `/device-runner/*` from it: runners cannot log in interactively, and these endpoints
    already require an enrollment token or runner secret. With Cloudflare Access: add a
@@ -65,6 +65,8 @@ Loma Device Runner (device_runner/loma_device_runner.py) on the user's machine
 | Malicious build archive | Checksum, 500 MB cap, zip-slip/symlink rejection, shared nested-zip budget |
 | Another user drives my devices | Owner or explicit `shared_with` only; leases per chat; audit log per call (90 day TTL) |
 | Oversized results break a run | Device results capped (~200 KiB) below the worker frame limit |
+| Device reaches the runner machine's network | Not blocked: `open_url`/`openLink` may load `http(s)` pages, and an Android emulator reaches the host's localhost at `10.0.2.2` (iOS simulators share the host network). Local dev servers and admin UIs on that machine are visible to the agent; use a dedicated machine if that matters |
+| Long device operations stall an agent run | Isolated workers get `pending` after ~90 s and poll; leases cover the op's worst case; the runner drops calls past the server's deadline |
 
 ## Known limits
 

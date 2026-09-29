@@ -14,8 +14,8 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from devices import store
-from devices.builds import blobs as default_blobs
-from devices.hub import DeviceError, hub as default_hub
+from devices.builds import GITHUB_FETCH_TIMEOUT, blobs as default_blobs
+from devices.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError, hub as default_hub
 
 LEASE_TTL = timedelta(minutes=15)
 APP_ID = re.compile(r'[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*\Z')
@@ -147,7 +147,7 @@ class DeviceService:
 
     # ── Leases ────────────────────────────────────────────────────────────
 
-    async def _acquire(self, device_id, user_email, scope):
+    async def _acquire(self, device_id, user_email, scope, ttl=LEASE_TTL):
         # Two attempts: concurrent first acquires by the SAME holder race on the
         # upsert insert; the retry then matches the winner's document.
         for _ in range(2):
@@ -156,7 +156,7 @@ class DeviceService:
                 return await self.db.device_leases.find_one_and_update(
                     {'_id': device_id, '$or': [{'expires_at': {'$lt': at}},
                                                {'owner_email': user_email, 'scope': scope}]},
-                    {'$set': {'owner_email': user_email, 'scope': scope, 'expires_at': at + LEASE_TTL},
+                    {'$set': {'owner_email': user_email, 'scope': scope, 'expires_at': at + ttl},
                      '$setOnInsert': {'acquired_at': at}},
                     upsert=True, return_document=ReturnDocument.AFTER)
             except DuplicateKeyError:
@@ -191,7 +191,7 @@ class DeviceService:
     @staticmethod
     def _no_device_message(devices, platform):
         if not devices:
-            return ('No devices are registered for you. Enroll a machine in Loma → Devices and run the '
+            return ('No devices are registered for you. Enroll a machine under Integrations → Devices and run the '
                     'Loma Device Runner there.')
         kind = f'{platform} ' if platform else ''
         return f'No online {kind}devices. Is the runner machine awake and the emulator/simulator booted?'
@@ -227,7 +227,9 @@ class DeviceService:
         self._check_scope(scope)
         _validate(op, args)
         runner, serial = await self._resolve(user_email, device_id)
-        lease = await self._acquire(device_id, user_email, scope)
+        # Hold the lease for the op's worst case too, so a long install is never taken over mid-way.
+        worst = OP_TIMEOUTS.get(op, DEFAULT_TIMEOUT) + (GITHUB_FETCH_TIMEOUT if op == 'install' else 0)
+        lease = await self._acquire(device_id, user_email, scope, LEASE_TTL + timedelta(seconds=worst))
         if lease is None:
             raise DeviceError('Device is leased by another session. Pick another device or wait for it to be released.')
         started = time.monotonic()
