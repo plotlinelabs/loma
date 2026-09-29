@@ -1,12 +1,11 @@
 """Runner-side tests: fixed argv construction, policy and archive safety (no emulator needed)."""
+import asyncio
 import base64
-import json
 import os
+import plistlib
 import stat
 import sys
 import zipfile
-from pathlib import Path
-
 import pytest
 
 from device_runner import loma_device_runner as ldr
@@ -130,7 +129,7 @@ async def test_non_ascii_text_rejected_on_android(adb):
 
 @pytest.mark.asyncio
 async def test_allowed_app_ids_policy(adb):
-    driver, calls = adb
+    driver, _ = adb
     r = runner(driver, allowed_app_ids=['com.example.demo'])
     await r.call('launch', 'emulator-5554', {'app_id': 'com.example.demo'})
     with pytest.raises(ldr.OpError, match='allowed_app_ids'):
@@ -154,16 +153,10 @@ async def test_screenshot_and_ui_tree(adb):
                                  'clickable': True, 'bounds': [100, 200, 500, 300], 'center': [300, 250]}]
 
 
-def test_flow_screening():
+def test_flow_scripts_opt_in():
     ok = 'appId: com.example.demo\n---\n- launchApp\n- tapOn: "Show modal"\n- assertVisible: "Hello"\n'
     ldr.screen_flow(ok, {})
-    for bad in ['- runScript: x.js', '  - evalScript: ${http.get("http://10.0.0.1")}', '- runFlow: ../x.yaml',
-                '- inputText: ${output.secret}', '- addMedia:\n  - ~/Pictures/a.png']:
-        with pytest.raises(ldr.OpError):
-            ldr.screen_flow(ok + bad, {})
     ldr.screen_flow(ok + '- runScript: x.js', {'allow_maestro_scripts': True})
-    with pytest.raises(ldr.OpError, match='allowed_app_ids'):
-        ldr.screen_flow('appId: com.other\n---\n- launchApp', {'allowed_app_ids': ['com.example.demo']})
 
 
 def test_zip_slip_and_symlinks_rejected(tmp_path):
@@ -192,6 +185,7 @@ def test_find_file_handles_nested_ios_artifact(tmp_path):
     outer = tmp_path / 'app-native-ios.zip'
     with zipfile.ZipFile(outer, 'w') as zf:
         zf.write(inner, 'DemoApp.zip')
+        zf.writestr('__MACOSX/._DemoApp.zip', 'AppleDouble, not a zip')
     app = ldr.find_file(outer, '.app')
     assert app.name == 'DemoApp.app'
     assert os.access(app / 'DemoApp', os.X_OK)
@@ -234,6 +228,8 @@ def test_config_is_private(tmp_path, monkeypatch):
     '- takeScreenshot: ../../etc/x',
     '- openLink: file:///Users/me/.ssh/id_rsa',
     '- repeat:\n    times: 2\n    commands:\n      - runScript: x.js',
+    '- retry:\n    maxRetries: 2\n    file: /tmp/other.yaml',
+    'appId: ${http.get("http://10.0.0.1")}\n---\n- launchApp',
     'appId: com.example.demo\nonFlowStart:\n  - runScript: x.js\n---\n- launchApp',
     'not: [valid',
 ])
@@ -290,7 +286,6 @@ def test_nested_zip_budget(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cancelled_run_kills_child(tmp_path):
-    import asyncio
     marker = tmp_path / 'done'
     task = asyncio.create_task(ldr.run([sys.executable, '-c',
         f'import time; time.sleep(3); open({str(marker)!r}, "w").write("x")'], timeout=30))
@@ -313,15 +308,13 @@ async def test_install_allowlist_verifies_real_package(adb, tmp_path, monkeypatc
     assert ['-s', 'emulator-5554', 'uninstall', 'com.evil'] in calls()
     install = next(c for c in calls() if c[2:3] == ['install'])
     assert '-r' not in install
-    import os as _os
-    _os.unlink(_os.environ['FAKE_ADB_LOG'] + '.installed')
+    os.unlink(os.environ['FAKE_ADB_LOG'] + '.installed')
     monkeypatch.setenv('FAKE_INSTALL_PKG', 'com.example.demo')
     result = await driver.install('emulator-5554', apk, 'com.example.demo', ('com.example.demo',))
     assert result['installed'] == 'app.apk'
 
 
 def test_ios_bundle_identifier(tmp_path):
-    import plistlib
     app = tmp_path / 'Demo.app'
     app.mkdir()
     (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.demo'}, fmt=plistlib.FMT_BINARY))

@@ -26,7 +26,8 @@ python3 loma_device_runner.py enroll --server https://<your-loma> --token <token
 # 3. Check tooling and visible devices
 python3 loma_device_runner.py doctor
 
-# 4. Run it (foreground), or install it as a login service
+# 4. Run it (foreground), or install it as a login service (launchd on macOS, systemd --user on Linux).
+#    Run install-service from a shell where doctor finds your tools: the service reuses that PATH.
 python3 loma_device_runner.py run
 python3 loma_device_runner.py install-service
 ```
@@ -51,8 +52,8 @@ python3 loma_device_runner.py install-service
 ```
 
 - `allow_physical_devices`: expose USB/Wi-Fi phones, not just emulators/simulators. Keep `false` on a personal laptop.
-- `allowed_app_ids`: if non-empty, only these app ids can be installed/launched/stopped/reset/uninstalled, and Maestro flows may only target them.
-- `allow_maestro_scripts`: permit `runScript`, `evalScript`, `runFlow`, `addMedia` and `${...}` in flows. Maestro JavaScript can make HTTP requests from your machine, so this is off by default.
+- `allowed_app_ids`: if non-empty, only these app ids can be installed/launched/stopped/reset/uninstalled, and Maestro flows may only target them. `install` then needs an `app_id`, and the package that actually got installed is checked too.
+- `allow_maestro_scripts`: permit Maestro commands outside the built-in allowlist (`runScript`, `evalScript`, `runFlow`, `addMedia`, `file:` sub-flows, ...), `${...}` and extra flow config keys. Maestro JavaScript can make HTTP requests from your machine and sub-flows can read files on it, so this is off by default.
 
 Restart the runner after editing the policy.
 

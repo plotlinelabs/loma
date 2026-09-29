@@ -14,9 +14,10 @@ Security model (read before running):
   personal phone plugged in over USB is never exposed by accident.
 - Optional allowed_app_ids restricts which app ids the agent may install, launch,
   stop, reset or uninstall.
-- Maestro flows are screened: runScript/evalScript/runFlow/addMedia and inline
-  JavaScript (${...}) are rejected unless allow_maestro_scripts=true, because
-  Maestro JavaScript can make HTTP calls from this machine.
+- Maestro flows are screened against a command allowlist: runScript/evalScript/
+  runFlow/addMedia, file: sub-flows and inline JavaScript (${...}) are rejected
+  unless allow_maestro_scripts=true, because Maestro JavaScript can make HTTP
+  calls from this machine.
 - Revoking the runner in the Loma dashboard (or stopping this process) cuts off
   access immediately.
 
@@ -37,6 +38,7 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import random
 import re
 import shlex
@@ -137,7 +139,7 @@ def default_policy():
 # ── Subprocess helper ─────────────────────────────────────────────────────
 
 
-async def run(args, *, timeout=60, check=True, keep='head'):
+async def run(args, *, timeout=60, check=True, keep='head', cwd=None):
     """Run a fixed argv (never a host shell string). Returns (code, stdout bytes, stderr text).
 
     The child is always killed if the call is cancelled (e.g. the WebSocket dropped),
@@ -145,7 +147,7 @@ async def run(args, *, timeout=60, check=True, keep='head'):
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            *args, stdin=asyncio.subprocess.DEVNULL,
+            *args, stdin=asyncio.subprocess.DEVNULL, cwd=cwd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     except FileNotFoundError:
         raise OpError(f'{args[0]} is not installed on the runner machine') from None
@@ -261,6 +263,8 @@ def screen_flow(flow, policy):
                 name = args if isinstance(args, str) else (args or {}).get('path') if isinstance(args, dict) else None
                 if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name):
                     raise OpError('takeScreenshot needs a simple name (letters, digits, - and _)')
+            if isinstance(args, dict) and 'file' in args and not scripts:
+                raise OpError(f'{command} with file: is not allowed on this runner (it runs an unscreened flow)')
             if isinstance(args, dict) and 'commands' in args:
                 check_commands(args['commands'], depth + 1)
             check_strings(args)
@@ -270,7 +274,7 @@ def screen_flow(flow, policy):
         raise OpError(f'Unsupported flow config keys: {sorted(unknown)}')
     if 'appId' in config:
         check_app(str(config['appId']))
-    check_strings(config.get('env'))
+    check_strings(config)
     for hook in ('onFlowStart', 'onFlowComplete'):
         if hook in config:
             check_commands(config[hook])
@@ -318,10 +322,10 @@ class Android:
         return {line[8:].strip() for line in out.decode('utf-8', 'replace').splitlines() if line.startswith('package:')}
 
     async def install(self, serial, path, app_id, allowed=()):
+        apk = find_file(path, '.apk')
         if app_id:
             # Debug keys differ between CI runs: always start from a clean install.
             await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60, check=False)
-        apk = find_file(path, '.apk')
         # With an app allowlist, never replace an existing package (no -r) and verify
         # the package that actually got installed, not just the app_id we were told.
         before = await self.packages(serial) if allowed else set()
@@ -453,12 +457,12 @@ class IOS:
         return 'idb'
 
     async def install(self, serial, path, app_id, allowed=()):
-        if app_id:
-            await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60, check=False)
         app = find_file(path, '.app')
         bundle_id = bundle_identifier(app)
         if allowed and bundle_id not in allowed:
             raise OpError(f'Bundle {bundle_id} is not in allowed_app_ids; not installed')
+        if app_id:
+            await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60, check=False)
         await run(['xcrun', 'simctl', 'install', serial, str(app)], timeout=300)
         return {'installed': app.name, 'bundle_id': bundle_id}
 
@@ -537,7 +541,6 @@ class IOS:
 
 
 def bundle_identifier(app):
-    import plistlib
     try:
         with open(Path(app) / 'Info.plist', 'rb') as handle:
             return str(plistlib.load(handle).get('CFBundleIdentifier') or '')
@@ -599,7 +602,7 @@ def find_file(path, suffix):
         matches = shallow(out.rglob('*' + suffix))
         if matches:
             return matches[0]
-        queue += [(nested, nested.parent / (nested.stem + '-x')) for nested in sorted(out.rglob('*.zip'))]
+        queue += [(nested, nested.parent / (nested.stem + '-x')) for nested in shallow(out.rglob('*.zip'))]
     raise OpError(f'No {suffix} found in the build archive')
 
 
@@ -614,6 +617,7 @@ class Runner:
     def __init__(self, config, drivers=None, session=None):
         self.config = config
         self.policy = {**default_policy(), **config.get('policy', {})}
+        self.allowed_apps = tuple(self.policy['allowed_app_ids'] or ())
         self.drivers = drivers if drivers is not None else [d for d in (Android(), IOS()) if d.available()]
         self.session = session
         self.locks = {}
@@ -651,8 +655,7 @@ class Runner:
         app_id = None
         if op in self.APP_OPS:
             app_id = need_str(args, 'app_id', APP_ID, 255, optional=op == 'install')
-            allowed = self.policy.get('allowed_app_ids') or []
-            if allowed and app_id not in allowed:
+            if self.allowed_apps and app_id not in self.allowed_apps:
                 raise OpError(f"App {app_id} is not in this runner's allowed_app_ids (install needs app_id)")
         lock = self.locks.setdefault(serial, asyncio.Lock())
         async with lock:
@@ -662,7 +665,7 @@ class Runner:
         if op == 'install':
             with tempfile.TemporaryDirectory(prefix='loma-build-') as tmp:
                 path = await self.download(args, Path(tmp))
-                return await driver.install(serial, path, app_id, tuple(self.policy.get('allowed_app_ids') or ()))
+                return await driver.install(serial, path, app_id, self.allowed_apps)
         if op in ('uninstall', 'launch', 'stop', 'reset_app'):
             return await getattr(driver, op)(serial, app_id)
         if op == 'open_url':
@@ -700,8 +703,6 @@ class Runner:
         blob_id = need_str(args, 'blob_id', BLOB_ID)
         expected = need_str(args, 'sha256', SHA256)
         name = need_str(args, 'filename', FILENAME)
-        if self.session is None:
-            raise OpError('Runner has no HTTP session')
         url = f"{self.config['server']}/device-runner/blobs/{blob_id}"
         digest, size = hashlib.sha256(), 0
         path = target / name
@@ -729,7 +730,7 @@ class Runner:
             flow_path, report = Path(tmp) / 'flow.yaml', Path(tmp) / 'report.xml'
             flow_path.write_text(flow)
             code, out, err = await run(['maestro', '--device', serial, 'test', str(flow_path), '--format', 'junit',
-                                        '--output', str(report)], timeout=600, check=False)
+                                        '--output', str(report)], timeout=600, check=False, cwd=tmp)
             return {'passed': code == 0, 'exit_code': code,
                     'report': report.read_text()[-20000:] if report.exists() else '',
                     'output': (out.decode('utf-8', 'replace') + err)[-8000:]}
@@ -753,8 +754,6 @@ class Runner:
             reply = {'type': 'result', 'id': call_id, 'ok': True, 'data': data}
         except OpError as exc:
             reply = {'type': 'result', 'id': call_id, 'ok': False, 'error': str(exc)[:2000]}
-        except asyncio.CancelledError:
-            raise
         except Exception as exc:  # one bad call must never drop the connection
             reply = {'type': 'result', 'id': call_id, 'ok': False, 'error': f'Runner error: {type(exc).__name__}'}
         await self.send(ws, reply)
@@ -853,23 +852,17 @@ def install_service():
     python = sys.executable
     CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     log = CONFIG_DIR / 'runner.log'
+    # Services start with a minimal PATH: keep this shell's PATH plus the default Maestro/Android SDK dirs.
+    sdk = 'Library/Android/sdk' if sys.platform == 'darwin' else 'Android/Sdk'
+    path_env = ':'.join([os.environ.get('PATH') or '/usr/local/bin:/usr/bin:/bin',
+                         str(Path.home() / '.maestro/bin'), str(Path.home() / sdk / 'platform-tools')])
     if sys.platform == 'darwin':
         plist = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
         plist.parent.mkdir(parents=True, exist_ok=True)
-        path_env = ':'.join(['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin',
-                             str(Path.home() / '.maestro/bin'), str(Path.home() / 'Library/Android/sdk/platform-tools')])
-        plist.write_text(f'''<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>{LABEL}</string>
-  <key>ProgramArguments</key><array><string>{python}</string><string>{script}</string><string>run</string></array>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>{path_env}</string></dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>StandardOutPath</key><string>{log}</string>
-  <key>StandardErrorPath</key><string>{log}</string>
-</dict></plist>
-''')
+        plist.write_bytes(plistlib.dumps({
+            'Label': LABEL, 'ProgramArguments': [python, str(script), 'run'],
+            'EnvironmentVariables': {'PATH': path_env}, 'RunAtLoad': True,
+            'KeepAlive': {'SuccessfulExit': False}, 'StandardOutPath': str(log), 'StandardErrorPath': str(log)}))
         print(f'Wrote {plist}\nStart it with: launchctl bootstrap gui/$(id -u) {plist}')
     else:
         unit = Path.home() / '.config/systemd/user/loma-device-runner.service'
@@ -879,6 +872,7 @@ Description=Loma Device Runner
 After=network-online.target
 
 [Service]
+Environment="PATH={path_env}"
 ExecStart={python} {script} run
 Restart=on-failure
 RestartSec=5
@@ -893,14 +887,12 @@ async def doctor():
     for tool in ('adb', 'xcrun', 'idb', 'maestro'):
         where = shutil.which(tool)
         print(f'{tool:8} {"found at " + where if where else "not found"}')
-    policy = load_config()['policy'] if CONFIG_PATH.exists() else {}
-    runner = Runner({'server': '', 'secret': '', 'runner_id': '', 'policy': policy})
-    devices = await runner.refresh()
+    config = load_config() if CONFIG_PATH.exists() else None
+    devices = await Runner({'policy': config['policy'] if config else {}}).refresh()
     print(f'{len(devices)} usable device(s) (physical devices are hidden unless allow_physical_devices=true):')
     for device in devices:
         print(f"  {device['platform']:8} {device['serial']:40} {device['name']} {device['os_version']}")
-    if CONFIG_PATH.exists():
-        config = load_config()
+    if config:
         print(f"Enrolled as {config['runner_id']} against {config['server']}")
     else:
         print('Not enrolled yet.')
@@ -924,9 +916,7 @@ def main(argv=None):
         return asyncio.run(Runner(load_config()).serve())
     if args.command == 'doctor':
         return asyncio.run(doctor())
-    if args.command == 'install-service':
-        return install_service()
-    return 1
+    return install_service()
 
 
 if __name__ == '__main__':
