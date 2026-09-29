@@ -85,6 +85,28 @@ CATALOG = [
             'type': 'array', 'minItems': 1, 'maxItems': 50, 'items': {'type': ['string', 'number', 'boolean']}}}, 'reason': REASON}),
     _tool('proposals.status', 'Read the current status of one proposal in this conversation. Statuses other than executed mean nothing was sent.', {'proposal_id': TEXT}),
     _tool('proposals.list', 'List recent proposals in this conversation with their statuses.', {}),
+    _tool('device.list', 'List mobile devices (Android emulators / iOS simulators) on Loma Device Runners you own or that are shared with you, with online and lease status.', {}),
+    _tool('device.lease', 'Reserve a device for this conversation (renews on every call, expires after 15 idle minutes). Give device_id, or platform to pick any free online device.', {
+        'device_id': TEXT, 'platform': {'type': 'string', 'enum': ['android', 'ios']}}, []),
+    _tool('device.release', 'Release a device you leased so other sessions can use it. Always release when done.', {'device_id': TEXT}),
+    _tool('device.install', 'Install a CI build on a device. The backend fetches the named GitHub Actions artifact (latest for the PR head, or from run_id) and the runner verifies its checksum. Pass app_id to uninstall the old app first (avoids signature mismatches). Returns the installed commit.', {
+        'device_id': TEXT, 'repo': TEXT, 'artifact_name': TEXT, 'pr': {'type': 'integer', 'minimum': 1},
+        'run_id': {'type': 'integer', 'minimum': 1}, 'app_id': TEXT}, ['device_id', 'repo', 'artifact_name']),
+    _tool('device.app', 'Launch, stop, clear data of (reset_app, Android only) or uninstall an app by package name / bundle id.', {
+        'device_id': TEXT, 'action': {'type': 'string', 'enum': ['launch', 'stop', 'reset_app', 'uninstall']}, 'app_id': TEXT}),
+    _tool('device.input', 'Interact with the device: tap (x,y), swipe (x1,y1,x2,y2[,duration_ms]), type (text), key (back/home/enter/delete/tab/app_switch...), open_url (deep link). Coordinates come from device.observe ui_tree centers.', {
+        'device_id': TEXT, 'action': {'type': 'string', 'enum': ['tap', 'swipe', 'type', 'key', 'open_url']},
+        'x': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
+        'x1': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y1': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
+        'x2': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y2': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
+        'duration_ms': {'type': 'integer', 'minimum': 50, 'maximum': 5000},
+        'text': {'type': 'string', 'minLength': 1, 'maxLength': 500}, 'key': TEXT,
+        'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}, ['device_id', 'action']),
+    _tool('device.observe', 'Observe the device: ui_tree (visible elements with text/id/bounds/center; best for assertions), screenshot (delivered as a run artifact), or logs (logcat / simulator log; optional filter, lines, clear).', {
+        'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs']},
+        'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': TEXT, 'clear': {'type': 'boolean'}}, ['device_id', 'what']),
+    _tool('device.run_flow', 'Run a Maestro YAML flow on the device and return pass/fail with the JUnit report. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
+        'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}}),
     _tool('workspace.list', 'List files in this disposable worker workspace, including staged attachments.', {}),
     _tool('workspace.import', 'Import a newly granted artifact, such as a skill asset, into this workspace.', {'artifact_id': TEXT}),
     _tool('workspace.read', 'Read a UTF-8 file relative to this private workspace.', {'path': PATH}),

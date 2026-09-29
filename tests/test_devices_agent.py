@@ -1,0 +1,177 @@
+"""Agent surfaces for Loma Devices: isolated gateway device.* tools and the legacy CLI."""
+import argparse
+import base64
+from unittest.mock import patch
+
+import pytest
+import aiohttp
+from aiohttp import web
+from aiohttp.test_utils import TestServer
+from mongomock_motor import AsyncMongoMockClient
+
+from devices.gateway import DeviceTools, TOOLS
+from devices.hub import DeviceError
+from isolation.catalog import CATALOG
+from isolation.gateway import ToolGateway, GatewayDenied
+from isolation.protocol import RunAuthority
+
+OWNER = 'vamsi@plotline.so'
+AUTH = RunAuthority('run1', OWNER, frozenset(TOOLS))
+
+
+class FakeService:
+    def __init__(self):
+        self.calls = []
+
+    async def list_devices(self, owner):
+        return [{'device_id': 'r_0123456789abcdef/emulator-5554', 'owner': owner}]
+
+    async def lease(self, owner, scope, device_id=None, platform=None):
+        self.calls.append(('lease', owner, scope, device_id, platform))
+        return {'device_id': 'r_0123456789abcdef/emulator-5554'}
+
+    async def release(self, owner, scope, device_id):
+        self.calls.append(('release', owner, scope, device_id))
+        return {'released': True}
+
+    async def call(self, owner, scope, device_id, op, args):
+        self.calls.append(('call', owner, scope, device_id, op, args))
+        if op == 'screenshot':
+            return {'png': b'PNGDATA', 'width': 10, 'height': 20}
+        if op == 'tap' and args.get('x') == 9999:
+            raise DeviceError('Runner is offline')
+        return {'ok': op}
+
+
+class FakeArtifacts:
+    def __init__(self, authority):
+        self.authority, self.ingested = authority, []
+
+    def ingest(self, name, data):
+        self.ingested.append((name, data))
+        return {'artifact_id': 'a1', 'name': name, 'size': len(data)}
+
+
+def test_catalog_has_device_tools_within_limit():
+    names = {t['name'] for t in CATALOG}
+    assert TOOLS <= names and len(CATALOG) <= 64
+
+
+@pytest.mark.asyncio
+async def test_device_tools_map_to_service_with_backend_scope():
+    service = FakeService()
+    tools = DeviceTools(None, AUTH, 'conv-42', artifacts=FakeArtifacts(AUTH), service=service)
+    device = 'r_0123456789abcdef/emulator-5554'
+    assert (await tools(AUTH, 'device.list', {}))['devices'][0]['owner'] == OWNER
+    await tools(AUTH, 'device.lease', {'platform': 'android'})
+    await tools(AUTH, 'device.input', {'device_id': device, 'action': 'tap', 'x': 1, 'y': 2})
+    await tools(AUTH, 'device.input', {'device_id': device, 'action': 'open_url', 'url': 'demo://x'})
+    await tools(AUTH, 'device.app', {'device_id': device, 'action': 'launch', 'app_id': 'so.plotline.demo'})
+    await tools(AUTH, 'device.install', {'device_id': device, 'repo': 'plotlinehq/plotline-sdk',
+                                         'artifact_name': 'app-native-android', 'pr': 366, 'app_id': 'so.plotline.demo'})
+    await tools(AUTH, 'device.observe', {'device_id': device, 'what': 'logs', 'filter': 'Plotline'})
+    assert all(call[2] == 'conv:conv-42' for call in service.calls)
+    ops = [(c[4], c[5]) for c in service.calls if c[0] == 'call']
+    assert ('tap', {'x': 1, 'y': 2}) in ops and ('open_url', {'url': 'demo://x'}) in ops
+    assert ('launch', {'app_id': 'so.plotline.demo'}) in ops
+    assert ('install', {'build': {'repo': 'plotlinehq/plotline-sdk', 'artifact_name': 'app-native-android', 'pr': 366},
+                        'app_id': 'so.plotline.demo'}) in ops
+    assert ('logs', {'filter': 'Plotline'}) in ops
+
+
+@pytest.mark.asyncio
+async def test_screenshot_becomes_artifact_not_base64():
+    artifacts = FakeArtifacts(AUTH)
+    tools = DeviceTools(None, AUTH, 'c', artifacts=artifacts, service=FakeService())
+    result = await tools(AUTH, 'device.observe', {'device_id': 'r_0123456789abcdef/e', 'what': 'screenshot'})
+    assert result['artifact']['artifact_id'] == 'a1' and artifacts.ingested == [('screenshot.png', b'PNGDATA')]
+    assert 'png' not in result and 'png_base64' not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_bad_arguments_and_device_errors_are_returned_not_raised():
+    tools = DeviceTools(None, AUTH, 'c', service=FakeService())
+    device = 'r_0123456789abcdef/e'
+    for tool, args in [('device.input', {'device_id': device, 'action': 'shell'}),
+                       ('device.input', {'device_id': device, 'action': 'tap', 'x': 1}),
+                       ('device.input', {'device_id': device, 'action': 'tap', 'x': 1, 'y': 1, 'url': 'x'}),
+                       ('device.app', {'device_id': device, 'action': 'format', 'app_id': 'a'}),
+                       ('device.observe', {'device_id': device, 'what': 'files'}),
+                       ('device.release', {}),
+                       ('device.input', {'device_id': device, 'action': 'tap', 'x': 9999, 'y': 1})]:
+        result = await tools(AUTH, tool, args)
+        assert 'error' in result, (tool, args)
+    with pytest.raises(DeviceError):
+        await tools(RunAuthority('other', OWNER, frozenset(TOOLS)), 'device.list', {})
+
+
+@pytest.mark.asyncio
+async def test_tool_gateway_routes_device_tools_and_audits():
+    events = []
+
+    async def authorize(_):
+        return True
+
+    async def audit(_, event):
+        events.append(event)
+
+    artifacts = FakeArtifacts(AUTH)
+    tools = DeviceTools(None, AUTH, 'c', artifacts=artifacts, service=FakeService())
+    gateway = ToolGateway(AUTH, authorize=authorize, audit=audit, artifacts=artifacts, devices=tools)
+    assert (await gateway(AUTH, 'device.list', {}))['devices']
+    assert [e['stage'] for e in events] == ['requested', 'completed']
+    no_devices = ToolGateway(AUTH, authorize=authorize, audit=audit, artifacts=artifacts)
+    with pytest.raises(GatewayDenied, match='unavailable'):
+        await no_devices(AUTH, 'device.list', {})
+    denied = ToolGateway(RunAuthority('run1', OWNER, frozenset()), authorize=authorize, audit=audit,
+                         artifacts=FakeArtifacts(RunAuthority('run1', OWNER, frozenset())))
+    with pytest.raises(GatewayDenied, match='not allowed'):
+        await denied(RunAuthority('run1', OWNER, frozenset()), 'device.list', {})
+
+
+# ── Legacy CLI ────────────────────────────────────────────────────────────
+
+
+def test_cli_build_body(tmp_path):
+    from tools import device
+    p = device.parser()
+    body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'conv-1',
+                                           'install', '--device-id', 'r_0123456789abcdef/e', '--repo', 'plotlinehq/plotline-sdk',
+                                           '--artifact-name', 'app-native-android', '--pr', '366', '--app-id', 'so.plotline.demo']))
+    assert body == {'scope': 'conv-1', 'action': 'call', 'device_id': 'r_0123456789abcdef/e', 'op': 'install',
+                    'args': {'app_id': 'so.plotline.demo',
+                             'build': {'repo': 'plotlinehq/plotline-sdk', 'artifact_name': 'app-native-android', 'pr': 366}}}
+    flow = tmp_path / 'f.yaml'
+    flow.write_text('- launchApp')
+    body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', 'run-flow',
+                                           '--device-id', 'r_0123456789abcdef/e', '--flow-file', str(flow)]))
+    assert body['op'] == 'run_flow' and body['args'] == {'flow': '- launchApp'} and body['scope'] == 'cli'
+    body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', 'logs',
+                                           '--device-id', 'r_0123456789abcdef/e', '--filter', 'Plotline', '--clear']))
+    assert body['args'] == {'lines': 300, 'clear': True, 'filter': 'Plotline'}
+
+
+@pytest.mark.asyncio
+async def test_internal_endpoint_accepts_valid_hmac_token(monkeypatch):
+    monkeypatch.setenv('OAUTH_ENCRYPTION_KEY', 'test-key')
+    from tools._auth_token import create_user_auth_token
+    from api.device_routes import setup_device_routes
+    db = AsyncMongoMockClient()['loma_devices_agent']
+    app = web.Application()
+    setup_device_routes(app)
+    with patch('api.device_routes.get_db', return_value=db):
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession() as http:
+                headers = {'X-Loma-User': OWNER, 'X-Loma-Auth-Token': create_user_auth_token(OWNER)}
+                async with http.post(server.make_url('/internal/devices/call'), json={'action': 'list'}, headers=headers) as r:
+                    assert r.status == 200 and (await r.json()) == {'devices': []}
+                async with http.post(server.make_url('/internal/devices/call'), json={'action': 'lease'}, headers=headers) as r:
+                    assert r.status == 409 and 'No devices are registered' in (await r.json())['error']
+                # A token for another user does not work for this user.
+                bad = {'X-Loma-User': OWNER, 'X-Loma-Auth-Token': create_user_auth_token('x@y.z')}
+                async with http.post(server.make_url('/internal/devices/call'), json={'action': 'list'}, headers=bad) as r:
+                    assert r.status == 401
+        finally:
+            await server.close()
