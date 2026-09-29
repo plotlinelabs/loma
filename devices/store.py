@@ -32,10 +32,6 @@ def matches(value, expected_hash):
     return isinstance(value, str) and isinstance(expected_hash, str) and hmac.compare_digest(digest(value), expected_hash)
 
 
-def new_runner_id():
-    return 'r_' + secrets.token_hex(8)
-
-
 def device_id(runner_id, serial):
     return f'{runner_id}/{serial}'
 
@@ -55,8 +51,6 @@ async def ensure_indexes(db):
     await db.device_runners.create_index('runner_id', unique=True)
     await db.device_runners.create_index('owner_email')
     await db.device_runners.create_index('shared_with')
-    await db.device_leases.create_index('expires_at')
-    await db.device_audit.create_index([('runner_id', 1), ('at', -1)])
     await db.device_audit.create_index('at', expireAfterSeconds=90 * 24 * 3600)
 
 
@@ -84,8 +78,8 @@ async def redeem_enrollment(db, token, details):
         return {'error': f'Runner limit reached ({MAX_RUNNERS_PER_USER}); revoke an unused runner first'}
     secret = SECRET_PREFIX + secrets.token_urlsafe(40)
     runner = {
-        'runner_id': new_runner_id(), 'owner_email': enrollment['owner_email'],
-        'name': (details.get('name') or enrollment.get('name') or 'Runner')[:80],
+        'runner_id': 'r_' + secrets.token_hex(8), 'owner_email': enrollment['owner_email'],
+        'name': str(details.get('name') or enrollment.get('name') or 'Runner')[:80],
         'hostname': str(details.get('hostname') or '')[:120], 'os': str(details.get('os') or '')[:120],
         'version': str(details.get('version') or '')[:40], 'secret_hash': digest(secret),
         'shared_with': [], 'devices': [], 'capabilities': [], 'created_at': at, 'last_seen': None,

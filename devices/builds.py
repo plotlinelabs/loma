@@ -12,6 +12,7 @@ import secrets
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import aiohttp
 
@@ -22,8 +23,6 @@ BLOB_TTL = 30 * 60
 MAX_DOWNLOADS = 5  # per bind (one install), not per blob lifetime
 MAX_TOTAL_BYTES = 3 * 1024 * 1024 * 1024
 MAX_OWNER_BYTES = 1536 * 1024 * 1024
-REPO = re.compile(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}\Z')
-ARTIFACT_NAME = re.compile(r'[A-Za-z0-9._ -]{1,200}\Z')
 FILENAME = re.compile(r'[A-Za-z0-9._-]{1,128}\Z')
 GITHUB_API = 'https://api.github.com'
 
@@ -83,16 +82,14 @@ class BlobStore:
 
     def add_file(self, path, filename, owner, sha256, size, meta=None):
         """Register an already-written file whose checksum was computed while streaming it."""
-        if not FILENAME.fullmatch(filename or ''):
-            raise DeviceError('Invalid build filename')
-        if size == 0 or size > MAX_BLOB:
-            raise DeviceError('Build must be between 1 byte and 500 MB')
+        if not size:
+            raise DeviceError('Build is empty')
         return self._register(path, sha256, size, filename, owner, meta=meta)
 
-    def get(self, blob_id, owner=None):
+    def get(self, blob_id, owner):
         self._prune()
         blob = self.blobs.get(blob_id)
-        if blob is None or (owner is not None and blob['owner'] != owner):
+        if blob is None or blob['owner'] != owner:
             return None
         return blob
 
@@ -106,7 +103,6 @@ class BlobStore:
         # Keep it long enough for this install to fetch it, but never past 2 hours old.
         now = time.monotonic()
         blob['expires'] = min(max(blob['expires'], now + 15 * 60), blob['created'] + 4 * BLOB_TTL)
-        return blob
 
     def open_for_runner(self, blob_id, runner_id):
         self._prune()
@@ -117,8 +113,7 @@ class BlobStore:
         return blob
 
     async def from_github(self, owner, repo, artifact_name, pr=None, run_id=None):
-        if not REPO.fullmatch(repo or '') or not ARTIFACT_NAME.fullmatch(artifact_name or ''):
-            raise DeviceError('Invalid repo or artifact_name')
+        """repo / artifact_name / pr / run_id are validated by DeviceService."""
         repos = allowed_repos()
         if repo.lower() not in repos:
             raise DeviceError('Builds from this repository are not allowed. An operator can add it to '
@@ -176,12 +171,11 @@ class BlobStore:
     async def _find_artifact(self, session, repo, name, pr, run_id):
         head_sha = None
         if run_id is not None:
-            data = await self._get(session, f'/repos/{repo}/actions/runs/{int(run_id)}/artifacts?per_page=100')
+            data = await self._get(session, f'/repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100')
             candidates = [a for a in data.get('artifacts', []) if a.get('name') == name]
         else:
             if pr is not None:
-                head_sha = (await self._get(session, f'/repos/{repo}/pulls/{int(pr)}'))['head']['sha']
-            from urllib.parse import quote
+                head_sha = (await self._get(session, f'/repos/{repo}/pulls/{pr}'))['head']['sha']
             data = await self._get(session, f'/repos/{repo}/actions/artifacts?per_page=100&name={quote(name)}')
             candidates = [a for a in data.get('artifacts', []) if a.get('name') == name
                           and (head_sha is None or (a.get('workflow_run') or {}).get('head_sha') == head_sha)]

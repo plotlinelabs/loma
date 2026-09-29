@@ -14,7 +14,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from devices import store
-from devices.builds import blobs as default_blobs, ARTIFACT_NAME, REPO
+from devices.builds import blobs as default_blobs
 from devices.hub import DeviceError, hub as default_hub
 
 LEASE_TTL = timedelta(minutes=15)
@@ -22,6 +22,8 @@ APP_ID = re.compile(r'[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*\Z')
 KEYS = {'back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up', 'volume_down', 'power',
         'lock', 'siri', 'side', 'apple_pay'}
 SCOPE = re.compile(r'[A-Za-z0-9:_.@-]{1,200}\Z')
+REPO = re.compile(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}\Z')
+ARTIFACT_NAME = re.compile(r'[A-Za-z0-9._ -]{1,200}\Z')
 
 # op: (required, optional). Values are type-checked by _validate.
 OPS = {
@@ -195,6 +197,7 @@ class DeviceService:
         return f'No online {kind}devices. Is the runner machine awake and the emulator/simulator booted?'
 
     async def release(self, user_email, scope, device_id):
+        self._check_scope(scope)
         await self._resolve(user_email, device_id)
         result = await self.db.device_leases.delete_one({'_id': device_id, 'owner_email': user_email, 'scope': scope})
         await self._audit(user_email, scope, device_id, 'release', True)
@@ -222,7 +225,6 @@ class DeviceService:
         'png' (never base64 in the caller's hands) so callers decide delivery.
         """
         self._check_scope(scope)
-        args = dict(args or {})
         _validate(op, args)
         runner, serial = await self._resolve(user_email, device_id)
         lease = await self._acquire(device_id, user_email, scope)
@@ -236,6 +238,11 @@ class DeviceService:
             data = await self.hub.call(runner['runner_id'], op, serial, args)
             if build_meta:
                 data['build'] = build_meta
+            if op == 'screenshot':
+                try:
+                    data['png'] = base64.b64decode(data.pop('png_base64'), validate=True)
+                except (KeyError, ValueError):
+                    raise DeviceError('Runner returned an invalid screenshot') from None
         except Exception as exc:
             message = str(exc) if isinstance(exc, DeviceError) else f'internal error: {type(exc).__name__}'
             try:
@@ -244,11 +251,6 @@ class DeviceService:
                 pass
             raise
         await self._audit(user_email, scope, device_id, op, True, None, started)
-        if op == 'screenshot':
-            try:
-                data = {'png': base64.b64decode(data.pop('png_base64'), validate=True), **data}
-            except (KeyError, ValueError):
-                raise DeviceError('Runner returned an invalid screenshot') from None
         return data
 
     async def _prepare_install(self, user_email, runner_id, args):
@@ -259,19 +261,17 @@ class DeviceService:
                                                          pr=build.get('pr'), run_id=build.get('run_id'))
         else:
             blob_id = args['upload_id']
-            blob = self.blobs.get(blob_id, owner=user_email)
+            blob = self.blobs.get(blob_id, user_email)
             if blob is None:
                 raise DeviceError('Upload not found or expired; upload the build again')
         self.blobs.bind(blob_id, runner_id)
         runner_args = {'blob_id': blob_id, 'sha256': blob['sha256'], 'filename': blob['filename']}
         if app_id:
             runner_args['app_id'] = app_id
-        return runner_args, dict(blob.get('meta') or {}, sha256=blob['sha256'], size=blob['size'])
+        return runner_args, dict(blob['meta'], sha256=blob['sha256'], size=blob['size'])
 
     async def _audit(self, user_email, scope, device_id, op, ok, error=None, started=None):
-        runner_id = device_id.split('/', 1)[0] if isinstance(device_id, str) else None
-        entry = {'at': store.now(), 'runner_id': runner_id, 'device_id': device_id, 'actor': user_email,
-                 'scope': scope, 'op': op, 'ok': ok}
+        entry = {'at': store.now(), 'device_id': device_id, 'actor': user_email, 'scope': scope, 'op': op, 'ok': ok}
         if error:
             entry['error'] = error[:500]
         if started is not None:

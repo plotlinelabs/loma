@@ -31,8 +31,6 @@ import time
 import urllib.error
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 
 def _base_url():
     return f"http://127.0.0.1:{int(os.environ.get('WEBHOOK_PORT', '3000'))}"
@@ -72,10 +70,9 @@ def build_body(args):
         call_args = {}
         if args.app_id:
             call_args['app_id'] = args.app_id
-        if args.file:
+        if args.file:  # main() adds upload_id after uploading the file
             if args.repo or args.artifact_name or args.pr or args.run_id:
                 raise SystemExit('install takes either --file or --repo/--artifact-name, not both')
-            call_args['upload_id'] = getattr(args, 'upload_id', None) or 'pending-upload'
         else:
             if not (args.repo and args.artifact_name):
                 raise SystemExit('install needs --file, or --repo and --artifact-name')
@@ -164,10 +161,7 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    from _auth_token import verify_user_auth_token
-    if not verify_user_auth_token(args.auth_token, args.user_email):
-        print(json.dumps({'error': 'Invalid or expired auth token for this user'}))
-        return 1
+    body = build_body(args)
     headers = {'X-Loma-User': args.user_email, 'X-Loma-Auth-Token': args.auth_token}
     if args.command == 'install' and args.file:
         name = os.path.basename(args.file)
@@ -176,8 +170,8 @@ def main(argv=None):
         if 'error' in upload:
             print(json.dumps(upload))
             return 1
-        args.upload_id = upload['upload_id']
-    result = _request('/internal/devices/call', headers, build_body(args))
+        body['args']['upload_id'] = upload['upload_id']
+    result = _request('/internal/devices/call', headers, body)
     if args.command == 'screenshot' and 'png_base64' in result:
         out = args.out or f'/tmp/loma-device-{int(time.time())}.png'
         with open(out, 'wb') as handle:

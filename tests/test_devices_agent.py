@@ -11,6 +11,7 @@ from mongomock_motor import AsyncMongoMockClient
 
 from devices.gateway import DeviceTools, TOOLS
 from devices.hub import DeviceError
+from devices.service import _validate
 from isolation.catalog import CATALOG
 from isolation.gateway import ToolGateway, GatewayDenied
 from isolation.protocol import RunAuthority
@@ -35,6 +36,7 @@ class FakeService:
         return {'released': True}
 
     async def call(self, owner, scope, device_id, op, args):
+        _validate(op, args)  # the real service is the single argument validator
         self.calls.append(('call', owner, scope, device_id, op, args))
         if op == 'screenshot':
             return {'png': b'PNGDATA', 'width': 10, 'height': 20}
@@ -199,7 +201,7 @@ async def test_internal_endpoint_accepts_valid_hmac_token(monkeypatch):
                 headers = {'X-Loma-User': OWNER, 'X-Loma-Auth-Token': create_user_auth_token(OWNER)}
                 async with http.post(server.make_url('/internal/devices/call'), json={'action': 'list'}, headers=headers) as r:
                     assert r.status == 200 and (await r.json()) == {'devices': []}
-                async with http.post(server.make_url('/internal/devices/call'), json={'action': 'lease'}, headers=headers) as r:
+                async with http.post(server.make_url('/internal/devices/call'), json={'action': 'lease', 'scope': 'conv:c'}, headers=headers) as r:
                     assert r.status == 409 and 'No devices are registered' in (await r.json())['error']
                 # A token for another user does not work for this user.
                 bad = {'X-Loma-User': OWNER, 'X-Loma-Auth-Token': create_user_auth_token('x@y.z')}

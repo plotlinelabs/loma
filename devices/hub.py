@@ -23,11 +23,10 @@ class DeviceError(Exception):
 
 
 class Connection:
-    def __init__(self, runner_id, ws, hello):
+    def __init__(self, runner_id, ws, devices):
         self.runner_id = runner_id
         self.ws = ws
-        self.hello = hello
-        self.devices = list(hello.get('devices') or [])
+        self.devices = devices
         self.pending = {}
         self.last_seen = time.monotonic()
         self.send_lock = asyncio.Lock()
@@ -49,9 +48,9 @@ class RunnerHub:
         conn = self.connections.get(runner_id)
         return conn if conn is not None and conn.alive else None
 
-    async def attach(self, runner_id, ws, hello):
+    async def attach(self, runner_id, ws, devices):
         old = self.connections.get(runner_id)
-        conn = Connection(runner_id, ws, hello)
+        conn = Connection(runner_id, ws, devices)
         self.connections[runner_id] = conn
         if old is not None and old.ws is not ws:
             self._fail_pending(old, 'Runner reconnected')
@@ -85,7 +84,7 @@ class RunnerHub:
             return conn.devices
         return None
 
-    async def call(self, runner_id, op, serial, args, timeout=None):
+    async def call(self, runner_id, op, serial, args):
         conn = self.get(runner_id)
         if conn is None:
             raise DeviceError('Runner is offline. Start the Loma Device Runner on that machine and retry.')
@@ -96,7 +95,7 @@ class RunnerHub:
         conn.pending[call_id] = future
         try:
             await conn.send({'type': 'call', 'id': call_id, 'op': op, 'device': serial, 'args': args})
-            return await asyncio.wait_for(future, timeout or OP_TIMEOUTS.get(op, DEFAULT_TIMEOUT))
+            return await asyncio.wait_for(future, OP_TIMEOUTS.get(op, DEFAULT_TIMEOUT))
         except asyncio.TimeoutError:
             raise DeviceError(f'Device operation {op} timed out') from None
         except ConnectionResetError:

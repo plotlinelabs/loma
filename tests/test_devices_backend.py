@@ -96,7 +96,7 @@ class FakeHub(RunnerHub):
         return type('C', (), {'devices': [{'serial': 'emulator-5554', 'platform': 'android', 'name': 'Pixel'}]})() \
             if runner_id in self.online else None
 
-    async def call(self, runner_id, op, serial, args, timeout=None):
+    async def call(self, runner_id, op, serial, args):
         if runner_id not in self.online:
             raise DeviceError('Runner is offline')
         self.calls.append((runner_id, op, serial, args))
@@ -191,7 +191,7 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
         try:
             async with aiohttp.ClientSession() as http:
                 # Dashboard mints an enrollment token; the runner redeems it.
-                async with http.post(base + '/api/devices/enrollments', json={'name': 'Vamsi Mac'},
+                async with http.post(base + '/api/devices/enrollments', json={'name': 'Work Mac'},
                                      headers={'X-Test-User': OWNER}) as resp:
                     enrollment = await resp.json()
                 assert any('enroll --server' in c for c in enrollment['commands'])

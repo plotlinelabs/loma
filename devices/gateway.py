@@ -24,14 +24,8 @@ MAX_SCREENSHOTS = 8  # per run; shares the run's 20-file artifact budget with wo
 TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'device.app',
          'device.input', 'device.observe', 'device.run_flow'}
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
-INPUT_FIELDS = {
-    'tap': ({'x', 'y'}, set()),
-    'swipe': ({'x1', 'y1', 'x2', 'y2'}, {'duration_ms'}),
-    'type': ({'text'}, set()),
-    'key': ({'key'}, set()),
-    'open_url': ({'url'}, set()),
-}
-OBSERVE_FIELDS = {'screenshot': set(), 'ui_tree': set(), 'logs': {'lines', 'filter', 'clear'}}
+INPUT_ACTIONS = {'tap', 'swipe', 'type', 'key', 'open_url'}
+OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs'}
 
 
 def _pick(arguments, required, optional, label):
@@ -41,6 +35,13 @@ def _pick(arguments, required, optional, label):
         raise DeviceError(f'{label}: ' + '; '.join(
             ([f'missing {sorted(missing)}'] if missing else []) + ([f'unexpected {sorted(extra)}'] if extra else [])))
     return {k: arguments[k] for k in required | optional if k in arguments}
+
+
+def _action(arguments, key, allowed):
+    action = arguments.pop(key, None)
+    if action not in allowed:
+        raise DeviceError(f'{key} must be one of ' + ', '.join(sorted(allowed)))
+    return action
 
 
 class DeviceTools:
@@ -85,37 +86,19 @@ class DeviceTools:
             build = {k: picked[k] for k in ('repo', 'artifact_name', 'pr', 'run_id') if k in picked}
             call_args = {'build': build, **({'app_id': picked['app_id']} if 'app_id' in picked else {})}
             return await service.call(owner, scope, device_id, 'install', call_args)
+        # Per-op argument shapes are validated once, in DeviceService.
         if tool == 'device.app':
-            picked = _pick(args, {'action', 'app_id'}, set(), tool)
-            if picked['action'] not in APP_ACTIONS:
-                raise DeviceError('action must be one of ' + ', '.join(sorted(APP_ACTIONS)))
-            return await service.call(owner, scope, device_id, picked['action'], {'app_id': picked['app_id']})
+            return await service.call(owner, scope, device_id, _action(args, 'action', APP_ACTIONS), args)
         if tool == 'device.input':
-            action = args.pop('action', None)
-            if action not in INPUT_FIELDS:
-                raise DeviceError('action must be one of ' + ', '.join(sorted(INPUT_FIELDS)))
-            required, optional = INPUT_FIELDS[action]
-            return await service.call(owner, scope, device_id, action, _pick(args, required, optional, f'{tool} {action}'))
+            return await service.call(owner, scope, device_id, _action(args, 'action', INPUT_ACTIONS), args)
         if tool == 'device.observe':
-            what = args.pop('what', None)
-            if what not in OBSERVE_FIELDS:
-                raise DeviceError('what must be one of ' + ', '.join(sorted(OBSERVE_FIELDS)))
-            data = await service.call(owner, scope, device_id, what, _pick(args, set(), OBSERVE_FIELDS[what], f'{tool} {what}'))
-            if what == 'screenshot':
-                return await self._deliver_screenshot(data)
-            return data
-        if tool == 'device.run_flow':
-            picked = _pick(args, {'flow'}, set(), tool)
-            return await service.call(owner, scope, device_id, 'run_flow', picked)
-        raise DeviceError('Unsupported device tool')
+            what = _action(args, 'what', OBSERVE_ACTIONS)
+            data = await service.call(owner, scope, device_id, what, args)
+            return await self._deliver_screenshot(data) if what == 'screenshot' else data
+        return await service.call(owner, scope, device_id, 'run_flow', args)
 
     async def _deliver_screenshot(self, data):
         png = data.pop('png')
-        result = {'width': data.get('width'), 'height': data.get('height'),
-                  'note': 'You cannot view images here; use device.observe ui_tree to check what is on screen.'}
-        if self.artifacts is None or self.on_artifact is None:
-            result['delivered'] = False
-            return result
         if self.screenshots >= MAX_SCREENSHOTS:
             raise DeviceError(f'Screenshot limit for this run reached ({MAX_SCREENSHOTS}); use ui_tree, '
                               'and keep screenshots for final evidence')
@@ -125,10 +108,10 @@ class DeviceTools:
         except (ValueError, OSError):
             raise DeviceError('Could not store the screenshot (run file limit reached?)') from None
         self.screenshots += 1
-        result.update({'delivered': True, 'file': {'name': info.get('name'), 'url': info.get('url')},
-                       'note': 'The screenshot is shown to the user in this chat as evidence. You cannot view '
-                               'images here; use device.observe ui_tree to check what is on screen.'})
-        return result
+        return {'width': data.get('width'), 'height': data.get('height'), 'delivered': True,
+                'file': {'name': info.get('name'), 'url': info.get('url')},
+                'note': 'The screenshot is shown to the user in this chat as evidence. You cannot view '
+                        'images here; use device.observe ui_tree to check what is on screen.'}
 
 
 def cap_result(result, limit=MAX_RESULT):

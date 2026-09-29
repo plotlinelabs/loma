@@ -25,6 +25,7 @@ from devices.builds import blobs, FILENAME, MAX_BLOB
 from devices.hub import DeviceError, hub
 from devices.service import DeviceService
 from observability.db import get_db
+from tools._auth_token import verify_user_auth_token
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,6 @@ def _bearer(request):
 
 async def _runner_from_request(request, db):
     return await store.authenticate_runner(db, request.headers.get('X-Loma-Runner-Id', ''), _bearer(request))
-
-
-def _public_base():
-    return os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
 
 
 def _clean_device(device):
@@ -107,19 +104,19 @@ async def handle_runner_ws(request):
     if not isinstance(hello, dict) or hello.get('type') != 'hello':
         await ws.close(code=4002, message=b'expected hello')
         return ws
-    hello['devices'] = _clean_devices(hello.get('devices'))
-    conn = await hub.attach(runner_id, ws, hello)
-    if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
-        await hub.revoke(runner_id)  # revoked while we waited for hello
-        return ws
-    await db.device_runners.update_one({'runner_id': runner_id}, {'$set': {
-        'devices': hello['devices'], 'last_seen': store.now(), 'connected_at': store.now(),
-        'version': str(hello.get('version') or '')[:40], 'hostname': str(hello.get('hostname') or '')[:120],
-        'os': str(hello.get('os') or '')[:120],
-        'capabilities': [str(c)[:20] for c in (hello.get('capabilities') or [])[:10]]}})
-    logger.info('Device runner %s connected with %d device(s)', runner_id, len(hello['devices']))
-    last_persist = asyncio.get_running_loop().time()
+    devices = _clean_devices(hello.get('devices'))
+    conn = await hub.attach(runner_id, ws, devices)
     try:
+        if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
+            await hub.revoke(runner_id)  # revoked while we waited for hello
+            return ws
+        await db.device_runners.update_one({'runner_id': runner_id}, {'$set': {
+            'devices': devices, 'last_seen': store.now(), 'connected_at': store.now(),
+            'version': str(hello.get('version') or '')[:40], 'hostname': str(hello.get('hostname') or '')[:120],
+            'os': str(hello.get('os') or '')[:120],
+            'capabilities': [str(c)[:20] for c in (hello.get('capabilities') or [])[:10]]}})
+        logger.info('Device runner %s connected with %d device(s)', runner_id, len(devices))
+        last_persist = asyncio.get_running_loop().time()
         async for message in ws:
             if message.type != web.WSMsgType.TEXT:
                 break
@@ -197,15 +194,15 @@ async def handle_create_enrollment(request):
     try:
         body = await request.json()
     except (ValueError, UnicodeError):
-        body = {}
-    name = str((body or {}).get('name') or '').strip()[:80] or 'My machine'
+        body = None
+    name = (str(body.get('name') or '').strip()[:80] if isinstance(body, dict) else '') or 'My machine'
     token, expires = await store.create_enrollment(db, user_email, name)
-    base = _public_base() or f'{request.scheme}://{request.host}'
+    base = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/') or f'{request.scheme}://{request.host}'
     return web.json_response({
         'token': token, 'expires_at': expires.isoformat(), 'server': base,
         'commands': [
             "python3 -m pip install --user 'aiohttp>=3.9,<4' 'pyyaml>=6,<7'",
-            f'curl -fsSLo loma_device_runner.py {base}/device-runner/download',
+            f'curl -fsSLo loma_device_runner.py {shlex.quote(base + "/device-runner/download")}',
             f'python3 loma_device_runner.py enroll --server {shlex.quote(base)} --token {token} --name {shlex.quote(name)}',
             'python3 loma_device_runner.py doctor',
             'python3 loma_device_runner.py run']})
@@ -266,21 +263,14 @@ async def handle_force_release(request):
         return _error('Authentication required', 401)
     try:
         body = await request.json()
-        result = await DeviceService(db).force_release(user_email, body.get('device_id'))
-    except (ValueError, UnicodeError, AttributeError):
+    except (ValueError, UnicodeError):
         return _error('Invalid JSON')
+    if not isinstance(body, dict):
+        return _error('Invalid JSON')
+    try:
+        return web.json_response(await DeviceService(db).force_release(user_email, body.get('device_id')))
     except DeviceError as exc:
         return _error(str(exc), 403)
-    return web.json_response(result)
-
-
-async def handle_audit(request):
-    db = _db_or_503()
-    user_email, runner = await _owned_runner(db, request)
-    rows = await db.device_audit.find({'runner_id': runner['runner_id']}, {'_id': 0}).sort('at', -1).to_list(length=100)
-    for row in rows:
-        row['at'] = store.aware(row['at']).isoformat()
-    return web.json_response({'events': rows})
 
 
 # ── Internal endpoints for the legacy agent CLI ───────────────────────────
@@ -289,7 +279,6 @@ async def handle_audit(request):
 def _internal_identity(request):
     if request.remote not in ('127.0.0.1', '::1'):
         raise web.HTTPForbidden(text=json.dumps({'error': 'Loopback only'}), content_type='application/json')
-    from tools._auth_token import verify_user_auth_token
     user_email = request.headers.get('X-Loma-User', '').strip()
     token = request.headers.get('X-Loma-Auth-Token', '').strip()
     if not user_email or not verify_user_auth_token(token, user_email):
@@ -307,7 +296,7 @@ async def handle_internal_call(request):
     if not isinstance(body, dict):
         return _error('Invalid JSON')
     service = DeviceService(db)
-    scope = body.get('scope') or 'cli'
+    scope = body.get('scope')
     action = body.get('action')
     try:
         if action == 'list':
@@ -327,7 +316,6 @@ async def handle_internal_call(request):
 
 
 async def handle_internal_upload(request):
-    _db_or_503()
     user_email = _internal_identity(request)
     filename = request.query.get('filename', '')
     if not FILENAME.fullmatch(filename) or not filename.endswith(('.apk', '.zip', '.ipa')):
@@ -365,7 +353,6 @@ def setup_device_routes(app):
     app.router.add_post('/api/devices/enrollments', handle_create_enrollment)
     app.router.add_patch('/api/devices/runners/{runner_id}', handle_update_runner)
     app.router.add_delete('/api/devices/runners/{runner_id}', handle_revoke_runner)
-    app.router.add_get('/api/devices/runners/{runner_id}/audit', handle_audit)
     app.router.add_post('/api/devices/release', handle_force_release)
     app.router.add_post('/internal/devices/call', handle_internal_call)
     app.router.add_post('/internal/devices/upload', handle_internal_upload)
