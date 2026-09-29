@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   RiAddLine,
   RiAndroidLine,
   RiAppleLine,
   RiCheckLine,
+  RiCloseLine,
   RiComputerLine,
   RiDeleteBinLine,
   RiFileCopyLine,
@@ -40,9 +41,13 @@ function CopyButton({ text }: { text: string }) {
       className="h-7 w-7 p-0 shrink-0"
       aria-label="Copy"
       onClick={async () => {
-        await navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          // Clipboard needs a secure context; the text is still selectable.
+        }
       }}
     >
       {copied ? <RiCheckLine size={14} className="text-green-500" /> : <RiFileCopyLine size={14} />}
@@ -54,14 +59,15 @@ function StatusDot({ online }: { online: boolean }) {
   return (
     <span
       className={`inline-block h-2 w-2 rounded-full shrink-0 ${online ? "bg-green-500" : "bg-muted-foreground/40"}`}
-      aria-label={online ? "Online" : "Offline"}
+      aria-hidden="true"
     />
   );
 }
 
-function DeviceRow({ device, canRelease, onRelease }: {
+function DeviceRow({ device, canRelease, busy, onRelease }: {
   device: DeviceRecord;
   canRelease: boolean;
+  busy: boolean;
   onRelease: (id: string) => void;
 }) {
   const Icon = device.platform === "ios" ? RiAppleLine : device.platform === "android" ? RiAndroidLine : RiSmartphoneLine;
@@ -92,6 +98,7 @@ function DeviceRow({ device, canRelease, onRelease }: {
           variant="ghost"
           size="sm"
           className="h-8 px-2 text-xs shrink-0"
+          disabled={busy}
           onClick={() => onRelease(device.device_id)}
         >
           <RiLockUnlockLine size={14} />
@@ -113,34 +120,44 @@ export default function DevicesPanel() {
   const [name, setName] = useState("");
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [enrollError, setEnrollError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
   const [sharing, setSharing] = useState<{ id: string; value: string } | null>(null);
+  // Only the newest request may update state, so a slow poll never overwrites fresher data.
+  const sequence = useRef(0);
 
   const load = useCallback(async () => {
+    const mine = ++sequence.current;
     try {
       const data = await fetchDevices();
+      if (mine !== sequence.current) return;
       setRunners(data.runners);
       setDevices(data.devices);
+      setPollError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load devices");
-      setRunners([]);
+      if (mine !== sequence.current) return;
+      setPollError(e instanceof Error ? e.message : "Failed to load devices");
+      setRunners((prev) => prev ?? []); // keep the last good list on a transient failure
     }
   }, []);
 
   useEffect(() => {
     load();
-    const timer = setInterval(load, 15000);
+    const timer = setInterval(() => {
+      if (!document.hidden) load();
+    }, 15000);
     return () => clearInterval(timer);
   }, [load]);
 
-  const run = async (fn: () => Promise<unknown>) => {
+  const run = async (fn: () => Promise<unknown>, setErr: (e: string | null) => void = setActionError) => {
     setBusy(true);
-    setError(null);
+    setErr(null);
     try {
       await fn();
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Request failed");
+      setErr(e instanceof Error ? e.message : "Request failed");
     } finally {
       setBusy(false);
     }
@@ -150,7 +167,7 @@ export default function DevicesPanel() {
     run(async () => {
       setEnrollment(await createEnrollment(name.trim() || "My machine"));
       setName("");
-    });
+    }, setEnrollError);
 
   const onRevoke = (runner: DeviceRunner) => {
     if (!window.confirm(`Revoke "${runner.name}"? The agent loses access to its devices immediately.`)) return;
@@ -181,7 +198,7 @@ export default function DevicesPanel() {
               placeholder="Machine name (e.g. Vamsi MacBook)"
               maxLength={80}
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !busy && onEnroll()}
+              onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && !busy && onEnroll()}
             />
             <Button size="sm" onClick={onEnroll} disabled={busy} className="shrink-0">
               <RiAddLine size={16} />
@@ -190,9 +207,20 @@ export default function DevicesPanel() {
           </div>
           {enrollment && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
-              <div className="text-xs font-medium text-foreground">
-                Run these on the machine. The token works once and expires{" "}
-                <ClientTimestamp iso={enrollment.expires_at} variant="short" />.
+              <div className="flex items-start gap-2">
+                <div className="text-xs font-medium text-foreground flex-1">
+                  Run these on the machine. The token works once and expires{" "}
+                  <ClientTimestamp iso={enrollment.expires_at} variant="short" />.
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0 shrink-0"
+                  aria-label="Hide setup commands"
+                  onClick={() => setEnrollment(null)}
+                >
+                  <RiCloseLine size={14} />
+                </Button>
               </div>
               {enrollment.commands.map((command) => (
                 <div key={command} className="flex items-center gap-2">
@@ -208,7 +236,7 @@ export default function DevicesPanel() {
               </div>
             </div>
           )}
-          {error && <div className="text-xs text-red-500">{error}</div>}
+          {enrollError && <div className="text-xs text-red-500">{enrollError}</div>}
         </CardContent>
       </Card>
 
@@ -219,6 +247,11 @@ export default function DevicesPanel() {
           Refresh
         </Button>
       </div>
+      {(actionError || pollError) && (
+        <div className="text-xs text-red-500" role="alert">
+          {actionError || `Could not refresh: ${pollError}`}
+        </div>
+      )}
 
       {runners === null ? (
         <>
@@ -266,6 +299,7 @@ export default function DevicesPanel() {
                         size="sm"
                         className="h-8 w-8 p-0 text-muted-foreground shrink-0"
                         aria-label="Share"
+                        disabled={busy}
                         onClick={() => setSharing({ id: runner.runner_id, value: runner.shared_with.join(", ") })}
                       >
                         <RiShareLine size={15} />
@@ -275,6 +309,7 @@ export default function DevicesPanel() {
                         size="sm"
                         className="h-8 w-8 p-0 text-muted-foreground hover:text-red-500 shrink-0"
                         aria-label="Revoke machine"
+                        disabled={busy}
                         onClick={() => onRevoke(runner)}
                       >
                         <RiDeleteBinLine size={15} />
@@ -287,11 +322,18 @@ export default function DevicesPanel() {
                   <div className="flex items-center gap-2">
                     <Input
                       value={sharing.value}
+                      aria-label="Share with (comma-separated emails)"
                       placeholder="Share with (comma-separated emails)"
                       onChange={(e) => setSharing({ id: runner.runner_id, value: e.target.value })}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && !e.nativeEvent.isComposing && !busy && onSaveSharing(runner.runner_id, sharing.value)
+                      }
                     />
                     <Button size="sm" disabled={busy} onClick={() => onSaveSharing(runner.runner_id, sharing.value)}>
                       Save
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setSharing(null)}>
+                      Cancel
                     </Button>
                   </div>
                 )}
@@ -312,6 +354,7 @@ export default function DevicesPanel() {
                         key={device.device_id}
                         device={device}
                         canRelease={runner.is_owner}
+                        busy={busy}
                         onRelease={(id) => run(() => releaseDevice(id))}
                       />
                     ))}
