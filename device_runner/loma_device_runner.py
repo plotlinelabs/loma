@@ -815,7 +815,8 @@ class Runner:
                     if exc.status in (401, 403):
                         print('Loma rejected this runner (revoked or invalid secret). Re-enroll to continue.', flush=True)
                         return 0  # exit 0 so launchd/systemd do not restart-loop
-                    print(f'Handshake failed: HTTP {exc.status}', flush=True)
+                    print(f'Handshake failed: HTTP {exc.status}'
+                          + (f'. {SSO_HINT}' if 300 <= exc.status < 400 else ''), flush=True)
                 except RevokedError as exc:
                     print(str(exc), flush=True)
                     return 0
@@ -832,15 +833,26 @@ class Runner:
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
+SSO_HINT = ('Loma redirected this request, usually to an SSO login such as Cloudflare Access. '
+            'Ask your admin to bypass SSO for /device-runner/* (see docs/devices.md).')
+
+
 async def enroll(server, token, name):
     import aiohttp
     async with aiohttp.ClientSession() as session:
         async with session.post(server + '/device-runner/enroll', json={
                 'token': token, 'name': name, 'hostname': socket.gethostname(),
-                'os': f'{platform.system()} {platform.release()}', 'version': VERSION}) as response:
-            body = await response.json(content_type=None)
-            if response.status != 200:
-                raise SystemExit(f'Enrollment failed: {body.get("error", response.status)}')
+                'os': f'{platform.system()} {platform.release()}', 'version': VERSION},
+                allow_redirects=False) as response:
+            if 300 <= response.status < 400:
+                raise SystemExit(f'Enrollment failed: {SSO_HINT}')
+            try:
+                body = await response.json(content_type=None)
+            except ValueError:
+                raise SystemExit(f'Enrollment failed: HTTP {response.status} (not a Loma response)')
+            if response.status != 200 or not isinstance(body, dict):
+                error = body.get('error') if isinstance(body, dict) else None
+                raise SystemExit(f'Enrollment failed: {error or response.status}')
     config = {'server': server, 'runner_id': body['runner_id'], 'secret': body['secret'],
               'name': body.get('name', name), 'policy': default_policy()}
     save_config(config)

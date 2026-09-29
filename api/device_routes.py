@@ -202,7 +202,9 @@ async def handle_create_enrollment(request):
         'token': token, 'expires_at': expires.isoformat(), 'server': base,
         'commands': [
             "python3 -m pip install --user 'aiohttp>=3.9,<4' 'pyyaml>=6,<7'",
-            f'curl -fsSLo loma_device_runner.py {shlex.quote(base + "/device-runner/download")}',
+            f'curl -fsSL --max-redirs 0 -o loma_device_runner.py {shlex.quote(base + "/device-runner/download")}'
+            " || { echo 'Download failed. If Loma is behind SSO (e.g. Cloudflare Access),"
+            " /device-runner/* must bypass it; see docs/devices.md.' >&2; false; }",
             f'python3 loma_device_runner.py enroll --server {shlex.quote(base)} --token {token} --name {shlex.quote(name)}',
             'python3 loma_device_runner.py doctor',
             'python3 loma_device_runner.py run']})

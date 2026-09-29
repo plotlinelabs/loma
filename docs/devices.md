@@ -37,7 +37,11 @@ Loma Device Runner (device_runner/loma_device_runner.py) on the user's machine
    those repos' artifacts. nginx must route `/device-runner/` to the backend (included in
    `deploy/nginx`). If Loma sits behind an SSO proxy (e.g. Cloudflare Access), exempt
    `/device-runner/*` from it: runners cannot log in interactively, and these endpoints
-   already require an enrollment token or runner secret.
+   already require an enrollment token or runner secret. With Cloudflare Access: add a
+   self-hosted application for `<host>/device-runner/*` (a wildcard host such as
+   `*.preview.example.com` covers every preview) with one policy, action **Bypass**, include
+   **Everyone**. The more specific path wins over the SSO app for the rest of the host.
+   Check: `curl -sI https://<host>/device-runner/download` returns `200`, not `302`.
 2. User: **Integrations → Devices → Get setup commands**, run them on the machine, boot an
    emulator/simulator. See `device_runner/README.md` for details, policy options and
    `install-service`.

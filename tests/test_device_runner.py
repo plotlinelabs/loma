@@ -319,3 +319,27 @@ def test_ios_bundle_identifier(tmp_path):
     app.mkdir()
     (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.example.demo'}, fmt=plistlib.FMT_BINARY))
     assert ldr.bundle_identifier(app) == 'com.example.demo'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,body,expected', [
+    (302, '<html>Sign in</html>', 'bypass SSO for /device-runner/*'),
+    (200, '<html>Sign in</html>', 'not a Loma response'),
+    (400, '[1]', 'Enrollment failed: 400'),
+])
+async def test_enroll_reports_sso_redirects_and_non_json(tmp_path, monkeypatch, status, body, expected):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    async def handler(request):
+        headers = {'Location': 'https://sso.example.com/login'} if status == 302 else {}
+        return web.Response(status=status, text=body, headers=headers)
+
+    app = web.Application()
+    app.router.add_post('/device-runner/enroll', handler)
+    monkeypatch.setattr(ldr, 'CONFIG_PATH', tmp_path / 'config.json')
+    async with TestServer(app) as server:
+        with pytest.raises(SystemExit) as exc:
+            await ldr.enroll(str(server.make_url('')).rstrip('/'), 'lde_x', 'Mac')
+    assert expected in str(exc.value)
+    assert not (tmp_path / 'config.json').exists()
