@@ -22,14 +22,18 @@ Security model (read before running):
   access immediately.
 
 Usage:
-  python3 loma_device_runner.py enroll --server https://loma.example.com --token lde_...
+  python3 loma_device_runner.py setup --server https://loma.example.com --token lde_...
+  python3 loma_device_runner.py setup        # upgrade/restart an enrolled runner
   python3 loma_device_runner.py doctor
-  python3 loma_device_runner.py run
-  python3 loma_device_runner.py install-service   # launchd (macOS) or systemd --user (Linux)
+  python3 loma_device_runner.py uninstall
 
-Requires Python 3.9+ (the macOS system python3 works), aiohttp and PyYAML (pip install aiohttp pyyaml). Device tooling is
-optional and detected at runtime: adb (Android), xcrun simctl (iOS simulators),
-idb (iOS taps / UI tree), maestro (run_flow).
+`setup` copies the runner and its dependencies (aiohttp, PyYAML) into ~/.loma-device-runner
+(a private virtualenv), enrolls this machine, checks tooling and starts a login service
+(launchd on macOS, systemd --user on Linux). `--foreground` runs it in the terminal instead.
+
+Requires Python 3.9+ (the macOS system python3 works). Device tooling is optional and
+detected at runtime: adb (Android), xcrun simctl (iOS simulators), idb (iOS taps / UI tree),
+maestro (run_flow). adb/maestro are also found in their default install dirs.
 """
 import argparse
 import asyncio
@@ -49,6 +53,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -106,7 +111,7 @@ class RevokedError(Exception):
 
 def load_config():
     if not CONFIG_PATH.exists():
-        raise SystemExit(f'Not enrolled. Run: {sys.argv[0]} enroll --server URL --token TOKEN')
+        raise SystemExit('Not enrolled. Copy the setup command from Loma → Integrations → Devices.')
     if CONFIG_PATH.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
         raise SystemExit(f'{CONFIG_PATH} is readable by other users; run: chmod 600 {CONFIG_PATH}')
     config = json.loads(CONFIG_PATH.read_text())
@@ -773,7 +778,7 @@ class Runner:
     async def connect_once(self):
         import aiohttp
         url = self.config['server'].replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)
-        self.cf_headers = cf_access_headers(self.config)  # refreshed per connect; cloudflared caches the token
+        self.cf_headers = await asyncio.to_thread(cf_access_headers, self.config)  # per connect; cloudflared caches it
         async with self.session.ws_connect(url + '/device-runner/ws', headers=self.auth_headers(),
                                            heartbeat=30, max_msg_size=MAX_WS_MESSAGE) as ws:
             devices = await self.refresh()
@@ -839,32 +844,64 @@ class Runner:
 # ── CLI ───────────────────────────────────────────────────────────────────
 
 
-SSO_HINT = ('Loma redirected this request, usually to an SSO login such as Cloudflare Access. '
-            'Ask your admin to bypass SSO for /device-runner/*, or re-enroll with --cf-access (see docs/devices.md).')
+VENV = CONFIG_DIR / 'venv'
+INSTALLED_SCRIPT = CONFIG_DIR / 'loma_device_runner.py'
+REQUIREMENTS = ('aiohttp>=3.9,<4', 'pyyaml>=6,<7')
+SERVICE_NAME = 'loma-device-runner'
+SSO_HINT = ('Loma redirected this request to a login page (an SSO proxy). Ask your admin to exempt '
+            '/device-runner/* from SSO (see docs/devices.md).')
 
 
 class CfAccessError(Exception):
     pass
 
 
-def cf_access_headers(config):
-    """Cloudflare Access login token for SSO-protected servers (opt-in via enroll --cf-access)."""
+def extend_path():
+    """Add the default adb/maestro install dirs to PATH, so neither the shell nor the
+    launchd/systemd service needs PATH edits. Returns the resulting PATH."""
+    sdk = os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT') or str(
+        Path.home() / ('Library/Android/sdk' if sys.platform == 'darwin' else 'Android/Sdk'))
+    parts = (os.environ.get('PATH') or '/usr/local/bin:/usr/bin:/bin').split(os.pathsep)
+    extra = [str(Path(sdk) / 'platform-tools'), str(Path.home() / '.maestro/bin')]
+    os.environ['PATH'] = os.pathsep.join(parts + [d for d in extra if d not in parts])
+    return os.environ['PATH']
+
+
+def behind_cf_access(headers):
+    return ('cloudflareaccess.com' in headers.get('Location', '')
+            or headers.get('WWW-Authenticate', '').startswith('Cloudflare-Access'))
+
+
+def cf_access_headers(config, interactive=False):
+    """Cloudflare Access login token for SSO-protected servers (config['cf_access'], set by setup).
+
+    interactive=True (setup only) opens `cloudflared access login` once when no token is cached.
+    """
     if not config.get('cf_access'):
         return {}
     if shutil.which('cloudflared') is None:
-        raise CfAccessError('cf_access is on but cloudflared is not installed (brew install cloudflared)')
-    proc = subprocess.run(['cloudflared', 'access', 'token', '-app=' + config['server']],
-                          capture_output=True, text=True, timeout=30)
-    token = proc.stdout.strip()
-    if proc.returncode != 0 or not token or ' ' in token:
-        raise CfAccessError(f"No Cloudflare Access token. Run: cloudflared access login {config['server']}")
-    return {'cf-access-token': token}
+        raise CfAccessError('Loma is behind Cloudflare Access: install cloudflared (brew install cloudflared) and retry')
+    for attempt in range(2):
+        try:
+            proc = subprocess.run(['cloudflared', 'access', 'token', '-app=' + config['server']],
+                                  capture_output=True, text=True, timeout=30)
+            token = proc.stdout.strip()
+            if proc.returncode == 0 and token and ' ' not in token:
+                return {'cf-access-token': token}
+            if not interactive or attempt:
+                break
+            print('Log in to Cloudflare Access in the browser window that opens ...', flush=True)
+            subprocess.run(['cloudflared', 'access', 'login', config['server']], timeout=300)
+        except subprocess.TimeoutExpired:
+            break
+    raise CfAccessError(f"No Cloudflare Access login. Run: cloudflared access login {config['server']}")
 
 
 async def enroll(server, token, name, cf_access=False):
+    """Redeem a one-time enrollment token and save the runner credentials (keeping any existing policy)."""
     import aiohttp
     try:
-        headers = cf_access_headers({'server': server, 'cf_access': cf_access})
+        headers = cf_access_headers({'server': server, 'cf_access': cf_access}, interactive=True)
     except CfAccessError as exc:
         raise SystemExit(f'Enrollment failed: {exc}')
     async with aiohttp.ClientSession() as session:
@@ -873,6 +910,9 @@ async def enroll(server, token, name, cf_access=False):
                 'os': f'{platform.system()} {platform.release()}', 'version': VERSION},
                 allow_redirects=False) as response:
             if 300 <= response.status < 400:
+                if not cf_access and behind_cf_access(response.headers):
+                    print('Loma is behind Cloudflare Access; using your cloudflared login.', flush=True)
+                    return await enroll(server, token, name, cf_access=True)
                 raise SystemExit(f'Enrollment failed: {SSO_HINT}')
             try:
                 body = await response.json(content_type=None)
@@ -881,85 +921,143 @@ async def enroll(server, token, name, cf_access=False):
             if response.status != 200 or not isinstance(body, dict):
                 error = body.get('error') if isinstance(body, dict) else None
                 raise SystemExit(f'Enrollment failed: {error or response.status}')
+    previous = load_config() if CONFIG_PATH.exists() else {}
     config = {'server': server, 'runner_id': body['runner_id'], 'secret': body['secret'],
-              'name': body.get('name', name), 'cf_access': cf_access, 'policy': default_policy()}
+              'name': body.get('name', name), 'cf_access': cf_access,
+              'policy': previous.get('policy') or default_policy()}
     save_config(config)
-    print(f'Enrolled as {config["runner_id"]} ({config["name"]}). Config: {CONFIG_PATH}')
+    print(f'Enrolled as {config["runner_id"]} ({config["name"]}).')
+
+
+def bootstrap(argv):
+    """Install this script and its dependencies into a private virtualenv under CONFIG_DIR,
+    then re-exec from there. Stdlib only, so it works before aiohttp/PyYAML exist."""
+    python = VENV / 'bin' / 'python3'
+    if Path(sys.prefix).resolve() == VENV.resolve():
+        return
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if Path(__file__).resolve() != INSTALLED_SCRIPT.resolve():
+        shutil.copyfile(Path(__file__).resolve(), INSTALLED_SCRIPT)
+    try:
+        if not python.exists():
+            print(f'Creating a private Python environment in {VENV} ...', flush=True)
+            subprocess.run([sys.executable, '-m', 'venv', str(VENV)], check=True)
+        print('Installing dependencies (aiohttp, pyyaml) ...', flush=True)
+        subprocess.run([str(python), '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check',
+                        *REQUIREMENTS], check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        shutil.rmtree(VENV, ignore_errors=True)  # never leave a half-built env that the next run would trust
+        raise SystemExit(f'Could not set up the Python environment: {exc}\n'
+                         'On Debian/Ubuntu install python3-venv first.')
+    os.execv(str(python), [str(python), str(INSTALLED_SCRIPT), *argv])
+
+
+def service_file():
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
+    return Path.home() / '.config/systemd/user' / f'{SERVICE_NAME}.service'
 
 
 def install_service():
-    script = Path(__file__).resolve()
-    python = sys.executable
-    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    log = CONFIG_DIR / 'runner.log'
-    # Services start with a minimal PATH: keep this shell's PATH plus the default Maestro/Android SDK dirs.
-    sdk = 'Library/Android/sdk' if sys.platform == 'darwin' else 'Android/Sdk'
-    path_env = ':'.join([os.environ.get('PATH') or '/usr/local/bin:/usr/bin:/bin',
-                         str(Path.home() / '.maestro/bin'), str(Path.home() / sdk / 'platform-tools')])
+    """Write and (re)start the login service that runs `run` from the private environment."""
+    foreground = f'{sys.executable} {INSTALLED_SCRIPT} run'
+    env = {'PATH': os.environ['PATH'], 'LOMA_DEVICE_RUNNER_HOME': str(CONFIG_DIR)}
+    path = service_file()
     if sys.platform == 'darwin':
-        plist = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
-        plist.parent.mkdir(parents=True, exist_ok=True)
-        plist.write_bytes(plistlib.dumps({
-            'Label': LABEL, 'ProgramArguments': [python, str(script), 'run'],
-            'EnvironmentVariables': {'PATH': path_env}, 'RunAtLoad': True,
-            'KeepAlive': {'SuccessfulExit': False}, 'StandardOutPath': str(log), 'StandardErrorPath': str(log)}))
-        print(f'Wrote {plist}\nStart it with: launchctl bootstrap gui/$(id -u) {plist}')
+        log = CONFIG_DIR / 'runner.log'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(plistlib.dumps({
+            'Label': LABEL, 'ProgramArguments': [sys.executable, str(INSTALLED_SCRIPT), 'run'],
+            'EnvironmentVariables': env, 'RunAtLoad': True, 'KeepAlive': {'SuccessfulExit': False},
+            'StandardOutPath': str(log), 'StandardErrorPath': str(log)}))
+        domain = f'gui/{os.getuid()}'
+        subprocess.run(['launchctl', 'bootout', f'{domain}/{LABEL}'], capture_output=True)  # fine if not loaded
+        commands, logs = [['launchctl', 'bootstrap', domain, str(path)]], f'Logs: {log}'
+    elif sys.platform.startswith('linux') and shutil.which('systemctl'):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        environment = ' '.join(f'"{key}={value}"' for key, value in env.items())
+        path.write_text(f'[Unit]\nDescription=Loma Device Runner\nAfter=network-online.target\n\n'
+                        f'[Service]\nEnvironment={environment}\nExecStart={foreground}\n'
+                        f'Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n')
+        commands = [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', SERVICE_NAME],
+                    ['systemctl', '--user', 'restart', SERVICE_NAME]]
+        logs = f'Logs: journalctl --user -u {SERVICE_NAME} -f'
     else:
-        unit = Path.home() / '.config/systemd/user/loma-device-runner.service'
-        unit.parent.mkdir(parents=True, exist_ok=True)
-        unit.write_text(f'''[Unit]
-Description=Loma Device Runner
-After=network-online.target
+        print(f'No launchd/systemd here. Keep this running in a terminal: {foreground}')
+        return
+    for command in commands:
+        for attempt in range(3):  # launchd can briefly refuse a bootstrap right after bootout
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            raise SystemExit(f'Could not start the service ({" ".join(command)}): {result.stderr.strip()}\n'
+                             f'Run it in the foreground instead: {foreground}')
+    print(f'The runner is running in the background and starts again at login. {logs}')
 
-[Service]
-Environment="PATH={path_env}"
-ExecStart={python} {script} run
-Restart=on-failure
-RestartSec=5
 
-[Install]
-WantedBy=default.target
-''')
-        print(f'Wrote {unit}\nStart it with: systemctl --user daemon-reload && systemctl --user enable --now loma-device-runner')
+def uninstall():
+    if sys.platform == 'darwin':
+        subprocess.run(['launchctl', 'bootout', f'gui/{os.getuid()}/{LABEL}'], capture_output=True)
+    elif shutil.which('systemctl'):
+        subprocess.run(['systemctl', '--user', 'disable', '--now', SERVICE_NAME], capture_output=True)
+    service_file().unlink(missing_ok=True)
+    shutil.rmtree(CONFIG_DIR, ignore_errors=True)
+    print('Removed the runner from this machine. Revoke it under Loma → Integrations → Devices if it is still listed.')
 
 
 async def doctor():
     for tool in ('adb', 'xcrun', 'idb', 'maestro'):
         where = shutil.which(tool)
         print(f'{tool:8} {"found at " + where if where else "not found"}')
-    config = load_config() if CONFIG_PATH.exists() else None
-    devices = await Runner({'policy': config['policy'] if config else {}}).refresh()
+    config = load_config() if CONFIG_PATH.exists() else {}
+    devices = await Runner({'policy': config.get('policy', {})}).refresh()
     print(f'{len(devices)} usable device(s) (physical devices are hidden unless allow_physical_devices=true):')
     for device in devices:
         print(f"  {device['platform']:8} {device['serial']:40} {device['name']} {device['os_version']}")
-    if config:
-        print(f"Enrolled as {config['runner_id']} against {config['server']}")
-    else:
-        print('Not enrolled yet.')
+    if not devices:
+        print('  Boot an Android emulator or iOS simulator; it shows up in Loma within ~15 seconds.')
+    print(f"Enrolled as {config['runner_id']} against {config['server']}" if config else 'Not enrolled yet.')
+
+
+def setup(args, argv):
+    server = normalize_server(args.server, args.allow_http) if args.server else None
+    if args.token and not server:
+        raise SystemExit('--server is required with --token')
+    if not args.token and not CONFIG_PATH.exists():
+        raise SystemExit('Not enrolled yet. Copy the setup command from Loma → Integrations → Devices.')
+    bootstrap(argv)  # returns only when running from the private environment
+    if args.token:
+        asyncio.run(enroll(server, args.token.strip(), args.name[:80]))
+    asyncio.run(doctor())
+    if args.foreground:
+        return asyncio.run(Runner(load_config()).serve())
+    return install_service()
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(description='Loma Device Runner ' + VERSION)
     sub = parser.add_subparsers(dest='command', required=True)
-    p_enroll = sub.add_parser('enroll', help='Register this machine with Loma')
-    p_enroll.add_argument('--server', required=True)
-    p_enroll.add_argument('--token', required=True)
-    p_enroll.add_argument('--name', default=socket.gethostname())
-    p_enroll.add_argument('--allow-http', action='store_true', help='Allow plain http (testing only)')
-    p_enroll.add_argument('--cf-access', action='store_true',
-                          help='Send your Cloudflare Access login token (run `cloudflared access login <server>` first)')
-    sub.add_parser('run', help='Connect to Loma and serve device requests')
+    p_setup = sub.add_parser('setup', help='Install, enroll and start the runner (re-run without --token to upgrade)')
+    p_setup.add_argument('--server', help='Your Loma URL')
+    p_setup.add_argument('--token', help='One-time token from Loma → Integrations → Devices')
+    p_setup.add_argument('--name', default=socket.gethostname())
+    p_setup.add_argument('--allow-http', action='store_true', help='Allow plain http (testing only)')
+    p_setup.add_argument('--foreground', action='store_true', help='Run in this terminal instead of as a service')
+    sub.add_parser('run', help='Connect to Loma and serve device requests (what the service runs)')
     sub.add_parser('doctor', help='Check tooling and list usable devices')
-    sub.add_parser('install-service', help='Install as a launchd/systemd user service')
+    sub.add_parser('uninstall', help='Stop the service and delete ' + str(CONFIG_DIR))
     args = parser.parse_args(argv)
-    if args.command == 'enroll':
-        return asyncio.run(enroll(normalize_server(args.server, args.allow_http), args.token.strip(), args.name[:80],
-                                  args.cf_access))
+    extend_path()
+    if args.command == 'setup':
+        return setup(args, argv)
     if args.command == 'run':
         return asyncio.run(Runner(load_config()).serve())
     if args.command == 'doctor':
         return asyncio.run(doctor())
-    return install_service()
+    return uninstall()
 
 
 if __name__ == '__main__':

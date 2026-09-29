@@ -209,7 +209,7 @@ export default function DevicesPanel() {
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
               <div className="flex items-start gap-2">
                 <div className="text-xs font-medium text-foreground flex-1">
-                  Run these on the machine. The token works once and expires{" "}
+                  Run these in a terminal on the machine. The token works once and expires{" "}
                   <ClientTimestamp iso={enrollment.expires_at} variant="short" />.
                 </div>
                 <Button
@@ -231,8 +231,8 @@ export default function DevicesPanel() {
                 </div>
               ))}
               <div className="text-xs text-muted-foreground">
-                Optional: <code className="bg-muted rounded px-1">python3 loma_device_runner.py install-service</code>{" "}
-                keeps it running in the background.
+                Setup installs the runner in <code className="bg-muted rounded px-1">~/.loma-device-runner</code>{" "}
+                and keeps it running in the background, also after a restart. Then boot an emulator or simulator.
               </div>
             </div>
           )}

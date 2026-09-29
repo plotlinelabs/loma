@@ -10,27 +10,46 @@ so there is no tunnel, DNS or firewall setup, and it works behind NAT/VPN.
 When the machine sleeps or the runner stops, Loma shows the devices as offline
 and agent calls fail fast with a clear message.
 
-## Quick start (macOS)
+## Setup
+
+In Loma, open **Integrations → Devices → Get setup commands** and run the two lines it
+shows in a terminal on the machine:
 
 ```bash
-# 1. Tooling (install what you need)
-#    Android: Android Studio + an emulator (arm64 image on Apple Silicon); make sure `adb devices` works
-#    iOS:     Xcode + a booted simulator; for taps/UI tree also: brew install idb-companion && pip3 install fb-idb
-#    Flows:   curl -fsSL "https://get.maestro.mobile.dev" | bash
-python3 -m pip install --user 'aiohttp>=3.9,<4' 'pyyaml>=6,<7'
-
-# 2. Download the runner from your Loma server and enroll
-curl -fsSLo loma_device_runner.py https://<your-loma>/device-runner/download
-python3 loma_device_runner.py enroll --server https://<your-loma> --token <token from Loma → Devices>
-
-# 3. Check tooling and visible devices
-python3 loma_device_runner.py doctor
-
-# 4. Run it (foreground), or install it as a login service (launchd on macOS, systemd --user on Linux).
-#    Run install-service from a shell where doctor finds your tools: the service reuses that PATH.
-python3 loma_device_runner.py run
-python3 loma_device_runner.py install-service
+curl -fsSL -o loma_device_runner.py https://<your-loma>/device-runner/download
+python3 loma_device_runner.py setup --server https://<your-loma> --token <token> --name 'Work Mac'
 ```
+
+`setup` does everything else:
+
+1. Copies the runner and its dependencies (aiohttp, PyYAML) into `~/.loma-device-runner`
+   (a private virtualenv, so your system Python is untouched).
+2. Enrolls the machine with the one-time token. If Loma is behind Cloudflare Access and
+   `cloudflared` is installed, it detects this and uses your `cloudflared` login.
+3. Checks tooling and lists usable devices (`doctor`).
+4. Starts a login service (launchd on macOS, systemd `--user` on Linux) so the runner is
+   online whenever the machine is. Add `--foreground` to run it in the terminal instead.
+
+Then boot an emulator or simulator; it shows up in Loma within about 15 seconds.
+
+| Task | Command |
+|---|---|
+| Upgrade / restart (download the new file first) | `python3 loma_device_runner.py setup` |
+| Check tooling and devices | `~/.loma-device-runner/venv/bin/python3 ~/.loma-device-runner/loma_device_runner.py doctor` |
+| Remove from this machine | `python3 ~/.loma-device-runner/loma_device_runner.py uninstall` |
+| Logs | macOS: `~/.loma-device-runner/runner.log`, Linux: `journalctl --user -u loma-device-runner -f` |
+
+Device tooling (install what you need):
+
+- **Android:** Android Studio + an emulator (arm64 image on Apple Silicon). `adb` is found in
+  the default SDK location (or `$ANDROID_HOME`) without PATH changes.
+- **iOS:** Xcode + a booted simulator. Taps, swipes, typing and the UI tree also need
+  `idb`: `brew install idb-companion && pip3 install fb-idb`.
+- **Flows:** `curl -fsSL "https://get.maestro.mobile.dev" | bash`.
+
+The service keeps the `PATH` of the shell you ran `setup` from, so run it from a shell
+where `idb`/`cloudflared` are found. On Linux, run `loginctl enable-linger $USER` if the
+runner should stay up while you are logged out.
 
 ## What the agent can and cannot do
 
@@ -55,7 +74,7 @@ python3 loma_device_runner.py install-service
 - `allowed_app_ids`: if non-empty, only these app ids can be installed/launched/stopped/reset/uninstalled, and Maestro flows may only target them. `install` then needs an `app_id`, and the package that actually got installed is checked too.
 - `allow_maestro_scripts`: permit Maestro commands outside the built-in allowlist (`runScript`, `evalScript`, `runFlow`, `addMedia`, `file:` sub-flows, ...), `${...}` and extra flow config keys. Maestro JavaScript can make HTTP requests from your machine and sub-flows can read files on it, so this is off by default.
 
-Restart the runner after editing the policy.
+Run `setup` again after editing the policy to restart the runner.
 
 ## Tips for reliable agent testing
 

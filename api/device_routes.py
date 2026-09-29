@@ -198,16 +198,15 @@ async def handle_create_enrollment(request):
     name = (str(body.get('name') or '').strip()[:80] if isinstance(body, dict) else '') or 'My machine'
     token, expires = await store.create_enrollment(db, user_email, name)
     base = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/') or f'{request.scheme}://{request.host}'
+    download = shlex.quote(base + '/device-runner/download')
     return web.json_response({
         'token': token, 'expires_at': expires.isoformat(), 'server': base,
+        # Two steps: download, then `setup` (private venv, enroll, doctor, login service).
         'commands': [
-            "python3 -m pip install --user 'aiohttp>=3.9,<4' 'pyyaml>=6,<7'",
-            f'curl -fsSL --max-redirs 0 -o loma_device_runner.py {shlex.quote(base + "/device-runner/download")}'
-            " || { echo 'Download failed. If Loma is behind SSO (e.g. Cloudflare Access),"
-            " /device-runner/* must bypass it; see docs/devices.md.' >&2; false; }",
-            f'python3 loma_device_runner.py enroll --server {shlex.quote(base)} --token {token} --name {shlex.quote(name)}',
-            'python3 loma_device_runner.py doctor',
-            'python3 loma_device_runner.py run']})
+            f'curl -fsSL --max-redirs 0 -o loma_device_runner.py {download}'
+            " || echo 'Download was redirected to a login page. Behind Cloudflare Access? Use:"
+            f" cloudflared access curl {download} -o loma_device_runner.py' >&2",
+            f'python3 loma_device_runner.py setup --server {shlex.quote(base)} --token {token} --name {shlex.quote(name)}']})
 
 
 async def _owned_runner(db, request):

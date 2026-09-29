@@ -4,6 +4,7 @@ import base64
 import os
 import plistlib
 import stat
+import subprocess
 import sys
 import zipfile
 import pytest
@@ -321,37 +322,165 @@ def test_ios_bundle_identifier(tmp_path):
     assert ldr.bundle_identifier(app) == 'com.example.demo'
 
 
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """Point every runner path (config, venv, installed script, service files) at a temp HOME."""
+    config_dir = tmp_path / '.loma-device-runner'
+    monkeypatch.setenv('HOME', str(tmp_path))
+    for name, value in {'CONFIG_DIR': config_dir, 'CONFIG_PATH': config_dir / 'config.json',
+                        'VENV': config_dir / 'venv', 'INSTALLED_SCRIPT': config_dir / 'loma_device_runner.py'}.items():
+        monkeypatch.setattr(ldr, name, value)
+    return config_dir
+
+
+def fake_cloudflared(tmp_path, monkeypatch, server):
+    fake = tmp_path / 'bin' / 'cloudflared'
+    fake.parent.mkdir(exist_ok=True)
+    fake.write_text(f'#!/bin/sh\n[ "$3" = "-app={server}" ] && echo eyJ.tok.en && exit 0\n'
+                    'echo "Unable to find token" >&2; exit 1\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{fake.parent}:{os.environ["PATH"]}')
+
+
+async def serve_enroll(handler, fn):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    app = web.Application()
+    app.router.add_post('/device-runner/enroll', handler)
+    async with TestServer(app) as server:
+        return await fn(str(server.make_url('')).rstrip('/'))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status,body,expected', [
-    (302, '<html>Sign in</html>', 'bypass SSO for /device-runner/*'),
+    (302, '<html>Sign in</html>', 'exempt /device-runner/* from SSO'),
     (200, '<html>Sign in</html>', 'not a Loma response'),
     (400, '[1]', 'Enrollment failed: 400'),
 ])
-async def test_enroll_reports_sso_redirects_and_non_json(tmp_path, monkeypatch, status, body, expected):
+async def test_enroll_reports_sso_redirects_and_non_json(home, status, body, expected):
     from aiohttp import web
-    from aiohttp.test_utils import TestServer
 
     async def handler(request):
         headers = {'Location': 'https://sso.example.com/login'} if status == 302 else {}
         return web.Response(status=status, text=body, headers=headers)
 
-    app = web.Application()
-    app.router.add_post('/device-runner/enroll', handler)
-    monkeypatch.setattr(ldr, 'CONFIG_PATH', tmp_path / 'config.json')
-    async with TestServer(app) as server:
-        with pytest.raises(SystemExit) as exc:
-            await ldr.enroll(str(server.make_url('')).rstrip('/'), 'lde_x', 'Mac')
+    with pytest.raises(SystemExit) as exc:
+        await serve_enroll(handler, lambda base: ldr.enroll(base, 'lde_x', 'Mac'))
     assert expected in str(exc.value)
-    assert not (tmp_path / 'config.json').exists()
+    assert not ldr.CONFIG_PATH.exists()
+
+
+@pytest.mark.asyncio
+async def test_enroll_detects_cloudflare_access_and_keeps_policy(home, tmp_path, monkeypatch):
+    from aiohttp import web
+
+    async def handler(request):
+        if request.headers.get('cf-access-token') != 'eyJ.tok.en':
+            return web.Response(status=302, headers={'Location': 'https://team.cloudflareaccess.com/login'})
+        return web.json_response({'runner_id': 'r_0123456789abcdef', 'secret': 's3cret', 'name': 'Mac'})
+
+    ldr.save_config({'policy': {'allowed_app_ids': ['com.example.demo']}})
+
+    async def enroll(base):
+        fake_cloudflared(tmp_path, monkeypatch, base)
+        await ldr.enroll(base, 'lde_x', 'Mac')
+
+    await serve_enroll(handler, enroll)
+    config = ldr.load_config()
+    assert config['cf_access'] is True and config['runner_id'] == 'r_0123456789abcdef'
+    assert config['policy'] == {'allowed_app_ids': ['com.example.demo']}
 
 
 def test_cf_access_headers(monkeypatch, tmp_path):
     assert ldr.cf_access_headers({'server': 'https://x.example.com'}) == {}
-    fake = tmp_path / 'cloudflared'
-    fake.write_text('#!/bin/sh\n[ "$3" = "-app=https://x.example.com" ] && echo eyJ.tok.en && exit 0\n'
-                    'echo "Unable to find token" >&2; exit 1\n')
-    fake.chmod(0o755)
-    monkeypatch.setenv('PATH', f'{tmp_path}:{os.environ["PATH"]}')
+    fake_cloudflared(tmp_path, monkeypatch, 'https://x.example.com')
     assert ldr.cf_access_headers({'server': 'https://x.example.com', 'cf_access': True}) == {'cf-access-token': 'eyJ.tok.en'}
     with pytest.raises(ldr.CfAccessError, match='cloudflared access login https://y.example.com'):
         ldr.cf_access_headers({'server': 'https://y.example.com', 'cf_access': True})
+
+
+class Exec(Exception):
+    pass
+
+
+def record_subprocess(monkeypatch, returncode=0):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, returncode, '', 'boom')
+
+    monkeypatch.setattr(ldr.subprocess, 'run', fake_run)
+    return calls
+
+
+def test_setup_needs_a_token_or_an_existing_enrollment(home):
+    with pytest.raises(SystemExit, match='Not enrolled yet'):
+        ldr.main(['setup'])
+    with pytest.raises(SystemExit, match='--server is required'):
+        ldr.main(['setup', '--token', 'lde_x'])
+
+
+def test_setup_bootstraps_private_env_then_reexecs(home, monkeypatch):
+    calls = record_subprocess(monkeypatch)
+
+    def fake_execv(path, argv):
+        raise Exec(argv)
+
+    monkeypatch.setattr(ldr.os, 'execv', fake_execv)
+    argv = ['setup', '--server', 'https://loma.example.com', '--token', 'lde_x']
+    with pytest.raises(Exec) as exc:
+        ldr.main(argv)
+    python = str(home / 'venv' / 'bin' / 'python3')
+    assert calls[0] == [sys.executable, '-m', 'venv', str(home / 'venv')]
+    assert calls[1][:4] == [python, '-m', 'pip', 'install'] and 'aiohttp>=3.9,<4' in calls[1]
+    assert exc.value.args[0] == [python, str(ldr.INSTALLED_SCRIPT), *argv]
+    assert ldr.INSTALLED_SCRIPT.read_bytes() == open(ldr.__file__, 'rb').read()
+
+
+@pytest.mark.parametrize('system', ['linux', 'darwin'])
+def test_install_service_writes_and_starts(home, monkeypatch, system):
+    monkeypatch.setattr(ldr.sys, 'platform', system)
+    monkeypatch.setattr(ldr.shutil, 'which', lambda tool: '/usr/bin/' + tool)
+    calls = record_subprocess(monkeypatch)
+    home.mkdir()
+    ldr.install_service()
+    unit = ldr.service_file()
+    if system == 'linux':
+        text = unit.read_text()
+        assert f'ExecStart={sys.executable} {ldr.INSTALLED_SCRIPT} run' in text
+        assert f'"LOMA_DEVICE_RUNNER_HOME={home}"' in text
+        assert calls[-1] == ['systemctl', '--user', 'restart', 'loma-device-runner']
+    else:
+        plist = plistlib.loads(unit.read_bytes())
+        assert plist['ProgramArguments'] == [sys.executable, str(ldr.INSTALLED_SCRIPT), 'run']
+        assert calls[-1][:2] == ['launchctl', 'bootstrap']
+
+
+def test_install_service_failure_points_to_foreground(home, monkeypatch):
+    monkeypatch.setattr(ldr.sys, 'platform', 'linux')
+    monkeypatch.setattr(ldr.shutil, 'which', lambda tool: '/usr/bin/' + tool)
+    monkeypatch.setattr(ldr.time, 'sleep', lambda s: None)
+    record_subprocess(monkeypatch, returncode=1)
+    with pytest.raises(SystemExit, match='Run it in the foreground instead'):
+        ldr.install_service()
+
+
+def test_uninstall_removes_service_and_config(home, monkeypatch):
+    monkeypatch.setattr(ldr.sys, 'platform', 'linux')
+    monkeypatch.setattr(ldr.shutil, 'which', lambda tool: '/usr/bin/' + tool)
+    calls = record_subprocess(monkeypatch)
+    ldr.save_config({'server': 'https://loma.example.com'})
+    ldr.service_file().parent.mkdir(parents=True)
+    ldr.service_file().write_text('unit')
+    ldr.uninstall()
+    assert not home.exists() and not ldr.service_file().exists()
+    assert ['systemctl', '--user', 'disable', '--now', 'loma-device-runner'] in calls
+
+
+def test_extend_path_adds_default_tool_dirs_once(monkeypatch, tmp_path):
+    monkeypatch.setenv('ANDROID_HOME', str(tmp_path / 'sdk'))
+    monkeypatch.setenv('PATH', '/usr/bin')
+    ldr.extend_path()
+    path = ldr.extend_path().split(os.pathsep)
+    assert path[0] == '/usr/bin' and path.count(str(tmp_path / 'sdk' / 'platform-tools')) == 1

@@ -194,7 +194,7 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
                 async with http.post(base + '/api/devices/enrollments', json={'name': 'Work Mac'},
                                      headers={'X-Test-User': OWNER}) as resp:
                     enrollment = await resp.json()
-                assert any('enroll --server' in c for c in enrollment['commands'])
+                assert any(' setup --server ' in c for c in enrollment['commands'])
                 async with http.post(base + '/device-runner/enroll', json={'token': enrollment['token']}) as resp:
                     creds = await resp.json()
                 async with http.post(base + '/device-runner/enroll', json={'token': enrollment['token']}) as resp:
@@ -340,7 +340,7 @@ async def test_patch_rejects_non_object_and_enroll_command_is_quoted(db):
                 headers = {'X-Test-User': OWNER}
                 async with http.post(server.make_url('/api/devices/enrollments'),
                                      json={'name': 'x"; $(touch /tmp/pwn) #'}, headers=headers) as r:
-                    command = next(c for c in (await r.json())['commands'] if ' enroll ' in c)
+                    command = next(c for c in (await r.json())['commands'] if ' setup ' in c)
                 import shlex
                 assert shlex.split(command)[-1] == 'x"; $(touch /tmp/pwn) #'
                 runner = await enroll(db)
