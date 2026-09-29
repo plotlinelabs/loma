@@ -877,7 +877,8 @@ INSTALLED_SCRIPT = CONFIG_DIR / 'loma_device_runner.py'
 REQUIREMENTS = ('aiohttp>=3.9,<4', 'pyyaml>=6,<7')
 SERVICE_NAME = 'loma-device-runner'
 SSO_HINT = ('Loma redirected this request to a login page (an SSO proxy). Ask your admin to exempt '
-            '/device-runner/* from SSO (see docs/devices.md).')
+            '/device-runner/* from SSO, or for Cloudflare Access install cloudflared, run '
+            '`cloudflared access login <server>` and re-run setup.')
 
 
 class CfAccessError(Exception):
