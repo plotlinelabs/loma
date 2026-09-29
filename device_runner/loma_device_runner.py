@@ -26,7 +26,7 @@ Usage:
   python3 loma_device_runner.py run
   python3 loma_device_runner.py install-service   # launchd (macOS) or systemd --user (Linux)
 
-Requires Python 3.10+, aiohttp and PyYAML (pip install aiohttp pyyaml). Device tooling is
+Requires Python 3.9+ (the macOS system python3 works), aiohttp and PyYAML (pip install aiohttp pyyaml). Device tooling is
 optional and detected at runtime: adb (Android), xcrun simctl (iOS simulators),
 idb (iOS taps / UI tree), maestro (run_flow).
 """

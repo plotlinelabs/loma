@@ -78,9 +78,21 @@ explicitly want that.
 | Symptom | Meaning / fix |
 |---|---|
 | "No devices are registered for you" | The user has not enrolled a machine: point them to Integrations → Devices |
-| "Runner is offline" / "No online devices" | Machine asleep or runner stopped; ask the user to wake it or start the runner |
+| "Runner is offline" / "No online … devices" | Machine asleep or runner stopped; ask the user to wake it or start the runner |
 | "leased by another session" | Another chat holds it; pick another device or ask the owner to release it in Integrations → Devices |
 | "not in this runner's allowed_app_ids" | The runner owner restricted apps; use an allowed app id |
 | "uiautomator could not capture the screen" | UI not idle (animation/video); wait a second and retry |
-| iOS "needs idb" | iOS taps/ui_tree need `idb` on the runner machine; screenshots, install, launch and deep links still work |
+| iOS "needs idb" | iOS taps, swipes, typing, keys and ui_tree need `idb` on the runner machine; screenshots, install, launch and deep links still work |
 | "Builds from this repository are not allowed" | An operator must add the repo to `LOMA_DEVICE_BUILD_REPOS` |
+
+## Isolated-worker tool mapping
+
+The steps above use `tools/device.py` spellings. In isolated runs use the `device.*` tools:
+
+| CLI | Isolated tool |
+|---|---|
+| `open-url` | `device.input action=open_url` |
+| `tap` / `type` / `swipe` / `key` | `device.input action=tap|type|swipe|key` |
+| `ui-tree` | `device.observe what=ui_tree` |
+| `screenshot` | `device.observe what=screenshot` |
+| `logs --clear` / `logs --filter X` | `device.observe what=logs clear=true` / `filter=X` |

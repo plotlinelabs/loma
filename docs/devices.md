@@ -67,6 +67,6 @@ Loma Device Runner (device_runner/loma_device_runner.py) on the user's machine
 - **Isolated workers cannot view images.** Screenshots are shown to the user as chat
   files; the model asserts on `ui_tree`.
 - **Worker tool catalog is at 62/64.** Device actions are grouped into 8 tools for that reason.
-- **iOS** taps and UI tree need `idb` on the runner; physical iOS devices are not supported.
+- **iOS** taps, swipes, typing, keys and UI tree need `idb` on the runner; physical iOS devices are not supported.
 - Build blobs live in memory + temp disk for up to 2 hours and are lost on restart
   (the agent just requests the build again).
