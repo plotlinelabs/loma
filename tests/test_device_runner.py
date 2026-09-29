@@ -36,6 +36,16 @@ elif args[2:5] == ['exec-out', 'screencap', '-p']:
     sys.stdout.buffer.write(open(os.environ['FAKE_PNG'], 'rb').read())
 elif args[2:4] == ['exec-out', 'cat']:
     sys.stdout.buffer.write(open(os.environ['FAKE_UI'], 'rb').read())
+elif args[2:5] == ['shell', 'uiautomator', 'dump']:
+    print('UI hierchary dumped to: /sdcard/loma_ui.xml')
+elif args[2:6] == ['shell', 'pm', 'list', 'packages']:
+    state = os.environ['FAKE_ADB_LOG'] + '.installed'
+    print('package:com.android.settings')
+    if os.path.exists(state):
+        print('package:' + open(state).read().strip())
+elif args[2] == 'install':
+    open(os.environ['FAKE_ADB_LOG'] + '.installed', 'w').write(os.environ.get('FAKE_INSTALL_PKG', 'so.plotline.demo'))
+    print('Success')
 '''
 
 
@@ -211,3 +221,108 @@ def test_config_is_private(tmp_path, monkeypatch):
     ldr.CONFIG_PATH.chmod(0o644)
     with pytest.raises(SystemExit, match='readable'):
         ldr.load_config()
+
+
+@pytest.mark.parametrize('flow', [
+    '- {runScript: x.js}',
+    '- "addMedia": [~/a.png]',
+    '- runFlow: other.yaml',
+    '- evalScript: ${1+1}',
+    '- inputText: ${output.secret}',
+    '- startRecording: rec',
+    '- assertTrue: ${true}',
+    '- takeScreenshot: ../../etc/x',
+    '- openLink: file:///Users/me/.ssh/id_rsa',
+    '- repeat:\n    times: 2\n    commands:\n      - runScript: x.js',
+    'appId: so.plotline.demo\nonFlowStart:\n  - runScript: x.js\n---\n- launchApp',
+    'not: [valid',
+])
+def test_flow_screening_blocks_bypasses(flow):
+    with pytest.raises(ldr.OpError):
+        ldr.screen_flow(flow, {})
+
+
+@pytest.mark.parametrize('flow', [
+    '- launchApp: com.other',
+    '- launchApp:\n    appId: com.other',
+    '- stopApp: com.other',
+    '- clearState: com.other',
+    'appId: com.other\n---\n- launchApp',
+])
+def test_flow_app_allowlist(flow):
+    with pytest.raises(ldr.OpError, match='allowed_app_ids'):
+        ldr.screen_flow(flow, {'allowed_app_ids': ['so.plotline.demo']})
+
+
+def test_flow_allows_normal_commands():
+    ldr.screen_flow('appId: so.plotline.demo\n---\n- launchApp\n- tapOn:\n    id: show\n'
+                    '- repeat:\n    times: 2\n    commands:\n      - swipe:\n          direction: UP\n'
+                    '- openLink: plotlinedemo://track?event=x\n- takeScreenshot: after_modal\n',
+                    {'allowed_app_ids': ['so.plotline.demo']})
+
+
+def test_file_urls_rejected():
+    with pytest.raises(ldr.OpError, match='not allowed'):
+        ldr.check_url('file:///etc/passwd')
+    assert ldr.check_url('plotlinedemo://x') == 'plotlinedemo://x'
+
+
+def test_dotdot_member_rejected(tmp_path):
+    archive = tmp_path / 'a.zip'
+    with zipfile.ZipFile(archive, 'w') as zf:
+        zf.writestr('a/../b.apk', 'x')
+    with pytest.raises(ldr.OpError, match='unsafe'):
+        ldr.safe_extract(archive, tmp_path / 'out')
+
+
+def test_nested_zip_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(ldr, 'MAX_EXTRACT_BYTES', 1000)
+    inner = tmp_path / 'inner.zip'
+    with zipfile.ZipFile(inner, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('big.bin', b'0' * 800)
+    outer = tmp_path / 'outer.zip'
+    with zipfile.ZipFile(outer, 'w') as zf:
+        zf.write(inner, 'one.zip')
+        zf.write(inner, 'two.zip')
+    with pytest.raises(ldr.OpError, match='size limit'):
+        ldr.find_file(outer, '.apk')
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_kills_child(tmp_path):
+    import asyncio
+    marker = tmp_path / 'done'
+    task = asyncio.create_task(ldr.run([sys.executable, '-c',
+        f'import time; time.sleep(3); open({str(marker)!r}, "w").write("x")'], timeout=30))
+    await asyncio.sleep(0.5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(3.5)
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_install_allowlist_verifies_real_package(adb, tmp_path, monkeypatch):
+    driver, calls = adb
+    apk = tmp_path / 'app.apk'
+    apk.write_bytes(b'apk')
+    monkeypatch.setenv('FAKE_INSTALL_PKG', 'com.evil')
+    with pytest.raises(ldr.OpError, match='not in allowed_app_ids'):
+        await driver.install('emulator-5554', apk, 'so.plotline.demo', ('so.plotline.demo',))
+    assert ['-s', 'emulator-5554', 'uninstall', 'com.evil'] in calls()
+    install = next(c for c in calls() if c[2:3] == ['install'])
+    assert '-r' not in install
+    import os as _os
+    _os.unlink(_os.environ['FAKE_ADB_LOG'] + '.installed')
+    monkeypatch.setenv('FAKE_INSTALL_PKG', 'so.plotline.demo')
+    result = await driver.install('emulator-5554', apk, 'so.plotline.demo', ('so.plotline.demo',))
+    assert result['installed'] == 'app.apk'
+
+
+def test_ios_bundle_identifier(tmp_path):
+    import plistlib
+    app = tmp_path / 'Demo.app'
+    app.mkdir()
+    (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'so.plotline.demo'}, fmt=plistlib.FMT_BINARY))
+    assert ldr.bundle_identifier(app) == 'so.plotline.demo'

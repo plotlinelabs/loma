@@ -26,7 +26,7 @@ Usage:
   python3 loma_device_runner.py run
   python3 loma_device_runner.py install-service   # launchd (macOS) or systemd --user (Linux)
 
-Requires Python 3.10+ and aiohttp (pip install aiohttp). Device tooling is
+Requires Python 3.10+, aiohttp and PyYAML (pip install aiohttp pyyaml). Device tooling is
 optional and detected at runtime: adb (Android), xcrun simctl (iOS simulators),
 idb (iOS taps / UI tree), maestro (run_flow).
 """
@@ -72,14 +72,30 @@ FILENAME = re.compile(r'[A-Za-z0-9._-]{1,128}\Z')
 ANDROID_KEYS = {'back': 4, 'home': 3, 'enter': 66, 'delete': 67, 'tab': 61, 'app_switch': 187,
                 'volume_up': 24, 'volume_down': 25, 'power': 26}
 IOS_BUTTONS = {'home': 'HOME', 'lock': 'LOCK', 'siri': 'SIRI', 'side': 'SIDE_BUTTON', 'apple_pay': 'APPLE_PAY'}
-BLOCKED_FLOW_PATTERNS = (
-    re.compile(r'^\s*-?\s*(runScript|evalScript|runFlow|addMedia)\b', re.M),
-    re.compile(r'\$\{'),
-)
+MAX_EXTRACT_BYTES = 2 * MAX_BLOB
+MAX_EXTRACT_MEMBERS = 20000
+MAX_NESTED_ZIPS = 5
+BLOCKED_URL_SCHEMES = {'file', 'javascript', 'data'}
+# Maestro commands a flow may use by default. Anything else (runScript, evalScript,
+# runFlow, addMedia, startRecording, assertWithAI, ...) needs allow_maestro_scripts,
+# because those can run JavaScript with HTTP access or read/write host files.
+FLOW_COMMANDS = {
+    'launchApp', 'stopApp', 'killApp', 'clearState', 'clearKeychain', 'tapOn', 'doubleTapOn', 'longPressOn',
+    'inputText', 'inputRandomText', 'inputRandomNumber', 'inputRandomEmail', 'inputRandomPersonName',
+    'eraseText', 'copyTextFrom', 'pasteText', 'assertVisible', 'assertNotVisible', 'scroll', 'scrollUntilVisible',
+    'swipe', 'back', 'pressKey', 'hideKeyboard', 'openLink', 'waitForAnimationToEnd', 'extendedWaitUntil',
+    'takeScreenshot', 'repeat', 'retry', 'setAirplaneMode', 'toggleAirplaneMode', 'setLocation', 'travel',
+}
+FLOW_CONFIG_KEYS = {'appId', 'name', 'tags', 'env', 'onFlowStart', 'onFlowComplete'}
+APP_COMMANDS = {'launchApp', 'stopApp', 'killApp', 'clearState'}
 
 
 class OpError(Exception):
     """A user-facing operation failure. The message is returned to the agent."""
+
+
+class RevokedError(Exception):
+    """The server told this runner it has been revoked."""
 
 
 # ── Config ────────────────────────────────────────────────────────────────
@@ -121,8 +137,12 @@ def default_policy():
 # ── Subprocess helper ─────────────────────────────────────────────────────
 
 
-async def run(args, *, timeout=60, check=True):
-    """Run a fixed argv (never a host shell string). Returns (code, stdout bytes, stderr text)."""
+async def run(args, *, timeout=60, check=True, keep='head'):
+    """Run a fixed argv (never a host shell string). Returns (code, stdout bytes, stderr text).
+
+    The child is always killed if the call is cancelled (e.g. the WebSocket dropped),
+    so a device lock is never released while a command is still running.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             *args, stdin=asyncio.subprocess.DEVNULL,
@@ -131,11 +151,14 @@ async def run(args, *, timeout=60, check=True):
         raise OpError(f'{args[0]} is not installed on the runner machine') from None
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise OpError(f'{Path(args[0]).name} timed out after {timeout}s') from None
-    out = out[:MAX_OUTPUT]
+    except BaseException as exc:
+        if proc.returncode is None:
+            proc.kill()
+            await asyncio.shield(proc.wait())
+        if isinstance(exc, asyncio.TimeoutError):
+            raise OpError(f'{Path(args[0]).name} timed out after {timeout}s') from None
+        raise
+    out = out[-MAX_OUTPUT:] if keep == 'tail' else out[:MAX_OUTPUT]
     err_text = err.decode('utf-8', 'replace')[-4000:]
     if check and proc.returncode != 0:
         detail = (err_text or out.decode('utf-8', 'replace')[-2000:]).strip()
@@ -171,25 +194,87 @@ def need_int(args, key, low, high, default=None):
 
 
 def check_url(url):
-    if (len(url) > 2000 or any(c.isspace() for c in url) or any(c in url for c in '"\'`\\')
-            or not re.match(r'[A-Za-z][A-Za-z0-9+.-]*:', url)):
+    match = re.match(r'([A-Za-z][A-Za-z0-9+.-]*):', url)
+    if (len(url) > 2000 or any(c.isspace() for c in url) or any(c in url for c in '"\'`\\') or not match):
         raise OpError('Invalid url')
+    if match.group(1).lower() in BLOCKED_URL_SCHEMES:
+        raise OpError(f'{match.group(1)}: URLs are not allowed on this runner')
     return url
 
 
 def screen_flow(flow, policy):
+    """Parse the flow and allow only safe Maestro commands and allowed app ids."""
     if len(flow.encode()) > MAX_FLOW:
         raise OpError('Flow is too large (64 KiB max)')
-    if not policy.get('allow_maestro_scripts'):
-        for pattern in BLOCKED_FLOW_PATTERNS:
-            if pattern.search(flow):
-                raise OpError('Flow uses scripts/sub-flows/media, which this runner does not allow '
-                              '(set allow_maestro_scripts=true in the runner config to permit)')
-    allowed = policy.get('allowed_app_ids') or []
-    if allowed:
-        for app_id in re.findall(r'^\s*appId\s*:\s*["\']?([^"\'\s#]+)', flow, re.M):
-            if app_id not in allowed:
-                raise OpError(f"App {app_id} is not in this runner's allowed_app_ids")
+    try:
+        import yaml
+    except ImportError:
+        raise OpError('run_flow needs PyYAML on the runner: python3 -m pip install --user pyyaml') from None
+    try:
+        docs = [d for d in yaml.safe_load_all(flow) if d is not None]
+    except yaml.YAMLError as exc:
+        raise OpError(f'Flow is not valid YAML: {str(exc)[:300]}') from None
+    if not docs or len(docs) > 2:
+        raise OpError('Flow must be "config --- commands" or a single command list')
+    config, commands = (docs[0], docs[1]) if len(docs) == 2 else ({}, docs[0])
+    if not isinstance(config, dict) or not isinstance(commands, list):
+        raise OpError('Flow must be a config mapping followed by a list of commands')
+    scripts = bool(policy.get('allow_maestro_scripts'))
+    allowed_apps = set(policy.get('allowed_app_ids') or [])
+
+    def check_app(app_id):
+        if allowed_apps and app_id not in allowed_apps:
+            raise OpError(f"App {app_id} is not in this runner's allowed_app_ids")
+
+    def check_strings(value):
+        if isinstance(value, str):
+            if not scripts and '${' in value:
+                raise OpError('Inline JavaScript (${...}) is not allowed on this runner')
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                check_strings(key)
+                check_strings(item)
+        elif isinstance(value, list):
+            for item in value:
+                check_strings(item)
+
+    def check_commands(items, depth=0):
+        if not isinstance(items, list) or depth > 5:
+            raise OpError('Invalid command list')
+        for item in items:
+            if isinstance(item, str):
+                command, args = item, None
+            elif isinstance(item, dict) and len(item) == 1:
+                command, args = next(iter(item.items()))
+            else:
+                raise OpError('Each flow step must be a command name or a single-key mapping')
+            if not isinstance(command, str) or (not scripts and command not in FLOW_COMMANDS):
+                raise OpError(f'Maestro command {command!r} is not allowed on this runner '
+                              '(set allow_maestro_scripts=true in the runner config to permit it)')
+            if command in APP_COMMANDS:
+                app = args if isinstance(args, str) else (args or {}).get('appId') if isinstance(args, dict) else None
+                check_app(app or config.get('appId'))
+            if command == 'openLink':
+                link = args if isinstance(args, str) else (args or {}).get('link') if isinstance(args, dict) else None
+                check_url(str(link or ''))
+            if command == 'takeScreenshot':
+                name = args if isinstance(args, str) else (args or {}).get('path') if isinstance(args, dict) else None
+                if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name):
+                    raise OpError('takeScreenshot needs a simple name (letters, digits, - and _)')
+            if isinstance(args, dict) and 'commands' in args:
+                check_commands(args['commands'], depth + 1)
+            check_strings(args)
+
+    unknown = set(config) - FLOW_CONFIG_KEYS
+    if unknown and not scripts:
+        raise OpError(f'Unsupported flow config keys: {sorted(unknown)}')
+    if 'appId' in config:
+        check_app(str(config['appId']))
+    check_strings(config.get('env'))
+    for hook in ('onFlowStart', 'onFlowComplete'):
+        if hook in config:
+            check_commands(config[hook])
+    check_commands(commands)
 
 
 # ── Android ───────────────────────────────────────────────────────────────
@@ -228,12 +313,26 @@ class Android:
     def _sh(self, serial, *argv):
         return [self.adb, '-s', serial, 'shell', *argv]
 
-    async def install(self, serial, path, app_id):
+    async def packages(self, serial):
+        _, out, _ = await run(self._sh(serial, 'pm', 'list', 'packages'), timeout=30)
+        return {line[8:].strip() for line in out.decode('utf-8', 'replace').splitlines() if line.startswith('package:')}
+
+    async def install(self, serial, path, app_id, allowed=()):
         if app_id:
             # Debug keys differ between CI runs: always start from a clean install.
             await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60, check=False)
         apk = find_file(path, '.apk')
-        _, out, err = await run([self.adb, '-s', serial, 'install', '-r', '-t', '-g', str(apk)], timeout=300)
+        # With an app allowlist, never replace an existing package (no -r) and verify
+        # the package that actually got installed, not just the app_id we were told.
+        before = await self.packages(serial) if allowed else set()
+        flags = ['-t', '-g'] if allowed else ['-r', '-t', '-g']
+        _, out, err = await run([self.adb, '-s', serial, 'install', *flags, str(apk)], timeout=300)
+        if allowed:
+            added = await self.packages(serial) - before
+            if not added or not added <= set(allowed):
+                for package in added:
+                    await run([self.adb, '-s', serial, 'uninstall', package], timeout=60, check=False)
+                raise OpError(f'Installed package {sorted(added) or "unknown"} is not in allowed_app_ids; removed it')
         return {'installed': apk.name, 'output': (out.decode('utf-8', 'replace') + err).strip()[-500:]}
 
     async def uninstall(self, serial, app_id):
@@ -267,7 +366,11 @@ class Android:
 
     async def ui_tree(self, serial):
         path = '/sdcard/loma_ui.xml'
-        await run(self._sh(serial, 'uiautomator', 'dump', '--compressed', path), timeout=30)
+        await run(self._sh(serial, 'rm', '-f', path), timeout=15, check=False)
+        _, out, err = await run(self._sh(serial, 'uiautomator', 'dump', '--compressed', path), timeout=30)
+        if b'dumped to' not in out and 'dumped to' not in err:
+            raise OpError('uiautomator could not capture the screen (UI not idle?); retry: '
+                          + (out.decode('utf-8', 'replace') + err).strip()[-300:])
         _, out, _ = await run([self.adb, '-s', serial, 'exec-out', 'cat', path], timeout=30)
         return {'units': 'pixels', 'elements': parse_uiautomator(out)}
 
@@ -295,7 +398,8 @@ class Android:
         if clear:
             await run([self.adb, '-s', serial, 'logcat', '-c'], timeout=15)
             return []
-        _, out, _ = await run([self.adb, '-s', serial, 'logcat', '-d', '-v', 'time', '-t', str(lines)], timeout=30)
+        _, out, _ = await run([self.adb, '-s', serial, 'logcat', '-d', '-v', 'time', '-t', str(lines)],
+                              timeout=30, keep='tail')
         return out.decode('utf-8', 'replace').splitlines()
 
 
@@ -348,12 +452,15 @@ class IOS:
             raise OpError('iOS UI control needs idb on the runner: brew install idb-companion && pip install fb-idb')
         return 'idb'
 
-    async def install(self, serial, path, app_id):
+    async def install(self, serial, path, app_id, allowed=()):
         if app_id:
             await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60, check=False)
         app = find_file(path, '.app')
+        bundle_id = bundle_identifier(app)
+        if allowed and bundle_id not in allowed:
+            raise OpError(f'Bundle {bundle_id} is not in allowed_app_ids; not installed')
         await run(['xcrun', 'simctl', 'install', serial, str(app)], timeout=300)
-        return {'installed': app.name}
+        return {'installed': app.name, 'bundle_id': bundle_id}
 
     async def uninstall(self, serial, app_id):
         await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60)
@@ -409,7 +516,7 @@ class IOS:
         return {'swiped': [x1, y1, x2, y2]}
 
     async def type_text(self, serial, text):
-        await run([self._idb(), 'ui', 'text', '--udid', serial, text], timeout=30)
+        await run([self._idb(), 'ui', 'text', '--udid', serial, '--', text], timeout=30)
         return {'typed': len(text)}
 
     async def key(self, serial, key):
@@ -422,55 +529,78 @@ class IOS:
         if clear:
             return []  # the unified log cannot be cleared; read a recent window instead
         _, out, _ = await run(['xcrun', 'simctl', 'spawn', serial, 'log', 'show', '--last', '2m',
-                               '--style', 'compact'], timeout=60)
+                               '--style', 'compact'], timeout=60, keep='tail')
         return out.decode('utf-8', 'replace').splitlines()[-lines:]
 
 
 # ── Build files ───────────────────────────────────────────────────────────
 
 
-def safe_extract(archive, target):
+def bundle_identifier(app):
+    import plistlib
+    try:
+        with open(Path(app) / 'Info.plist', 'rb') as handle:
+            return str(plistlib.load(handle).get('CFBundleIdentifier') or '')
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        raise OpError('Could not read the app bundle identifier (Info.plist)') from None
+
+
+class ExtractBudget:
+    """One byte/member budget shared by an archive and every zip nested in it."""
+
+    def __init__(self):
+        self.bytes, self.members, self.archives = 0, 0, 0
+
+
+def safe_extract(archive, target, budget=None):
+    budget = budget or ExtractBudget()
+    budget.archives += 1
+    if budget.archives > MAX_NESTED_ZIPS + 1:
+        raise OpError('Build archive nests too many zips')
     target = Path(target).resolve()
     with zipfile.ZipFile(archive) as zf:
-        total = 0
-        for member in zf.infolist():
-            destination = (target / member.filename).resolve()
-            if member.filename.startswith('/') or '\\' in member.filename or not destination.is_relative_to(target):
+        members = zf.infolist()
+        for member in members:
+            name = member.filename
+            if (name.startswith('/') or '\\' in name or '..' in Path(name).parts
+                    or not (target / name).resolve().is_relative_to(target)):
                 raise OpError('Build archive contains an unsafe path')
             if stat.S_ISLNK(member.external_attr >> 16):
                 raise OpError('Build archive contains a symlink; refusing to extract')
-            total += member.file_size
-            if total > 2 * MAX_BLOB:
+            budget.bytes += member.file_size
+            budget.members += 1
+            if budget.bytes > MAX_EXTRACT_BYTES or budget.members > MAX_EXTRACT_MEMBERS:
                 raise OpError('Build archive expands beyond the size limit')
         zf.extractall(target)
         # Preserve the executable bit so iOS .app bundles still launch.
-        for member in zf.infolist():
+        for member in members:
             mode = (member.external_attr >> 16) & 0o777
-            if mode:
-                os.chmod(target / member.filename, mode | stat.S_IRUSR | stat.S_IWUSR)
+            path = target / member.filename
+            if mode and not member.is_dir() and path.is_file():
+                os.chmod(path, mode | stat.S_IRUSR | stat.S_IWUSR)
 
 
 def find_file(path, suffix):
-    """Resolve an .apk file or an .app bundle inside a downloaded build (zips nested once)."""
+    """Resolve an .apk file or an .app bundle inside a downloaded build (zips nested up to 5 deep)."""
     path = Path(path)
     if path.suffix == suffix:
         return path
-    if path.is_file() and zipfile.is_zipfile(path):
-        out = path.parent / (path.stem + '-x')
-        safe_extract(path, out)
-        def shallow(items):
-            return sorted((p for p in items if '__MACOSX' not in p.parts), key=lambda p: (len(p.parts), str(p)))
+    if not (path.is_file() and zipfile.is_zipfile(path)):
+        raise OpError(f'Build is not an {suffix} or a zip containing one')
+
+    def shallow(items):
+        return sorted((p for p in items if '__MACOSX' not in p.parts), key=lambda p: (len(p.parts), str(p)))
+
+    budget = ExtractBudget()
+    queue = [(path, path.parent / (path.stem + '-x'))]
+    while queue:
+        archive, out = queue.pop(0)
+        safe_extract(archive, out, budget)
         matches = shallow(out.rglob('*' + suffix))
         if matches:
             return matches[0]
-        for nested in sorted(out.rglob('*.zip')):
-            inner = nested.parent / (nested.stem + '-x')
-            safe_extract(nested, inner)
-            matches = shallow(inner.rglob('*' + suffix))
-            if matches:
-                return matches[0]
-        raise OpError(f'No {suffix} found in the build archive')
-    raise OpError(f'Build is not an {suffix} or a zip containing one')
+        queue += [(nested, nested.parent / (nested.stem + '-x')) for nested in sorted(out.rglob('*.zip'))]
+    raise OpError(f'No {suffix} found in the build archive')
 
 
 # ── Runner ────────────────────────────────────────────────────────────────
@@ -532,7 +662,7 @@ class Runner:
         if op == 'install':
             with tempfile.TemporaryDirectory(prefix='loma-build-') as tmp:
                 path = await self.download(args, Path(tmp))
-                return await driver.install(serial, path, app_id)
+                return await driver.install(serial, path, app_id, tuple(self.policy.get('allowed_app_ids') or ()))
         if op in ('uninstall', 'launch', 'stop', 'reset_app'):
             return await getattr(driver, op)(serial, app_id)
         if op == 'open_url':
@@ -575,7 +705,9 @@ class Runner:
         url = f"{self.config['server']}/device-runner/blobs/{blob_id}"
         digest, size = hashlib.sha256(), 0
         path = target / name
-        async with self.session.get(url, headers=self.auth_headers()) as response:
+        import aiohttp
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120)
+        async with self.session.get(url, headers=self.auth_headers(), timeout=timeout) as response:
             if response.status != 200:
                 raise OpError(f'Build download failed (HTTP {response.status})')
             with open(path, 'wb') as handle:
@@ -607,8 +739,12 @@ class Runner:
 
     async def send(self, ws, frame):
         async with self.send_lock:
-            if not ws.closed:
+            if ws.closed:
+                return
+            try:
                 await ws.send_str(json.dumps(frame))
+            except (ConnectionError, RuntimeError):
+                pass  # socket is closing; the reconnect loop takes over
 
     async def handle_call(self, ws, frame):
         call_id = frame.get('id')
@@ -660,7 +796,7 @@ class Runner:
                         tasks.add(task)
                         task.add_done_callback(tasks.discard)
                     elif frame.get('type') == 'revoked':
-                        raise PermissionError('Runner was revoked in Loma')
+                        raise RevokedError('Runner was revoked in Loma')
             finally:
                 beat.cancel()
                 for task in list(tasks):
@@ -669,22 +805,27 @@ class Runner:
     async def serve(self):
         import aiohttp
         delay = 1
+        loop = asyncio.get_running_loop()
         async with aiohttp.ClientSession() as session:
             self.session = session
             while True:
+                started = loop.time()
                 try:
                     await self.connect_once()
-                    delay = 1
                 except aiohttp.WSServerHandshakeError as exc:
                     if exc.status in (401, 403):
                         print('Loma rejected this runner (revoked or invalid secret). Re-enroll to continue.', flush=True)
                         return 0  # exit 0 so launchd/systemd do not restart-loop
                     print(f'Handshake failed: HTTP {exc.status}', flush=True)
-                except PermissionError as exc:
+                except RevokedError as exc:
                     print(str(exc), flush=True)
                     return 0
                 except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
                     print(f'Connection lost: {type(exc).__name__}', flush=True)
+                # Only a connection that stayed up resets the backoff, so a server
+                # that accepts and immediately closes cannot cause a 1/s reconnect loop.
+                if loop.time() - started >= 60:
+                    delay = 1
                 await asyncio.sleep(delay + random.random())
                 delay = min(delay * 2, 60)
 

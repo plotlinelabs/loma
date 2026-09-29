@@ -17,7 +17,7 @@ and agent calls fail fast with a clear message.
 #    Android: Android Studio + an emulator (arm64 image on Apple Silicon); make sure `adb devices` works
 #    iOS:     Xcode + a booted simulator; for taps/UI tree also: brew install idb-companion && pip3 install fb-idb
 #    Flows:   curl -fsSL "https://get.maestro.mobile.dev" | bash
-python3 -m pip install --user 'aiohttp>=3.9,<4'
+python3 -m pip install --user 'aiohttp>=3.9,<4' 'pyyaml>=6,<7'
 
 # 2. Download the runner from your Loma server and enroll
 curl -fsSLo loma_device_runner.py https://<your-loma>/device-runner/download
