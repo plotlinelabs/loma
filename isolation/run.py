@@ -134,7 +134,7 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
             return await read(db, owner, tool, args)
 
         from devices.gateway import DeviceTools
-        devices = DeviceTools(db, authority, conversation_id, artifacts=artifacts)
+        devices = DeviceTools(db, authority, conversation_id, artifacts=artifacts, on_artifact=registry)
         gateway = ToolGateway(authority, authorize=context.authorize, audit=audit, artifacts=artifacts,
             connector=personal_read, models=relay, knowledge=knowledge, on_artifact=registry, proposals=proposals, automation=automation,
             devices=devices)

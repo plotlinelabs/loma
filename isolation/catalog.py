@@ -100,11 +100,14 @@ CATALOG = [
         'x1': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y1': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
         'x2': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y2': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
         'duration_ms': {'type': 'integer', 'minimum': 50, 'maximum': 5000},
-        'text': {'type': 'string', 'minLength': 1, 'maxLength': 500}, 'key': TEXT,
+        'text': {'type': 'string', 'minLength': 1, 'maxLength': 500},
+        'key': {'type': 'string', 'enum': ['back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up',
+                                           'volume_down', 'power', 'lock', 'siri', 'side', 'apple_pay']},
         'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}, ['device_id', 'action']),
-    _tool('device.observe', 'Observe the device: ui_tree (visible elements with text/id/bounds/center; best for assertions), screenshot (delivered as a run artifact), or logs (logcat / simulator log; optional filter, lines, clear).', {
+    _tool('device.observe', 'Observe the device: ui_tree (visible elements with text/id/bounds/center; use it for all checks), screenshot (shown to the user as evidence; you cannot view it), or logs (logcat / simulator log; optional filter, lines, clear).', {
         'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs']},
-        'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': TEXT, 'clear': {'type': 'boolean'}}, ['device_id', 'what']),
+        'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': {'type': 'string', 'minLength': 1, 'maxLength': 200},
+        'clear': {'type': 'boolean'}}, ['device_id', 'what']),
     _tool('device.run_flow', 'Run a Maestro YAML flow on the device and return pass/fail with the JUnit report. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
         'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}}),
     _tool('workspace.list', 'List files in this disposable worker workspace, including staged attachments.', {}),

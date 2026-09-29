@@ -236,8 +236,12 @@ class DeviceService:
             data = await self.hub.call(runner['runner_id'], op, serial, args)
             if build_meta:
                 data['build'] = build_meta
-        except DeviceError as exc:
-            await self._audit(user_email, scope, device_id, op, False, str(exc), started)
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, DeviceError) else f'internal error: {type(exc).__name__}'
+            try:
+                await self._audit(user_email, scope, device_id, op, False, message, started)
+            except Exception:
+                pass
             raise
         await self._audit(user_email, scope, device_id, op, True, None, started)
         if op == 'screenshot':

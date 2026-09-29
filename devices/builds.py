@@ -128,6 +128,12 @@ class BlobStore:
             raise DeviceError('No GitHub token is configured on the Loma backend')
         headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json',
                    'X-GitHub-Api-Version': '2022-11-28'}
+        try:
+            return await self._from_github(owner, repo, artifact_name, pr, run_id, headers)
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise DeviceError(f'Could not fetch the build from GitHub ({type(exc).__name__}); retry') from None
+
+    async def _from_github(self, owner, repo, artifact_name, pr, run_id, headers):
         timeout = aiohttp.ClientTimeout(total=600, sock_read=120)
         async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
             artifact, head_sha = await self._find_artifact(session, repo, artifact_name, pr, run_id)

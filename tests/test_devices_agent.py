@@ -44,10 +44,12 @@ class FakeService:
 
 
 class FakeArtifacts:
-    def __init__(self, authority):
-        self.authority, self.ingested = authority, []
+    def __init__(self, authority, fail=False):
+        self.authority, self.ingested, self.fail = authority, [], fail
 
     def ingest(self, name, data):
+        if self.fail:
+            raise ValueError('limit')
         self.ingested.append((name, data))
         return {'artifact_id': 'a1', 'name': name, 'size': len(data)}
 
@@ -80,12 +82,40 @@ async def test_device_tools_map_to_service_with_backend_scope():
 
 
 @pytest.mark.asyncio
-async def test_screenshot_becomes_artifact_not_base64():
-    artifacts = FakeArtifacts(AUTH)
-    tools = DeviceTools(None, AUTH, 'c', artifacts=artifacts, service=FakeService())
+async def test_screenshot_is_registered_for_the_user_not_returned_as_base64():
+    artifacts, registered = FakeArtifacts(AUTH), []
+
+    async def on_artifact(receipt):
+        registered.append(receipt)
+        return {'name': receipt['name'], 'url': '/api/files/worker-a1'}
+
+    tools = DeviceTools(None, AUTH, 'c', artifacts=artifacts, service=FakeService(), on_artifact=on_artifact)
     result = await tools(AUTH, 'device.observe', {'device_id': 'r_0123456789abcdef/e', 'what': 'screenshot'})
-    assert result['artifact']['artifact_id'] == 'a1' and artifacts.ingested == [('screenshot.png', b'PNGDATA')]
-    assert 'png' not in result and 'png_base64' not in str(result)
+    assert result['delivered'] is True and result['file']['url'] == '/api/files/worker-a1'
+    assert artifacts.ingested == [('device-screenshot-1.png', b'PNGDATA')] and registered[0]['artifact_id'] == 'a1'
+    assert 'PNGDATA' not in str(result) and 'png_base64' not in str(result)
+    for _ in range(7):
+        await tools(AUTH, 'device.observe', {'device_id': 'r_0123456789abcdef/e', 'what': 'screenshot'})
+    limited = await tools(AUTH, 'device.observe', {'device_id': 'r_0123456789abcdef/e', 'what': 'screenshot'})
+    assert 'limit' in limited['error']
+
+
+@pytest.mark.asyncio
+async def test_large_results_are_capped_and_unexpected_errors_contained():
+    from devices.gateway import cap_result, MAX_RESULT
+    import json as _json
+    big = {'lines': ['x' * 1999] * 2000, 'cleared': False}
+    capped = cap_result(big)
+    assert capped['truncated'] and len(_json.dumps(capped).encode()) <= MAX_RESULT
+    assert capped['lines'][-1] == big['lines'][-1]  # newest lines kept
+
+    class Broken(FakeService):
+        async def call(self, *a, **k):
+            raise RuntimeError('mongo down')
+
+    tools = DeviceTools(None, AUTH, 'c', service=Broken())
+    result = await tools(AUTH, 'device.input', {'device_id': 'r_0123456789abcdef/e', 'action': 'tap', 'x': 1, 'y': 1})
+    assert 'unexpectedly' in result['error']
 
 
 @pytest.mark.asyncio
@@ -138,7 +168,7 @@ def test_cli_build_body(tmp_path):
     body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'conv-1',
                                            'install', '--device-id', 'r_0123456789abcdef/e', '--repo', 'plotlinehq/plotline-sdk',
                                            '--artifact-name', 'app-native-android', '--pr', '366', '--app-id', 'so.plotline.demo']))
-    assert body == {'scope': 'conv-1', 'action': 'call', 'device_id': 'r_0123456789abcdef/e', 'op': 'install',
+    assert body == {'scope': 'conv:conv-1', 'action': 'call', 'device_id': 'r_0123456789abcdef/e', 'op': 'install',
                     'args': {'app_id': 'so.plotline.demo',
                              'build': {'repo': 'plotlinehq/plotline-sdk', 'artifact_name': 'app-native-android', 'pr': 366}}}
     flow = tmp_path / 'f.yaml'
@@ -147,7 +177,7 @@ def test_cli_build_body(tmp_path):
         p.parse_args(['--user-email', OWNER, '--auth-token', 't', 'list'])  # --scope is required
     body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'cli', 'run-flow',
                                            '--device-id', 'r_0123456789abcdef/e', '--flow-file', str(flow)]))
-    assert body['op'] == 'run_flow' and body['args'] == {'flow': '- launchApp'} and body['scope'] == 'cli'
+    assert body['op'] == 'run_flow' and body['args'] == {'flow': '- launchApp'} and body['scope'] == 'conv:cli'
     body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'c', 'logs',
                                            '--device-id', 'r_0123456789abcdef/e', '--filter', 'Plotline', '--clear']))
     assert body['args'] == {'lines': 300, 'clear': True, 'filter': 'Plotline'}

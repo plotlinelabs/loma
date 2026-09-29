@@ -38,7 +38,7 @@ def _base_url():
     return f"http://127.0.0.1:{int(os.environ.get('WEBHOOK_PORT', '3000'))}"
 
 
-def _request(path, headers, body=None, data=None, timeout=960):
+def _request(path, headers, body=None, data=None, timeout=1800):
     payload = data if data is not None else json.dumps(body).encode()
     request = urllib.request.Request(_base_url() + path, data=payload, method='POST', headers={
         **headers, 'Content-Type': 'application/octet-stream' if data is not None else 'application/json'})
@@ -52,11 +52,15 @@ def _request(path, headers, body=None, data=None, timeout=960):
             return {'error': f'HTTP {exc.code}'}
     except urllib.error.URLError as exc:
         return {'error': f'Loma backend unreachable at {_base_url()}: {exc.reason}'}
+    except (TimeoutError, OSError) as exc:
+        return {'error': f'No response from Loma within {timeout}s ({type(exc).__name__}); '
+                         'the operation may still finish, check with ui-tree'}
 
 
 def build_body(args):
     """Translate CLI arguments into the /internal/devices/call body (pure; unit-tested)."""
-    body = {'scope': args.scope}
+    # Same lease scope as isolated runs (conv:<id>), so both runtimes agree.
+    body = {'scope': args.scope if ':' in args.scope else f'conv:{args.scope}'}
     if args.command == 'list':
         return {**body, 'action': 'list'}
     if args.command == 'lease':
@@ -69,7 +73,9 @@ def build_body(args):
         if args.app_id:
             call_args['app_id'] = args.app_id
         if args.file:
-            call_args['upload_id'] = args.upload_id
+            if args.repo or args.artifact_name or args.pr or args.run_id:
+                raise SystemExit('install takes either --file or --repo/--artifact-name, not both')
+            call_args['upload_id'] = getattr(args, 'upload_id', None) or 'pending-upload'
         else:
             if not (args.repo and args.artifact_name):
                 raise SystemExit('install needs --file, or --repo and --artifact-name')
