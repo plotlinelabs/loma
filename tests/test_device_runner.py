@@ -546,3 +546,42 @@ def test_second_runner_instance_is_refused(home):
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(SystemExit, match='already running'):
             ldr.run_forever()
+
+
+def test_install_ios_tools_installs_idb_client_and_trusted_companion(home, monkeypatch, capsys):
+    monkeypatch.setattr(ldr.sys, 'platform', 'darwin')
+    monkeypatch.setattr(ldr.shutil, 'which', lambda tool: None if tool == 'idb_companion' else '/usr/bin/' + tool)
+    calls = record_subprocess(monkeypatch)
+    ldr.install_ios_tools()
+    assert calls[0][:4] == [sys.executable, '-m', 'pip', 'install'] and calls[0][-1] == 'fb-idb'
+    assert calls[1:] == [['brew', 'tap', 'facebook/fb'], ['brew', 'trust', '--formula', ldr.IDB_COMPANION],
+                         ['brew', 'install', ldr.IDB_COMPANION]]
+
+
+def test_install_ios_tools_is_best_effort(home, monkeypatch, capsys):
+    monkeypatch.setattr(ldr.sys, 'platform', 'darwin')
+    monkeypatch.setattr(ldr.shutil, 'which', lambda tool: None if tool == 'idb_companion' else '/usr/bin/' + tool)
+    calls = record_subprocess(monkeypatch, returncode=1)
+    ldr.install_ios_tools()  # must not raise
+    assert len(calls) == 1 and 'could not install' in capsys.readouterr().out
+
+
+def test_install_ios_tools_skips_without_xcode_or_when_present(home, monkeypatch):
+    calls = record_subprocess(monkeypatch)
+    monkeypatch.setattr(ldr.sys, 'platform', 'linux')
+    ldr.install_ios_tools()
+    monkeypatch.setattr(ldr.sys, 'platform', 'darwin')
+    monkeypatch.setattr(ldr.shutil, 'which', lambda tool: None if tool == 'xcrun' else '/usr/bin/' + tool)
+    ldr.install_ios_tools()
+    monkeypatch.setattr(ldr.shutil, 'which', lambda tool: '/usr/bin/' + tool)
+    (home / 'venv' / 'bin').mkdir(parents=True)
+    (home / 'venv' / 'bin' / 'idb').write_text('')
+    ldr.install_ios_tools()
+    assert calls == []
+
+
+def test_extend_path_finds_private_idb_and_homebrew(home, monkeypatch):
+    monkeypatch.setattr(ldr.sys, 'platform', 'darwin')
+    monkeypatch.setenv('PATH', '/usr/bin')
+    path = ldr.extend_path().split(os.pathsep)
+    assert path[0] == '/usr/bin' and str(home / 'venv' / 'bin') in path and '/opt/homebrew/bin' in path

@@ -26,8 +26,11 @@ python3 loma_device_runner.py setup --server https://<your-loma> --token <token>
    (a private virtualenv, so your system Python is untouched).
 2. Enrolls the machine with the one-time token. If Loma is behind Cloudflare Access and
    `cloudflared` is installed, it detects this and uses your `cloudflared` login.
-3. Checks tooling and lists usable devices (`doctor`).
-4. Starts a login service (launchd on macOS, systemd `--user` on Linux) so the runner is
+3. On macOS with Xcode, installs `idb` for iOS taps, typing and the UI tree: the client
+   into the private virtualenv, `idb_companion` from Meta's Homebrew tap (trusting only that
+   one formula). Best effort; add `--skip-ios-tools` to skip it.
+4. Checks tooling and lists usable devices (`doctor`), with a fix for anything missing.
+5. Starts a login service (launchd on macOS, systemd `--user` on Linux) so the runner is
    online whenever the machine is. Add `--foreground` to run it in the terminal instead.
 
 Then boot an emulator or simulator; it shows up in Loma within about 15 seconds.
@@ -43,12 +46,12 @@ Device tooling (install what you need):
 
 - **Android:** Android Studio + an emulator (arm64 image on Apple Silicon). `adb` is found in
   the default SDK location (or `$ANDROID_HOME`) without PATH changes.
-- **iOS:** Xcode + a booted simulator. Taps, swipes, typing and the UI tree also need
-  `idb`: `brew install idb-companion && pip3 install fb-idb`.
-- **Flows:** `curl -fsSL "https://get.maestro.mobile.dev" | bash`.
+- **iOS:** Xcode + a booted simulator. `setup` installs `idb` (needs Homebrew).
+- **Flows (optional):** Maestro, which needs Java 17:
+  `brew install openjdk@17 && curl -fsSL "https://get.maestro.mobile.dev" | bash`, then re-run `setup`.
 
-The service keeps the `PATH` of the shell you ran `setup` from, so run it from a shell
-where `idb`/`cloudflared` are found. On Linux, run `loginctl enable-linger $USER` if the
+The service keeps the `PATH` of the shell you ran `setup` from, plus the Android SDK,
+Maestro, Homebrew and the runner's own `idb`. On Linux, run `loginctl enable-linger $USER` if the
 runner should stay up while you are logged out.
 
 ## What the agent can and cannot do

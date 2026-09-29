@@ -469,7 +469,7 @@ class IOS:
 
     def _idb(self):
         if shutil.which('idb') is None:
-            raise OpError('iOS UI control needs idb on the runner: brew install idb-companion && pip install fb-idb')
+            raise OpError('iOS UI control needs idb on the runner: re-run `setup` on it (installs idb automatically)')
         return 'idb'
 
     async def install(self, serial, path, app_id, allowed=()):
@@ -891,7 +891,9 @@ def extend_path():
     sdk = os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT') or str(
         Path.home() / ('Library/Android/sdk' if sys.platform == 'darwin' else 'Android/Sdk'))
     parts = (os.environ.get('PATH') or '/usr/local/bin:/usr/bin:/bin').split(os.pathsep)
-    extra = [str(Path(sdk) / 'platform-tools'), str(Path.home() / '.maestro/bin')]
+    extra = [str(Path(sdk) / 'platform-tools'), str(Path.home() / '.maestro/bin'), str(VENV / 'bin')]
+    if sys.platform == 'darwin':  # Homebrew (idb_companion, cloudflared) is missing from launchd's default PATH
+        extra += ['/opt/homebrew/bin', '/usr/local/bin']
     os.environ['PATH'] = os.pathsep.join(parts + [d for d in extra if d not in parts])
     return os.environ['PATH']
 
@@ -981,6 +983,44 @@ def bootstrap(argv):
     os.execv(str(python), [str(python), str(INSTALLED_SCRIPT), *argv])
 
 
+IDB_COMPANION = 'facebook/fb/idb-companion'
+TOOL_HINTS = {
+    'adb': 'install Android Studio and create an emulator',
+    'xcrun': 'install Xcode',
+    'idb': 're-run setup (installs it for iOS taps / UI tree)',
+    'maestro': 'optional, for scripted flows: curl -fsSL "https://get.maestro.mobile.dev" | bash',
+}
+
+
+def install_ios_tools():
+    """Best effort: install idb (iOS taps, typing, UI tree) when Xcode is present.
+
+    The idb client goes into the private virtualenv; idb_companion comes from Meta's Homebrew
+    tap, which newer Homebrew only installs once that one formula is trusted. A failure only
+    prints a hint, since Android and screenshot-only iOS work without idb.
+    """
+    if sys.platform != 'darwin' or shutil.which('xcrun') is None:
+        return
+    steps = []
+    if not (VENV / 'bin' / 'idb').exists():
+        steps.append([sys.executable, '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', 'fb-idb'])
+    if shutil.which('idb_companion') is None:
+        if shutil.which('brew') is None:
+            print('idb      skipped: install Homebrew (https://brew.sh) and re-run setup for iOS taps / UI tree')
+            return
+        steps += [['brew', 'tap', 'facebook/fb'], ['brew', 'trust', '--formula', IDB_COMPANION],
+                  ['brew', 'install', IDB_COMPANION]]
+    if steps:
+        print('Installing idb for iOS simulator control (a few minutes the first time) ...', flush=True)
+    for step in steps:
+        result = subprocess.run(step, capture_output=True, text=True)
+        # `brew trust` only exists on Homebrew versions that enforce tap trust; older ones skip it.
+        if result.returncode != 0 and step[:2] != ['brew', 'trust']:
+            print(f'idb      could not install ({" ".join(step)}): {result.stderr.strip()[-300:]}\n'
+                  '         Android and iOS screenshots still work; fix this and re-run setup for iOS taps.')
+            return
+
+
 def service_file():
     if sys.platform == 'darwin':
         return Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
@@ -1037,9 +1077,9 @@ def uninstall():
 
 
 async def doctor():
-    for tool in ('adb', 'xcrun', 'idb', 'maestro'):
+    for tool, hint in TOOL_HINTS.items():
         where = shutil.which(tool)
-        print(f'{tool:8} {"found at " + where if where else "not found"}')
+        print(f'{tool:8} {"found at " + where if where else "not found: " + hint}')
     config = load_config() if CONFIG_PATH.exists() else {}
     devices = await Runner({'policy': config.get('policy', {})}).refresh()
     print(f'{len(devices)} usable device(s) (physical devices are hidden unless allow_physical_devices=true):')
@@ -1072,6 +1112,8 @@ def setup(args, argv):
     bootstrap(argv)  # returns only when running from the private environment
     if args.token:
         asyncio.run(enroll(server, args.token.strip(), args.name[:80]))
+    if not args.skip_ios_tools:
+        install_ios_tools()
     asyncio.run(doctor())
     if args.foreground:
         return run_forever()
@@ -1088,6 +1130,7 @@ def main(argv=None):
     p_setup.add_argument('--name', default=socket.gethostname())
     p_setup.add_argument('--allow-http', action='store_true', help='Allow plain http (testing only)')
     p_setup.add_argument('--foreground', action='store_true', help='Run in this terminal instead of as a service')
+    p_setup.add_argument('--skip-ios-tools', action='store_true', help='Do not install idb on macOS')
     sub.add_parser('run', help='Connect to Loma and serve device requests (what the service runs)')
     sub.add_parser('doctor', help='Check tooling and list usable devices')
     sub.add_parser('uninstall', help='Stop the service and delete ' + str(CONFIG_DIR))
