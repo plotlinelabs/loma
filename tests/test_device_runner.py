@@ -343,3 +343,15 @@ async def test_enroll_reports_sso_redirects_and_non_json(tmp_path, monkeypatch, 
             await ldr.enroll(str(server.make_url('')).rstrip('/'), 'lde_x', 'Mac')
     assert expected in str(exc.value)
     assert not (tmp_path / 'config.json').exists()
+
+
+def test_cf_access_headers(monkeypatch, tmp_path):
+    assert ldr.cf_access_headers({'server': 'https://x.example.com'}) == {}
+    fake = tmp_path / 'cloudflared'
+    fake.write_text('#!/bin/sh\n[ "$3" = "-app=https://x.example.com" ] && echo eyJ.tok.en && exit 0\n'
+                    'echo "Unable to find token" >&2; exit 1\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{tmp_path}:{os.environ["PATH"]}')
+    assert ldr.cf_access_headers({'server': 'https://x.example.com', 'cf_access': True}) == {'cf-access-token': 'eyJ.tok.en'}
+    with pytest.raises(ldr.CfAccessError, match='cloudflared access login https://y.example.com'):
+        ldr.cf_access_headers({'server': 'https://y.example.com', 'cf_access': True})

@@ -46,6 +46,7 @@ import shutil
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -623,6 +624,7 @@ class Runner:
         self.locks = {}
         self.inventory = {}
         self.send_lock = asyncio.Lock()
+        self.cf_headers = {}
 
     def capabilities(self):
         caps = [d.platform for d in self.drivers]
@@ -736,7 +738,8 @@ class Runner:
                     'output': (out.decode('utf-8', 'replace') + err)[-8000:]}
 
     def auth_headers(self):
-        return {'Authorization': 'Bearer ' + self.config['secret'], 'X-Loma-Runner-Id': self.config['runner_id']}
+        return {'Authorization': 'Bearer ' + self.config['secret'], 'X-Loma-Runner-Id': self.config['runner_id'],
+                **self.cf_headers}
 
     async def send(self, ws, frame):
         async with self.send_lock:
@@ -770,6 +773,7 @@ class Runner:
     async def connect_once(self):
         import aiohttp
         url = self.config['server'].replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)
+        self.cf_headers = cf_access_headers(self.config)  # refreshed per connect; cloudflared caches the token
         async with self.session.ws_connect(url + '/device-runner/ws', headers=self.auth_headers(),
                                            heartbeat=30, max_msg_size=MAX_WS_MESSAGE) as ws:
             devices = await self.refresh()
@@ -820,6 +824,8 @@ class Runner:
                 except RevokedError as exc:
                     print(str(exc), flush=True)
                     return 0
+                except CfAccessError as exc:
+                    print(str(exc), flush=True)
                 except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
                     print(f'Connection lost: {type(exc).__name__}', flush=True)
                 # Only a connection that stayed up resets the backoff, so a server
@@ -834,13 +840,35 @@ class Runner:
 
 
 SSO_HINT = ('Loma redirected this request, usually to an SSO login such as Cloudflare Access. '
-            'Ask your admin to bypass SSO for /device-runner/* (see docs/devices.md).')
+            'Ask your admin to bypass SSO for /device-runner/*, or re-enroll with --cf-access (see docs/devices.md).')
 
 
-async def enroll(server, token, name):
+class CfAccessError(Exception):
+    pass
+
+
+def cf_access_headers(config):
+    """Cloudflare Access login token for SSO-protected servers (opt-in via enroll --cf-access)."""
+    if not config.get('cf_access'):
+        return {}
+    if shutil.which('cloudflared') is None:
+        raise CfAccessError('cf_access is on but cloudflared is not installed (brew install cloudflared)')
+    proc = subprocess.run(['cloudflared', 'access', 'token', '-app=' + config['server']],
+                          capture_output=True, text=True, timeout=30)
+    token = proc.stdout.strip()
+    if proc.returncode != 0 or not token or ' ' in token:
+        raise CfAccessError(f"No Cloudflare Access token. Run: cloudflared access login {config['server']}")
+    return {'cf-access-token': token}
+
+
+async def enroll(server, token, name, cf_access=False):
     import aiohttp
+    try:
+        headers = cf_access_headers({'server': server, 'cf_access': cf_access})
+    except CfAccessError as exc:
+        raise SystemExit(f'Enrollment failed: {exc}')
     async with aiohttp.ClientSession() as session:
-        async with session.post(server + '/device-runner/enroll', json={
+        async with session.post(server + '/device-runner/enroll', headers=headers, json={
                 'token': token, 'name': name, 'hostname': socket.gethostname(),
                 'os': f'{platform.system()} {platform.release()}', 'version': VERSION},
                 allow_redirects=False) as response:
@@ -854,7 +882,7 @@ async def enroll(server, token, name):
                 error = body.get('error') if isinstance(body, dict) else None
                 raise SystemExit(f'Enrollment failed: {error or response.status}')
     config = {'server': server, 'runner_id': body['runner_id'], 'secret': body['secret'],
-              'name': body.get('name', name), 'policy': default_policy()}
+              'name': body.get('name', name), 'cf_access': cf_access, 'policy': default_policy()}
     save_config(config)
     print(f'Enrolled as {config["runner_id"]} ({config["name"]}). Config: {CONFIG_PATH}')
 
@@ -918,12 +946,15 @@ def main(argv=None):
     p_enroll.add_argument('--token', required=True)
     p_enroll.add_argument('--name', default=socket.gethostname())
     p_enroll.add_argument('--allow-http', action='store_true', help='Allow plain http (testing only)')
+    p_enroll.add_argument('--cf-access', action='store_true',
+                          help='Send your Cloudflare Access login token (run `cloudflared access login <server>` first)')
     sub.add_parser('run', help='Connect to Loma and serve device requests')
     sub.add_parser('doctor', help='Check tooling and list usable devices')
     sub.add_parser('install-service', help='Install as a launchd/systemd user service')
     args = parser.parse_args(argv)
     if args.command == 'enroll':
-        return asyncio.run(enroll(normalize_server(args.server, args.allow_http), args.token.strip(), args.name[:80]))
+        return asyncio.run(enroll(normalize_server(args.server, args.allow_http), args.token.strip(), args.name[:80],
+                                  args.cf_access))
     if args.command == 'run':
         return asyncio.run(Runner(load_config()).serve())
     if args.command == 'doctor':

@@ -42,6 +42,11 @@ Loma Device Runner (device_runner/loma_device_runner.py) on the user's machine
    `*.preview.example.com` covers every preview) with one policy, action **Bypass**, include
    **Everyone**. The more specific path wins over the SSO app for the rest of the host.
    Check: `curl -sI https://<host>/device-runner/download` returns `200`, not `302`.
+   No admin access? Use your own login instead: `cloudflared access login https://<host>`,
+   download with `cloudflared access curl https://<host>/device-runner/download -o loma_device_runner.py`,
+   and add `--cf-access` to `enroll`. The runner then sends `cloudflared access token` as
+   `cf-access-token` on every connect. The token expires with the Access session (often 24h);
+   re-run `cloudflared access login` when `run` says so. Fine for testing, not for always-on runners.
 2. User: **Integrations → Devices → Get setup commands**, run them on the machine, boot an
    emulator/simulator. See `device_runner/README.md` for details, policy options and
    `install-service`.
