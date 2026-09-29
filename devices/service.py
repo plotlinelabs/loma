@@ -104,19 +104,22 @@ class DeviceService:
 
     async def runners_for(self, user_email):
         cursor = self.db.device_runners.find(
-            {'revoked': {'$ne': True}, '$or': [{'owner_email': user_email}, {'shared_with': user_email}]},
+            {'revoked': {'$ne': True}, '$or': [{'owner_email': user_email}, {'shared_with': user_email.lower()}]},
             {'secret_hash': 0, '_id': 0})
         return await cursor.to_list(length=100)
 
     async def list_devices(self, user_email):
         runners = await self.runners_for(user_email)
-        ids = [store.device_id(r['runner_id'], d.get('serial', '')) for r in runners for d in (r.get('devices') or [])]
+        # Live device list when the runner is connected, last persisted list otherwise.
+        listing = []
+        for runner in runners:
+            conn = self.hub.get(runner['runner_id'])
+            listing.append((runner, conn, conn.devices if conn is not None else (runner.get('devices') or [])))
+        ids = [store.device_id(r['runner_id'], d.get('serial', '')) for r, _, listed in listing for d in listed]
         leases = {l['_id']: l for l in await self.db.device_leases.find({'_id': {'$in': ids}}).to_list(length=500)}
         at = store.now()
         devices = []
-        for runner in runners:
-            conn = self.hub.get(runner['runner_id'])
-            listed = conn.devices if conn is not None else (runner.get('devices') or [])
+        for runner, conn, listed in listing:
             for device in listed:
                 did = store.device_id(runner['runner_id'], device.get('serial', ''))
                 lease = leases.get(did)
@@ -143,17 +146,20 @@ class DeviceService:
     # ── Leases ────────────────────────────────────────────────────────────
 
     async def _acquire(self, device_id, user_email, scope):
-        at = store.now()
-        try:
-            lease = await self.db.device_leases.find_one_and_update(
-                {'_id': device_id, '$or': [{'expires_at': {'$lt': at}},
-                                           {'owner_email': user_email, 'scope': scope}]},
-                {'$set': {'owner_email': user_email, 'scope': scope, 'expires_at': at + LEASE_TTL},
-                 '$setOnInsert': {'acquired_at': at}},
-                upsert=True, return_document=ReturnDocument.AFTER)
-        except DuplicateKeyError:
-            return None
-        return lease
+        # Two attempts: concurrent first acquires by the SAME holder race on the
+        # upsert insert; the retry then matches the winner's document.
+        for _ in range(2):
+            at = store.now()
+            try:
+                return await self.db.device_leases.find_one_and_update(
+                    {'_id': device_id, '$or': [{'expires_at': {'$lt': at}},
+                                               {'owner_email': user_email, 'scope': scope}]},
+                    {'$set': {'owner_email': user_email, 'scope': scope, 'expires_at': at + LEASE_TTL},
+                     '$setOnInsert': {'acquired_at': at}},
+                    upsert=True, return_document=ReturnDocument.AFTER)
+            except DuplicateKeyError:
+                continue
+        return None
 
     async def lease(self, user_email, scope, device_id=None, platform=None):
         self._check_scope(scope)

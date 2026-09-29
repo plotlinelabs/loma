@@ -231,7 +231,8 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
                 # Install: backend blob → runner downloads with its secret → checksum → adb install.
                 apk = tmp_path / 'upload.apk'
                 apk.write_bytes(b'fake apk bytes')
-                upload_id = test_blobs.add_file(apk, 'app-debug.apk', OWNER)
+                import hashlib
+                upload_id = test_blobs.add_file(apk, 'app-debug.apk', OWNER, hashlib.sha256(b'fake apk bytes').hexdigest(), 14)
                 result = await service.call(OWNER, 'conv-1', device, 'install',
                                             {'upload_id': upload_id, 'app_id': 'so.plotline.demo'})
                 assert result['installed'] == 'app-debug.apk' and result['build']['size'] == 14
@@ -277,5 +278,74 @@ async def test_runner_download_and_internal_loopback(db):
                 async with http.post(base + '/internal/devices/call', json={'action': 'list'},
                                      headers={'X-Loma-User': OWNER, 'X-Loma-Auth-Token': 'bad'}) as resp:
                     assert resp.status == 401
+        finally:
+            await server.close()
+
+
+# ── Phase 2 review regressions ────────────────────────────────────────────
+
+
+def test_blob_reuse_and_multiple_runners(tmp_path):
+    import hashlib
+    blobs = BlobStore(tmp_path / 'b')
+    path = blobs.new_path()
+    path.write_bytes(b'x')
+    blob_id = blobs.add_file(path, 'a.apk', OWNER, hashlib.sha256(b'x').hexdigest(), 1)
+    for _ in range(8):  # the same build installed many times keeps working
+        blobs.bind(blob_id, 'r_a')
+        assert blobs.open_for_runner(blob_id, 'r_a') is not None
+    blobs.bind(blob_id, 'r_b')  # a second runner does not steal access from the first
+    assert blobs.open_for_runner(blob_id, 'r_a') and blobs.open_for_runner(blob_id, 'r_b')
+    assert blobs.open_for_runner(blob_id, 'r_c') is None
+    assert blobs.get(blob_id, owner='someone@else') is None
+
+
+def test_blob_budget_and_orphan_cleanup(tmp_path, monkeypatch):
+    root = tmp_path / 'b'
+    root.mkdir()
+    (root / 'orphan').write_bytes(b'left over from a previous process')
+    blobs = BlobStore(root)
+    blobs.new_path()
+    assert not (root / 'orphan').exists()
+    monkeypatch.setattr('devices.builds.MAX_OWNER_BYTES', 10)
+    with pytest.raises(DeviceError, match='storage is full'):
+        blobs.reserve(OWNER, 11)
+    blobs.reserve('other@x.com', 5)
+
+
+def test_sharing_is_case_insensitive():
+    runner = {'owner_email': 'Vamsi@Plotline.so', 'shared_with': ['pm@x.com']}
+    assert store.can_use(runner, 'vamsi@plotline.so') and store.can_use(runner, 'PM@x.com')
+    assert not store.can_use(runner, 'other@x.com') and not store.can_use(runner, '')
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_lease_same_holder_does_not_report_busy(db):
+    runner = await enroll(db)
+    service = DeviceService(db, hub=FakeHub({runner['runner_id']}), blobs=BlobStore())
+    device = store.device_id(runner['runner_id'], 'emulator-5554')
+    results = await asyncio.gather(*(service._acquire(device, OWNER, 'conv-1') for _ in range(5)))
+    assert all(r is not None for r in results)
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_non_object_and_enroll_command_is_quoted(db):
+    app = web.Application(middlewares=[fake_identity])
+    setup_device_routes(app)
+    with patch('api.device_routes.get_db', return_value=db):
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession() as http:
+                headers = {'X-Test-User': OWNER}
+                async with http.post(server.make_url('/api/devices/enrollments'),
+                                     json={'name': 'x"; $(touch /tmp/pwn) #'}, headers=headers) as r:
+                    command = next(c for c in (await r.json())['commands'] if ' enroll ' in c)
+                import shlex
+                assert shlex.split(command)[-1] == 'x"; $(touch /tmp/pwn) #'
+                runner = await enroll(db)
+                async with http.patch(server.make_url(f"/api/devices/runners/{runner['runner_id']}"),
+                                      json='not-an-object', headers=headers) as r:
+                    assert r.status == 400
         finally:
             await server.close()

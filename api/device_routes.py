@@ -9,10 +9,12 @@ Three audiences, three auth modes:
 """
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
 import re
+import shlex
 from pathlib import Path
 
 from aiohttp import web
@@ -107,6 +109,9 @@ async def handle_runner_ws(request):
         return ws
     hello['devices'] = _clean_devices(hello.get('devices'))
     conn = await hub.attach(runner_id, ws, hello)
+    if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
+        await hub.revoke(runner_id)  # revoked while we waited for hello
+        return ws
     await db.device_runners.update_one({'runner_id': runner_id}, {'$set': {
         'devices': hello['devices'], 'last_seen': store.now(), 'connected_at': store.now(),
         'version': str(hello.get('version') or '')[:40], 'hostname': str(hello.get('hostname') or '')[:120],
@@ -199,9 +204,9 @@ async def handle_create_enrollment(request):
     return web.json_response({
         'token': token, 'expires_at': expires.isoformat(), 'server': base,
         'commands': [
-            "python3 -m pip install --user 'aiohttp>=3.9,<4'",
+            "python3 -m pip install --user 'aiohttp>=3.9,<4' 'pyyaml>=6,<7'",
             f'curl -fsSLo loma_device_runner.py {base}/device-runner/download',
-            f'python3 loma_device_runner.py enroll --server {base} --token {token} --name "{name}"',
+            f'python3 loma_device_runner.py enroll --server {shlex.quote(base)} --token {token} --name {shlex.quote(name)}',
             'python3 loma_device_runner.py doctor',
             'python3 loma_device_runner.py run']})
 
@@ -223,6 +228,8 @@ async def handle_update_runner(request):
         body = await request.json()
     except (ValueError, UnicodeError):
         return _error('Invalid JSON')
+    if not isinstance(body, dict):
+        return _error('Invalid JSON')
     update = {}
     if 'name' in body:
         name = str(body['name'] or '').strip()[:80]
@@ -234,7 +241,7 @@ async def handle_update_runner(request):
         if (not isinstance(emails, list) or len(emails) > 50
                 or not all(isinstance(e, str) and EMAIL.fullmatch(e.strip()) for e in emails)):
             return _error('shared_with must be a list of email addresses')
-        update['shared_with'] = sorted({e.strip().lower() for e in emails} - {user_email})
+        update['shared_with'] = sorted({e.strip().lower() for e in emails} - {user_email.lower()})
     if not update:
         return _error('Nothing to update')
     await db.device_runners.update_one({'runner_id': runner['runner_id']}, {'$set': update})
@@ -325,18 +332,27 @@ async def handle_internal_upload(request):
     filename = request.query.get('filename', '')
     if not FILENAME.fullmatch(filename) or not filename.endswith(('.apk', '.zip', '.ipa')):
         return _error('filename must be a simple name ending in .apk, .zip or .ipa')
-    path, size = blobs.new_path(), 0
+    try:
+        declared = int(request.headers.get('Content-Length', '0'))
+        blobs.reserve(user_email, declared)
+    except (ValueError, DeviceError) as exc:
+        return _error(str(exc) if isinstance(exc, DeviceError) else 'Invalid Content-Length')
+    path, size, digest = blobs.new_path(), 0, hashlib.sha256()
     try:
         with open(path, 'wb') as handle:
             async for chunk in request.content.iter_chunked(1 << 20):
                 size += len(chunk)
                 if size > MAX_BLOB:
                     raise DeviceError('Build is larger than 500 MB')
+                digest.update(chunk)
                 handle.write(chunk)
-        blob_id = blobs.add_file(path, filename, user_email, meta={'uploaded': filename})
+        blob_id = blobs.add_file(path, filename, user_email, digest.hexdigest(), size, meta={'uploaded': filename})
     except DeviceError as exc:
         path.unlink(missing_ok=True)
         return _error(str(exc))
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
     return web.json_response({'upload_id': blob_id, 'size': size})
 
 

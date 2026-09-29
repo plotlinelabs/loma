@@ -2,10 +2,12 @@
 
 Talks to the local Loma backend (loopback only) which enforces ownership,
 leases, validation and audit. Devices come from runners enrolled in Loma →
-Devices. Use --scope <conversation-id> so a lease belongs to this chat.
+Devices. --scope <conversation-id> is required so a lease belongs to one chat.
+In this legacy runtime the scope is advisory between your own chats (other
+users are always isolated); isolated workers bind the scope server-side.
 
 Commands:
-  device.py --user-email E --auth-token T [--scope S] list
+  device.py --user-email E --auth-token T --scope CONVERSATION_ID list
   device.py ... lease [--platform android|ios] [--device-id ID]
   device.py ... release --device-id ID
   device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N] | --file PATH) [--app-id PKG]
@@ -110,7 +112,8 @@ def parser():
     p = argparse.ArgumentParser(description='Drive devices on your Loma Device Runners')
     p.add_argument('--user-email', required=True)
     p.add_argument('--auth-token', required=True)
-    p.add_argument('--scope', default='cli', help='Lease scope; pass the conversation id')
+    p.add_argument('--scope', required=True,
+                   help='Lease scope: pass this conversation id, so leases are per chat')
     sub = p.add_subparsers(dest='command', required=True)
     sub.add_parser('list')
     s = sub.add_parser('lease')

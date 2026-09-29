@@ -19,7 +19,9 @@ from devices.hub import DeviceError
 
 MAX_BLOB = 500 * 1024 * 1024
 BLOB_TTL = 30 * 60
-MAX_DOWNLOADS = 5
+MAX_DOWNLOADS = 5  # per bind (one install), not per blob lifetime
+MAX_TOTAL_BYTES = 3 * 1024 * 1024 * 1024
+MAX_OWNER_BYTES = 1536 * 1024 * 1024
 REPO = re.compile(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}\Z')
 ARTIFACT_NAME = re.compile(r'[A-Za-z0-9._ -]{1,200}\Z')
 FILENAME = re.compile(r'[A-Za-z0-9._-]{1,128}\Z')
@@ -36,6 +38,7 @@ class BlobStore:
         self.root = Path(root or os.environ.get('LOMA_DEVICE_BLOB_DIR') or Path(tempfile.gettempdir()) / 'loma-device-blobs')
         self.blobs = {}
         self.cache = {}
+        self.cleaned = False
 
     def _prune(self):
         cutoff = time.monotonic()
@@ -50,30 +53,41 @@ class BlobStore:
 
     def new_path(self):
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not self.cleaned:
+            # The registry is in memory: files left by a previous process are orphans.
+            self.cleaned = True
+            for leftover in self.root.iterdir():
+                if leftover.is_file() and leftover.name not in {Path(b['path']).name for b in self.blobs.values()}:
+                    leftover.unlink(missing_ok=True)
+        self._prune()
         return self.root / secrets.token_hex(16)
+
+    def reserve(self, owner, size):
+        """Reject new builds that would exceed the per-owner or global disk budget."""
+        self._prune()
+        total = sum(b['size'] for b in self.blobs.values())
+        mine = sum(b['size'] for b in self.blobs.values() if b['owner'] == owner)
+        if total + size > MAX_TOTAL_BYTES or mine + size > MAX_OWNER_BYTES:
+            raise DeviceError('Build storage is full; wait for recent builds to expire (30 min) and retry')
 
     def _register(self, path, sha256, size, filename, owner, cache_key=None, meta=None):
         self._prune()
         blob_id = 'b_' + secrets.token_urlsafe(18)
         self.blobs[blob_id] = {'path': str(path), 'sha256': sha256, 'size': size, 'filename': filename,
-                               'owner': owner, 'runner_id': None, 'downloads': 0,
-                               'expires': time.monotonic() + BLOB_TTL, 'meta': meta or {}}
+                               'owner': owner, 'runners': {}, 'created': time.monotonic(),
+                               'expires': time.monotonic() + BLOB_TTL,
+                               'meta': meta or {}}
         if cache_key is not None:
             self.cache[cache_key] = blob_id
         return blob_id
 
-    def add_file(self, path, filename, owner, meta=None):
-        """Register an already-written file (e.g. a CLI upload). Computes the checksum."""
+    def add_file(self, path, filename, owner, sha256, size, meta=None):
+        """Register an already-written file whose checksum was computed while streaming it."""
         if not FILENAME.fullmatch(filename or ''):
             raise DeviceError('Invalid build filename')
-        digest, size = hashlib.sha256(), 0
-        with open(path, 'rb') as handle:
-            for chunk in iter(lambda: handle.read(1 << 20), b''):
-                size += len(chunk)
-                digest.update(chunk)
         if size == 0 or size > MAX_BLOB:
             raise DeviceError('Build must be between 1 byte and 500 MB')
-        return self._register(path, digest.hexdigest(), size, filename, owner, meta=meta)
+        return self._register(path, sha256, size, filename, owner, meta=meta)
 
     def get(self, blob_id, owner=None):
         self._prune()
@@ -83,20 +97,23 @@ class BlobStore:
         return blob
 
     def bind(self, blob_id, runner_id):
-        """Allow exactly one runner to download the blob."""
+        """Allow this runner a few downloads (one install) of the blob."""
+        self._prune()
         blob = self.blobs.get(blob_id)
         if blob is None:
             raise DeviceError('Build expired; request it again')
-        blob['runner_id'] = runner_id
-        blob['expires'] = max(blob['expires'], time.monotonic() + 15 * 60)
+        blob['runners'][runner_id] = MAX_DOWNLOADS
+        # Keep it long enough for this install to fetch it, but never past 2 hours old.
+        now = time.monotonic()
+        blob['expires'] = min(max(blob['expires'], now + 15 * 60), blob['created'] + 4 * BLOB_TTL)
         return blob
 
     def open_for_runner(self, blob_id, runner_id):
         self._prune()
         blob = self.blobs.get(blob_id)
-        if blob is None or blob['runner_id'] != runner_id or blob['downloads'] >= MAX_DOWNLOADS:
+        if blob is None or blob['runners'].get(runner_id, 0) <= 0:
             return None
-        blob['downloads'] += 1
+        blob['runners'][runner_id] -= 1
         return blob
 
     async def from_github(self, owner, repo, artifact_name, pr=None, run_id=None):
@@ -118,6 +135,7 @@ class BlobStore:
             cached = self.cache.get(cache_key)
             if cached in self.blobs:
                 return cached, self.blobs[cached]
+            self.reserve(owner, int(artifact.get('size_in_bytes') or 0))
             path = self.new_path()
             digest, size = hashlib.sha256(), 0
             try:

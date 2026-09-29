@@ -143,10 +143,12 @@ def test_cli_build_body(tmp_path):
                              'build': {'repo': 'plotlinehq/plotline-sdk', 'artifact_name': 'app-native-android', 'pr': 366}}}
     flow = tmp_path / 'f.yaml'
     flow.write_text('- launchApp')
-    body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', 'run-flow',
+    with pytest.raises(SystemExit):
+        p.parse_args(['--user-email', OWNER, '--auth-token', 't', 'list'])  # --scope is required
+    body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'cli', 'run-flow',
                                            '--device-id', 'r_0123456789abcdef/e', '--flow-file', str(flow)]))
     assert body['op'] == 'run_flow' and body['args'] == {'flow': '- launchApp'} and body['scope'] == 'cli'
-    body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', 'logs',
+    body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'c', 'logs',
                                            '--device-id', 'r_0123456789abcdef/e', '--filter', 'Plotline', '--clear']))
     assert body['args'] == {'lines': 300, 'clear': True, 'filter': 'Plotline'}
 

@@ -104,4 +104,8 @@ async def authenticate_runner(db, runner_id, secret):
 
 
 def can_use(runner, user_email):
-    return bool(user_email) and (runner.get('owner_email') == user_email or user_email in (runner.get('shared_with') or []))
+    if not user_email:
+        return False
+    email = user_email.lower()
+    return (str(runner.get('owner_email') or '').lower() == email
+            or email in (runner.get('shared_with') or []))
