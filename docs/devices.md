@@ -35,7 +35,9 @@ Loma Device Runner (device_runner/loma_device_runner.py) on the user's machine
    Actions artifacts may be installed; empty = no CI installs) and `LOMA_DEVICE_BLOB_DIR`
    (defaults to the system temp dir). The backend's `GITHUB_API_KEY` must be able to read
    those repos' artifacts. nginx must route `/device-runner/` to the backend (included in
-   `deploy/nginx`).
+   `deploy/nginx`). If Loma sits behind an SSO proxy (e.g. Cloudflare Access), exempt
+   `/device-runner/*` from it: runners cannot log in interactively, and these endpoints
+   already require an enrollment token or runner secret.
 2. User: **Integrations → Devices → Get setup commands**, run them on the machine, boot an
    emulator/simulator. See `device_runner/README.md` for details, policy options and
    `install-service`.

@@ -195,7 +195,7 @@ export default function DevicesPanel() {
           <div className="flex items-center gap-2">
             <Input
               value={name}
-              placeholder="Machine name (e.g. Vamsi MacBook)"
+              placeholder="Machine name (e.g. Work MacBook)"
               maxLength={80}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && !busy && onEnroll()}
