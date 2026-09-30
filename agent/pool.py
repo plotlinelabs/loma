@@ -29,6 +29,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 from agent.prompt import build_pooled_system_prompt
+from agent.run_processes import PROC_TAG_ENV, kill_tagged, new_proc_tag
 
 logger = logging.getLogger(__name__)
 
@@ -416,8 +417,11 @@ class ClientPool:
         client = None
         try:
             options = self._build_options(model_override=model_override)
-            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
+            # Clients are single-use, so the tag scopes cleanup to one run.
+            proc_tag = new_proc_tag()
+            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"], PROC_TAG_ENV: proc_tag}
             client = ClaudeSDKClient(options=options)
+            client._loma_proc_tag = proc_tag  # type: ignore[attr-defined]
             await asyncio.wait_for(client.connect(), timeout=_env_int("AGENT_CONNECT_TIMEOUT"))
             # Attach account info for diagnostics and rate-limit tracking
             client._pool_account = account  # type: ignore[attr-defined]
@@ -612,6 +616,11 @@ class ClientPool:
             self._kill_process_tree(pid)
         else:
             logger.warning("Could not find subprocess PID on client — orphan processes may leak")
+        # Background jobs the run spawned were reparented away from the CLI's
+        # tree; they still carry the client's tag.
+        proc_tag = getattr(client, "_loma_proc_tag", None)
+        if proc_tag:
+            await kill_tagged(proc_tag)
 
     async def _warm_one(self):
         """Warm a single replacement client in the background with retries."""

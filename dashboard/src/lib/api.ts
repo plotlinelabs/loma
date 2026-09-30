@@ -1017,6 +1017,21 @@ export async function interruptAgent(
   return res.json();
 }
 
+/** 409 from /api/chat: the conversation already has a run in progress. */
+export class ConversationBusyError extends Error {
+  /** The message was handed to the running agent mid-stream. */
+  injected: boolean;
+  /** The message repeats one the agent is already working on (double submit). */
+  duplicate: boolean;
+
+  constructor(message: string, injected: boolean, duplicate: boolean) {
+    super(message);
+    this.name = "ConversationBusyError";
+    this.injected = injected;
+    this.duplicate = duplicate;
+  }
+}
+
 export async function* streamChat(
   message: string,
   conversationHistory?: ChatMessage[],
@@ -1048,6 +1063,9 @@ export async function* streamChat(
     // Surface the backend's message (e.g. "restarting for a deploy") instead
     // of a bare status code.
     const body = await res.json().catch(() => ({}));
+    if (res.status === 409 && body.busy) {
+      throw new ConversationBusyError(body.error || "Agent is busy", !!body.injected, !!body.duplicate);
+    }
     throw new Error(body.error || `Chat request failed: ${res.status}`);
   }
   if (!res.body) throw new Error("No response body");

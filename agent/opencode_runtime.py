@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from agent.prompt import build_pooled_system_prompt
+from agent.run_processes import PROC_TAG_ENV, clock_ticks_now, kill_tagged, new_proc_tag
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class _OpenCodeServer:
         process: asyncio.subprocess.Process | None,
         log_path: Path | None = None,
         log_file=None,
+        proc_tag: str | None = None,
     ) -> None:
         self.config_hash = config_hash
         self.config_home = config_home
@@ -85,6 +87,10 @@ class _OpenCodeServer:
         self.log_file = log_file
         self.active_turns = 0
         self.last_used_at = time.monotonic()
+        # The server is shared across runs, so run-end cleanup only kills
+        # tagged processes that detached from it since the last idle sweep.
+        self.proc_tag = proc_tag or new_proc_tag()
+        self.swept_at_ticks = clock_ticks_now()
 
     @property
     def base_url(self) -> str:
@@ -115,6 +121,19 @@ class _OpenCodeServer:
             except asyncio.TimeoutError:
                 self.process.kill()
                 await self.process.wait()
+        if self.process is not None:
+            await kill_tagged(self.proc_tag)
+
+    async def sweep_detached(self) -> None:
+        """Kill background jobs runs left behind, once no turn is in flight.
+
+        Only processes that detached from the server (their tool shell exited)
+        are touched; the server's own children (MCP servers) are kept.
+        """
+        if self.active_turns or not self.is_alive:
+            return
+        since, self.swept_at_ticks = self.swept_at_ticks, clock_ticks_now()
+        await kill_tagged(self.proc_tag, started_after=since, detached_from=self.process.pid)
         if self.log_file is not None:
             try:
                 self.log_file.close()
@@ -445,10 +464,12 @@ async def _ensure_server_instance(
             config_hash[:12],
             log_path or "/dev/null",
         )
+        proc_tag = new_proc_tag()
         env = {
             **os.environ,
             "XDG_CONFIG_HOME": str(config_home),
             "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+            PROC_TAG_ENV: proc_tag,
         }
         process = await asyncio.create_subprocess_exec(
             opencode_bin,
@@ -470,6 +491,7 @@ async def _ensure_server_instance(
             process=process,
             log_path=log_path,
             log_file=log_file,
+            proc_tag=proc_tag,
         )
         _opencode_servers[config_hash] = server
         await _retire_stale_servers(keep_hash=config_hash)
@@ -1692,9 +1714,10 @@ async def _run_opencode_agent(
     finally:
         if active_stream is not None:
             from agent.active_streams import unregister
-            await unregister(conversation_id)
+            await unregister(conversation_id, active_stream)
         server.active_turns = max(0, server.active_turns - 1)
         server.touch()
+        await server.sweep_detached()
         if (user_mcp_overrides or {}).get("loma-recall"):
             await server.terminate()
             _drop_server_state(server.config_hash)

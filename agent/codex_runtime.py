@@ -45,6 +45,8 @@ import time
 from pathlib import Path
 from typing import AsyncGenerator
 
+from agent.run_processes import PROC_TAG_ENV, new_proc_tag
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -251,6 +253,8 @@ class CodexWorker:
         self.account = account
         self.model = model or default_codex_model()
         self._proc: asyncio.subprocess.Process | None = None
+        # Workers are single-use: the tag scopes run-end cleanup to this run.
+        self.proc_tag = new_proc_tag()
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._events: asyncio.Queue[dict] = asyncio.Queue()
@@ -424,7 +428,7 @@ class CodexWorker:
         """
         write_managed_codex_config(self.account["config_dir"], mcp_servers or {})
 
-        env = {**os.environ, "CODEX_HOME": self.account["config_dir"]}
+        env = {**os.environ, "CODEX_HOME": self.account["config_dir"], PROC_TAG_ENV: self.proc_tag}
         env.pop("OPENAI_API_KEY", None)  # subscription auth only — never fall back to API billing
         self._proc = await asyncio.create_subprocess_exec(
             "codex", "app-server",
@@ -910,7 +914,7 @@ async def run_codex_agent(
     finally:
         if active_stream is not None:
             from agent.active_streams import unregister
-            await unregister(conversation_id)
+            await unregister(conversation_id, active_stream)
         if execution_home:
             await pool.safe_disconnect(worker)
             execution_home.cleanup()
