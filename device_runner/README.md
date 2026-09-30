@@ -94,6 +94,30 @@ simulators follow the Mac's clock and time zone, so those two are reported as un
 
 - `auto_update`: install newer runner versions offered by Loma automatically (default `true`).
 
+## Device templates (boot on demand, clean state)
+
+Add `templates` at the top level of `config.json` so the agent can boot devices itself instead of
+needing one already running. The agent only picks a template by name; it can never pass an AVD
+name, emulator flags or a simulator of its choice.
+
+```json
+"templates": [
+  {"name": "pixel-34", "platform": "android", "avd": "Pixel_7_API_34", "snapshot": "clean", "headless": true},
+  {"name": "iphone-15", "platform": "ios", "simulator": "Loma iPhone 15"}
+]
+```
+
+- Android: `avd` from `emulator -list-avds`. `snapshot` is a snapshot you saved in that AVD
+  (Extended controls > Snapshots) with the state every test should start from, e.g. the Plotline
+  demo app installed and logged out. A clean boot loads it `-read-only` and never saves, so
+  nothing a session does persists and several clean devices can run at once.
+- iOS: `simulator` is the name or UDID of a simulator you set up once and keep shut down. A clean
+  boot clones it and deletes the clone at shutdown; a normal boot starts it as is.
+- `headless` (Android): no emulator window. `idle_shutdown_s` (default 1800): a device the runner
+  booted is shut down after this long without calls, in case a session never released it.
+
+Devices booted for a session shut down when it releases them. Run `setup` again after editing.
+
 Run `setup` again after editing the policy to restart the runner.
 
 ## Tips for reliable agent testing

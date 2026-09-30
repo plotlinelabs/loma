@@ -18,6 +18,7 @@ export interface DeviceRunner {
   online: boolean;
   last_seen: string | null;
   created_at: string | null;
+  templates?: { name: string; platform: "android" | "ios"; clean: boolean }[];
   latest_version?: string;
   update_available?: boolean;
   self_update?: boolean;

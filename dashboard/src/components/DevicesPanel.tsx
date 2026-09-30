@@ -339,6 +339,14 @@ export default function DevicesPanel() {
                     </Button>
                   </div>
                 )}
+                {(runner.templates?.length ?? 0) > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    Can boot:{" "}
+                    {runner.templates!
+                      .map((t) => `${t.name} (${t.platform}${t.clean ? ", clean" : ""})`)
+                      .join(", ")}
+                  </div>
+                )}
                 {runner.shared_with.length > 0 && sharing?.id !== runner.runner_id && (
                   <div className="text-xs text-muted-foreground">Shared with {runner.shared_with.join(", ")}</div>
                 )}
@@ -346,7 +354,9 @@ export default function DevicesPanel() {
                 {mine.length === 0 ? (
                   <div className="text-xs text-muted-foreground">
                     {runner.online
-                      ? "No emulators or simulators running. Boot one and it will appear within ~15s."
+                      ? (runner.templates?.length ?? 0) > 0
+                        ? "No emulators or simulators running. The agent boots one from a template when it needs a device."
+                        : "No emulators or simulators running. Boot one and it will appear within ~15s."
                       : "Start the runner on this machine to see its devices."}
                   </div>
                 ) : (

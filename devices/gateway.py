@@ -76,8 +76,8 @@ class DeviceTools:
             raise DeviceError('Invalid device request')
         owner, args = authority.user_email, dict(arguments)
         key = args.get('device_id') if isinstance(args.get('device_id'), str) else None
-        if tool == 'device.lease' and key is None:  # a waiting lease on "any device" is resumed by calling it again
-            key = f"lease:{args.get('platform')}"
+        if tool == 'device.lease' and key is None:  # a waiting lease / boot is resumed by calling it again
+            key = f"lease:{args.get('platform')}:{args.get('template')}"
         try:
             if key in self.pending:
                 busy_tool, task = self.pending[key]
@@ -105,11 +105,11 @@ class DeviceTools:
         service, scope = self.service, self.scope
         if tool == 'device.list':
             _pick(args, set(), set(), tool)
-            return {'devices': await service.list_devices(owner)}
+            return {'devices': await service.list_devices(owner), 'templates': await service.templates_for(owner)}
         if tool == 'device.lease':
-            picked = _pick(args, set(), {'platform', 'device_id', 'wait_online_s'}, tool)
+            picked = _pick(args, set(), {'platform', 'device_id', 'wait_online_s', 'template', 'clean'}, tool)
             return await service.lease(owner, scope, picked.get('device_id'), picked.get('platform'),
-                                       picked.get('wait_online_s', 0))
+                                       picked.get('wait_online_s', 0), picked.get('template'), picked.get('clean', False))
         device_id = args.pop('device_id', None)
         if not isinstance(device_id, str):
             raise DeviceError('device_id is required; get one from device.list or device.lease')

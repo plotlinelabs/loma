@@ -252,7 +252,7 @@ class MediaService:
                     'interval_ms': args.get('interval_ms', 500)}
         return {'applied': sorted(args)}
 
-    async def lease(self, owner, scope, device_id=None, platform=None, wait_online_s=0):
+    async def lease(self, owner, scope, device_id=None, platform=None, wait_online_s=0, template=None, clean=False):
         self.calls.append(('lease', wait_online_s))
         return {'device_id': DEVICE}
 

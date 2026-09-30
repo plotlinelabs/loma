@@ -8,7 +8,7 @@ users are always isolated); isolated workers bind the scope server-side.
 
 Commands:
   device.py --user-email E --auth-token T --scope CONVERSATION_ID list
-  device.py ... lease [--platform android|ios] [--device-id ID] [--wait-online SECONDS]
+  device.py ... lease [--platform android|ios] [--device-id ID | --template NAME [--clean]] [--wait-online SECONDS]
   device.py ... release --device-id ID
   device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N]
                 [--wait SECONDS] [--dispatch-workflow FILE.yml] | --file PATH) [--app-id PKG]
@@ -123,7 +123,8 @@ def build_body(args):
         return {**body, 'action': 'list'}
     if args.command == 'lease':
         return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform,
-                **({'wait_online_s': args.wait_online} if args.wait_online else {})}
+                **({'wait_online_s': args.wait_online} if args.wait_online else {}),
+                **({'template': args.template} if args.template else {}), **({'clean': True} if args.clean else {})}
     if args.command == 'release':
         return {**body, 'action': 'release', 'device_id': args.device_id}
     call = {**body, 'action': 'call', 'device_id': args.device_id}
@@ -265,6 +266,8 @@ def parser():
     s.add_argument('--device-id')
     s.add_argument('--wait-online', type=int, default=0, metavar='SECONDS',
                    help='Wait up to SECONDS (max 600) for a device to come online; the runner owner is notified')
+    s.add_argument('--template', help='Boot a new device from this runner template (see list)')
+    s.add_argument('--clean', action='store_true', help='Boot from the template\'s clean snapshot / a fresh clone')
 
     def with_device(name):
         cmd = sub.add_parser(name)
