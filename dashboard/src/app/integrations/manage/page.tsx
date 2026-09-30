@@ -58,8 +58,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RiCloseLine, RiFileCopyLine, RiArrowDownSLine, RiArrowRightSLine } from "@remixicon/react";
 import ClaudeLogin from "../../../components/ClaudeLogin";
 import ApiKeysPanel from "../../../components/ApiKeysPanel";
+import DevicesPanel from "../../../components/DevicesPanel";
 
-const INTEGRATION_TABS = ["org", "system", "custom", "personal", "api-keys"] as const;
+const INTEGRATION_TABS = ["org", "system", "custom", "personal", "api-keys", "devices"] as const;
 type IntegrationTab = (typeof INTEGRATION_TABS)[number];
 
 const WebTerminal = dynamic(() => import("../../../components/WebTerminal"), { ssr: false });
@@ -1208,6 +1209,7 @@ export default function IntegrationsPage() {
             <TabsTrigger value="custom">Custom</TabsTrigger>
             <TabsTrigger value="personal">Personal</TabsTrigger>
             <TabsTrigger value="api-keys">API Keys</TabsTrigger>
+            <TabsTrigger value="devices">Devices</TabsTrigger>
           </TabsList>
 
           {/* Org Integrations */}
@@ -1810,6 +1812,11 @@ export default function IntegrationsPage() {
           <TabsContent value="api-keys">
             <ApiKeysPanel />
           </TabsContent>
+
+          {/* Devices (Loma Device Runners: emulators / simulators for agent testing) */}
+          <TabsContent value="devices">
+            <DevicesPanel />
+          </TabsContent>
         </Tabs>
       )}
 
@@ -1822,6 +1829,7 @@ export default function IntegrationsPage() {
             <li>System-managed integrations are configured on the server — no setup needed</li>
             <li>Personal integrations are scoped to your account only</li>
             <li>API Keys let external agents reach your own task board over MCP — they act as you</li>
+            <li>Devices let the agent test builds on emulators/simulators on machines you enroll</li>
             <li>All tokens and keys are encrypted at rest</li>
             <li>You can disconnect at any time to revoke access</li>
           </ul>

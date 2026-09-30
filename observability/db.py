@@ -70,6 +70,10 @@ async def init_observability():
     await _db.api_keys.create_index("key_hash", unique=True)
     await _db.api_keys.create_index("user_email")
 
+    # Device runners (Loma Devices): enrollment, runners, leases, audit
+    from devices.store import ensure_indexes as ensure_device_indexes
+    await ensure_device_indexes(_db)
+
     # Draft with Loma indexes
     await _db.drafts.create_index("draft_id", unique=True)
     await _db.drafts.create_index([("user_email", 1), ("status", 1)])

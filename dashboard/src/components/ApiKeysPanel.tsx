@@ -4,9 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   RiAddLine,
   RiDeleteBinLine,
-  RiFileCopyLine,
   RiKey2Line,
-  RiCheckLine,
 } from "@remixicon/react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,31 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import ClientTimestamp from "@/components/ClientTimestamp";
+import { CopyButton } from "@/components/CopyButton";
 import {
   ApiKeyRecord,
   createApiKey,
   fetchApiKeys,
   revokeApiKey,
 } from "@/lib/api-keys-api";
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-7 w-7 p-0 shrink-0"
-      aria-label="Copy"
-      onClick={async () => {
-        await navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
-    >
-      {copied ? <RiCheckLine size={14} className="text-green-500" /> : <RiFileCopyLine size={14} />}
-    </Button>
-  );
-}
 
 /**
  * Personal API keys for the loma-tasks MCP server.
