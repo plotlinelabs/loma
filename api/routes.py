@@ -924,6 +924,59 @@ async def handle_interrupt_agent(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+# An identical message arriving this soon after the last one while the run is
+# still going is a double submit / client retry, not a new instruction.
+CHAT_DUPLICATE_WINDOW_SECONDS = 30
+
+
+async def _is_recent_duplicate(db, conversation_id: str, message: str) -> bool:
+    doc = await db.conversations.find_one(
+        {"conversation_id": conversation_id}, {"messages": {"$slice": -1}},
+    )
+    last = ((doc or {}).get("messages") or [None])[-1]
+    if not last or last.get("role") != "user" or last.get("content") != message:
+        return False
+    sent_at = last.get("timestamp")
+    if not isinstance(sent_at, datetime):
+        return False
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - sent_at <= timedelta(seconds=CHAT_DUPLICATE_WINDOW_SECONDS)
+
+
+async def _busy_conversation_response(db, conversation_id: str, user_email: str, message: str):
+    """409 for a message that arrived while the conversation already has a run.
+
+    Claude SDK runs take it mid-stream (``injected``); other runtimes can't, so
+    the dashboard queues it and sends it once the current run finishes.
+    """
+    from agent.active_streams import get_for_user, supports_injection
+
+    body = {"busy": True, "injected": False, "duplicate": False, "conversation_id": conversation_id}
+    if await _is_recent_duplicate(db, conversation_id, message):
+        logger.info("Dropping duplicate chat message for busy conversation %s", conversation_id)
+        return web.json_response(
+            {**body, "duplicate": True, "error": "Already sent — the agent is working on it."},
+            status=409,
+        )
+    stream = await get_for_user(conversation_id, user_email)
+    if stream is not None and supports_injection(stream):
+        try:
+            await stream.client.query(message)
+            observer = ConversationObserver(db, {}, conversation_id=conversation_id)
+            await observer.record_injected_message(message)
+            return web.json_response(
+                {**body, "injected": True, "error": "Sent to the running agent."}, status=409,
+            )
+        except Exception:
+            logger.exception("Failed to inject into busy conversation %s", conversation_id)
+    return web.json_response(
+        {**body, "error": "The agent is still working on this conversation; "
+                          "your message will be sent when it finishes."},
+        status=409,
+    )
+
+
 async def handle_chat(request: web.Request) -> web.Response:
     """POST /api/chat — SSE stream for dashboard chat.
 
@@ -983,6 +1036,7 @@ async def handle_chat(request: web.Request) -> web.Response:
     observer = None
     existing = None
     agent_identity = None
+    run_id = None
     db = get_db()
     existing_conversation_id = body.get("conversation_id")
     if db is not None:
@@ -1002,6 +1056,16 @@ async def handle_chat(request: web.Request) -> web.Response:
                 existing, user_email, get_system_role(request)
             ):
                 return web.json_response({"error": "Not found"}, status=404)
+            # One active run per conversation: a second concurrent run would
+            # fight the first over devices, proxies, files and branches. The
+            # claim is taken before the message is recorded, so a busy
+            # conversation never gets a duplicate user message either.
+            from agent.active_streams import try_claim
+            run_id = uuid.uuid4().hex
+            if not await try_claim(existing_conversation_id, run_id):
+                return await _busy_conversation_response(
+                    db, existing_conversation_id, user_email, message,
+                )
 
         # Agent identity: an explicit selection wins; resumed conversations fall
         # back to the agent pinned on the conversation.
@@ -1172,6 +1236,10 @@ async def handle_chat(request: web.Request) -> web.Response:
     finally:
         if keepalive_task:
             keepalive_task.cancel()
+
+    if run_id:
+        from agent.active_streams import release_claim
+        await release_claim(existing_conversation_id, run_id)
 
     # Fire-and-forget: ingest this chat turn as a change-stream event.
     if observer:

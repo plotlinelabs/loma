@@ -6,6 +6,7 @@ import re
 import base64
 import tempfile
 import logging
+import uuid
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -850,6 +851,16 @@ async def _stream_agent(
             f"tool call, or the conversation the notification points to will be empty."
         )
 
+    if conversation_id:
+        conversation_dir = conversation_work_dir(conversation_id)
+        if conversation_dir:
+            text_parts.append(
+                f"[Conversation Work Dir: {conversation_dir}]\n"
+                f"LOMA_CONVERSATION_DIR={conversation_dir} (stable across runs of this "
+                f"conversation; read/update `state.json` there — see Run Lifecycle & "
+                f"Resumable State)."
+            )
+
     if conversation_context:
         text_parts.append(
             f"## Conversation Context (previous messages in this thread)\n"
@@ -1587,9 +1598,9 @@ async def _stream_agent(
                 yield f"Sorry, I encountered an error: {e}"
             return
         finally:
-            if observer and observer.conversation_id:
+            if active_stream is not None:
                 from agent.active_streams import unregister
-                await unregister(observer.conversation_id)
+                await unregister(observer.conversation_id, active_stream)
             # Always release the client back to pool
             if client is not None:
                 await pool.release(client)
@@ -1789,14 +1800,46 @@ def _extract_result_text(block) -> str:
     return str(content)
 
 
+def conversation_work_dir(conversation_id: str) -> str | None:
+    """Stable per-conversation dir under the persistent workspace (created lazily)."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", conversation_id or "") or conversation_id in (".", ".."):
+        return None
+    root = os.environ.get("LOMA_WORKSPACE_DIR") or "/opt/loma-workspace"
+    path = Path(root) / "conversations" / conversation_id
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.warning("Could not create conversation work dir %s: %s", path, e)
+        return None
+    return str(path)
+
+
 async def stream_agent(prompt: str, conversation_context: str = "", files=None,
         observer=None, include_steps=False, source="slack", user_email=None,
         selected_model=None, raise_on_opencode_error=False, tool_config=None,
         recall_session=None):
-    """Own recall credentials for exactly one turn, including cancellation/errors."""
+    """Own recall credentials for exactly one turn, including cancellation/errors.
+
+    Also enforces one active run per conversation. Entry points that can answer
+    the user directly (dashboard chat, Slack) claim up front and inject or
+    queue there; any other caller that resumes a busy conversation (webhooks,
+    Linear, Telegram, recovery) waits here until the current run finishes.
+    """
+    from agent.active_streams import release_claim, try_claim, wait_for_release
     from agent.recall_runtime import refresh_history, revoke
     from isolation.deployment import remote_workers_enabled
+    conversation_id = getattr(observer, "conversation_id", None) if observer else None
+    run_id = uuid.uuid4().hex
     try:
+        if conversation_id and not await try_claim(conversation_id, run_id):
+            logger.warning(
+                "Conversation %s already has an active run; queueing this one behind it",
+                conversation_id,
+            )
+            while not await try_claim(conversation_id, run_id):
+                await wait_for_release(conversation_id)
+            # The finished run marked the conversation completed; flip it back.
+            await observer.resume(record_prompt=False)
         if remote_workers_enabled():
             # Operator cutover: remote isolated workers own every agent run.
             # Configuration/transport failure surfaces an error; it never
@@ -1814,6 +1857,8 @@ async def stream_agent(prompt: str, conversation_context: str = "", files=None,
                 raise_on_opencode_error, tool_config, recall_session):
             yield event
     finally:
+        if conversation_id:
+            await release_claim(conversation_id, run_id)
         if recall_session:
             await revoke(recall_session)
             await refresh_history(recall_session['user_id'])
