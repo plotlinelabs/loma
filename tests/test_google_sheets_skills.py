@@ -332,3 +332,14 @@ async def test_source_routes_preview_import_validation_and_role_guard(env, monke
         monkeypatch.setattr(routes, "require_maintainer_or_above", forbidden)
         r = await client.post('/api/skill-sources/google-sheets/preview', json={"url": URL})
         assert r.status == 403
+
+
+def test_sheets_enabled_by_default_with_independent_kill_switch(monkeypatch):
+    monkeypatch.delenv("LOMA_GOOGLE_SHEETS_SKILLS_ENABLED", raising=False)
+    monkeypatch.setenv("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", "false")
+    assert sync.enabled("google_sheet")
+    assert not sync.enabled("google_doc")
+    monkeypatch.setenv("LOMA_GOOGLE_SHEETS_SKILLS_ENABLED", "false")
+    assert not sync.enabled("google_sheet")
+    monkeypatch.setenv("LOMA_GOOGLE_SHEETS_SKILLS_ENABLED", "true")
+    assert sync.enabled("google_sheet")

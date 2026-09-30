@@ -2,8 +2,9 @@
 
 ## Rollout and user flow
 
-Set `LOMA_GOOGLE_SHEETS_SKILLS_ENABLED=true` to enable the independent Sheets
-feature flag. It defaults off; Google Docs behavior remains enabled by default.
+Google Sheets linking is enabled by default, independently of Google Docs.
+Set `LOMA_GOOGLE_SHEETS_SKILLS_ENABLED=false` to disable it. Linking remains
+opt-in per skill; existing skills are unchanged.
 No data migration is required. Import creates the partial unique source indexes.
 
 In Skills, choose **Import from Google**, paste a native spreadsheet URL, choose

@@ -26,7 +26,7 @@ from integrations.google_docs_skill_source import GoogleDocsSource, SourceError,
 
 def enabled(source_type="google_doc"):
     if source_type == "google_sheet":
-        return os.environ.get("LOMA_GOOGLE_SHEETS_SKILLS_ENABLED", "false").lower() == "true"
+        return os.environ.get("LOMA_GOOGLE_SHEETS_SKILLS_ENABLED", "true").lower() == "true"
     return os.environ.get("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", "true").lower() == "true"
 
 
