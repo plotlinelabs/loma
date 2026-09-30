@@ -28,14 +28,15 @@ from devices.service import DeviceService
 logger = logging.getLogger(__name__)
 MAX_RESULT = 200 * 1024
 MAX_SCREENSHOTS = 8  # per run; shares the run's 20-file artifact budget with workspace.publish
+MAX_RECORDINGS = 2  # per run; each up to 16 MB (a run holds 64 MB of artifacts in total)
 WAIT_SECONDS = 90  # below the worker's 120 s per-call RPC timeout
 
 TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'device.app',
-         'device.input', 'device.observe', 'device.run_flow'}
+         'device.input', 'device.observe', 'device.run_flow', 'device.configure'}
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
 INPUT_ACTIONS = {'animations', 'tap', 'swipe', 'type', 'key', 'open_url', 'set_text', 'clear_text', 'tap_text', 'wait_for',
                  'scroll_until_visible'}
-OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs'}
+OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs', 'record', 'burst'}
 
 
 def failure(message, **extra):
@@ -66,6 +67,7 @@ class DeviceTools:
         self.artifacts = artifacts
         self.on_artifact = on_artifact
         self.screenshots = 0
+        self.recordings = 0
         self.service = service or DeviceService(db)
         self.pending = {}  # device_id -> (tool, task) still running past WAIT_SECONDS
 
@@ -74,6 +76,8 @@ class DeviceTools:
             raise DeviceError('Invalid device request')
         owner, args = authority.user_email, dict(arguments)
         key = args.get('device_id') if isinstance(args.get('device_id'), str) else None
+        if tool == 'device.lease' and key is None:  # a waiting lease on "any device" is resumed by calling it again
+            key = f"lease:{args.get('platform')}"
         try:
             if key in self.pending:
                 busy_tool, task = self.pending[key]
@@ -103,8 +107,9 @@ class DeviceTools:
             _pick(args, set(), set(), tool)
             return {'devices': await service.list_devices(owner)}
         if tool == 'device.lease':
-            picked = _pick(args, set(), {'platform', 'device_id'}, tool)
-            return await service.lease(owner, scope, picked.get('device_id'), picked.get('platform'))
+            picked = _pick(args, set(), {'platform', 'device_id', 'wait_online_s'}, tool)
+            return await service.lease(owner, scope, picked.get('device_id'), picked.get('platform'),
+                                       picked.get('wait_online_s', 0))
         device_id = args.pop('device_id', None)
         if not isinstance(device_id, str):
             raise DeviceError('device_id is required; get one from device.list or device.lease')
@@ -122,10 +127,21 @@ class DeviceTools:
             return await service.call(owner, scope, device_id, _action(args, 'action', APP_ACTIONS), args)
         if tool == 'device.input':
             return await service.call(owner, scope, device_id, _action(args, 'action', INPUT_ACTIONS), args)
+        if tool == 'device.configure':
+            return await service.call(owner, scope, device_id, 'configure', args)
         if tool == 'device.observe':
             what = _action(args, 'what', OBSERVE_ACTIONS)
+            if what == 'record' and self.recordings >= MAX_RECORDINGS:
+                raise DeviceError(f'Recording limit for this run reached ({MAX_RECORDINGS}); keep recordings for '
+                                  'the final evidence')
             data = await service.call(owner, scope, device_id, what, args)
-            return await self._deliver_screenshot(data) if what == 'screenshot' else data
+            if what == 'screenshot':
+                return await self._deliver_screenshot(data)
+            if what == 'record':
+                return await self._deliver_recording(data)
+            if what == 'burst':
+                return await self._deliver_burst(data)
+            return data
         data = await service.call(owner, scope, device_id, 'run_flow', args)
         return await self._deliver_flow_screenshots(data)
 
@@ -133,13 +149,38 @@ class DeviceTools:
         if self.screenshots >= MAX_SCREENSHOTS:
             raise DeviceError(f'Screenshot limit for this run reached ({MAX_SCREENSHOTS}); use ui_tree, '
                               'and keep screenshots for final evidence')
+        info = await self._store(f'device-{label}-{self.screenshots + 1}.png', png, 'screenshot')
+        self.screenshots += 1
+        return info
+
+    async def _store(self, filename, data, what):
         try:
-            receipt = self.artifacts.ingest(f'device-{label}-{self.screenshots + 1}.png', png)
+            receipt = self.artifacts.ingest(filename, data)
             info = await self.on_artifact(dict(receipt))
         except (ValueError, OSError):
-            raise DeviceError('Could not store the screenshot (run file limit reached?)') from None
-        self.screenshots += 1
+            raise DeviceError(f'Could not store the {what} (run file limit reached?)') from None
         return {'name': info.get('name'), 'url': info.get('url')}
+
+    async def _deliver_recording(self, data):
+        mp4 = data.pop('mp4')
+        info = await self._store(f'device-recording-{self.recordings + 1}.mp4', mp4, 'recording')
+        self.recordings += 1
+        return {'delivered': True, 'bytes': len(mp4), 'duration_s': data.get('duration_s'), 'file': info,
+                'note': 'The recording is shown to the user in this chat as evidence; you cannot view it.'}
+
+    async def _deliver_burst(self, data):
+        """Frames go to the user as screenshots (same budget); the model gets their timing only."""
+        delivered, skipped = [], 0
+        for frame in data.get('frames') or []:
+            try:
+                delivered.append({'at_ms': frame.get('at_ms'), **await self._store_png(frame['png'], 'burst')})
+            except DeviceError:
+                skipped += 1
+        result = {'delivered': len(delivered), 'frames': delivered, 'interval_ms': data.get('interval_ms'),
+                  'note': 'Frames are shown to the user in this chat; you cannot view them.'}
+        if skipped:
+            result['frames_not_delivered'] = skipped
+        return result
 
     async def _deliver_screenshot(self, data):
         png = data.pop('png')

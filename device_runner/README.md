@@ -37,7 +37,7 @@ Then boot an emulator or simulator; it shows up in Loma within about 15 seconds.
 
 | Task | Command |
 |---|---|
-| Upgrade / restart (download the new file first) | `python3 loma_device_runner.py setup` |
+| Upgrade / restart (download the new file first) | `python3 loma_device_runner.py setup` (only needed once to reach 1.2.0; see below) |
 | Check tooling and devices | `~/.loma-device-runner/venv/bin/python3 ~/.loma-device-runner/loma_device_runner.py doctor` |
 | Remove from this machine | `python3 ~/.loma-device-runner/loma_device_runner.py uninstall` |
 | Logs | macOS: `~/.loma-device-runner/runner.log`, Linux: `journalctl --user -u loma-device-runner -f` |
@@ -50,6 +50,14 @@ Device tooling (install what you need):
 - **Flows (optional):** Maestro, which needs Java 17:
   `brew install openjdk@17 && curl -fsSL "https://get.maestro.mobile.dev" | bash`, then re-run `setup`.
 
+**Automatic updates (1.2.0+).** When the runner runs as the login service, Loma offers it the
+newer runner it serves. The runner downloads it over its authenticated connection, checks it
+against the SHA-256 the server announced, checks it parses and declares that version, waits for
+running operations to finish (up to 10 minutes) and exits so launchd/systemd restart it on the
+new version. The checksum protects against a truncated or altered download on the way; it comes
+from the same Loma server, so it is not a code signature. Set `"auto_update": false` in the policy
+to update by hand. Runners older than 1.2.0 need one manual `setup` with the new file.
+
 The service keeps the `PATH` of the shell you ran `setup` from, plus the Android SDK,
 Maestro, Homebrew and the runner's own `idb`. On Linux, run `loginctl enable-linger $USER` if the
 runner should stay up while you are logged out.
@@ -60,8 +68,14 @@ runner should stay up while you are logged out.
 |---|---|
 | install (build fetched by Loma, checksum-verified), uninstall, launch, stop, reset_app | Run shell commands on your machine |
 | open_url (deep links), tap, swipe, type, key | Read or write files on your machine |
-| screenshot, ui_tree, logs | See physical devices (unless you opt in) |
+| screenshot, ui_tree, logs, record, burst | See physical devices (unless you opt in) |
 | run_flow (Maestro YAML, screened) | Run Maestro JavaScript (unless you opt in) |
+| configure: per-app locale, time zone and clock offset (Android), location, dark mode, font scale, permissions | Change settings of apps outside `allowed_app_ids` |
+
+`configure` remembers the original value of each setting it changes and restores them when the
+agent releases the device (or on `configure reset=true`). Permissions and Android location are not
+restored. Clock and time zone changes need Android 11+, per-app locale needs Android 13+; iOS
+simulators follow the Mac's clock and time zone, so those two are reported as unsupported there.
 
 ## Policy (`~/.loma-device-runner/config.json`)
 
@@ -69,13 +83,16 @@ runner should stay up while you are logged out.
 "policy": {
   "allow_physical_devices": false,
   "allowed_app_ids": ["com.example.demo"],
-  "allow_maestro_scripts": false
+  "allow_maestro_scripts": false,
+  "auto_update": true
 }
 ```
 
 - `allow_physical_devices`: expose USB/Wi-Fi phones, not just emulators/simulators. Keep `false` on a personal laptop.
 - `allowed_app_ids`: if non-empty, only these app ids can be installed/launched/stopped/reset/uninstalled, and Maestro flows may only target them. `install` then needs an `app_id`, and the package that actually got installed is checked too.
 - `allow_maestro_scripts`: permit Maestro commands outside the built-in allowlist (`runScript`, `evalScript`, `runFlow`, `addMedia`, `file:` sub-flows, ...), `${...}` and extra flow config keys. Maestro JavaScript can make HTTP requests from your machine and sub-flows can read files on it, so this is off by default.
+
+- `auto_update`: install newer runner versions offered by Loma automatically (default `true`).
 
 Run `setup` again after editing the policy to restart the runner.
 

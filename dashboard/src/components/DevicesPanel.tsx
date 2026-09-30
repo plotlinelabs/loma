@@ -8,6 +8,7 @@ import {
   RiCloseLine,
   RiComputerLine,
   RiDeleteBinLine,
+  RiHistoryLine,
   RiLockUnlockLine,
   RiRefreshLine,
   RiShareLine,
@@ -21,6 +22,7 @@ import { EmptyState } from "@/components/EmptyState";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import { CopyButton } from "@/components/CopyButton";
 import DeviceBuildSources from "@/components/DeviceBuildSources";
+import DeviceActivity from "@/components/DeviceActivity";
 import {
   DeviceRecord,
   DeviceRunner,
@@ -48,40 +50,54 @@ function DeviceRow({ device, canRelease, busy, onRelease }: {
   onRelease: (id: string) => void;
 }) {
   const Icon = device.platform === "ios" ? RiAppleLine : device.platform === "android" ? RiAndroidLine : RiSmartphoneLine;
+  const [showActivity, setShowActivity] = useState(false);
   return (
-    <div className="flex items-center gap-2 rounded-md border px-3 py-2">
-      <Icon size={15} className="text-muted-foreground shrink-0" />
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] text-foreground truncate">
-          {device.name} <span className="text-muted-foreground">· {device.platform} {device.os_version}</span>
-          {!device.virtual && <span className="ml-1 text-amber-600 text-xs">physical</span>}
+    <div className="rounded-md border px-3 py-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <Icon size={15} className="text-muted-foreground shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] text-foreground truncate">
+            {device.name} <span className="text-muted-foreground">· {device.platform} {device.os_version}</span>
+            {!device.virtual && <span className="ml-1 text-amber-600 text-xs">physical</span>}
+          </div>
+          <div className="text-xs text-muted-foreground truncate">
+            <code>{device.device_id}</code>
+            {device.leased_by ? (
+              <>
+                {" · in use by "}
+                {device.leased_by.owner}
+                {" until "}
+                <ClientTimestamp iso={device.leased_by.expires_at} variant="short" />
+              </>
+            ) : (
+              " · free"
+            )}
+          </div>
         </div>
-        <div className="text-xs text-muted-foreground truncate">
-          <code>{device.device_id}</code>
-          {device.leased_by ? (
-            <>
-              {" · in use by "}
-              {device.leased_by.owner}
-              {" until "}
-              <ClientTimestamp iso={device.leased_by.expires_at} variant="short" />
-            </>
-          ) : (
-            " · free"
-          )}
-        </div>
-      </div>
-      {device.leased_by && canRelease && (
+        {device.leased_by && canRelease && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs shrink-0"
+            disabled={busy}
+            onClick={() => onRelease(device.device_id)}
+          >
+            <RiLockUnlockLine size={14} />
+            Release
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
           className="h-8 px-2 text-xs shrink-0"
-          disabled={busy}
-          onClick={() => onRelease(device.device_id)}
+          aria-expanded={showActivity}
+          onClick={() => setShowActivity((value) => !value)}
         >
-          <RiLockUnlockLine size={14} />
-          Release
+          <RiHistoryLine size={14} />
+          Activity
         </Button>
-      )}
+      </div>
+      {showActivity && <DeviceActivity deviceId={device.device_id} />}
     </div>
   );
 }
@@ -270,6 +286,13 @@ export default function DevicesPanel() {
                       {runner.version ? ` · runner ${runner.version}` : ""}
                       {runner.capabilities.length ? ` · ${runner.capabilities.join(", ")}` : ""}
                     </div>
+                    {runner.update_available && (
+                      <div className="text-xs text-amber-600">
+                        {runner.self_update
+                          ? `Updating itself to runner ${runner.latest_version} after its current work finishes.`
+                          : `Runner ${runner.latest_version} is available. Re-run \`python3 loma_device_runner.py setup\` on this machine once; later versions install themselves.`}
+                      </div>
+                    )}
                   </div>
                   {runner.is_owner && (
                     <>

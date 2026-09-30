@@ -86,8 +86,9 @@ CATALOG = [
     _tool('proposals.status', 'Read the current status of one proposal in this conversation. Statuses other than executed mean nothing was sent.', {'proposal_id': TEXT}),
     _tool('proposals.list', 'List recent proposals in this conversation with their statuses.', {}),
     _tool('device.list', 'List mobile devices (Android emulators / iOS simulators) on Loma Device Runners you own or that are shared with you, with online and lease status.', {}),
-    _tool('device.lease', 'Reserve a device for this conversation (renews on every call, expires after 15 idle minutes). Give device_id, or platform to pick any free online device.', {
-        'device_id': TEXT, 'platform': {'type': 'string', 'enum': ['android', 'ios']}}, []),
+    _tool('device.lease', 'Reserve a device for this conversation (renews on every call, expires after 15 idle minutes). Give device_id, or platform to pick any free online device. If no device is online the runner owner gets a Loma notification; wait_online_s (up to 600) keeps waiting for one (call again with the same arguments while it reports pending).', {
+        'device_id': TEXT, 'platform': {'type': 'string', 'enum': ['android', 'ios']},
+        'wait_online_s': {'type': 'integer', 'minimum': 0, 'maximum': 600}}, []),
     _tool('device.release', 'Release a device you leased so other sessions can use it. Always release when done.', {'device_id': TEXT}),
     _tool('device.install', 'Install a CI build on a device. The backend fetches the named GitHub Actions artifact (latest for the PR head, or from run_id) and the runner verifies its checksum. Updates in place (keeps app data) and only reinstalls on a signature mismatch; an identical build is skipped unless force. wait_s waits server-side for the CI run to produce the artifact; dispatch_workflow (e.g. build.yml, needs pr) starts it if no run exists; only workflows an admin allowed (Integrations > Devices > Build sources) can be dispatched. grant_appops (Android, e.g. SCHEDULE_EXACT_ALARM; needs app_id) / grant_privacy (iOS) grant permissions after install. Returns the installed commit.', {
         'device_id': TEXT, 'repo': TEXT, 'artifact_name': TEXT, 'pr': {'type': 'integer', 'minimum': 1},
@@ -118,11 +119,24 @@ CATALOG = [
         'key': {'type': 'string', 'enum': ['back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up',
                                            'volume_down', 'power', 'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup']},
         'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}, ['device_id', 'action']),
-    _tool('device.observe', 'Observe the device: ui_tree (visible elements with a ref, text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), or logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true).', {
-        'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs']},
+    _tool('device.observe', 'Observe the device: ui_tree (visible elements with a ref, text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true), record (an mp4 of duration_s seconds, max 20, 2 per run; app_id launches the app as recording starts) or burst (count screenshots every interval_ms, e.g. to catch a nudge animating in). record and burst are shown to the user as evidence; keep them for the final proof.', {
+        'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs', 'record', 'burst']},
         'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': {'type': 'string', 'minLength': 1, 'maxLength': 200},
         'clear': {'type': 'boolean'}, 'compact': {'type': 'boolean'}, 'clickable_only': {'type': 'boolean'},
-        'source': {'type': 'string', 'enum': ['auto', 'system', 'console']}}, ['device_id', 'what']),
+        'source': {'type': 'string', 'enum': ['auto', 'system', 'console']},
+        'duration_s': {'type': 'integer', 'minimum': 1, 'maximum': 20}, 'count': {'type': 'integer', 'minimum': 2, 'maximum': 12},
+        'interval_ms': {'type': 'integer', 'minimum': 100, 'maximum': 5000}, 'app_id': TEXT}, ['device_id', 'what']),
+    _tool('device.configure', 'Change device settings for a test: locale (per app, needs app_id; e.g. ar-SA for RTL), timezone (IANA, Android), clock_offset_s (move the clock, Android; e.g. 86400 = tomorrow, for streaks/milestones), location {lat, lon}, dark_mode, font_scale (0.85-2.0), grant / revoke permissions (need app_id; Android CAMERA or android.permission.X, iOS privacy services such as photos, location). Relaunch the app afterwards. Unsupported settings are reported, not fatal. release restores the changed settings automatically; reset=true restores them now.', {
+        'device_id': TEXT, 'app_id': TEXT,
+        'locale': {'type': 'string', 'minLength': 2, 'maxLength': 35}, 'timezone': {'type': 'string', 'minLength': 1, 'maxLength': 64},
+        'clock_offset_s': {'type': 'integer', 'minimum': -34560000, 'maximum': 34560000},
+        'location': {'type': 'object', 'properties': {'lat': {'type': 'number', 'minimum': -90, 'maximum': 90},
+                                                      'lon': {'type': 'number', 'minimum': -180, 'maximum': 180}},
+                     'required': ['lat', 'lon'], 'additionalProperties': False},
+        'dark_mode': {'type': 'boolean'}, 'font_scale': {'type': 'number', 'minimum': 0.85, 'maximum': 2.0},
+        'grant': {'type': 'array', 'minItems': 1, 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 100}},
+        'revoke': {'type': 'array', 'minItems': 1, 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 100}},
+        'reset': {'type': 'boolean'}}, ['device_id']),
     _tool('device.run_flow', 'Run a Maestro YAML flow on the device. Returns pass/fail, test counts and only the failed steps (verbose=true for the full output and JUnit report); takeScreenshot images are delivered to the user. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
         'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}, 'verbose': {'type': 'boolean'}},
         ['device_id', 'flow']),

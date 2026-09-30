@@ -29,7 +29,7 @@ class FakeService:
     async def list_devices(self, owner):
         return [{'device_id': 'r_0123456789abcdef/emulator-5554', 'owner': owner}]
 
-    async def lease(self, owner, scope, device_id=None, platform=None):
+    async def lease(self, owner, scope, device_id=None, platform=None, wait_online_s=0):
         self.calls.append(('lease', owner, scope, device_id, platform))
         return {'device_id': 'r_0123456789abcdef/emulator-5554'}
 

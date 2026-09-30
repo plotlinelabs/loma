@@ -18,6 +18,9 @@ export interface DeviceRunner {
   online: boolean;
   last_seen: string | null;
   created_at: string | null;
+  latest_version?: string;
+  update_available?: boolean;
+  self_update?: boolean;
 }
 
 export interface DeviceRecord {
@@ -88,4 +91,32 @@ export function fetchBuildSettings(): Promise<BuildSettings> {
 
 export function saveBuildSettings(update: { repos: string[]; workflows: string[] }): Promise<BuildSettings> {
   return request("/api/devices/build-settings", { method: "PUT", body: JSON.stringify(update) });
+}
+
+export interface DeviceActivityEvent {
+  at: string;
+  device_id: string;
+  actor: string;
+  scope: string;
+  op: string;
+  ok: boolean;
+  error?: string;
+  duration_ms?: number;
+  detail?: Record<string, unknown>;
+}
+
+export interface DeviceSession {
+  scope: string;
+  actor: string;
+  started_at: string;
+  ended_at: string;
+  ops: number;
+  failures: number;
+  conversation_id?: string;
+}
+
+export function fetchDeviceActivity(
+  deviceId: string,
+): Promise<{ device_id: string; sessions: DeviceSession[]; events: DeviceActivityEvent[] }> {
+  return request(`/api/devices/activity?device_id=${encodeURIComponent(deviceId)}`);
 }

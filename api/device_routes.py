@@ -30,6 +30,22 @@ from tools._auth_token import verify_user_auth_token
 logger = logging.getLogger(__name__)
 
 RUNNER_SCRIPT = Path(__file__).resolve().parent.parent / 'device_runner' / 'loma_device_runner.py'
+_RUNNER_RELEASE = {}
+
+
+def runner_release():
+    """(version, sha256) of the runner script this backend serves; read once per process."""
+    if not _RUNNER_RELEASE:
+        data = RUNNER_SCRIPT.read_bytes()
+        found = re.search(rb"^VERSION = '(\d+\.\d+\.\d+)'", data, re.M)
+        _RUNNER_RELEASE.update(version=found.group(1).decode() if found else '',
+                               sha256=hashlib.sha256(data).hexdigest())
+    return _RUNNER_RELEASE['version'], _RUNNER_RELEASE['sha256']
+
+
+def _older(version, latest):
+    parse = lambda text: tuple(int(p) for p in re.findall(r'\d+', text or '')[:3])  # noqa: E731
+    return bool(latest) and parse(version) < parse(latest)
 MAX_RUNNER_FRAME = 24 * 1024 * 1024
 HELLO_TIMEOUT = 10
 EMAIL = re.compile(r'[^@\s]{1,64}@[^@\s]{1,190}\Z')
@@ -126,6 +142,10 @@ async def handle_runner_ws(request):
             'os': str(hello.get('os') or '')[:120],
             'capabilities': [str(c)[:20] for c in capabilities[:10]]}})
         logger.info('Device runner %s connected with %d device(s)', runner_id, len(devices))
+        latest, digest = runner_release()
+        if 'self_update' in capabilities and _older(version, latest):
+            logger.info('Offering runner %s an update %s -> %s', runner_id, version, latest)
+            await conn.send({'type': 'update', 'version': latest, 'sha256': digest})
         last_persist = asyncio.get_running_loop().time()
         async for message in ws:
             if message.type != web.WSMsgType.TEXT:
@@ -176,7 +196,10 @@ async def handle_runner_download(request):
 def _runner_view(runner, user_email):
     conn = hub.get(runner['runner_id'])
     last_seen = store.aware(runner.get('last_seen'))
+    latest, _ = runner_release()
     return {
+        'latest_version': latest, 'update_available': _older(runner.get('version'), latest),
+        'self_update': 'self_update' in (runner.get('capabilities') or []),
         'runner_id': runner['runner_id'], 'name': runner.get('name'), 'owner': runner.get('owner_email'),
         'is_owner': runner.get('owner_email') == user_email, 'hostname': runner.get('hostname'),
         'os': runner.get('os'), 'version': runner.get('version'),
@@ -273,6 +296,41 @@ async def handle_force_release(request):
         return web.json_response(await DeviceService(db).force_release(user_email, body.get('device_id')))
     except DeviceError as exc:
         return _error(str(exc), 403)
+
+
+MAX_ACTIVITY = 300
+
+
+async def handle_activity(request):
+    """Session timeline for one device, from device_audit: sessions (by lease scope) and their steps."""
+    db = _db_or_503()
+    user_email = get_user_email(request)
+    if not user_email:
+        return _error('Authentication required', 401)
+    device_id = request.query.get('device_id', '')
+    try:
+        await DeviceService(db)._resolve(user_email, device_id)
+    except DeviceError as exc:
+        return _error(str(exc), 404)
+    query = {'device_id': device_id}
+    scope = request.query.get('scope')
+    if scope:
+        query['scope'] = scope[:200]
+    rows = await db.device_audit.find(query, {'_id': 0}).sort('at', -1).to_list(length=MAX_ACTIVITY)
+    sessions = {}
+    for row in rows:
+        at = store.aware(row['at'])
+        row['at'] = at.isoformat()
+        session = sessions.setdefault(row.get('scope'), {
+            'scope': row.get('scope'), 'actor': row.get('actor'), 'started_at': row['at'], 'ended_at': row['at'],
+            'ops': 0, 'failures': 0})
+        session['started_at'] = row['at']  # rows are newest first
+        session['ops'] += 1
+        session['failures'] += 0 if row.get('ok') else 1
+        conversation = (row.get('scope') or '')[5:] if str(row.get('scope')).startswith('conv:') else None
+        if conversation:
+            session['conversation_id'] = conversation
+    return web.json_response({'device_id': device_id, 'sessions': list(sessions.values()), 'events': rows})
 
 
 MAX_BUILD_SOURCES = 50
@@ -375,7 +433,8 @@ async def handle_internal_call(request):
         if action == 'list':
             return web.json_response({'devices': await service.list_devices(user_email)})
         if action == 'lease':
-            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform')))
+            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform'),
+                                                         body.get('wait_online_s', 0)))
         if action == 'release':
             return web.json_response(await service.release(user_email, scope, body.get('device_id')))
         if action == 'call':
@@ -426,6 +485,7 @@ def setup_device_routes(app):
     app.router.add_patch('/api/devices/runners/{runner_id}', handle_update_runner)
     app.router.add_delete('/api/devices/runners/{runner_id}', handle_revoke_runner)
     app.router.add_post('/api/devices/release', handle_force_release)
+    app.router.add_get('/api/devices/activity', handle_activity)
     app.router.add_get('/api/devices/build-settings', handle_get_build_settings)
     app.router.add_put('/api/devices/build-settings', handle_put_build_settings)
     app.router.add_post('/internal/devices/call', handle_internal_call)

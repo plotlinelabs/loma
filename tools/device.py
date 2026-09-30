@@ -8,7 +8,7 @@ users are always isolated); isolated workers bind the scope server-side.
 
 Commands:
   device.py --user-email E --auth-token T --scope CONVERSATION_ID list
-  device.py ... lease [--platform android|ios] [--device-id ID]
+  device.py ... lease [--platform android|ios] [--device-id ID] [--wait-online SECONDS]
   device.py ... release --device-id ID
   device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N]
                 [--wait SECONDS] [--dispatch-workflow FILE.yml] | --file PATH) [--app-id PKG]
@@ -32,6 +32,9 @@ Commands:
   device.py ... record --device-id ID --duration S [--app-id PKG [--extra K=V ...]]
   device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console]
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
+  device.py ... configure --device-id ID [--locale ar-SA --app-id PKG] [--timezone Asia/Dubai]
+                [--clock-offset SECONDS] [--location LAT,LON] [--dark-mode on|off] [--font-scale 1.3]
+                [--grant PERM ... --revoke PERM ... --app-id PKG] | --reset
 
 Files (screenshots, burst frames, recordings, flow screenshots) are written to
 $LOMA_CONVERSATION_DIR/device/ when that is set, else to a per-conversation dir
@@ -119,7 +122,8 @@ def build_body(args):
     if args.command == 'list':
         return {**body, 'action': 'list'}
     if args.command == 'lease':
-        return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform}
+        return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform,
+                **({'wait_online_s': args.wait_online} if args.wait_online else {})}
     if args.command == 'release':
         return {**body, 'action': 'release', 'device_id': args.device_id}
     call = {**body, 'action': 'call', 'device_id': args.device_id}
@@ -223,6 +227,22 @@ def build_body(args):
         if args.source:
             log_args['source'] = args.source
         return {**call, 'op': 'logs', 'args': log_args}
+    if args.command == 'configure':
+        if args.reset:
+            return {**call, 'op': 'configure', 'args': {'reset': True}}
+        call_args = {key: value for key, value in (
+            ('app_id', args.app_id), ('locale', args.locale), ('timezone', args.timezone),
+            ('clock_offset_s', args.clock_offset), ('font_scale', args.font_scale),
+            ('grant', args.grant), ('revoke', args.revoke)) if value is not None}
+        if args.dark_mode:
+            call_args['dark_mode'] = args.dark_mode == 'on'
+        if args.location:
+            try:
+                lat, lon = (float(part) for part in args.location.split(','))
+            except ValueError:
+                raise SystemExit('--location must be LAT,LON (e.g. 25.2048,55.2708)') from None
+            call_args['location'] = {'lat': lat, 'lon': lon}
+        return {**call, 'op': 'configure', 'args': call_args}
     if args.command == 'run-flow':
         with open(args.flow_file) as handle:
             flow_args = {'flow': handle.read()}
@@ -243,6 +263,8 @@ def parser():
     s = sub.add_parser('lease')
     s.add_argument('--platform', choices=['android', 'ios'])
     s.add_argument('--device-id')
+    s.add_argument('--wait-online', type=int, default=0, metavar='SECONDS',
+                   help='Wait up to SECONDS (max 600) for a device to come online; the runner owner is notified')
 
     def with_device(name):
         cmd = sub.add_parser(name)
@@ -286,6 +308,17 @@ def parser():
     s.add_argument('--ref', help='Element ref from the latest ui-tree (e.g. e3)')
     s.add_argument('--x', type=int)
     s.add_argument('--y', type=int)
+    s = with_device('configure')
+    s.add_argument('--app-id', help='Needed for --locale (per-app language) and --grant/--revoke')
+    s.add_argument('--locale', help='e.g. ar-SA (RTL), hi-IN')
+    s.add_argument('--timezone', help='IANA name, e.g. Asia/Dubai (Android)')
+    s.add_argument('--clock-offset', type=int, metavar='SECONDS', help='Move the clock, e.g. 86400 (Android)')
+    s.add_argument('--location', metavar='LAT,LON')
+    s.add_argument('--dark-mode', choices=['on', 'off'])
+    s.add_argument('--font-scale', type=float)
+    s.add_argument('--grant', action='append', metavar='PERMISSION')
+    s.add_argument('--revoke', action='append', metavar='PERMISSION')
+    s.add_argument('--reset', action='store_true', help='Restore everything configure changed')
     s = with_device('animations')
     toggle = s.add_mutually_exclusive_group(required=True)
     toggle.add_argument('--off', dest='on', action='store_false', help='Faster, steadier ui-tree / taps')

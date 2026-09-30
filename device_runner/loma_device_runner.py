@@ -59,7 +59,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = '1.1.0'  # the backend gates newer ops/arguments on this (devices/service.py NEEDS_RUNNER)
+VERSION = '1.2.0'  # the backend gates newer ops/arguments on this (devices/service.py OP_MIN_RUNNER)
 PROTOCOL = 1
 CONFIG_DIR = Path(os.environ.get('LOMA_DEVICE_RUNNER_HOME', Path.home() / '.loma-device-runner'))
 CONFIG_PATH = CONFIG_DIR / 'config.json'
@@ -122,6 +122,17 @@ FLOW_COMMANDS = {
 }
 FLOW_CONFIG_KEYS = {'appId', 'name', 'tags', 'env', 'onFlowStart', 'onFlowComplete'}
 APP_COMMANDS = {'launchApp', 'stopApp', 'killApp', 'clearState'}
+# configure: validated values only ever reach adb/simctl as single argv words.
+LOCALE = re.compile(r'[a-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}\Z')
+TIMEZONE = re.compile(r'[A-Za-z][A-Za-z0-9_+-]{0,30}(?:/[A-Za-z0-9_+-]{1,30}){0,2}\Z')
+PERMISSION = re.compile(r'[A-Za-z][A-Za-z0-9_.-]{1,99}\Z')
+SETTING_VALUE = re.compile(r'[A-Za-z0-9_.+/-]{0,64}\Z')  # values read back from `settings get` for restore
+MAX_CLOCK_OFFSET = 400 * 24 * 3600
+# iOS Dynamic Type categories (`simctl ui content_size`), with the Android-style scale each stands for.
+IOS_CONTENT_SIZES = ((0.9, 'small'), (1.0, 'medium'), (1.05, 'large'), (1.15, 'extra-large'),
+                     (1.3, 'extra-extra-large'), (1.5, 'extra-extra-extra-large'), (9.0, 'accessibility-large'))
+UPDATE_EXIT_CODE = 75  # non-zero: launchd (KeepAlive SuccessfulExit=false) and systemd (on-failure) restart us
+MAX_SCRIPT_BYTES = 2 * 1024 * 1024
 
 
 class OpError(Exception):
@@ -268,6 +279,45 @@ def need_launch(args):
     return {'extras': extras, 'bool_extras': flags,
             'activity': need_str(args, 'activity', ACTIVITY, 255, optional=True),
             'console': need_bool(args, 'console')}
+
+
+def need_configure(args, allowed_apps=()):
+    """Validated configure settings (the server validates the same shapes)."""
+    settings = {}
+    if 'locale' in args:
+        settings['locale'] = need_str(args, 'locale', LOCALE, 35)
+    if 'timezone' in args:
+        settings['timezone'] = need_str(args, 'timezone', TIMEZONE, 64)
+    if 'clock_offset_s' in args:
+        settings['clock_offset_s'] = need_int(args, 'clock_offset_s', -MAX_CLOCK_OFFSET, MAX_CLOCK_OFFSET)
+    if 'dark_mode' in args:
+        settings['dark_mode'] = need_bool(args, 'dark_mode')
+    if 'font_scale' in args:
+        value = args['font_scale']
+        if type(value) not in (int, float) or not 0.85 <= value <= 2.0:
+            raise OpError('Invalid font_scale')
+        settings['font_scale'] = float(value)
+    if 'location' in args:
+        value = args['location']
+        if (not isinstance(value, dict) or set(value) != {'lat', 'lon'}
+                or not all(type(value[k]) in (int, float) for k in ('lat', 'lon'))
+                or not -90 <= value['lat'] <= 90 or not -180 <= value['lon'] <= 180):
+            raise OpError('Invalid location')
+        settings['location'] = {'lat': float(value['lat']), 'lon': float(value['lon'])}
+    for verb in ('grant', 'revoke'):
+        if verb in args:
+            items = args[verb]
+            if (not isinstance(items, list) or not 1 <= len(items) <= 10
+                    or not all(isinstance(v, str) and PERMISSION.fullmatch(v) for v in items)):
+                raise OpError(f'Invalid {verb}')
+            settings[verb] = items
+    if not settings:
+        raise OpError('Nothing to configure')
+    if {'locale', 'grant', 'revoke'} & set(settings):
+        settings['app_id'] = need_str(args, 'app_id', APP_ID, 255)
+        if allowed_apps and settings['app_id'] not in allowed_apps:
+            raise OpError(f"App {settings['app_id']} is not in this runner's allowed_app_ids")
+    return settings
 
 
 def find_elements(elements, match, by='any', exact=False):
@@ -584,6 +634,129 @@ class Android:
         await run(self._sh(serial, script), timeout=15)
         return {'animations': enabled}
 
+    # ── configure: each setting records its original value once, so restore() can undo it ──
+
+    async def _get_setting(self, serial, namespace, key):
+        _, out, _ = await run(self._sh(serial, 'settings', 'get', namespace, key), timeout=15, check=False)
+        value = out.decode('utf-8', 'replace').strip()
+        return value if value and SETTING_VALUE.fullmatch(value) else 'null'
+
+    async def _put_setting(self, serial, namespace, key, value):
+        if value == 'null':
+            await run(self._sh(serial, 'settings', 'delete', namespace, key), timeout=15, check=False)
+        else:
+            await run(self._sh(serial, 'settings', 'put', namespace, key, value), timeout=15)
+
+    async def _set_time(self, serial, offset_s):
+        # `cmd alarm set-time` (Android 11+) takes epoch millis; the emulator shares this machine's clock.
+        millis = int((time.time() + offset_s) * 1000)
+        _, out, err = await run(self._sh(serial, 'cmd', 'alarm', 'set-time', str(millis)), timeout=15, check=False)
+        if 'Unknown command' in out.decode('utf-8', 'replace') + err:
+            raise OpError('Setting the clock needs Android 11+ (cmd alarm set-time)')
+
+    async def configure(self, serial, settings, saved):
+        """Apply each setting on its own: one unsupported setting does not undo or block the others."""
+        applied, unsupported = [], {}
+
+        async def apply(name, step):
+            try:
+                await step()
+                applied.append(name)
+            except OpError as exc:
+                unsupported[name] = str(exc)[:300]
+
+        async def dark_mode():
+            if 'dark_mode' not in saved:
+                _, out, _ = await run(self._sh(serial, 'cmd', 'uimode', 'night'), timeout=15, check=False)
+                current = out.decode('utf-8', 'replace').rpartition(':')[2].strip().lower()
+                saved['dark_mode'] = current if current in ('yes', 'no', 'auto') else 'no'
+            await run(self._sh(serial, 'cmd', 'uimode', 'night', 'yes' if settings['dark_mode'] else 'no'), timeout=15)
+
+        async def font_scale():
+            saved.setdefault('font_scale', await self._get_setting(serial, 'system', 'font_scale'))
+            await self._put_setting(serial, 'system', 'font_scale', f"{settings['font_scale']:.2f}")
+
+        async def timezone():
+            saved.setdefault('auto_time_zone', await self._get_setting(serial, 'global', 'auto_time_zone'))
+            if 'timezone' not in saved:
+                _, out, _ = await run(self._sh(serial, 'getprop', 'persist.sys.timezone'), timeout=15, check=False)
+                current = out.decode('utf-8', 'replace').strip()
+                saved['timezone'] = current if TIMEZONE.fullmatch(current) else 'GMT'
+            await self._put_setting(serial, 'global', 'auto_time_zone', '0')
+            _, out, err = await run(self._sh(serial, 'cmd', 'alarm', 'set-timezone', settings['timezone']),
+                                    timeout=15, check=False)
+            if 'Unknown command' in out.decode('utf-8', 'replace') + err:
+                raise OpError('Setting the time zone needs Android 11+ (cmd alarm set-timezone)')
+
+        async def clock():
+            saved.setdefault('auto_time', await self._get_setting(serial, 'global', 'auto_time'))
+            saved['clock_changed'] = True
+            await self._put_setting(serial, 'global', 'auto_time', '0')  # or network time undoes the offset
+            await self._set_time(serial, settings['clock_offset_s'])
+
+        async def location():
+            if not serial.startswith('emulator-'):
+                raise OpError('location is emulator-only on Android (adb emu geo fix)')
+            lat, lon = settings['location']['lat'], settings['location']['lon']
+            await run([self.adb, '-s', serial, 'emu', 'geo', 'fix', f'{lon:.6f}', f'{lat:.6f}'], timeout=15)
+
+        async def locale():
+            # Per-app language (Android 13+): only the app under test changes, nothing system-wide.
+            app, tag = settings['app_id'], settings['locale'].replace('_', '-')
+            _, out, err = await run(self._sh(serial, 'cmd', 'locale', 'set-app-locales', app, '--locales', tag),
+                                    timeout=15, check=False)
+            text = out.decode('utf-8', 'replace') + err
+            if 'Unknown command' in text or 'Exception' in text or 'Error' in text:
+                raise OpError('Per-app locale needs Android 13+: ' + text.strip()[-200:])
+            saved.setdefault('app_locales', [])
+            if app not in saved['app_locales']:
+                saved['app_locales'].append(app)
+
+        async def permissions(verb):
+            for name in settings[verb]:
+                permission = name if '.' in name else 'android.permission.' + name
+                await run(self._sh(serial, 'pm', verb, settings['app_id'], permission), timeout=15)
+
+        steps = {'dark_mode': dark_mode, 'font_scale': font_scale, 'timezone': timezone,
+                 'clock_offset_s': clock, 'location': location, 'locale': locale,
+                 'grant': lambda: permissions('grant'), 'revoke': lambda: permissions('revoke')}
+        for name, step in steps.items():
+            if name in settings:
+                await apply(name, step)
+        return {'applied': applied, **({'unsupported': unsupported} if unsupported else {}),
+                'note': 'Relaunch the app to pick up locale, font scale and time zone changes. release (or '
+                        'configure reset=true) restores everything except permissions and location.'}
+
+    async def restore(self, serial, saved):
+        restored = []
+
+        async def attempt(name, step):
+            try:
+                await step()
+                restored.append(name)
+            except OpError:
+                pass
+
+        if 'dark_mode' in saved:
+            await attempt('dark_mode', lambda: run(self._sh(serial, 'cmd', 'uimode', 'night', saved['dark_mode']),
+                                                   timeout=15))
+        if 'font_scale' in saved:
+            await attempt('font_scale', lambda: self._put_setting(serial, 'system', 'font_scale', saved['font_scale']))
+        if saved.get('clock_changed'):
+            await attempt('clock_offset_s', lambda: self._set_time(serial, 0))
+        if 'auto_time' in saved:
+            await attempt('auto_time', lambda: self._put_setting(serial, 'global', 'auto_time', saved['auto_time']))
+        if 'timezone' in saved:
+            await attempt('timezone', lambda: run(self._sh(serial, 'cmd', 'alarm', 'set-timezone', saved['timezone']),
+                                                  timeout=15))
+        if 'auto_time_zone' in saved:
+            await attempt('auto_time_zone', lambda: self._put_setting(serial, 'global', 'auto_time_zone',
+                                                                      saved['auto_time_zone']))
+        for app in saved.get('app_locales') or []:
+            await attempt('locale:' + app, lambda app=app: run(self._sh(
+                serial, 'cmd', 'locale', 'set-app-locales', app, '--locales', "''"), timeout=15))
+        return restored
+
     async def capture(self, serial):
         return 'png', await self.screenshot(serial)
 
@@ -813,6 +986,89 @@ class IOS:
     async def animations(self, serial, enabled):
         raise OpError('animations is Android-only; iOS simulators have no global animation switch')
 
+    async def _ui_value(self, serial, what):
+        _, out, _ = await run(['xcrun', 'simctl', 'ui', serial, what], timeout=15, check=False)
+        value = out.decode('utf-8', 'replace').strip().splitlines()
+        return value[-1].strip() if value and SETTING_VALUE.fullmatch(value[-1].strip()) else None
+
+    async def configure(self, serial, settings, saved):
+        applied, unsupported = [], {}
+        host_clock = 'iOS simulators use this Mac\'s clock and time zone; test time-based logic on Android'
+        for name in ('timezone', 'clock_offset_s'):
+            if name in settings:
+                unsupported[name] = host_clock
+        try:
+            if 'dark_mode' in settings:
+                if 'appearance' not in saved:
+                    saved['appearance'] = await self._ui_value(serial, 'appearance') or 'light'
+                await run(['xcrun', 'simctl', 'ui', serial, 'appearance',
+                           'dark' if settings['dark_mode'] else 'light'], timeout=15)
+                applied.append('dark_mode')
+        except OpError as exc:
+            unsupported['dark_mode'] = str(exc)[:300]
+        try:
+            if 'font_scale' in settings:
+                if 'content_size' not in saved:
+                    saved['content_size'] = await self._ui_value(serial, 'content_size') or 'large'
+                size = next(name for limit, name in IOS_CONTENT_SIZES if settings['font_scale'] <= limit)
+                await run(['xcrun', 'simctl', 'ui', serial, 'content_size', size], timeout=15)
+                applied.append('font_scale')
+        except OpError as exc:
+            unsupported['font_scale'] = str(exc)[:300]
+        try:
+            if 'location' in settings:
+                lat, lon = settings['location']['lat'], settings['location']['lon']
+                await run(['xcrun', 'simctl', 'location', serial, 'set', f'{lat:.6f},{lon:.6f}'], timeout=15)
+                saved['location'] = True
+                applied.append('location')
+        except OpError as exc:
+            unsupported['location'] = str(exc)[:300]
+        try:
+            if 'locale' in settings:
+                # The app's own defaults domain: only the app under test changes language.
+                app, tag = settings['app_id'], settings['locale'].replace('_', '-')
+                region = tag.replace('-', '_')
+                prefix = ['xcrun', 'simctl', 'spawn', serial, 'defaults', 'write', app]
+                await run([*prefix, 'AppleLanguages', '-array', tag], timeout=15)
+                await run([*prefix, 'AppleLocale', region], timeout=15)
+                saved.setdefault('app_locales', [])
+                if app not in saved['app_locales']:
+                    saved['app_locales'].append(app)
+                applied.append('locale')
+        except OpError as exc:
+            unsupported['locale'] = str(exc)[:300]
+        for verb in ('grant', 'revoke'):
+            for service in settings.get(verb) or []:
+                if service not in IOS_PRIVACY:
+                    unsupported[f'{verb}:{service}'] = 'Not an iOS privacy service: ' + ', '.join(sorted(IOS_PRIVACY))
+                    continue
+                try:
+                    await run(['xcrun', 'simctl', 'privacy', serial, verb, service, settings['app_id']], timeout=30)
+                    applied.append(f'{verb}:{service}')
+                except OpError as exc:
+                    unsupported[f'{verb}:{service}'] = str(exc)[:300]
+        return {'applied': applied, **({'unsupported': unsupported} if unsupported else {}),
+                'note': 'Relaunch the app to pick up locale and text size changes. release (or configure '
+                        'reset=true) restores everything except permissions.'}
+
+    async def restore(self, serial, saved):
+        restored = []
+        steps = []
+        if 'appearance' in saved:
+            steps.append(('dark_mode', ['xcrun', 'simctl', 'ui', serial, 'appearance', saved['appearance']]))
+        if 'content_size' in saved:
+            steps.append(('font_scale', ['xcrun', 'simctl', 'ui', serial, 'content_size', saved['content_size']]))
+        if saved.get('location'):
+            steps.append(('location', ['xcrun', 'simctl', 'location', serial, 'clear']))
+        for app in saved.get('app_locales') or []:
+            for key in ('AppleLanguages', 'AppleLocale'):
+                steps.append((f'locale:{app}', ['xcrun', 'simctl', 'spawn', serial, 'defaults', 'delete', app, key]))
+        for name, argv in steps:
+            code, _, _ = await run(argv, timeout=15, check=False)
+            if code == 0 and name not in restored:
+                restored.append(name)
+        return restored
+
     async def tap(self, serial, x, y):
         await run([self._idb(), 'ui', 'tap', '--udid', serial, str(x), str(y)], timeout=15)
         return {'tapped': [x, y]}
@@ -966,7 +1222,7 @@ class Runner:
     OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
            'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow',
            'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record',
-           'animations'}
+           'animations', 'configure'}
     APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
     LAUNCHING_OPS = {'burst', 'record'}  # may launch app_id right before capturing
     CACHE_KEEP = 4
@@ -983,10 +1239,21 @@ class Runner:
         self.cf_headers = {}
         self.installed = {}  # (serial, package) -> (build sha256, install stamp) of builds this runner installed
         self.cache_dir = Path(config.get('cache_dir') or CONFIG_DIR / 'build-cache')
+        self.saved_settings = {}  # serial -> original values changed by configure (restored by reset)
+        self.calls = set()  # in-flight call tasks; a self-update waits for these to finish
+        self.update_task = None
+        self.exit_code = None  # set when the runner should exit (e.g. restart into an updated script)
+
+    def can_self_update(self):
+        """Only under the login service (it restarts us) and when the owner has not opted out."""
+        return (os.environ.get('LOMA_DEVICE_RUNNER_SERVICE') == '1' and self.policy.get('auto_update', True) is not False
+                and Path(sys.argv[0]).resolve() == INSTALLED_SCRIPT.resolve())
 
     def capabilities(self):
         caps = [d.platform for d in self.drivers]
         caps += [tool for tool in ('maestro', 'idb') if shutil.which(tool)]
+        if self.can_self_update():
+            caps.append('self_update')
         return caps
 
     async def refresh(self):
@@ -1058,6 +1325,12 @@ class Runner:
             return {'mp4_base64': base64.b64encode(data).decode(), 'bytes': len(data), 'duration_s': seconds}
         if op == 'animations':
             return await driver.animations(serial, need_bool(args, 'enabled'))
+        if op == 'configure':
+            if need_bool(args, 'reset'):
+                saved = self.saved_settings.pop(serial, {})
+                return {'reset': True, 'restored': await driver.restore(serial, saved) if saved else []}
+            settings = need_configure(args, self.allowed_apps)
+            return await driver.configure(serial, settings, self.saved_settings.setdefault(serial, {}))
         if op == 'open_url':
             return await driver.open_url(serial, check_url(need_str(args, 'url', max_len=2000)))
         if op == 'screenshot':
@@ -1380,13 +1653,59 @@ class Runner:
                     if frame.get('type') == 'call':
                         task = asyncio.create_task(self.handle_call(ws, frame))
                         tasks.add(task)
+                        self.calls.add(task)
                         task.add_done_callback(tasks.discard)
+                        task.add_done_callback(self.calls.discard)
+                    elif frame.get('type') == 'update' and self.can_self_update() and self.update_task is None:
+                        self.update_task = asyncio.create_task(self.self_update(ws, frame))
                     elif frame.get('type') == 'revoked':
                         raise RevokedError('Runner was revoked in Loma')
             finally:
                 beat.cancel()
                 for task in list(tasks):
                     task.cancel()
+
+    async def self_update(self, ws, frame):
+        """Replace the installed script with the server's newer one, then restart via the login service.
+
+        The new script is fetched from the same server over the authenticated channel and must match
+        the sha256 the server announced, parse as Python and declare the announced VERSION. In-flight
+        calls finish first (up to 10 minutes), so an update never cuts an install or flow short.
+        """
+        try:
+            version, digest = frame.get('version'), frame.get('sha256')
+            if (not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+', version)
+                    or not isinstance(digest, str) or not SHA256.fullmatch(digest)):
+                return
+            if tuple(map(int, version.split('.'))) <= tuple(map(int, VERSION.split('.'))):
+                return
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=120)
+            async with self.session.get(self.config['server'] + '/device-runner/download',
+                                        headers=self.auth_headers(), timeout=timeout, allow_redirects=False) as response:
+                if response.status != 200:
+                    raise OpError(f'download failed (HTTP {response.status})')
+                data = await response.content.read(MAX_SCRIPT_BYTES + 1)
+            if len(data) > MAX_SCRIPT_BYTES or hashlib.sha256(data).hexdigest() != digest:
+                raise OpError('downloaded script does not match the announced checksum')
+            compile(data, 'loma_device_runner.py', 'exec')
+            if f"VERSION = '{version}'".encode() not in data:
+                raise OpError('downloaded script does not declare the announced version')
+            tmp = INSTALLED_SCRIPT.with_suffix('.update')
+            tmp.write_bytes(data)
+            os.chmod(tmp, 0o700)
+            os.replace(tmp, INSTALLED_SCRIPT)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 600
+            while self.calls and loop.time() < deadline:
+                await asyncio.sleep(1)
+            print(f'Updated to runner {version}; restarting', flush=True)
+            self.exit_code = UPDATE_EXIT_CODE
+            await ws.close()
+        except (OpError, SyntaxError, ValueError, OSError) as exc:
+            print(f'Self-update to {frame.get("version")} failed: {exc}', flush=True)
+        except Exception as exc:  # never let an update attempt take the runner down
+            print(f'Self-update failed: {type(exc).__name__}', flush=True)
 
     async def serve(self):
         import aiohttp
@@ -1411,6 +1730,8 @@ class Runner:
                     print(str(exc), flush=True)
                 except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
                     print(f'Connection lost: {type(exc).__name__}', flush=True)
+                if self.exit_code is not None:
+                    return self.exit_code
                 # Only a connection that stayed up resets the backoff, so a server
                 # that accepts and immediately closes cannot cause a 1/s reconnect loop.
                 if loop.time() - started >= 60:
@@ -1580,7 +1901,8 @@ def service_file():
 def install_service():
     """Write and (re)start the login service that runs `run` from the private environment."""
     foreground = f'{sys.executable} {INSTALLED_SCRIPT} run'
-    env = {'PATH': os.environ['PATH'], 'LOMA_DEVICE_RUNNER_HOME': str(CONFIG_DIR)}
+    # LOMA_DEVICE_RUNNER_SERVICE tells the runner a supervisor restarts it, so it may self-update.
+    env = {'PATH': os.environ['PATH'], 'LOMA_DEVICE_RUNNER_HOME': str(CONFIG_DIR), 'LOMA_DEVICE_RUNNER_SERVICE': '1'}
     path = service_file()
     if sys.platform == 'darwin':
         log = CONFIG_DIR / 'runner.log'

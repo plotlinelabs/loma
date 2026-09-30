@@ -20,6 +20,9 @@ from devices.builds import GITHUB_FETCH_TIMEOUT, blobs as default_blobs
 from devices.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError, hub as default_hub
 
 LEASE_TTL = timedelta(minutes=15)
+MAX_WAIT_ONLINE = 600
+WAIT_ONLINE_POLL = 2
+OFFLINE_NOTIFY_EVERY = timedelta(minutes=30)
 APP_ID = re.compile(r'[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*\Z')
 KEYS = {'back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up', 'volume_down', 'power',
         'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup'}
@@ -62,18 +65,28 @@ OPS = {
     'burst': ({'count'}, {'interval_ms', 'app_id'} | LAUNCH),
     'record': ({'duration_s'}, {'app_id'} | LAUNCH),
     'animations': ({'enabled'}, set()),
+    # Device settings for a test (locale, time, location, appearance, permissions). reset=true restores
+    # everything this runner changed on the device; release does that automatically.
+    'configure': (set(), {'locale', 'timezone', 'clock_offset_s', 'location', 'dark_mode', 'font_scale',
+                          'app_id', 'grant', 'revoke', 'reset'}),
 }
+CONFIGURE_SETTINGS = {'locale', 'timezone', 'clock_offset_s', 'location', 'dark_mode', 'font_scale', 'grant', 'revoke'}
+LOCALE = re.compile(r'[a-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}\Z')
+TIMEZONE = re.compile(r'[A-Za-z][A-Za-z0-9_+-]{0,30}(?:/[A-Za-z0-9_+-]{1,30}){0,2}\Z')
+PERMISSION = re.compile(r'[A-Za-z][A-Za-z0-9_.-]{1,99}\Z')
+MAX_CLOCK_OFFSET = 400 * 24 * 3600
 # Arguments the backend consumes itself; never forwarded to the runner.
 BACKEND_ARGS = {'ui_tree': {'compact', 'clickable_only', 'filter'}, 'run_flow': {'verbose'},
                 'install': {'wait_s', 'dispatch_workflow'}}
 INTS = {'x': (0, 10000), 'y': (0, 10000), 'x1': (0, 10000), 'y1': (0, 10000), 'x2': (0, 10000),
         'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 60),
         'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 20),
-        'wait_s': (0, MAX_WAIT)}
-BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled'}
+        'wait_s': (0, MAX_WAIT), 'clock_offset_s': (-MAX_CLOCK_OFFSET, MAX_CLOCK_OFFSET)}
+BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled',
+         'dark_mode', 'reset'}
 ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'}}
 STRS = {'url': 2000, 'text': 500, 'filter': 200, 'flow': 64 * 1024, 'key': 32, 'app_id': 255, 'upload_id': 64,
-        'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8}
+        'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8, 'locale': 35, 'timezone': 64}
 REF = re.compile(r'e[1-9][0-9]{0,3}\Z')
 # Element refs (e1, e2, ...) from the latest ui_tree, per (user, scope, device). Module level:
 # the HTTP routes build a new DeviceService per request. The model taps by ref instead of copying
@@ -93,24 +106,33 @@ NEW_RUNNER_OPS = {'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_unti
                   'animations'}
 NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
                    'install': {'grant_appops', 'grant_privacy', 'force'}, 'logs': {'source'}}
+# Minimum runner version per op; ops not listed work on every runner.
+OP_MIN_RUNNER = {**{op: NEEDS_RUNNER for op in NEW_RUNNER_OPS}, 'configure': (1, 2, 0)}
 
 
 def _version(text):
     return tuple(int(part) for part in re.findall(r'\d+', str(text or ''))[:3])
 
 
+def runner_supports(conn, op):
+    version = getattr(conn, 'version', None)
+    return version is None or _version(version) >= OP_MIN_RUNNER.get(op, ())
+
+
 def _check_runner_version(conn, op, args):
     """args are the runner-bound arguments (backend-only ones already removed)."""
     version = getattr(conn, 'version', None)
-    if version is None or _version(version) >= NEEDS_RUNNER:
+    if version is None:
         return
     newer = sorted(NEW_RUNNER_ARGS.get(op, set()) & set(args))
-    if op in NEW_RUNNER_OPS or newer:
-        what = op + (' with ' + ', '.join(newer) if newer else '')
-        need = '.'.join(map(str, NEEDS_RUNNER))
-        raise DeviceError(f'Runner too old for {what} (runner {version or "unknown"}); update the Loma Device Runner '
-                          f'to >= {need}: download the new loma_device_runner.py from Integrations > Devices and '
-                          'run `python3 loma_device_runner.py setup` on that machine')
+    need = max(OP_MIN_RUNNER.get(op, ()), NEEDS_RUNNER if newer else ())
+    if _version(version) >= need:
+        return
+    what = op + (' with ' + ', '.join(newer) if newer else '')
+    raise DeviceError(f'Runner too old for {what} (runner {version or "unknown"}); update the Loma Device Runner '
+                      f'to >= {".".join(map(str, need))}. Runners from 1.2.0 update themselves; older ones need '
+                      'the new loma_device_runner.py from Integrations > Devices and '
+                      '`python3 loma_device_runner.py setup` on that machine')
 
 
 def _validate(op, args):
@@ -138,6 +160,19 @@ def _validate(op, args):
             _validate_build(value)
         elif name in ('extras', 'bool_extras'):
             _validate_extras(name, value)
+        elif name == 'location':
+            if (not isinstance(value, dict) or set(value) != {'lat', 'lon'}
+                    or not all(type(value[k]) in (int, float) for k in ('lat', 'lon'))
+                    or not -90 <= value['lat'] <= 90 or not -180 <= value['lon'] <= 180):
+                raise DeviceError('location must be {lat, lon} in degrees')
+        elif name == 'font_scale':
+            if type(value) not in (int, float) or not 0.85 <= value <= 2.0:
+                raise DeviceError('font_scale must be a number between 0.85 and 2.0')
+        elif name in ('grant', 'revoke'):
+            if (not isinstance(value, list) or not 1 <= len(value) <= 10
+                    or not all(isinstance(v, str) and PERMISSION.fullmatch(v) for v in value)):
+                raise DeviceError(f'{name} must be a list of permission names (Android: CAMERA or '
+                                  f'android.permission.CAMERA; iOS: ' + ', '.join(sorted(IOS_PRIVACY)) + ')')
         elif name in ('grant_appops', 'grant_privacy'):
             if (not isinstance(value, list) or not 1 <= len(value) <= 10
                     or not all(isinstance(v, str) and (APPOP.fullmatch(v) if name == 'grant_appops'
@@ -148,6 +183,19 @@ def _validate(op, args):
         elif name in STRS:
             if not isinstance(value, str) or not value or len(value) > STRS[name] or '\x00' in value:
                 raise DeviceError(f'Invalid {name}')
+    if 'locale' in args and not LOCALE.fullmatch(args['locale']):
+        raise DeviceError('Invalid locale (e.g. ar, ar-SA, en_IN)')
+    if 'timezone' in args and not TIMEZONE.fullmatch(args['timezone']):
+        raise DeviceError('Invalid timezone (an IANA name, e.g. Asia/Kolkata)')
+    if op == 'configure':
+        settings = CONFIGURE_SETTINGS & set(args)
+        if args.get('reset') and (settings or 'app_id' in args):
+            raise DeviceError('reset restores the device on its own; call configure again to change settings')
+        if not args.get('reset') and not settings:
+            raise DeviceError('configure needs at least one of ' + ', '.join(sorted(CONFIGURE_SETTINGS))
+                              + ', or reset=true')
+        if ({'grant', 'revoke'} & settings or 'locale' in settings) and 'app_id' not in args:
+            raise DeviceError('grant / revoke / locale need app_id (locale is set per app)')
     if 'app_id' in args and not APP_ID.fullmatch(args['app_id']):
         raise DeviceError('Invalid app_id (expected a package name / bundle id)')
     if 'activity' in args and not ACTIVITY.fullmatch(args['activity']):
@@ -180,6 +228,32 @@ def _validate(op, args):
             raise DeviceError('Invalid url (needs a scheme, no spaces or quotes)')
     if op == 'install' and ('build' in args) == ('upload_id' in args):
         raise DeviceError('install needs exactly one of build or upload_id')
+
+
+# Arguments shown in the session timeline. Never typed text (may be a password) or flow bodies.
+AUDIT_ARGS = ('app_id', 'match', 'ref', 'x', 'y', 'key', 'url', 'action', 'enabled', 'duration_s', 'count',
+              'locale', 'timezone', 'clock_offset_s', 'dark_mode', 'font_scale', 'grant', 'revoke', 'reset')
+
+
+def audit_detail(op, args):
+    detail = {k: args[k] for k in AUDIT_ARGS if k in args}
+    if 'url' in detail:
+        detail['url'] = str(detail['url']).split('?', 1)[0][:200]  # query strings may carry tokens
+    if isinstance(args.get('build'), dict):
+        detail['build'] = {k: args['build'][k] for k in ('repo', 'artifact_name', 'pr', 'run_id') if k in args['build']}
+    if op in ('set_text', 'type'):
+        detail['chars'] = len(args.get('text') or '')
+    if 'location' in args:
+        detail['location'] = True
+    return detail or None
+
+
+class DeviceOffline(DeviceError):
+    """No usable device right now; `runners` are the ones whose owner could fix that."""
+
+    def __init__(self, message, runners):
+        super().__init__(message)
+        self.runners = runners
 
 
 def _validate_extras(name, extras):
@@ -359,21 +433,45 @@ class DeviceService:
                 continue
         return None
 
-    async def lease(self, user_email, scope, device_id=None, platform=None):
+    async def lease(self, user_email, scope, device_id=None, platform=None, wait_online_s=0):
+        """Reserve a device. With wait_online_s, wait (bounded) for an offline runner / unbooted device;
+        either way the owners of the offline runners get a Loma inbox notification (rate-limited)."""
         self._check_scope(scope)
+        if platform not in (None, 'android', 'ios'):
+            raise DeviceError('platform must be android or ios')
+        if type(wait_online_s) is not int or not 0 <= wait_online_s <= MAX_WAIT_ONLINE:
+            raise DeviceError(f'wait_online_s must be an integer between 0 and {MAX_WAIT_ONLINE}')
+        deadline, notified = time.monotonic() + wait_online_s, False
+        while True:
+            try:
+                return await self._lease_once(user_email, scope, device_id, platform)
+            except DeviceOffline as exc:
+                if not notified:
+                    notified = True
+                    await self._notify_offline(user_email, scope, exc.runners, platform)
+                if time.monotonic() + WAIT_ONLINE_POLL > deadline:
+                    if wait_online_s:
+                        raise DeviceError(f'{exc} (waited {wait_online_s}s; the runner owner was notified)') from None
+                    raise
+                await asyncio.sleep(WAIT_ONLINE_POLL)
+
+    async def _lease_once(self, user_email, scope, device_id, platform):
         if device_id is not None:
             runner, serial = await self._resolve(user_email, device_id)
             if self.hub.get(runner['runner_id']) is None:
-                raise DeviceError('That device\'s runner is offline')
+                raise DeviceOffline('That device\'s runner is offline', [runner])
             candidates = [store.device_id(runner['runner_id'], serial)]
         else:
-            if platform not in (None, 'android', 'ios'):
-                raise DeviceError('platform must be android or ios')
             devices = await self.list_devices(user_email)
             candidates = [d['device_id'] for d in devices if d['online']
                           and (platform is None or d['platform'] == platform)]
             if not candidates:
-                raise DeviceError(self._no_device_message(devices, platform))
+                message = self._no_device_message(devices, platform)
+                runners = await self.runners_for(user_email)
+                if not runners:
+                    raise DeviceError(message)
+                # Runners that could help: offline ones, and online ones without a matching booted device.
+                raise DeviceOffline(message, runners)
         busy = []
         for candidate in candidates:
             lease = await self._acquire(candidate, user_email, scope)
@@ -392,12 +490,53 @@ class DeviceService:
         kind = f'{platform} ' if platform else ''
         return f'No online {kind}devices. Is the runner machine awake and the emulator/simulator booted?'
 
+    async def _notify_offline(self, user_email, scope, runners, platform):
+        """Tell each runner owner (at most every 30 min per runner) that an agent is waiting for a device."""
+        from observability.notifications import create_notification
+        at = store.now()
+        conversation_id = scope[5:] if scope.startswith('conv:') else None
+        kind = {'android': 'an Android ', 'ios': 'an iOS '}.get(platform, 'a ')
+        for runner in runners:
+            claimed = await self.db.device_runners.find_one_and_update(
+                {'runner_id': runner['runner_id'], '$or': [
+                    {'offline_notified_at': {'$exists': False}},
+                    {'offline_notified_at': {'$lt': at - OFFLINE_NOTIFY_EVERY}}]},
+                {'$set': {'offline_notified_at': at}})
+            if claimed is None:
+                continue
+            online = self.hub.get(runner['runner_id']) is not None
+            action = ('boot an emulator/simulator on it' if online
+                      else 'wake the machine and check the runner service is running')
+            try:
+                await create_notification(
+                    self.db, user_email=runner['owner_email'], source='system',
+                    title=f"Loma needs {kind}device on {runner.get('name') or 'your runner'}",
+                    body=(f'{user_email} started a device session, but "{runner.get("name")}" has no usable '
+                          f'device. Please {action}. The agent keeps the request open for a few minutes.'),
+                    conversation_id=conversation_id if runner['owner_email'] == user_email else None)
+            except Exception:
+                pass  # a notification failure must never fail the lease
+
     async def release(self, user_email, scope, device_id):
         self._check_scope(scope)
-        await self._resolve(user_email, device_id)
-        result = await self.db.device_leases.delete_one({'_id': device_id, 'owner_email': user_email, 'scope': scope})
+        runner, serial = await self._resolve(user_email, device_id)
+        lease = await self.db.device_leases.find_one_and_delete(
+            {'_id': device_id, 'owner_email': user_email, 'scope': scope})
+        result = {'released': lease is not None}
+        if lease is not None and lease.get('configured'):
+            result['settings_restored'] = await self._restore_settings(runner['runner_id'], serial)
         await self._audit(user_email, scope, device_id, 'release', True)
-        return {'released': bool(result.deleted_count)}
+        return result
+
+    async def _restore_settings(self, runner_id, serial):
+        """Best effort: undo configure (clock, locale, ...) so the next session starts from defaults."""
+        if not runner_supports(self.hub.get(runner_id), 'configure'):
+            return False
+        try:
+            await self.hub.call(runner_id, 'configure', serial, {'reset': True})
+            return True
+        except DeviceError:
+            return False
 
     async def force_release(self, user_email, device_id):
         runner, _ = await self._resolve(user_email, device_id)
@@ -441,6 +580,7 @@ class DeviceService:
         if lease is None:
             raise DeviceError('Device is leased by another session. Pick another device or wait for it to be released.')
         started = time.monotonic()
+        detail = audit_detail(op, {**args, **({'ref': ref} if ref else {})})
         try:
             if op in REF_RESET_OPS:
                 _REFS.pop(_ref_key(user_email, scope, device_id), None)
@@ -451,6 +591,9 @@ class DeviceService:
                 await self.hub.call(runner['runner_id'], 'tap', serial, tap_first)
                 await asyncio.sleep(0.3)
             data = await self.hub.call(runner['runner_id'], op, serial, args)
+            if op == 'configure':  # release restores the device only when this session changed it
+                await self.db.device_leases.update_one({'_id': device_id}, {'$set': {
+                    'configured': not args.get('reset', False)}})
             if ref is not None:
                 data = {**data, 'ref': ref}
             if build_meta:
@@ -462,11 +605,11 @@ class DeviceService:
         except Exception as exc:
             message = str(exc) if isinstance(exc, DeviceError) else f'internal error: {type(exc).__name__}'
             try:
-                await self._audit(user_email, scope, device_id, op, False, message, started)
+                await self._audit(user_email, scope, device_id, op, False, message, started, detail)
             except Exception:
                 pass
             raise
-        await self._audit(user_email, scope, device_id, op, True, None, started)
+        await self._audit(user_email, scope, device_id, op, True, None, started, detail)
         return data
 
     @staticmethod
@@ -513,10 +656,12 @@ class DeviceService:
             runner_args['app_id'] = app_id
         return runner_args, dict(blob['meta'], sha256=blob['sha256'], size=blob['size'])
 
-    async def _audit(self, user_email, scope, device_id, op, ok, error=None, started=None):
+    async def _audit(self, user_email, scope, device_id, op, ok, error=None, started=None, detail=None):
         entry = {'at': store.now(), 'device_id': device_id, 'actor': user_email, 'scope': scope, 'op': op, 'ok': ok}
         if error:
             entry['error'] = error[:500]
+        if detail:
+            entry['detail'] = detail
         if started is not None:
             entry['duration_ms'] = int((time.monotonic() - started) * 1000)
         await self.db.device_audit.insert_one(entry)
