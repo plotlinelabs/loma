@@ -29,6 +29,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 from agent.prompt import build_pooled_system_prompt
+from agent.subagents import build_subagents
 from agent.run_processes import PROC_TAG_ENV, kill_run_processes, kill_tagged, new_proc_tag
 
 logger = logging.getLogger(__name__)
@@ -409,6 +410,7 @@ class ClientPool:
             cwd=str(Path(__file__).parent.parent),
             max_buffer_size=10 * 1024 * 1024,
             include_partial_messages=True,
+            agents=build_subagents(),
         )
 
     async def _create_client(
