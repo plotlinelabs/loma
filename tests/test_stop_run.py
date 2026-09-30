@@ -33,7 +33,7 @@ async def test_interrupt_flags_stop_and_aborts_runtime():
         client.interrupt.assert_awaited_once()
         assert stream.stopped
     finally:
-        await active_streams.unregister("convo-1")
+        await active_streams.unregister("convo-1", stream)
     assert await active_streams.get_for_user("convo-1", "owner@example.test") is None
 
 
@@ -133,7 +133,7 @@ async def test_pending_stop_is_applied_when_the_runtime_registers(monkeypatch):
     try:
         assert stream.stopped, "stop requested before registration must apply"
     finally:
-        await active_streams.unregister("convo-early")
+        await active_streams.unregister("convo-early", stream)
 
     # Expired requests are ignored so a stale stop never aborts a later run.
     await active_streams.request_pending_stop("convo-stale")
@@ -144,7 +144,7 @@ async def test_pending_stop_is_applied_when_the_runtime_registers(monkeypatch):
     try:
         assert not stream.stopped
     finally:
-        await active_streams.unregister("convo-stale")
+        await active_streams.unregister("convo-stale", stream)
     assert "convo-stale" not in active_streams._pending_stops
 
 

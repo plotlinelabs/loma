@@ -58,10 +58,13 @@ def get_integration_key(provider: str) -> str:
         return ""
 
 
-def get_integration_extra(provider: str, field: str) -> str:
-    """Load a decrypted extra field for *provider* from db.integrations."""
+def get_integration_extra(provider: str, field: str, use_cache: bool = True) -> str:
+    """Load a decrypted extra field for *provider* from db.integrations.
+
+    use_cache=False re-reads Mongo, for settings an admin may change while the process runs.
+    """
     cache_key = f"{provider}:{field}"
-    if cache_key in _cache:
+    if use_cache and cache_key in _cache:
         return _cache[cache_key]
 
     enc_key = os.environ.get("OAUTH_ENCRYPTION_KEY", "").strip()

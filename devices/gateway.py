@@ -33,7 +33,8 @@ WAIT_SECONDS = 90  # below the worker's 120 s per-call RPC timeout
 TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'device.app',
          'device.input', 'device.observe', 'device.run_flow'}
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
-INPUT_ACTIONS = {'tap', 'swipe', 'type', 'key', 'open_url'}
+INPUT_ACTIONS = {'animations', 'tap', 'swipe', 'type', 'key', 'open_url', 'set_text', 'clear_text', 'tap_text', 'wait_for',
+                 'scroll_until_visible'}
 OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs'}
 
 
@@ -111,9 +112,10 @@ class DeviceTools:
             _pick(args, set(), set(), tool)
             return await service.release(owner, scope, device_id)
         if tool == 'device.install':
-            picked = _pick(args, {'repo', 'artifact_name'}, {'pr', 'run_id', 'app_id'}, tool)
+            options = {'app_id', 'grant_appops', 'grant_privacy', 'force', 'wait_s', 'dispatch_workflow'}
+            picked = _pick(args, {'repo', 'artifact_name'}, {'pr', 'run_id'} | options, tool)
             build = {k: picked[k] for k in ('repo', 'artifact_name', 'pr', 'run_id') if k in picked}
-            call_args = {'build': build, **({'app_id': picked['app_id']} if 'app_id' in picked else {})}
+            call_args = {'build': build, **{k: picked[k] for k in options if k in picked}}
             return await service.call(owner, scope, device_id, 'install', call_args)
         # Per-op argument shapes are validated once, in DeviceService.
         if tool == 'device.app':
@@ -124,23 +126,41 @@ class DeviceTools:
             what = _action(args, 'what', OBSERVE_ACTIONS)
             data = await service.call(owner, scope, device_id, what, args)
             return await self._deliver_screenshot(data) if what == 'screenshot' else data
-        return await service.call(owner, scope, device_id, 'run_flow', args)
+        data = await service.call(owner, scope, device_id, 'run_flow', args)
+        return await self._deliver_flow_screenshots(data)
 
-    async def _deliver_screenshot(self, data):
-        png = data.pop('png')
+    async def _store_png(self, png, label):
         if self.screenshots >= MAX_SCREENSHOTS:
             raise DeviceError(f'Screenshot limit for this run reached ({MAX_SCREENSHOTS}); use ui_tree, '
                               'and keep screenshots for final evidence')
         try:
-            receipt = self.artifacts.ingest(f'device-screenshot-{self.screenshots + 1}.png', png)
+            receipt = self.artifacts.ingest(f'device-{label}-{self.screenshots + 1}.png', png)
             info = await self.on_artifact(dict(receipt))
         except (ValueError, OSError):
             raise DeviceError('Could not store the screenshot (run file limit reached?)') from None
         self.screenshots += 1
+        return {'name': info.get('name'), 'url': info.get('url')}
+
+    async def _deliver_screenshot(self, data):
+        png = data.pop('png')
         return {'width': data.get('width'), 'height': data.get('height'), 'delivered': True,
-                'file': {'name': info.get('name'), 'url': info.get('url')},
+                'file': await self._store_png(png, 'screenshot'),
                 'note': 'The screenshot is shown to the user in this chat as evidence. You cannot view '
                         'images here; use device.observe ui_tree to check what is on screen.'}
+
+    async def _deliver_flow_screenshots(self, data):
+        """Maestro takeScreenshot files go to the user like device.observe screenshots (same budget)."""
+        shots, delivered, skipped = data.pop('screenshots', None) or [], [], []
+        for shot in shots:
+            try:
+                delivered.append({'step': shot.get('name'), **await self._store_png(shot['png'], 'flow')})
+            except DeviceError:
+                skipped.append(shot.get('name'))
+        if delivered:
+            data['screenshots'] = delivered
+        if skipped:
+            data['screenshots_not_delivered'] = skipped
+        return data
 
 
 def cap_result(result, limit=MAX_RESULT):

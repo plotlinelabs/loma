@@ -205,13 +205,15 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
                         'Authorization': 'Bearer nope', 'X-Loma-Runner-Id': creds['runner_id']})
 
                 runner = ldr.Runner({'server': base, 'runner_id': creds['runner_id'], 'secret': creds['secret'],
-                                     'policy': {}}, drivers=[ldr.Android(adb_path)], session=http)
+                                     'policy': {}, 'cache_dir': str(tmp_path / 'cache')},
+                                    drivers=[ldr.Android(adb_path)], session=http)
                 task = asyncio.create_task(runner.connect_once())
                 for _ in range(50):
                     if test_hub.get(creds['runner_id']):
                         break
                     await asyncio.sleep(0.05)
                 assert test_hub.get(creds['runner_id']) is not None
+                assert test_hub.get(creds['runner_id']).version == ldr.VERSION  # recorded from the hello
 
                 service = DeviceService(db, hub=test_hub, blobs=test_blobs)
                 devices = await service.list_devices(OWNER)
@@ -343,7 +345,7 @@ async def test_github_token_falls_back_to_the_integration(monkeypatch):
         await BlobStore().from_github(OWNER, 'example-org/mobile-sdk', 'app', pr=1)
     seen = {}
 
-    async def fake_fetch(self, owner, repo, artifact_name, pr, run_id, headers):
+    async def fake_fetch(self, owner, repo, artifact_name, pr, run_id, headers, *rest):
         seen.update(headers)
         return 'b_x', {}
 

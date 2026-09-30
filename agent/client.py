@@ -6,6 +6,7 @@ import re
 import base64
 import tempfile
 import logging
+import uuid
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -31,6 +32,7 @@ from claude_agent_sdk import (
 
 from agent.pool import get_pool
 from agent.prompt import build_reply_format_reminder
+from agent.run_processes import PROC_TAG_ENV, new_proc_tag
 
 logger = logging.getLogger(__name__)
 
@@ -850,6 +852,23 @@ async def _stream_agent(
             f"tool call, or the conversation the notification points to will be empty."
         )
 
+    # Env for runtime processes started for this run only. Pooled Claude
+    # clients / Codex workers and the shared OpenCode server were started
+    # before the run and can't take it, so the prompt gives the literal path.
+    run_env: dict[str, str] = {}
+    if conversation_id:
+        conversation_dir = conversation_work_dir(conversation_id)
+        if conversation_dir:
+            run_env["LOMA_CONVERSATION_DIR"] = conversation_dir
+            text_parts.append(
+                f"[Conversation Work Dir: {conversation_dir}]\n"
+                f"This conversation's work dir, stable across its runs, is "
+                f"`{conversation_dir}`: read/update `{conversation_dir}/state.json` "
+                f"(see Run Lifecycle & Resumable State). Always use this literal "
+                f"absolute path; do not use `$LOMA_CONVERSATION_DIR`, which may be "
+                f"unset in your shell."
+            )
+
     if conversation_context:
         text_parts.append(
             f"## Conversation Context (previous messages in this thread)\n"
@@ -1004,6 +1023,7 @@ async def _stream_agent(
                 source=source,
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
+                extra_env=run_env,
             ):
                 yield event
         except Exception as e:
@@ -1096,8 +1116,11 @@ async def _stream_agent(
                 enabled_set.add("Skill")
                 allowed_tools = [t for t in allowed_tools if t in enabled_set]
             options.allowed_tools = allowed_tools
-            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
+            # Per-run client: tag it for run-end cleanup and give it the run env.
+            proc_tag = new_proc_tag()
+            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"], PROC_TAG_ENV: proc_tag, **run_env}
             client = ClaudeSDKClient(options=options)
+            client._loma_proc_tag = proc_tag
             await asyncio.wait_for(client.connect(), timeout=90)
             client._pool_account = account
             client._pool_model = options.model
@@ -1117,7 +1140,7 @@ async def _stream_agent(
 
     if client is None:
         try:
-            client = await pool.acquire(model=selected_claude_model)
+            client = await pool.acquire(model=selected_claude_model, extra_env=run_env)
             account = getattr(client, '_pool_account', {})
             account_email = account.get('email')
             active_claude_model = getattr(client, "_pool_model", None) or selected_claude_model
@@ -1587,9 +1610,9 @@ async def _stream_agent(
                 yield f"Sorry, I encountered an error: {e}"
             return
         finally:
-            if observer and observer.conversation_id:
+            if active_stream is not None:
                 from agent.active_streams import unregister
-                await unregister(observer.conversation_id)
+                await unregister(observer.conversation_id, active_stream)
             # Always release the client back to pool
             if client is not None:
                 await pool.release(client)
@@ -1789,14 +1812,52 @@ def _extract_result_text(block) -> str:
     return str(content)
 
 
+def conversation_work_dir(conversation_id: str) -> str | None:
+    """Stable per-conversation dir under the persistent workspace (created lazily)."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", conversation_id or "") or conversation_id in (".", ".."):
+        return None
+    root = os.environ.get("LOMA_WORKSPACE_DIR") or "/opt/loma-workspace"
+    path = Path(root) / "conversations" / conversation_id
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.warning("Could not create conversation work dir %s: %s", path, e)
+        return None
+    return str(path)
+
+
 async def stream_agent(prompt: str, conversation_context: str = "", files=None,
         observer=None, include_steps=False, source="slack", user_email=None,
         selected_model=None, raise_on_opencode_error=False, tool_config=None,
         recall_session=None):
-    """Own recall credentials for exactly one turn, including cancellation/errors."""
+    """Own recall credentials for exactly one turn, including cancellation/errors.
+
+    Also enforces one active run per conversation. Entry points that can answer
+    the user directly (dashboard chat, Slack) claim up front and inject or
+    queue there; any other caller that resumes a busy conversation (webhooks,
+    Linear, Telegram, recovery) waits here until the current run finishes.
+    """
+    from agent.active_streams import release_claim, try_claim, wait_for_release
     from agent.recall_runtime import refresh_history, revoke
     from isolation.deployment import remote_workers_enabled
+    conversation_id = getattr(observer, "conversation_id", None) if observer else None
+    run_id = uuid.uuid4().hex
     try:
+        if conversation_id and not await try_claim(conversation_id, run_id):
+            logger.warning(
+                "Conversation %s already has an active run; queueing this one behind it",
+                conversation_id,
+            )
+            while not await try_claim(conversation_id, run_id):
+                await wait_for_release(conversation_id)
+            # A deploy may have started draining while this waited.
+            from api.drain import DRAIN_MESSAGE, is_draining
+            if is_draining():
+                logger.info("Draining for a deploy; dropping queued run of %s", conversation_id)
+                yield DRAIN_MESSAGE
+                return
+            # The finished run marked the conversation completed; flip it back.
+            await observer.resume(record_prompt=False)
         if remote_workers_enabled():
             # Operator cutover: remote isolated workers own every agent run.
             # Configuration/transport failure surfaces an error; it never
@@ -1814,6 +1875,8 @@ async def stream_agent(prompt: str, conversation_context: str = "", files=None,
                 raise_on_opencode_error, tool_config, recall_session):
             yield event
     finally:
+        if conversation_id:
+            await release_claim(conversation_id, run_id)
         if recall_session:
             await revoke(recall_session)
             await refresh_history(recall_session['user_id'])
