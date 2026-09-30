@@ -51,8 +51,19 @@ cheapest test is the one with the fewest calls, so:
 - **Time-sensitive states** (loaders, toasts, animations): use `burst` or `record`, which
   time the frames on the runner. Screenshots taken turn by turn arrive seconds late.
 - **Repeat work goes in a Maestro flow.** Once a path works, run it with `run-flow` in one call.
-- **Keep device work out of long threads.** For a large matrix, run the device loop in a
-  subagent that returns only pass/fail per scenario and screenshot paths.
+- **Hand the tap/check loop to the `device-tester` sub-agent** (legacy runtime on a Claude
+  model: call the Agent tool with `subagent_type: "device-tester"`). It runs on a cheaper model
+  (`LOMA_DEVICE_TESTER_MODEL`, default `haiku`) and returns only PASS/FAIL/BLOCKED per scenario
+  with the deciding tool output. Split the work like this:
+  - **You** find and lease the device, install the build, plan the scenarios and write each
+    assertion as something a tool can check (`wait-for` text, a `ui-tree` id, a Maestro flow).
+  - **Give it** the full CLI prefix (`python3 tools/device.py --user-email <E> --auth-token <T>
+    --scope <conversation-id>`), the device id, the app id, and the scenarios with assertions.
+    It cannot see this conversation, so leave nothing implicit.
+  - **You** judge every FAIL/BLOCKED (real bug, flaky step or setup issue), re-check anything
+    that decides the verdict yourself, write the report and release the device.
+  - Skip the hand-off for one or two quick checks, and on OpenCode/Codex models or isolated
+    workers (no `device-tester` there); run the loop yourself instead.
 - **State file.** Write the device id, installed build SHA, app id and anything you started
   (servers, tunnels) to `state.json` in the conversation work dir (the literal path in `[Conversation Work Dir: ...]`; never `$LOMA_CONVERSATION_DIR`, which can be unset). Read it first when resuming.
 
