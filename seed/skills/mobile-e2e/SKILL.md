@@ -58,10 +58,15 @@ cheapest test is the one with the fewest calls, so:
 
 ## The loop
 
-1. **Find a device**: `list`. If nothing is online, stop and tell the user exactly what
-   to do ("wake the machine / start the runner / boot the emulator"). Do not retry in a loop.
-2. **Lease it**: `lease --platform android|ios` (or a specific `device_id`). A lease lasts
-   15 idle minutes and renews on every call. Another chat cannot use a leased device.
+1. **Find a device**: `list` shows running devices and the **templates** each runner can boot.
+   If nothing is online, the runner owner already got a Loma notification: either lease with
+   `--wait-online 300` (isolated: `wait_online_s=300`) or stop and tell the user exactly what to do
+   ("wake the machine / start the runner"). Do not retry in a loop.
+2. **Lease it**: `lease --platform android|ios` (or a specific `device_id`). If no device is running,
+   an online runner boots one from a template. For reproducible tests prefer
+   `lease --template NAME --clean` (isolated: `template=..., clean=true`): a fresh device from the
+   template's clean state, shut down again on release. Booting takes 1-3 minutes (`pending` in
+   isolated runs: repeat the call). A lease lasts 15 idle minutes and renews on every call.
 3. **Install the build**:
    - CI artifact: `install --repo OWNER/NAME --artifact-name NAME --pr N --app-id PKG --wait 1200`.
      `--wait` (max 1200 s) makes the backend wait for the CI run (no model turns); `--dispatch-workflow FILE.yml`
@@ -72,8 +77,12 @@ cheapest test is the one with the fewest calls, so:
    - Pre-grant permissions in the same call: `--grant-appop SCHEDULE_EXACT_ALARM` (Android),
      `--grant-privacy photos` (iOS). Runtime permissions are granted on Android installs.
    - Local file (legacy only): `install --file /path/app.apk --app-id PKG`.
-4. **Wake and clean**: `key --key wakeup` and `animations --off` (Android), then `app --action reset_app` only if the
-   test needs a fresh state, then `logs --clear`.
+4. **Wake, clean and set conditions**: `key --key wakeup` and `animations --off` (Android), then
+   `app --action reset_app` only if the test needs a fresh state (a clean lease already is), then `logs --clear`.
+   Set test conditions in one `configure` call, then relaunch the app: `--locale ar-SA --app-id PKG` (RTL),
+   `--dark-mode on`, `--font-scale 1.3`, `--location 25.2,55.27`, `--grant/--revoke PERMISSION --app-id PKG`,
+   and on Android `--timezone Asia/Dubai` and `--clock-offset 86400` (move a day forward for streaks,
+   milestones, expiry and frequency caps). Release restores all of it.
 5. **Launch configured**: `app --action launch --app-id PKG --extra endpoint=... --bool-extra test_mode=true`.
    On iOS add `--console` if the app logs with `print`, then read it with `logs --source console`.
    Use deep links (`open-url`) to reach a screen instead of tapping through menus.
@@ -82,10 +91,41 @@ cheapest test is the one with the fewest calls, so:
    When the element has no useful text (icons, empty fields), use its ref from
    `ui-tree --compact`: `tap --ref e7`. Use `tap --x --y` only for things not in the tree
    (Flutter canvases, games, some WebViews), taking coordinates from a screenshot.
-7. **Collect evidence**: one screenshot at the key moment (every capture gets a new file name),
-   `logs --filter <tag>`, plus any backend checks your team's skills describe.
+7. **Verify and collect evidence** (text for you, media for the user):
+   - `ui-tree` for what is on screen; `visual-check --expect "..."` (isolated: `observe what=visual`)
+     for what the tree cannot see: clipping, overlap, RTL layout, WebView/HTML templates, Lottie. It is
+     supporting evidence only; never fail a test on it alone.
+   - Network (Android): start with `configure capture_network=true` (CLI: `netcap --action start`) before
+     launching, then `observe what=network filter=/sdk/` shows the SDK calls grouped by endpoint.
+     HTTPS needs a debug build that trusts the capture CA; `tls_failures` means it does not.
+   - Plotline analytics: `plotline-check --product-id P --user-id U --flow-id F` (isolated:
+     `observe what=plotline`) returns the user's events, campaign triggers and flow shows/clicks, with a
+     triggered/shown/clicked verdict. Only test products an admin allowlisted work. Analytics lag up to
+     a minute: check again before calling it a failure.
+   - One screenshot at the key moment, or `record --duration 8` / `burst` for motion (2 recordings per run).
+   A strong result says: rendered (ui_tree/visual) + SDK call made (network) + recorded (plotline).
 8. **Make it repeatable**: write the scenario as a Maestro flow and run it with `run-flow`.
 9. **Release the device** (`release`) when finished, including after failures.
+
+## A person can take over
+
+The device owner (or whoever holds the session) can open **Live** on the device in
+Integrations → Devices and **Take over** to get past a login/OTP or show you something. While they
+hold it, your calls fail with "... took over this device". Wait about a minute and retry the same
+call; do not switch devices mid-test. Your refs are stale afterwards: read `ui_tree` again.
+
+## Reproducing a reported SDK bug
+
+Used by the `sdk-bug-intake` flow once a report is complete:
+1. Lease a **clean** template device on the reported platform (closest OS version you have).
+2. Install the SDK example/demo app build for the reported SDK version from CI (never a customer build).
+3. `configure` the reported conditions (locale, dark mode, font scale, permissions; time on Android)
+   and `capture_network=true` on Android.
+4. Recreate the campaign type in an allowlisted **test product**, identify as a fresh test user, follow
+   the reported steps.
+5. Verify as in step 7 above, record a short clip of the result, release.
+6. Report "reproduced / not reproduced on <device, OS, SDK version>" with the evidence. Not reproduced is
+   a valid result: it points at client-specific factors, say so.
 
 ## Common blockers on a fresh install
 
@@ -137,6 +177,10 @@ explicitly want that.
 | "Timed out on the runner" | The device did not finish in time; check `ui_tree`/`logs`, then retry once |
 | "Builds from this repository are not allowed" | An admin adds `owner/name` under Integrations → Devices → Build sources (or the `LOMA_DEVICE_BUILD_REPOS` env var) |
 | "Ref e3 is unknown or expired" | The screen changed or 120 s passed: `ui-tree --compact` again and use the new ref |
+| "... took over this device" | A person is driving it from the dashboard; wait a minute and retry the same call |
+| "Runner too old for ..." | Runners from 1.2.0 update themselves; older ones need one manual `setup` by their owner |
+| "No device template matches" | The runner owner has not defined that template; `list` shows the available ones |
+| "product_id is not allowed" | Only test products in `LOMA_DEVICE_PLOTLINE_PRODUCTS` can be checked; use one of those |
 
 ## Isolated-worker tool mapping
 
@@ -152,3 +196,7 @@ The steps above use `tools/device.py` spellings. In isolated runs use the `devic
 | `ui-tree --compact` | `device.observe what=ui_tree compact=true` |
 | `screenshot` | `device.observe what=screenshot` |
 | `logs --clear` / `logs --filter X` | `device.observe what=logs clear=true` / `filter=X` |
+| `record --duration 8` / `burst --count 6` | `device.observe what=record duration_s=8` / `what=burst count=6` |
+| `configure ...` / `netcap --action start` | `device.configure ...` / `device.configure capture_network=true` |
+| `netcap --action read` / `plotline-check` / `visual-check` | `device.observe what=network` / `what=plotline` / `what=visual` |
+| `lease --template T --clean --wait-online 300` | `device.lease template=T clean=true wait_online_s=300` |

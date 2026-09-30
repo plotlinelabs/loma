@@ -311,6 +311,40 @@ async def handle_force_release(request):
         return _error(str(exc), 403)
 
 
+async def handle_screen(request):
+    """Live view: one PNG frame of a device the user can use."""
+    db = _db_or_503()
+    user_email = get_user_email(request)
+    if not user_email:
+        return _error('Authentication required', 401)
+    try:
+        png = await DeviceService(db).screen(user_email, request.query.get('device_id', ''))
+    except DeviceError as exc:
+        status = 429 if 'slow down' in str(exc) else 404 if 'not found' in str(exc).lower() else 409
+        return _error(str(exc), status)
+    return web.Response(body=png, content_type='image/png', headers={'Cache-Control': 'no-store'})
+
+
+async def handle_takeover(request):
+    db = _db_or_503()
+    user_email = get_user_email(request)
+    if not user_email:
+        return _error('Authentication required', 401)
+    body = await _json_object(request)
+    if body is None or body.get('action') not in ('start', 'end', 'input'):
+        return _error('action must be start, end or input')
+    service = DeviceService(db)
+    try:
+        if body['action'] == 'start':
+            return web.json_response(await service.start_takeover(user_email, body.get('device_id')))
+        if body['action'] == 'end':
+            return web.json_response(await service.end_takeover(user_email, body.get('device_id')))
+        data = await service.takeover_input(user_email, body.get('device_id'), body.get('op'), body.get('args') or {})
+        return web.json_response(_encode_media(data))
+    except DeviceError as exc:
+        return _error(str(exc), 409)
+
+
 MAX_ACTIVITY = 300
 
 
@@ -507,6 +541,8 @@ def setup_device_routes(app):
     app.router.add_delete('/api/devices/runners/{runner_id}', handle_revoke_runner)
     app.router.add_post('/api/devices/release', handle_force_release)
     app.router.add_get('/api/devices/activity', handle_activity)
+    app.router.add_get('/api/devices/screen', handle_screen)
+    app.router.add_post('/api/devices/takeover', handle_takeover)
     app.router.add_get('/api/devices/build-settings', handle_get_build_settings)
     app.router.add_put('/api/devices/build-settings', handle_put_build_settings)
     app.router.add_post('/internal/devices/call', handle_internal_call)

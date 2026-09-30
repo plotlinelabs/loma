@@ -121,3 +121,27 @@ export function fetchDeviceActivity(
 ): Promise<{ device_id: string; sessions: DeviceSession[]; events: DeviceActivityEvent[] }> {
   return request(`/api/devices/activity?device_id=${encodeURIComponent(deviceId)}`);
 }
+
+/** One live-view frame as an object URL (revoke it when replaced). */
+export async function fetchDeviceScreen(deviceId: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(`${basePath}/api/devices/screen?device_id=${encodeURIComponent(deviceId)}`, { signal });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(data.error || `Request failed: ${res.status}`), { status: res.status });
+  }
+  return URL.createObjectURL(await res.blob());
+}
+
+export function takeover(
+  deviceId: string,
+  action: "start" | "end",
+): Promise<{ held: boolean; until?: string; paused_session?: string | null }> {
+  return request("/api/devices/takeover", { method: "POST", body: JSON.stringify({ device_id: deviceId, action }) });
+}
+
+export function takeoverInput(deviceId: string, op: string, args: Record<string, unknown>): Promise<unknown> {
+  return request("/api/devices/takeover", {
+    method: "POST",
+    body: JSON.stringify({ device_id: deviceId, action: "input", op, args }),
+  });
+}

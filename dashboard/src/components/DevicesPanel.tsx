@@ -9,6 +9,7 @@ import {
   RiComputerLine,
   RiDeleteBinLine,
   RiHistoryLine,
+  RiLiveLine,
   RiLockUnlockLine,
   RiRefreshLine,
   RiShareLine,
@@ -23,6 +24,7 @@ import ClientTimestamp from "@/components/ClientTimestamp";
 import { CopyButton } from "@/components/CopyButton";
 import DeviceBuildSources from "@/components/DeviceBuildSources";
 import DeviceActivity from "@/components/DeviceActivity";
+import DeviceLiveView from "@/components/DeviceLiveView";
 import {
   DeviceRecord,
   DeviceRunner,
@@ -43,14 +45,16 @@ function StatusDot({ online }: { online: boolean }) {
   );
 }
 
-function DeviceRow({ device, canRelease, busy, onRelease }: {
+function DeviceRow({ device, canRelease, busy, online, onRelease }: {
   device: DeviceRecord;
+  online: boolean;
   canRelease: boolean;
   busy: boolean;
   onRelease: (id: string) => void;
 }) {
   const Icon = device.platform === "ios" ? RiAppleLine : device.platform === "android" ? RiAndroidLine : RiSmartphoneLine;
   const [showActivity, setShowActivity] = useState(false);
+  const [showLive, setShowLive] = useState(false);
   return (
     <div className="rounded-md border px-3 py-2 space-y-2">
       <div className="flex items-center gap-2">
@@ -86,6 +90,18 @@ function DeviceRow({ device, canRelease, busy, onRelease }: {
             Release
           </Button>
         )}
+        {online && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs shrink-0"
+            aria-expanded={showLive}
+            onClick={() => setShowLive((value) => !value)}
+          >
+            <RiLiveLine size={14} />
+            Live
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -97,6 +113,7 @@ function DeviceRow({ device, canRelease, busy, onRelease }: {
           Activity
         </Button>
       </div>
+      {showLive && online && <DeviceLiveView deviceId={device.device_id} platform={device.platform} />}
       {showActivity && <DeviceActivity deviceId={device.device_id} />}
     </div>
   );
@@ -366,6 +383,7 @@ export default function DevicesPanel() {
                         key={device.device_id}
                         device={device}
                         canRelease={runner.is_owner}
+                        online={runner.online}
                         busy={busy}
                         onRelease={(id) => run(() => releaseDevice(id))}
                       />

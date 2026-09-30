@@ -21,6 +21,12 @@ from devices.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError, hub as defaul
 from devices.verify import plotline_activity, summarize_network, visual_check as judge_screenshot
 
 LEASE_TTL = timedelta(minutes=15)
+HOLD_TTL = timedelta(minutes=10)  # a dashboard take-over lapses this long after the person's last input
+TAKEOVER = 'takeover:'
+TAKEOVER_OPS = {'tap', 'swipe', 'key', 'type', 'open_url'}
+SCREEN_MIN_INTERVAL = 0.7  # seconds between live-view frames per (user, device)
+_SCREENS = {}  # device_id -> {'pixels': (w, h), 'points': (w, h)} for live-view coordinate mapping
+_LAST_FRAME = {}
 MAX_WAIT_ONLINE = 600
 WAIT_ONLINE_POLL = 2
 OFFLINE_NOTIFY_EVERY = timedelta(minutes=30)
@@ -607,6 +613,14 @@ class DeviceService:
         lease = await self.db.device_leases.find_one_and_delete(
             {'_id': device_id, 'owner_email': user_email, 'scope': scope})
         result = {'released': lease is not None}
+        hold = (lease or {}).get('hold')
+        if hold and store.aware(hold['until']) > store.now():
+            # A person is driving it from the dashboard: hand the lease to them, touch nothing on the device.
+            await self.db.device_leases.replace_one({'_id': device_id}, {
+                'owner_email': hold['by'], 'scope': TAKEOVER + hold['by'], 'acquired_at': store.now(),
+                'expires_at': hold['until'], 'hold': hold}, upsert=True)
+            await self._audit(user_email, scope, device_id, 'release', True)
+            return {**result, 'note': f"{hold['by']} has taken over this device; it stays with them"}
         if lease is not None and lease.get('netcap'):  # never leave a device pointing at the capture proxy
             try:
                 await self.hub.call(runner['runner_id'], 'netcap', serial, {'action': 'stop'})
@@ -681,6 +695,7 @@ class DeviceService:
                 args.update(x=int(center[0]), y=int(center[1]))
             else:  # set_text / clear_text: focus the field by ref, then edit the focused field
                 tap_first = {'x': int(center[0]), 'y': int(center[1])}
+        await self._check_hold(device_id, scope)
         lease = await self._acquire(device_id, user_email, scope, LEASE_TTL + timedelta(seconds=worst))
         if lease is None:
             raise DeviceError('Device is leased by another session. Pick another device or wait for it to be released.')
@@ -744,6 +759,105 @@ class DeviceService:
             if shots:
                 data['screenshots'] = shots
         return data
+
+    # ── Live view and take-over (dashboard) ───────────────────────────────
+
+    async def _check_hold(self, device_id, scope):
+        lease = await self.db.device_leases.find_one({'_id': device_id}, {'hold': 1})
+        hold = (lease or {}).get('hold')
+        if hold and store.aware(hold['until']) > store.now() and scope != TAKEOVER + hold['by']:
+            raise DeviceError(f"{hold['by']} took over this device from the Loma dashboard. Wait for them to hand "
+                              'it back (about a minute), then retry; do not switch to another device mid-test.')
+
+    async def screen(self, user_email, device_id):
+        """One live-view frame (PNG bytes). Read-only: no lease needed, rate-limited per viewer."""
+        runner, serial = await self._resolve(user_email, device_id)
+        key = (user_email, device_id)
+        now = time.monotonic()
+        if now - _LAST_FRAME.get(key, 0) < SCREEN_MIN_INTERVAL:
+            raise DeviceError('Too many frames; slow down')
+        _LAST_FRAME[key] = now
+        if len(_LAST_FRAME) > 1000:
+            _LAST_FRAME.clear()
+        data = await self.hub.call(runner['runner_id'], 'screenshot', serial, {})
+        png = _decode(data.get('png_base64'), 'screenshot')
+        _SCREENS.setdefault(device_id, {})['pixels'] = (data.get('width'), data.get('height'))
+        return png
+
+    async def start_takeover(self, user_email, device_id):
+        """Hold the device for a person: agent calls on it fail with a clear message until hand-back."""
+        runner, _ = await self._resolve(user_email, device_id)
+        at = store.now()
+        lease = await self.db.device_leases.find_one({'_id': device_id})
+        active = lease is not None and store.aware(lease['expires_at']) > at
+        if active and lease['owner_email'] != user_email and runner['owner_email'] != user_email:
+            raise DeviceError('Only the runner owner or the person whose session holds the device can take it over')
+        hold = {'by': user_email, 'since': at, 'until': at + HOLD_TTL}
+        if active:
+            await self.db.device_leases.update_one({'_id': device_id}, {'$set': {'hold': hold}})
+        else:
+            await self.db.device_leases.replace_one({'_id': device_id}, {
+                'owner_email': user_email, 'scope': TAKEOVER + user_email, 'acquired_at': at,
+                'expires_at': at + HOLD_TTL, 'hold': hold}, upsert=True)
+        await self._audit(user_email, TAKEOVER + user_email, device_id, 'takeover', True)
+        return {'held': True, 'until': hold['until'].isoformat(),
+                'paused_session': lease['scope'] if active and not lease['scope'].startswith(TAKEOVER) else None}
+
+    async def end_takeover(self, user_email, device_id):
+        runner, _ = await self._resolve(user_email, device_id)
+        who = [user_email] if runner['owner_email'] != user_email else None
+        query = {'_id': device_id, **({'hold.by': {'$in': who}} if who else {'hold': {'$exists': True}})}
+        await self.db.device_leases.delete_one({**query, 'scope': TAKEOVER + user_email})
+        result = await self.db.device_leases.update_one(query, {'$unset': {'hold': ''}})
+        await self._audit(user_email, TAKEOVER + user_email, device_id, 'hand_back', True)
+        return {'held': False, 'resumed_session': bool(result.modified_count)}
+
+    async def takeover_input(self, user_email, device_id, op, args):
+        """A person's input during a take-over. tap/swipe take fractions of the screen (fx, fy in 0..1)."""
+        if op not in TAKEOVER_OPS or not isinstance(args, dict):
+            raise DeviceError('Unsupported input')
+        runner, serial = await self._resolve(user_email, device_id)
+        at = store.now()
+        lease = await self.db.device_leases.find_one_and_update(
+            {'_id': device_id, 'hold.by': user_email, 'hold.until': {'$gt': at}},
+            {'$set': {'hold.until': at + HOLD_TTL}, '$max': {'expires_at': at + HOLD_TTL}})
+        if lease is None:
+            raise DeviceError('Take over the device first (or your take-over lapsed)')
+        if op in ('tap', 'swipe'):
+            args = await self._to_device_units(runner['runner_id'], serial, device_id, op, args)
+        _validate(op, args)
+        started = time.monotonic()
+        scope = TAKEOVER + user_email
+        try:
+            data = await self.hub.call(runner['runner_id'], op, serial, args)
+        except DeviceError as exc:
+            await self._audit(user_email, scope, device_id, op, False, str(exc), started, audit_detail(op, args))
+            raise
+        _REFS.pop(_ref_key(lease['owner_email'], lease['scope'], device_id), None)  # the agent's refs are stale now
+        await self._audit(user_email, scope, device_id, op, True, None, started, audit_detail(op, args))
+        return data
+
+    async def _to_device_units(self, runner_id, serial, device_id, op, args):
+        names = ('fx', 'fy') if op == 'tap' else ('fx1', 'fy1', 'fx2', 'fy2')
+        if set(args) != set(names) or not all(type(args[n]) in (int, float) and 0 <= args[n] <= 1 for n in names):
+            raise DeviceError(f'{op} takes {", ".join(names)} as fractions of the screen (0..1)')
+        screens = _SCREENS.setdefault(device_id, {})
+        platform = next((d.get('platform') for d in getattr(self.hub.get(runner_id), 'devices', None) or []
+                         if d.get('serial') == serial), None)
+        if platform == 'ios':  # idb taps in points; screenshots are in pixels
+            if 'points' not in screens:
+                tree = await self.hub.call(runner_id, 'ui_tree', serial, {})
+                screens['points'] = tuple(tree.get('screen') or (0, 0))
+            width, height = screens['points']
+        else:
+            width, height = screens.get('pixels') or (0, 0)
+        if not width or not height:
+            raise DeviceError('Screen size unknown; wait for the live view to load a frame')
+        scale = lambda fraction, size: min(int(fraction * size), size - 1)  # noqa: E731
+        if op == 'tap':
+            return {'x': scale(args['fx'], width), 'y': scale(args['fy'], height)}
+        return {'x1': scale(args['fx1'], width), 'y1': scale(args['fy1'], height),
+                'x2': scale(args['fx2'], width), 'y2': scale(args['fy2'], height), 'duration_ms': 300}
 
     # ── Verification (backend-side, text results only) ───────────────────
 
