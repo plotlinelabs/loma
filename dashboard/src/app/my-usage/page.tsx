@@ -16,13 +16,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import { formatUsd } from "@/components/CostChip";
-import { fetchMyUsage, type MyUsageDay, type MyUsageResponse } from "@/lib/api";
+import {
+  fetchMyUsage, type MyUsageDay, type MyUsageResponse, type MyUsageTopChat,
+} from "@/lib/api";
 
 /** Fields added by the usage-ledger backend; optional so an older server
  * still renders. */
-type UsageData = MyUsageResponse & {
+type UsageData = Omit<MyUsageResponse, "top_chats"> & {
   includes_approximate?: boolean;
-  top_chats: (MyUsageResponse["top_chats"][number] & { last_used_at?: string | null })[];
+  top_chats: (MyUsageTopChat & { last_used_at?: string | null })[];
 };
 
 function formatTokens(n: number): string {
