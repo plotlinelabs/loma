@@ -147,7 +147,9 @@ PROVIDER_CATALOG = {
         "auth_help_url": "https://github.com/settings/tokens",
         "extra_fields": [
             {"key": "device_build_repos", "label": "Device build repos",
-             "placeholder": "owner/app-repo, owner/other-repo", "required": False},
+             "placeholder": "owner/app-repo, owner/other-repo", "required": False, "admin_only": True},
+            {"key": "device_build_workflows", "label": "Device build workflows",
+             "placeholder": "build-android.yml, build-ios.yml", "required": False, "admin_only": True},
         ],
         "mcp_config_template": {
             "type": "http",

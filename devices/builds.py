@@ -43,20 +43,35 @@ class ArtifactMissing(DeviceError):
         self.head_sha, self.head_ref, self.same_repo = head_sha, head_ref, same_repo
 
 
-REPO_SETTING_FIELD = 'device_build_repos'  # optional field on the GitHub integration (dashboard)
-REPO_SETTING_TTL = 60
-_repo_setting = {'at': None, 'value': ''}
+REPO_SETTING_FIELD = 'device_build_repos'  # optional fields on the GitHub integration (dashboard, admin-only)
+WORKFLOW_SETTING_FIELD = 'device_build_workflows'
+SETTING_TTL = 60
+_settings = {}  # field -> (read at, value)
+
+
+def _setting(field):
+    """A GitHub integration extra field, re-read from Mongo at most every SETTING_TTL s. Blocking."""
+    now = time.monotonic()
+    at, value = _settings.get(field, (None, ''))
+    if at is None or now - at > SETTING_TTL:
+        value = get_integration_extra('github', field, use_cache=False)
+        _settings[field] = (now, value)
+    return value or ''
 
 
 def allowed_repos():
     """Repos CI builds may be installed from: LOMA_DEVICE_BUILD_REPOS plus the GitHub integration's
     "Device build repos" field, so an admin can allow a repo from the dashboard without a redeploy.
-    Blocking (Mongo read, cached for REPO_SETTING_TTL s): call it off the event loop."""
-    now = time.monotonic()
-    if _repo_setting['at'] is None or now - _repo_setting['at'] > REPO_SETTING_TTL:
-        _repo_setting.update(at=now, value=get_integration_extra('github', REPO_SETTING_FIELD, use_cache=False))
-    raw = os.environ.get('LOMA_DEVICE_BUILD_REPOS', '') + ',' + (_repo_setting['value'] or '')
+    Blocking (Mongo read, cached for SETTING_TTL s): call it off the event loop."""
+    raw = os.environ.get('LOMA_DEVICE_BUILD_REPOS', '') + ',' + _setting(REPO_SETTING_FIELD)
     return {repo.strip().lower() for repo in re.split(r'[,\s]+', raw) if repo.strip()}
+
+
+def allowed_workflows():
+    """Workflow files dispatch_workflow may start (e.g. build-android.yml): LOMA_DEVICE_BUILD_WORKFLOWS plus
+    the GitHub integration's "Device build workflows" field. Empty means no dispatching. Blocking."""
+    raw = os.environ.get('LOMA_DEVICE_BUILD_WORKFLOWS', '') + ',' + _setting(WORKFLOW_SETTING_FIELD)
+    return {name.strip() for name in re.split(r'[,\s]+', raw) if name.strip()}
 
 
 class BlobStore:
@@ -162,6 +177,14 @@ class BlobStore:
         if repo.lower() not in repos:
             raise DeviceError('Builds from this repository are not allowed. An admin can add it under '
                               'Integrations > GitHub > Device build repos (or LOMA_DEVICE_BUILD_REPOS)' + (f' (allowed: {", ".join(sorted(repos))})' if repos else ''))
+        if dispatch_workflow is not None:
+            workflows = await asyncio.to_thread(allowed_workflows)
+            if dispatch_workflow not in workflows:
+                raise DeviceError(f'Dispatching {dispatch_workflow} is not allowed. An admin can allow it under '
+                                  'Integrations > GitHub > Device build workflows (or LOMA_DEVICE_BUILD_WORKFLOWS, '
+                                  'comma-separated file names)' + (f' (allowed: {", ".join(sorted(workflows))})'
+                                                                   if workflows else '')
+                                  + '. Or omit dispatch_workflow and start the build another way.')
         # Same lookup as isolation/automation.request: env var, else the dashboard-managed integration.
         token = os.environ.get('GITHUB_API_KEY') or await asyncio.to_thread(get_integration_key, 'github')
         if not token:

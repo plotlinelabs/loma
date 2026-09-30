@@ -213,6 +213,7 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
                         break
                     await asyncio.sleep(0.05)
                 assert test_hub.get(creds['runner_id']) is not None
+                assert test_hub.get(creds['runner_id']).version == ldr.VERSION  # recorded from the hello
 
                 service = DeviceService(db, hub=test_hub, blobs=test_blobs)
                 devices = await service.list_devices(OWNER)

@@ -34,8 +34,9 @@ Commands:
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
 
 Files (screenshots, burst frames, recordings, flow screenshots) are written to
-$LOMA_CONVERSATION_DIR/device/ when that is set, else /tmp/loma-device/, always under
-a new unique name, so a later capture never reuses (or shadows) an earlier file.
+$LOMA_CONVERSATION_DIR/device/ when that is set, else to a per-conversation dir
+under /tmp/loma-device/<scope>/, always under a new unique name, so a later capture
+never reuses (or shadows) an earlier file.
 """
 import argparse
 import base64
@@ -271,7 +272,7 @@ def parser():
     s.add_argument('--wait', type=int, default=0, metavar='SECONDS',
                    help='Backend waits (no model turns) up to SECONDS for the CI run to produce the artifact')
     s.add_argument('--dispatch-workflow', metavar='FILE.yml',
-                   help='With --pr: dispatch this workflow on the PR branch if no run exists for its head')
+                   help='With --pr: dispatch this workflow on the PR branch if no run exists for its head (must be in the admin workflow allowlist)')
     s.add_argument('--grant-appop', action='append', metavar='OP', help='Android app-op to allow, e.g. SCHEDULE_EXACT_ALARM')
     s.add_argument('--grant-privacy', action='append', metavar='SERVICE', help='iOS simctl privacy service, e.g. photos')
     s.add_argument('--force', action='store_true', help='Reinstall even if this exact build is already installed')
@@ -341,14 +342,19 @@ def parser():
     return p
 
 
-def output_dir():
-    base = os.environ.get('LOMA_CONVERSATION_DIR')
-    folder = Path(base) / 'device' if base else Path('/tmp/loma-device')
+def output_dir(scope=None):
+    """$LOMA_CONVERSATION_DIR/device, else /tmp/loma-device/<scope> (never a bare '/device')."""
+    base = (os.environ.get('LOMA_CONVERSATION_DIR') or '').strip()
+    if base and os.path.isabs(base) and Path(base) != Path('/'):
+        folder = Path(base) / 'device'
+    else:
+        safe = ''.join(c for c in str(scope or '') if c.isalnum() or c in '-_.').strip('.')[:128]
+        folder = Path('/tmp/loma-device') / safe if safe else Path('/tmp/loma-device')
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
 
-def unique_path(stem, ext, requested=None):
+def unique_path(stem, ext, requested=None, scope=None):
     """A path that does not exist yet: timestamp + pid + counter. --out is kept if it is free."""
     if requested:
         path = Path(requested)
@@ -357,7 +363,7 @@ def unique_path(stem, ext, requested=None):
             return path
         folder, stem, ext = path.parent, path.stem, path.suffix or ext
     else:
-        folder = output_dir()
+        folder = output_dir(scope)
     while True:
         stamp = time.strftime('%Y%m%d-%H%M%S') + f'-{int(time.time() * 1000) % 1000:03d}'
         path = folder / f'{stem}-{stamp}-{os.getpid()}-{next(_counter)}{ext}'
@@ -385,15 +391,16 @@ def write_preview(png_path, max_side=PREVIEW_MAX):
 def save_media(args, result):
     """Write media returned as base64 to unique files and replace it with paths."""
     preview = getattr(args, 'preview', False)
+    scope = getattr(args, 'scope', None)
     if 'png_base64' in result:
-        path = unique_path('screenshot', '.png', getattr(args, 'out', None))
+        path = unique_path('screenshot', '.png', getattr(args, 'out', None), scope=scope)
         path.write_bytes(base64.b64decode(result.pop('png_base64')))
         result['saved_to'] = str(path)
         if preview:
             result['preview'] = write_preview(path)
     for index, frame in enumerate(result.get('frames') or []):
         if 'png_base64' in frame:
-            path = unique_path(f'burst-{index:02d}-{frame.get("at_ms", 0)}ms', '.png')
+            path = unique_path(f'burst-{index:02d}-{frame.get("at_ms", 0)}ms', '.png', scope=scope)
             path.write_bytes(base64.b64decode(frame.pop('png_base64')))
             frame['saved_to'] = str(path)
             if preview:
@@ -401,11 +408,11 @@ def save_media(args, result):
     for shot in result.get('screenshots') or []:
         if 'png_base64' in shot:
             name = ''.join(c for c in str(shot.get('name') or 'flow') if c.isalnum() or c in '-_.')[:60]
-            path = unique_path('flow-' + (name[:-4] if name.endswith('.png') else name), '.png')
+            path = unique_path('flow-' + (name[:-4] if name.endswith('.png') else name), '.png', scope=scope)
             path.write_bytes(base64.b64decode(shot.pop('png_base64')))
             shot['saved_to'] = str(path)
     if 'mp4_base64' in result:
-        path = unique_path('recording', '.mp4')
+        path = unique_path('recording', '.mp4', scope=scope)
         path.write_bytes(base64.b64decode(result.pop('mp4_base64')))
         result['saved_to'] = str(path)
     return result

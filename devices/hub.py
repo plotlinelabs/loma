@@ -24,10 +24,11 @@ class DeviceError(Exception):
 
 
 class Connection:
-    def __init__(self, runner_id, ws, devices):
+    def __init__(self, runner_id, ws, devices, version=''):
         self.runner_id = runner_id
         self.ws = ws
         self.devices = devices
+        self.version = version  # runner VERSION from its hello; service.py gates newer ops on it
         self.pending = {}
         self.last_seen = time.monotonic()
         self.send_lock = asyncio.Lock()
@@ -49,9 +50,9 @@ class RunnerHub:
         conn = self.connections.get(runner_id)
         return conn if conn is not None and conn.alive else None
 
-    async def attach(self, runner_id, ws, devices):
+    async def attach(self, runner_id, ws, devices, version=''):
         old = self.connections.get(runner_id)
-        conn = Connection(runner_id, ws, devices)
+        conn = Connection(runner_id, ws, devices, version)
         self.connections[runner_id] = conn
         if old is not None and old.ws is not ws:
             self._fail_pending(old, 'Runner reconnected')

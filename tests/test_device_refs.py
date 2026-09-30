@@ -26,8 +26,11 @@ class TreeHub(RunnerHub):
         super().__init__()
         self.online, self.calls = set(online), []
 
+    version = None  # set by tests: the runner version reported in the hello
+
     def get(self, runner_id):
-        return type('C', (), {'devices': [{'serial': 'emulator-5554', 'platform': 'android'}]})()
+        return type('C', (), {'devices': [{'serial': 'emulator-5554', 'platform': 'android'}],
+                              'version': self.version})()
 
     async def call(self, runner_id, op, serial, args):
         self.calls.append((op, dict(args)))
@@ -71,6 +74,7 @@ async def test_tap_by_ref_resolves_on_the_backend(setup):
     assert '_refs' not in reply and reply['tree'].startswith('e1 TextView')
     await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e3'})
     assert hub.calls[-1] == ('tap', {'x': 540, 'y': 1800})  # the runner only ever sees coordinates
+    await service.call(OWNER, 'conv-1', device, 'ui_tree', {'compact': True})  # the tap reset the refs
     with pytest.raises(DeviceError, match='No element e9'):
         await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e9'})
     # set_text by ref: focus the field, then edit what is focused (no match sent to the runner).
@@ -90,6 +94,37 @@ async def test_refs_expire_and_reset_after_screen_changes(setup, monkeypatch):
     monkeypatch.setattr(service_mod.time, 'monotonic', lambda: clock)
     with pytest.raises(DeviceError, match='unknown or expired'):
         await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e1'})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('op,args', [
+    ('tap', {'x': 1, 'y': 1}), ('tap_text', {'match': 'Save'}), ('key', {'key': 'back'}),
+    ('set_text', {'text': 'a'}), ('clear_text', {}), ('type', {'text': 'a'}),
+    ('scroll_until_visible', {'match': 'Save'}),
+])
+async def test_input_ops_reset_refs(setup, op, args):
+    service, hub, device = setup
+    await service.call(OWNER, 'conv-1', device, 'ui_tree', {})
+    await service.call(OWNER, 'conv-1', device, op, args)
+    with pytest.raises(DeviceError, match='unknown or expired'):
+        await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e1'})
+
+
+@pytest.mark.asyncio
+async def test_failed_install_or_launch_still_resets_refs(setup, monkeypatch):
+    service, hub, device = setup
+
+    async def failing(runner_id, op, serial, args):
+        if op == 'ui_tree':
+            return dict(TREE)
+        raise DeviceError('launch failed')
+    for op, args in (('launch', {'app_id': 'com.example'}), ('uninstall', {'app_id': 'com.example'})):
+        monkeypatch.setattr(hub, 'call', failing)
+        await service.call(OWNER, 'conv-1', device, 'ui_tree', {})
+        with pytest.raises(DeviceError, match='launch failed'):
+            await service.call(OWNER, 'conv-1', device, op, args)
+        with pytest.raises(DeviceError, match='unknown or expired'):
+            await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e1'})
 
 
 @pytest.mark.asyncio
@@ -132,8 +167,81 @@ async def test_runner_animations_switch(monkeypatch):
 def test_allowlist_merges_env_and_integration_setting(monkeypatch):
     monkeypatch.setenv('LOMA_DEVICE_BUILD_REPOS', 'org/a')
     monkeypatch.setattr(builds, 'get_integration_extra', lambda *a, **k: 'Org/B, org/c\norg/d')
-    monkeypatch.setitem(builds._repo_setting, 'at', None)
+    monkeypatch.setattr(builds, '_settings', {})
     assert builds.allowed_repos() == {'org/a', 'org/b', 'org/c', 'org/d'}
-    # Cached for REPO_SETTING_TTL: a second read does not hit Mongo again.
+    # Cached for SETTING_TTL: a second read does not hit Mongo again.
     monkeypatch.setattr(builds, 'get_integration_extra', lambda *a, **k: pytest.fail('re-read too soon'))
     assert 'org/b' in builds.allowed_repos()
+
+
+def test_workflow_allowlist_merges_env_and_integration_setting(monkeypatch):
+    monkeypatch.setenv('LOMA_DEVICE_BUILD_WORKFLOWS', 'build.yml')
+    monkeypatch.setattr(builds, 'get_integration_extra',
+                        lambda provider, field, **k: 'android.yml ios.yaml' if field == 'device_build_workflows' else '')
+    monkeypatch.setattr(builds, '_settings', {})
+    assert builds.allowed_workflows() == {'build.yml', 'android.yml', 'ios.yaml'}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_workflow_must_be_allowlisted(monkeypatch):
+    monkeypatch.setenv('LOMA_DEVICE_BUILD_REPOS', 'org/app')
+    monkeypatch.setenv('GITHUB_API_KEY', 'token')
+    monkeypatch.delenv('LOMA_DEVICE_BUILD_WORKFLOWS', raising=False)
+    monkeypatch.setattr(builds, 'get_integration_extra', lambda *a, **k: '')
+    monkeypatch.setattr(builds, '_settings', {})
+    fetched = []
+
+    async def fake_fetch(self, *args):
+        fetched.append(args)
+        return 'b_x', {}
+    monkeypatch.setattr(BlobStore, '_from_github', fake_fetch)
+    # Empty allowlist: dispatching is denied, and the message says how to allow it.
+    with pytest.raises(DeviceError, match='LOMA_DEVICE_BUILD_WORKFLOWS'):
+        await BlobStore().from_github(OWNER, 'org/app', 'apk', pr=1, dispatch_workflow='deploy.yml')
+    monkeypatch.setenv('LOMA_DEVICE_BUILD_WORKFLOWS', 'build.yml')
+    monkeypatch.setattr(builds, '_settings', {})
+    with pytest.raises(DeviceError, match=r'not allowed.*allowed: build.yml'):
+        await BlobStore().from_github(OWNER, 'org/app', 'apk', pr=1, dispatch_workflow='deploy.yml')
+    assert not fetched
+    await BlobStore().from_github(OWNER, 'org/app', 'apk', pr=1, dispatch_workflow='build.yml')
+    # No dispatch requested: the workflow allowlist does not apply.
+    await BlobStore().from_github(OWNER, 'org/app', 'apk', pr=1)
+    assert len(fetched) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('op,args', [
+    ('launch', {'app_id': 'com.example', 'extras': {'endpoint': 'x'}}),
+    ('launch', {'app_id': 'com.example', 'bool_extras': {'test_mode': True}}),
+    ('launch', {'app_id': 'com.example', 'activity': '.Main'}),
+    ('install', {'upload_id': 'u1', 'app_id': 'com.example', 'grant_appops': ['SCHEDULE_EXACT_ALARM']}),
+    ('install', {'upload_id': 'u1', 'grant_privacy': ['photos']}),
+    ('tap_text', {'match': 'Save'}), ('record', {'duration_s': 3}), ('animations', {'enabled': False}),
+    ('logs', {'source': 'console'}),
+])
+async def test_old_runner_is_told_to_update(setup, op, args):
+    service, hub, device = setup
+    hub.version = '1.0.0'
+    with pytest.raises(DeviceError, match=r'Runner too old .*runner 1\.0\.0.*>= 1\.1\.0'):
+        await service.call(OWNER, 'conv-1', device, op, args)
+    assert hub.calls == []  # refused before anything reached the runner
+
+
+@pytest.mark.asyncio
+async def test_old_runner_still_does_the_basics_and_new_runner_does_everything(setup):
+    service, hub, device = setup
+    hub.version = '1.0.0'
+    await service.call(OWNER, 'conv-1', device, 'launch', {'app_id': 'com.example'})
+    await service.call(OWNER, 'conv-1', device, 'tap', {'x': 1, 'y': 2})
+    hub.version = ldr.VERSION
+    await service.call(OWNER, 'conv-1', device, 'launch', {'app_id': 'com.example', 'activity': '.Main'})
+    await service.call(OWNER, 'conv-1', device, 'tap_text', {'match': 'Save'})
+    assert [op for op, _ in hub.calls] == ['launch', 'tap', 'launch', 'tap_text']
+
+
+@pytest.mark.asyncio
+async def test_hub_records_the_runner_version():
+    class WS:
+        closed = False
+    conn = await RunnerHub().attach('r1', WS(), [], '1.1.0')
+    assert conn.version == '1.1.0'

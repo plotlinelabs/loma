@@ -81,9 +81,36 @@ REF = re.compile(r'e[1-9][0-9]{0,3}\Z')
 REF_TTL = 120
 REF_KEYS_MAX = 500
 _REFS = {}
-# Ops after which the screen is very likely different, so earlier refs must not be reused.
-REF_RESET_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'swipe',
-                 'scroll_until_visible', 'run_flow', 'record', 'burst'}
+# Ops after which the screen may be different, so earlier refs must not be reused. Cleared before
+# the op is sent, so a failed or timed-out attempt (e.g. a half-done install) also invalidates them.
+REF_RESET_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'tap', 'tap_text', 'swipe',
+                 'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst'}
+
+# Runner features newer than 1.0.0: an older runner rejects the op or silently ignores the argument,
+# so the backend refuses them up front with an upgrade hint (the runner reports VERSION in its hello).
+NEEDS_RUNNER = (1, 1, 0)
+NEW_RUNNER_OPS = {'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record',
+                  'animations'}
+NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
+                   'install': {'grant_appops', 'grant_privacy', 'force'}, 'logs': {'source'}}
+
+
+def _version(text):
+    return tuple(int(part) for part in re.findall(r'\d+', str(text or ''))[:3])
+
+
+def _check_runner_version(conn, op, args):
+    """args are the runner-bound arguments (backend-only ones already removed)."""
+    version = getattr(conn, 'version', None)
+    if version is None or _version(version) >= NEEDS_RUNNER:
+        return
+    newer = sorted(NEW_RUNNER_ARGS.get(op, set()) & set(args))
+    if op in NEW_RUNNER_OPS or newer:
+        what = op + (' with ' + ', '.join(newer) if newer else '')
+        need = '.'.join(map(str, NEEDS_RUNNER))
+        raise DeviceError(f'Runner too old for {what} (runner {version or "unknown"}); update the Loma Device Runner '
+                          f'to >= {need}: download the new loma_device_runner.py from Integrations > Devices and '
+                          'run `python3 loma_device_runner.py setup` on that machine')
 
 
 def _validate(op, args):
@@ -401,6 +428,7 @@ class DeviceService:
             GITHUB_FETCH_TIMEOUT + args.get('wait_s', 0) if op == 'install' else 0)
         local = {k: args[k] for k in BACKEND_ARGS.get(op, ()) if k in args}
         args = {k: v for k, v in args.items() if k not in local}
+        _check_runner_version(self.hub.get(runner['runner_id']), op, args)
         ref = args.pop('ref', None)
         tap_first = None
         if ref is not None:
@@ -414,6 +442,8 @@ class DeviceService:
             raise DeviceError('Device is leased by another session. Pick another device or wait for it to be released.')
         started = time.monotonic()
         try:
+            if op in REF_RESET_OPS:
+                _REFS.pop(_ref_key(user_email, scope, device_id), None)
             build_meta = None
             if op == 'install':
                 args, build_meta = await self._prepare_install(user_email, runner['runner_id'], args, local)
@@ -429,8 +459,6 @@ class DeviceService:
             refs = data.pop('_refs', None) if isinstance(data, dict) else None
             if refs is not None:
                 remember_refs(user_email, scope, device_id, refs)
-            elif op in REF_RESET_OPS:
-                _REFS.pop(_ref_key(user_email, scope, device_id), None)
         except Exception as exc:
             message = str(exc) if isinstance(exc, DeviceError) else f'internal error: {type(exc).__name__}'
             try:

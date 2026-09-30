@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import aiohttp as _aiohttp
 from aiohttp import web
 
-from api.auth_helpers import require_admin, get_user_email
+from api.auth_helpers import get_system_role, get_user_email, require_admin
 from api.oauth_helpers import encrypt_token, decrypt_token, register_oauth_client
 from integrations.registry import PROVIDER_CATALOG, list_providers, get_provider
 from observability.db import get_db
@@ -131,6 +131,21 @@ async def _connect_integration(request: web.Request) -> web.Response:
     # Get user email from auth context (set by auth_middleware)
     user_email = request.get("user_email", "unknown")
 
+    # Admin-only settings (e.g. GitHub device_build_repos, which gates which repos' builds devices
+    # install): only an admin may set them; a non-admin reconnect keeps the existing values.
+    admin_only = {f["key"] for f in catalog_entry.get("extra_fields", []) if f.get("admin_only")}
+    preserved = {}
+    if admin_only and get_system_role(request) != "admin":
+        if not isinstance(extra_fields, dict):
+            return web.json_response({"error": "extra_fields must be an object"}, status=400)
+        denied = sorted(k for k in admin_only if str(extra_fields.get(k) or "").strip())
+        if denied:
+            return web.json_response({"error": "Only an admin can set " + ", ".join(denied)}, status=403)
+        extra_fields = {k: v for k, v in extra_fields.items() if k not in admin_only}
+        existing = await db.integrations.find_one({"provider": provider}, {"extra_fields_encrypted": 1})
+        preserved = {k: v for k, v in ((existing or {}).get("extra_fields_encrypted") or {}).items()
+                     if k in admin_only}
+
     now = datetime.now(timezone.utc)
     doc = {
         "integration_id": str(uuid.uuid4()),
@@ -138,7 +153,8 @@ async def _connect_integration(request: web.Request) -> web.Response:
         "status": "active",
         "api_key_encrypted": encrypt_token(api_key),
         "webhook_secret_encrypted": encrypt_token(webhook_secret) if webhook_secret else None,
-        "extra_fields_encrypted": {k: encrypt_token(v) for k, v in extra_fields.items()} if extra_fields else None,
+        "extra_fields_encrypted": ({**{k: encrypt_token(v) for k, v in extra_fields.items()}, **preserved}
+                                   if extra_fields or preserved else None),
         "connected_by": user_email,
         "connected_at": now,
         "updated_at": now,

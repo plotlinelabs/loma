@@ -59,7 +59,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'  # the backend gates newer ops/arguments on this (devices/service.py NEEDS_RUNNER)
 PROTOCOL = 1
 CONFIG_DIR = Path(os.environ.get('LOMA_DEVICE_RUNNER_HOME', Path.home() / '.loma-device-runner'))
 CONFIG_PATH = CONFIG_DIR / 'config.json'
@@ -98,6 +98,9 @@ SWIPE_MS = 1000  # scroll_until_visible: slow, fixed-distance swipes give the sa
 # One adb round trip for the UI tree: dump and cat in a single device-side shell (a constant string).
 ANDROID_UI_DUMP = ('rm -f /sdcard/loma_ui.xml; uiautomator dump --compressed /sdcard/loma_ui.xml >&2 '
                    '&& cat /sdcard/loma_ui.xml')
+# `am start` failures: "Error: Activity class {...} does not exist." / "Error type 3" line prefixes
+# (not 'Error' anywhere, which would match an activity named e.g. .ErrorReportActivity).
+AM_ERROR = re.compile(r'^\s*Error(?::| type\b)', re.M)
 ANDROID_WAKEUP = 'input keyevent 224; wm dismiss-keyguard'
 # Animation scales off (0) or back to the default (1), in one round trip. With animations off,
 # uiautomator reaches "idle" quickly (a running animation blocks ui_tree for seconds), and taps
@@ -195,6 +198,15 @@ async def run(args, *, timeout=60, check=True, keep='head', cwd=None):
         detail = (err_text or out.decode('utf-8', 'replace')[-2000:]).strip()
         raise OpError(f'{Path(args[0]).name} failed (exit {proc.returncode}): {detail[:1500]}')
     return proc.returncode, out, err_text
+
+
+def read_media(path, what):
+    """Read a captured media file, refusing (not truncating) anything over MAX_MEDIA_BYTES."""
+    size = path.stat().st_size
+    if size > MAX_MEDIA_BYTES:
+        raise OpError(f'{what} is {size // (1024 * 1024)} MB, over the {MAX_MEDIA_BYTES // (1024 * 1024)} MB limit; '
+                      'use a shorter duration')
+    return path.read_bytes()
 
 
 def png_size(data):
@@ -440,7 +452,12 @@ class Android:
             if 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' not in text:
                 raise OpError(f'adb install failed: {text[-1500:]}')
             found = re.search(r'(?:Existing package|Package) ([A-Za-z0-9_.]+) signatures', text)
-            package = app_id or (found.group(1) if found else None)
+            # Uninstall only the package adb says conflicts (it is what the APK really installs).
+            package = found.group(1) if found else app_id
+            if found and app_id and package != app_id:
+                raise OpError(f'The build installs {package}, not app_id {app_id}, and {package} is already installed '
+                              f'with a different signature. Not uninstalling anything: pass app_id {package} if it '
+                              'should be replaced (its data will be lost)')
             if not package or not APP_ID.fullmatch(package):
                 raise OpError('Installed app has a different signature; pass app_id so it can be reinstalled')
             await run([self.adb, '-s', serial, 'uninstall', package], timeout=60, check=False)
@@ -478,16 +495,17 @@ class Android:
             argv += ['--es', key, shlex.quote(value)]
         for key, value in bool_extras.items():
             argv += ['--ez', key, 'true' if value else 'false']
-        _, out, _ = await run(self._sh(serial, *argv), timeout=45)
+        # Worst case (resolve 10 s + start 40 s) stays under the runner's 55 s default call deadline.
+        _, out, _ = await run(self._sh(serial, *argv), timeout=40)
         text = out.decode('utf-8', 'replace')
-        if 'Error' in text:
+        if AM_ERROR.search(text):
             raise OpError(text.strip()[-500:])
         return {'launched': app_id, 'component': component, 'extras': sorted(extras) + sorted(bool_extras)}
 
     async def _launcher_activity(self, serial, app_id):
         _, out, _ = await run(self._sh(serial, 'cmd', 'package', 'resolve-activity', '--brief',
                                        '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER',
-                                       app_id), timeout=30, check=False)
+                                       app_id), timeout=10, check=False)
         for line in reversed(out.decode('utf-8', 'replace').splitlines()):
             name = line.strip().partition('/')[2]
             if line.strip().startswith(app_id + '/') and ACTIVITY.fullmatch(name):
@@ -507,7 +525,7 @@ class Android:
         _, out, _ = await run(self._sh(serial, 'am', 'start', '-W', '-a', 'android.intent.action.VIEW',
                                        '-d', shlex.quote(url)), timeout=30)
         text = out.decode('utf-8', 'replace')
-        if 'Error' in text:
+        if AM_ERROR.search(text):
             raise OpError(text.strip()[-500:])
         return {'opened': url}
 
@@ -573,13 +591,24 @@ class Android:
         path = '/sdcard/loma_rec.mp4'
         task = asyncio.ensure_future(run(self._sh(serial, 'screenrecord', '--time-limit', str(seconds),
                                                   '--bit-rate', '4000000', path), timeout=seconds + 30))
-        await asyncio.sleep(0.8)  # screenrecord needs a moment before frames flow
-        if started is not None:
-            await started()
-        await task
-        _, out, _ = await run([self.adb, '-s', serial, 'exec-out', 'cat', path], timeout=60)
-        await run(self._sh(serial, 'rm', '-f', path), timeout=15, check=False)
-        return out
+        try:
+            await asyncio.sleep(0.8)  # screenrecord needs a moment before frames flow
+            if started is not None:
+                await started()
+            await task
+            # adb pull to a file: run() caps stdout at MAX_OUTPUT, which would silently cut the mp4.
+            with tempfile.TemporaryDirectory(prefix='loma-rec-') as tmp:
+                target = Path(tmp) / 'rec.mp4'
+                await run([self.adb, '-s', serial, 'pull', path, str(target)], timeout=60)
+                return read_media(target, 'Recording')
+        except BaseException:
+            # A failed launch callback (or a cancelled call) must not leave screenrecord running on the device.
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await run(self._sh(serial, 'pkill -INT screenrecord'), timeout=15, check=False)
+            raise
+        finally:
+            await run(self._sh(serial, 'rm', '-f', path), timeout=15, check=False)
 
     async def logs(self, serial, lines, clear, source='auto'):
         if clear:
@@ -760,7 +789,7 @@ class IOS:
                 raise
             if not target.exists():
                 raise OpError('simctl recordVideo produced no file')
-            return target.read_bytes()
+            return read_media(target, 'Recording')
 
     async def ui_tree(self, serial):
         _, out, _ = await run([self._idb(), 'ui', 'describe-all', '--udid', serial, '--json'], timeout=30)
@@ -1116,9 +1145,17 @@ class Runner:
         return result
 
     async def scroll_until_visible(self, driver, serial, selector, direction, max_swipes):
-        swipes = 0
+        swipes, misses = 0, 0
         while True:
-            tree = await driver.ui_tree(serial)
+            try:
+                tree = await driver.ui_tree(serial)
+            except OpError:  # UI not idle (a running animation): look again, like wait_for
+                misses += 1
+                if misses > 3:
+                    raise
+                await asyncio.sleep(POLL_SECONDS)
+                continue
+            misses = 0
             hits = find_elements(tree['elements'], *selector)
             if hits:
                 return {'found': True, 'element': hits[0], 'swipes': swipes}
@@ -1200,15 +1237,33 @@ class Runner:
         """Best effort: keep the last few verified builds, keyed by checksum."""
         try:
             self.cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            tmp = self.cache_dir / (sha256 + '.part')
-            shutil.copyfile(path, tmp)
-            os.replace(tmp, self.cache_dir / sha256)
+            # A unique temp name: two installs of the same build on two devices may cache it at once.
+            fd, tmp = tempfile.mkstemp(prefix=sha256[:16] + '.', suffix='.part', dir=self.cache_dir)
+            try:
+                with os.fdopen(fd, 'wb') as handle, open(path, 'rb') as source:
+                    shutil.copyfileobj(source, handle)
+                os.replace(tmp, self.cache_dir / sha256)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
             entries = sorted((p for p in self.cache_dir.iterdir() if SHA256.fullmatch(p.name)),
                              key=lambda p: p.stat().st_mtime, reverse=True)
             for old in entries[self.CACHE_KEEP:]:
                 old.unlink(missing_ok=True)
         except OSError:
             pass
+
+    @staticmethod
+    def _copy_verified(source, target, sha256):
+        digest = hashlib.sha256()
+        try:
+            with open(source, 'rb') as reader, open(target, 'wb') as writer:
+                for chunk in iter(lambda: reader.read(1 << 20), b''):
+                    digest.update(chunk)
+                    writer.write(chunk)
+        except OSError:
+            return False
+        return digest.hexdigest() == sha256
 
     async def download(self, args, target):
         blob_id = need_str(args, 'blob_id', BLOB_ID)
@@ -1217,9 +1272,11 @@ class Runner:
         path = target / name
         cached = self._cached(expected)
         if cached is not None:
-            await asyncio.to_thread(shutil.copyfile, cached, path)
-            os.utime(cached)  # most recently used
-            return path
+            # Re-verify: the cache is plain files on disk, and a checksum is what install trusts.
+            if await asyncio.to_thread(self._copy_verified, cached, path, expected):
+                os.utime(cached)  # most recently used
+                return path
+            cached.unlink(missing_ok=True)  # corrupt or tampered: drop it and download again
         url = f"{self.config['server']}/device-runner/blobs/{blob_id}"
         digest, size = hashlib.sha256(), 0
         import aiohttp

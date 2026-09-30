@@ -4,10 +4,11 @@ A freshly cloned Loma deployment starts with an empty `skills` collection, so th
 agent has nothing useful to draw on. On startup we import a curated set of
 generic, company-agnostic starter skills bundled under ``seed/skills/``.
 
-Each bundled skill is imported only if no skill with its slug exists yet (in any
-state, including disabled), so skills added to ``seed/skills/`` later still reach
-existing deployments, while existing, edited or deleted skills are never
-overwritten, updated or resurrected.
+On an empty ``skills`` collection every bundled skill is imported. On a populated
+deployment (e.g. an upgrade) only the skills listed in ``AUTO_ADD_SLUGS`` are added,
+and only if no skill with that slug exists yet (in any state, including disabled), so
+existing, edited or deleted skills are never overwritten, updated or resurrected.
+A bundled skill's later content changes never reach deployments that already have it.
 """
 
 from __future__ import annotations
@@ -21,10 +22,12 @@ from config.app_config import LOMA_SEED_SKILLS
 logger = logging.getLogger(__name__)
 
 SEED_DIR = Path(__file__).resolve().parent.parent / "seed" / "skills"
+# Bundled skills explicitly added to deployments that already have skills (opt-in, per skill).
+AUTO_ADD_SLUGS = frozenset({"mobile-e2e"})
 
 
 async def seed_default_skills(db) -> None:
-    """Import every bundled starter skill whose slug does not exist yet.
+    """Import all bundled starter skills into an empty collection, else only missing AUTO_ADD_SLUGS.
 
     Idempotent and safe: a skill that already exists (edited by users, or disabled
     by deleting it) is never touched. Disable entirely with ``LOMA_SEED_SKILLS=false``.
@@ -50,7 +53,7 @@ async def seed_default_skills(db) -> None:
             slug = skill_service.slugify(child.name)
         except skill_service.SkillError:
             continue
-        if slug not in existing:
+        if slug not in existing and (not existing or slug in AUTO_ADD_SLUGS):
             candidates.append(child)
     if not candidates:
         return

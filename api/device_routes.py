@@ -114,14 +114,15 @@ async def handle_runner_ws(request):
         return ws
     devices = _clean_devices(hello.get('devices'))
     capabilities = hello.get('capabilities') if isinstance(hello.get('capabilities'), list) else []
-    conn = await hub.attach(runner_id, ws, devices)
+    version = str(hello.get('version') or '')[:40]
+    conn = await hub.attach(runner_id, ws, devices, version)
     try:
         if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
             await hub.revoke(runner_id)  # revoked while we waited for hello
             return ws
         await db.device_runners.update_one({'runner_id': runner_id}, {'$set': {
             'devices': devices, 'last_seen': store.now(), 'connected_at': store.now(),
-            'version': str(hello.get('version') or '')[:40], 'hostname': str(hello.get('hostname') or '')[:120],
+            'version': version, 'hostname': str(hello.get('hostname') or '')[:120],
             'os': str(hello.get('os') or '')[:120],
             'capabilities': [str(c)[:20] for c in capabilities[:10]]}})
         logger.info('Device runner %s connected with %d device(s)', runner_id, len(devices))

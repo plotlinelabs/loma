@@ -1,4 +1,4 @@
-"""Bundled seed skills reach existing deployments without touching existing skills."""
+"""Seed skills: all on an empty DB; on existing deployments only AUTO_ADD_SLUGS, never overwriting."""
 import pytest
 from mongomock_motor import AsyncMongoMockClient
 
@@ -34,7 +34,7 @@ async def test_seeds_empty_collection(seed_dir):
 
 
 @pytest.mark.asyncio
-async def test_adds_only_missing_skills_and_never_overwrites(seed_dir):
+async def test_existing_deployments_only_get_auto_add_skills(seed_dir):
     db = AsyncMongoMockClient()['seed_test_existing']
     await skill_seed.seed_default_skills(db)
     # A user edited alpha and deleted (disabled) mobile-e2e; later a new bundled skill ships.
@@ -45,10 +45,24 @@ async def test_adds_only_missing_skills_and_never_overwrites(seed_dir):
 
     await skill_seed.seed_default_skills(db)
 
-    assert {d['slug'] async for d in db.skills.find({})} == {'alpha', 'mobile-e2e', 'beta'}
+    # beta is not opted in to auto-add: a populated deployment does not get it.
+    assert {d['slug'] async for d in db.skills.find({})} == {'alpha', 'mobile-e2e'}
     assert await _skill_md(db, 'alpha') == 'edited'
     assert (await db.skills.find_one({'slug': 'mobile-e2e'}))['enabled'] is False
-    assert 'bundled beta' in await _skill_md(db, 'beta')
+
+
+@pytest.mark.asyncio
+async def test_auto_add_skill_reaches_a_deployment_seeded_before_it(seed_dir):
+    db = AsyncMongoMockClient()['seed_test_auto_add']
+    await skill_seed.seed_default_skills(db)
+    await db.skills.delete_one({'slug': 'mobile-e2e'})  # as if seeded before mobile-e2e was bundled
+    await db.skill_files.delete_many({'skill_slug': 'mobile-e2e'})
+    _skill(seed_dir, 'beta', 'bundled beta')
+
+    await skill_seed.seed_default_skills(db)
+
+    assert {d['slug'] async for d in db.skills.find({})} == {'alpha', 'mobile-e2e'}
+    assert 'bundled mobile' in await _skill_md(db, 'mobile-e2e')
 
 
 @pytest.mark.asyncio

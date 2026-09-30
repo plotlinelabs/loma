@@ -42,7 +42,8 @@ cheapest test is the one with the fewest calls, so:
 - **Read the tree small, act by ref.** `ui-tree --compact` prints one line per element with a
   ref (`e3 Button 'Save' @540,1800 *`); add `--filter` or `--clickable-only`. Then
   `tap --ref e3` / `set-text --ref e2 --text ...`: never copy coordinates. Refs expire after
-  120 s or any screen-changing op (launch, swipe, open-url, ...); read the tree again then.
+  120 s or any op that may change the screen (tap, type, key, set-text, launch, swipe, open-url, ...);
+  read the tree again then.
   Use `screenshot --preview` and open the JPEG; keep the PNG for evidence.
 - **Animations off on Android emulators** (`animations --off`) at the start of a session:
   `ui-tree` stops stalling on "UI not idle" and taps don't land mid-transition. Turn them back
@@ -53,7 +54,7 @@ cheapest test is the one with the fewest calls, so:
 - **Keep device work out of long threads.** For a large matrix, run the device loop in a
   subagent that returns only pass/fail per scenario and screenshot paths.
 - **State file.** Write the device id, installed build SHA, app id and anything you started
-  (servers, tunnels) to `$LOMA_CONVERSATION_DIR/state.json`. Read it first when resuming.
+  (servers, tunnels) to `state.json` in the conversation work dir (the literal path in `[Conversation Work Dir: ...]`; never `$LOMA_CONVERSATION_DIR`, which can be unset). Read it first when resuming.
 
 ## The loop
 
@@ -62,9 +63,10 @@ cheapest test is the one with the fewest calls, so:
 2. **Lease it**: `lease --platform android|ios` (or a specific `device_id`). A lease lasts
    15 idle minutes and renews on every call. Another chat cannot use a leased device.
 3. **Install the build**:
-   - CI artifact: `install --repo OWNER/NAME --artifact-name NAME --pr N --app-id PKG --wait 1500`.
-     `--wait` makes the backend wait for the CI run (no model turns); `--dispatch-workflow FILE.yml`
-     starts it if the PR has no run. Report the returned `head_sha`.
+   - CI artifact: `install --repo OWNER/NAME --artifact-name NAME --pr N --app-id PKG --wait 1200`.
+     `--wait` (max 1200 s) makes the backend wait for the CI run (no model turns); `--dispatch-workflow FILE.yml`
+     starts it if the PR has no run. Only workflows an admin allowed can be dispatched (Integrations > GitHub >
+     Device build workflows, or `LOMA_DEVICE_BUILD_WORKFLOWS`). Report the returned `head_sha`.
    - The runner updates in place (keeps app data), reinstalls only on a signature mismatch,
      and skips an identical build. `--force` reinstalls anyway.
    - Pre-grant permissions in the same call: `--grant-appop SCHEDULE_EXACT_ALARM` (Android),

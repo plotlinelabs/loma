@@ -853,3 +853,136 @@ def test_find_elements_ranking():
     assert ldr.find_elements(elements, 'save', 'any', True) == [elements[1], elements[2]]
     assert ldr.find_elements(elements, 'SAVE')[:2] == [elements[1], elements[2]]
     assert ldr.find_elements(elements, 'save', 'label') == [elements[3]]
+
+
+# ── Review fixes: recording size, orphaned screenrecord, cache integrity, package mismatch ──
+
+
+def fake_record_run(monkeypatch, size, calls):
+    async def fake_run(args, timeout=60, check=True, **kwargs):
+        calls.append(args)
+        if 'screenrecord' in args:
+            await asyncio.sleep(0.05)
+        elif 'pull' in args:
+            with open(args[-1], 'wb') as handle:
+                handle.write(b'\0' * size)
+        return 0, b'', ''
+    monkeypatch.setattr(ldr, 'run', fake_run)
+
+
+@pytest.mark.asyncio
+async def test_android_record_pulls_the_file_and_refuses_oversized(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ldr, 'MAX_MEDIA_BYTES', 1000)
+    fake_record_run(monkeypatch, 900, calls)
+    assert len(await ldr.Android('adb').record('emulator-5554', 1)) == 900
+    assert ['adb', '-s', 'emulator-5554', 'pull', '/sdcard/loma_rec.mp4'] == calls[1][:5]
+    assert not any('exec-out' in c for c in calls)  # stdout is capped at MAX_OUTPUT: never read the mp4 from it
+    calls.clear()
+    fake_record_run(monkeypatch, 1001, calls)
+    with pytest.raises(ldr.OpError, match='over the 0 MB limit'):
+        await ldr.Android('adb').record('emulator-5554', 1)
+    assert calls[-1][-3:] == ['rm', '-f', '/sdcard/loma_rec.mp4']
+
+
+@pytest.mark.asyncio
+async def test_android_record_stops_screenrecord_when_launch_fails(monkeypatch):
+    calls, recording = [], {}
+
+    async def fake_run(args, timeout=60, check=True, **kwargs):
+        calls.append(args)
+        if 'screenrecord' in args:
+            recording['task'] = asyncio.current_task()
+            await asyncio.sleep(30)
+        return 0, b'', ''
+    monkeypatch.setattr(ldr, 'run', fake_run)
+
+    async def failing_launch():
+        raise ldr.OpError('launch failed')
+    with pytest.raises(ldr.OpError, match='launch failed'):
+        await ldr.Android('adb').record('emulator-5554', 5, failing_launch)
+    assert recording['task'].cancelled()
+    assert ['adb', '-s', 'emulator-5554', 'shell', 'pkill -INT screenrecord'] in calls
+    assert calls[-1][-3:] == ['rm', '-f', '/sdcard/loma_rec.mp4']
+
+
+@pytest.mark.asyncio
+async def test_cached_build_is_reverified_and_redownloaded_on_mismatch(tmp_path):
+    import hashlib
+    r = ldr.Runner({'server': 'https://loma.test', 'secret': 's', 'runner_id': 'r', 'cache_dir': str(tmp_path / 'c')},
+                   drivers=[])
+    sha = hashlib.sha256(b'build').hexdigest()
+    src = tmp_path / 'x.apk'
+    src.write_bytes(b'build')
+    r._store_in_cache(src, sha)
+    assert [p.name for p in (tmp_path / 'c').iterdir()] == [sha]  # no temp files left behind
+    (tmp_path / 'c' / sha).write_bytes(b'tampered')
+
+    class Response:
+        status = 200
+
+        class content:
+            @staticmethod
+            async def iter_chunked(size):
+                yield b'build'
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    fetched = []
+
+    class Session:
+        def get(self, url, **kwargs):
+            fetched.append(url)
+            return Response()
+    r.session = Session()
+    target = tmp_path / 't'
+    target.mkdir()
+    path = await r.download({'blob_id': 'blob12345', 'sha256': sha, 'filename': 'app.apk'}, target)
+    assert path.read_bytes() == b'build' and fetched == ['https://loma.test/device-runner/blobs/blob12345']
+    assert (tmp_path / 'c' / sha).read_bytes() == b'build'  # the re-download replaced the bad entry
+
+
+@pytest.mark.asyncio
+async def test_signature_mismatch_never_uninstalls_a_different_package(adb, tmp_path):
+    driver, calls = adb
+    apk = tmp_path / 'app.apk'
+    apk.write_bytes(b'apk')
+    open(os.environ['FAKE_ADB_LOG'] + '.incompatible', 'w').close()
+    with pytest.raises(ldr.OpError, match='installs com.example.demo, not app_id com.other.app'):
+        await driver.install('emulator-5554', apk, 'com.other.app')
+    assert not any(c[2:3] == ['uninstall'] for c in calls())
+    open(os.environ['FAKE_ADB_LOG'] + '.incompatible', 'w').close()
+    result = await driver.install('emulator-5554', apk, 'com.example.demo')
+    assert result['data_kept'] is False and ['-s', 'emulator-5554', 'uninstall', 'com.example.demo'] in calls()
+
+
+def test_am_start_error_detection_ignores_activity_names():
+    assert ldr.AM_ERROR.search('Starting: Intent { cmp=com.x/.Main }\nError: Activity class {com.x/.Main} does not exist.')
+    assert ldr.AM_ERROR.search('Starting: Intent {...}\nError type 3\nError: Activity class does not exist')
+    assert not ldr.AM_ERROR.search('Starting: Intent { cmp=com.x/.ErrorReportActivity }\nStatus: ok\n'
+                                   'Activity: com.x/.ErrorReportActivity\nComplete')
+
+
+@pytest.mark.asyncio
+async def test_scroll_until_visible_retries_when_the_ui_is_not_idle():
+    class Flaky:
+        platform = 'android'
+
+        def __init__(self):
+            self.dumps, self.swipes = 0, 0
+
+        async def ui_tree(self, serial):
+            self.dumps += 1
+            if self.dumps == 1:
+                raise ldr.OpError('uiautomator could not capture the screen (UI not idle?)')
+            return {'screen': [1080, 2400], 'elements': [{'text': 'Save', 'center': [1, 2]}]}
+
+    driver = Flaky()
+    r = runner(driver)
+    r.inventory = {'emulator-5554': (driver, {'serial': 'emulator-5554'})}
+    result = await r.call('scroll_until_visible', 'emulator-5554', {'match': 'Save'})
+    assert result['found'] and driver.dumps == 2
