@@ -40,6 +40,10 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
   // section behind `!collapsed` and its expand button is desktop-only, so a
   // sidebar collapsed on desktop would open as an empty strip on a phone.
   const collapsed = sidebarCollapsed && !isMobile;
+  // The drawer only exists below md. Deriving this (instead of trusting the raw
+  // state) releases the drawer's body scroll lock when a phone rotates to
+  // landscape or a window widens past the breakpoint with the drawer open.
+  const drawerOpen = sidebarOpen && isMobile;
 
   if (isLogin) {
     return <>{children}</>;
@@ -74,7 +78,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
     <>
       <Suspense>
         <Sidebar
-          isOpen={sidebarOpen}
+          isOpen={drawerOpen}
           onClose={closeSidebar}
           collapsed={collapsed}
           onToggleCollapse={toggleCollapse}

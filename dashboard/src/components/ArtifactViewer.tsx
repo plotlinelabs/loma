@@ -662,7 +662,13 @@ export default function ArtifactViewer({
               )}
               <DropdownMenuSeparator />
               {!isFileArtifact && (
-                <DropdownMenuItem onSelect={handleCopy}>
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    // Keep the menu open so the "Copied!" confirmation is visible.
+                    e.preventDefault();
+                    handleCopy();
+                  }}
+                >
                   {copyFeedback ? <RiCheckLine className="text-green-500" /> : <RiFileCopyLine />}
                   {copyFeedback ? "Copied!" : "Copy"}
                 </DropdownMenuItem>

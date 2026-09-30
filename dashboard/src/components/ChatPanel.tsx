@@ -1396,6 +1396,25 @@ export default function ChatPanel({
 
   const isEmptyState = items.length === 0 && !isStreaming;
 
+  // Shared by the empty-state and in-conversation composers.
+  const composerPickers = (
+    <>
+      {isMobile && (
+        <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" className="size-11 shrink-0 rounded-full text-muted-foreground">
+          <RiAttachmentLine size={18} />
+        </Button>
+      )}
+      {!isMobile && <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />}
+      <div className="min-w-0 max-md:flex-1 max-md:[&_button]:h-11"><ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} /></div>
+      {isMobile ? (
+        <ComposerSettings>
+          <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
+          <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+        </ComposerSettings>
+      ) : <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />}
+    </>
+  );
+
   return (
     <div
       className="flex flex-col h-full"
@@ -1475,19 +1494,7 @@ export default function ChatPanel({
                 />
                 <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:gap-0 max-md:px-2 max-md:pb-2">
                   <div className="flex min-w-0 items-center gap-0.5 max-md:flex-1">
-                    {isMobile && (
-                      <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" className="size-11 shrink-0 rounded-full text-muted-foreground">
-                        <RiAttachmentLine size={18} />
-                      </Button>
-                    )}
-                    {!isMobile && <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />}
-                    <div className="min-w-0 max-md:flex-1 max-md:[&_button]:h-11"><ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} /></div>
-                    {isMobile ? (
-                      <ComposerSettings>
-                        <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-                        <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
-                      </ComposerSettings>
-                    ) : <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />}
+                    {composerPickers}
                   </div>
                   <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
                     <DictationButton
@@ -1603,11 +1610,11 @@ export default function ChatPanel({
                   return (
                     <div key={i} className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
                       {item.queued && editingQueuedIndex !== i && (
-                        <div className="flex items-center gap-0.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 pointer-coarse:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-0.5 pointer-coarse:gap-1.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <button
                             type="button"
                             onClick={() => handleStartEditQueued(i)}
-                            className="touch-target p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            className="touch-target p-1 pointer-coarse:p-2 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                             title="Edit queued message"
                             aria-label="Edit queued message"
                           >
@@ -1616,7 +1623,7 @@ export default function ChatPanel({
                           <button
                             type="button"
                             onClick={() => handleDeleteQueued(i)}
-                            className="touch-target p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            className="touch-target p-1 pointer-coarse:p-2 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                             title="Delete queued message"
                             aria-label="Delete queued message"
                           >
@@ -1818,19 +1825,7 @@ export default function ChatPanel({
                 />
                 <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:gap-0 max-md:px-2 max-md:pb-2">
                   <div className="flex min-w-0 items-center gap-0.5 max-md:flex-1">
-                    {isMobile && (
-                      <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" className="size-11 shrink-0 rounded-full text-muted-foreground">
-                        <RiAttachmentLine size={18} />
-                      </Button>
-                    )}
-                    {!isMobile && <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />}
-                    <div className="min-w-0 max-md:flex-1 max-md:[&_button]:h-11"><ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} /></div>
-                    {isMobile ? (
-                      <ComposerSettings>
-                        <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-                        <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
-                      </ComposerSettings>
-                    ) : <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />}
+                    {composerPickers}
                   </div>
                   <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
                     <DictationButton

@@ -680,6 +680,16 @@
       position: absolute;
       inset: min(0px, calc((100% - 44px) / 2));
     }
+    /* Adjacent small controls (Edit/Delete, prev/next version) would otherwise
+       overlap their grown hit areas, and the later sibling paints on top and
+       steals taps aimed at the earlier one. Stop growth on the shared side so
+       each control keeps its own column. */
+    .touch-target:has(+ .touch-target)::after {
+      right: 0;
+    }
+    .touch-target + .touch-target::after {
+      left: 0;
+    }
   }
 }
 
