@@ -43,6 +43,8 @@ _selectors: dict = {}
 class RemoteRunHandle:
     """Interrupt shim registered in active_streams for remote runs."""
 
+    supports_injection = False
+
     def __init__(self):
         self.cancelled = asyncio.Event()
 
@@ -240,7 +242,7 @@ async def remote_stream_agent(prompt, conversation_context='', files=None, obser
         return
 
     from agent.active_streams import register, unregister
-    await register(observer.conversation_id, handle, owner)
+    active_stream = await register(observer.conversation_id, handle, owner)
     observer.turn_count = max(getattr(observer, 'turn_count', 0) or 0, 1)
     run = stream_run(
         db=db, owner=owner, conversation_id=observer.conversation_id, prompt=prompt,
@@ -287,4 +289,4 @@ async def remote_stream_agent(prompt, conversation_context='', files=None, obser
         yield message
     finally:
         await run.aclose()
-        await unregister(observer.conversation_id)
+        await unregister(observer.conversation_id, active_stream)

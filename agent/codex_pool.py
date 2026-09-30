@@ -25,6 +25,7 @@ from pathlib import Path
 
 from agent.codex_runtime import CodexWorker, read_codex_auth
 from agent.pool import ClientPool
+from agent.run_processes import kill_run_processes, kill_tagged
 from agent.prompt import build_pooled_system_prompt
 
 logger = logging.getLogger(__name__)
@@ -394,8 +395,13 @@ class CodexClientPool:
             self._queue_depth -= 1
 
     async def release(self, worker: CodexWorker):
-        """Discard a used worker and warm a replacement (single-use workers)."""
+        """Discard a used worker and warm a replacement (single-use workers).
+
+        The run's tagged processes are killed first (bounded) so the caller's
+        conversation claim is only released once they are gone.
+        """
         self._in_use = max(0, self._in_use - 1)
+        await kill_run_processes(getattr(worker, "proc_tag", None))
         if getattr(worker, "_pool_ephemeral", False):
             asyncio.create_task(self.safe_disconnect(worker))
             return
@@ -416,6 +422,9 @@ class CodexClientPool:
         if pid:
             # Reuse the Claude pool's process-tree killer (kills MCP children too)
             ClientPool._kill_process_tree(pid)
+        # ...and anything the run backgrounded that escaped the tree.
+        if getattr(worker, "proc_tag", None):
+            await kill_tagged(worker.proc_tag)
 
     async def _warm_one(self):
         """Warm a single replacement worker in the background with retries."""

@@ -16,6 +16,14 @@ ROLE_HIERARCHY = {"admin": 5, "maintainer": 4, "operator": 3, "analyst": 2, "cha
 TOOL_ROLE_PRIORITY = {"Admin": 3, "Analyst": 2, "Read-only": 1, "Support": 1}
 
 
+LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+def is_loopback(request) -> bool:
+    """True for requests from the backend's own host (in-container CLIs, local probes)."""
+    return (request.remote or "") in LOOPBACK
+
+
 def get_system_role(request) -> str:
     """Get the system role from the request, defaulting to chatter."""
     return request.get("system_role", "chatter")

@@ -85,7 +85,7 @@ class ConversationObserver:
         except Exception as e:
             logger.warning("Observability: failed to insert conversation: %s", e)
 
-    async def resume(self):
+    async def resume(self, record_prompt: bool = True):
         """Resume an existing conversation — set turn offset and mark running."""
         self.start_time = datetime.now(timezone.utc)
         try:
@@ -95,7 +95,7 @@ class ConversationObserver:
             )
             if existing:
                 self.turn_offset = existing.get("total_turns", 0)
-            prompt = self.metadata.get("prompt", "")
+            prompt = self.metadata.get("prompt", "") if record_prompt else ""
             update: dict = {"$set": {
                 "status": STATUS_RUNNING,
                 "last_heartbeat": self.start_time,

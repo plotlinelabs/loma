@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiohttp import web
 
+from api.auth_helpers import is_loopback
 from observability.db import get_db
 from observability.observer import HEARTBEAT_INTERVAL_SECONDS
 
@@ -31,8 +32,6 @@ RUNNING_HEARTBEAT_WINDOW_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 2
 
 # What callers show the user when a new run is refused during drain.
 DRAIN_MESSAGE = "Loma is restarting for a deploy. Please try again in a minute."
-
-_LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 _state: dict = {"draining": False, "since": None, "reason": ""}
 
@@ -77,10 +76,6 @@ async def running_summary(db) -> dict:
     return {"running": running, "oldest_started_at": oldest_started_at}
 
 
-def _is_loopback(request: web.Request) -> bool:
-    return (request.remote or "") in _LOOPBACK
-
-
 async def handle_health(request: web.Request) -> web.Response:
     """GET /health — liveness probe (public)."""
     return web.json_response({"status": "ok", "draining": is_draining()})
@@ -100,7 +95,7 @@ async def handle_get_drain(request: web.Request) -> web.Response:
 
 async def handle_set_drain(request: web.Request) -> web.Response:
     """POST /health/drain — start refusing new agent runs (loopback only)."""
-    if not _is_loopback(request):
+    if not is_loopback(request):
         return web.json_response({"error": "Forbidden"}, status=403)
     reason = ""
     if request.can_read_body:
@@ -115,7 +110,7 @@ async def handle_set_drain(request: web.Request) -> web.Response:
 
 async def handle_clear_drain(request: web.Request) -> web.Response:
     """DELETE /health/drain — resume accepting runs (aborted deploy)."""
-    if not _is_loopback(request):
+    if not is_loopback(request):
         return web.json_response({"error": "Forbidden"}, status=403)
     set_draining(False)
     return await handle_get_drain(request)

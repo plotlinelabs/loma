@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git curl ca-certificates \
-    poppler-utils tesseract-ocr openssh-client \
+    poppler-utils tesseract-ocr openssh-client tini \
     && OPENCODE_INSTALL_DIR=/usr/local/bin sh -c 'curl -fsSL https://opencode.ai/install | bash' \
     && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
     && opencode --version \
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
     && claude --version \
     # Codex CLI pinned: the app-server protocol is not stability-guaranteed,
     # so version bumps must go through CI (see agent/codex_runtime.py)
-    && npm install -g @openai/codex@0.153.3 \
+    && npm install -g @openai/codex@0.159.0 \
     && codex --version \
     && pip install --no-cache-dir uv \
     && uv --version \
@@ -42,4 +42,8 @@ RUN mkdir -p /root/.ssh \
     && printf 'Host 98.83.133.237\n  User ubuntu\n  IdentityFile /root/.ssh-host/id_rsa\n  StrictHostKeyChecking accept-new\n' > /root/.ssh/config \
     && chmod 700 /root/.ssh && chmod 600 /root/.ssh/config
 EXPOSE 3000
+# tini as PID 1: reaps the orphaned children agent runs leave behind (without it
+# they pile up as zombies under `python app.py`) and forwards SIGTERM so the
+# backend still drains in-flight runs on shutdown.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "app.py"]

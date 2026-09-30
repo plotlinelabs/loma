@@ -235,7 +235,7 @@ through the model relay and framed tool gateway. This is no longer only a
 synthetic-worker transport test. It is still **not a chat cutover**, a complete
 Codex feature migration, or proof of gVisor containment.
 
-- Codex 0.153.3 gets a fresh ephemeral HOME and CODEX_HOME, a fixed loopback custom
+- Codex 0.159.0 gets a fresh ephemeral HOME and CODEX_HOME, a fixed loopback custom
   model provider and no account files, inherited environment, API credentials,
   hooks, plugins, backend paths or arbitrary MCP configuration. No CLI/account
   code from `agent/` is imported. The caller fixes the model.
@@ -787,7 +787,7 @@ cancellation, timeout, policy revocation, identity/account changes, file failure
 and default-selector/run-to-budget wiring. The native test script includes this
 suite. No live subscription credential or paid provider is used; live-provider
 compatibility and dedicated-host containment certification remain rollout gates.
-Protocol references: Codex `rust-v0.153.3` login/auth implementation and installed
+Protocol references: Codex `rust-v0.159.0` login/auth implementation and installed
 Claude Code `2.1.261` OAuth client. Public credential guidance:
 https://developers.openai.com/codex/auth
 
@@ -1059,7 +1059,7 @@ explicitly rather than silently truncating totals.
 ## Native CI activation patch
 
 `docs/security-containment/native-ci.patch` adds a `native-workers` job with
-pinned Codex 0.153.3, Claude Code 2.1.261 and OpenCode 1.18.28, Python 3.12,
+pinned Codex 0.159.0, Claude Code 2.1.261 and OpenCode 1.18.28, Python 3.12,
 Node 22, a disposable Mongo 7 service, opt-in database tests, JUnit artifacts
 and an explicit zero-skips check. The job becomes a dependency of production
 deployment. Providers remain synthetic; no subscription/API secrets are used.

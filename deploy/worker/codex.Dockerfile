@@ -1,7 +1,7 @@
 # Build from the repository root. This is a worker image, NEVER the backend image.
 # Pin the published output digest in LOMA_WORKER_IMAGE after containment tests.
 FROM node:22-bookworm-slim AS native
-RUN npm install --prefix /opt/native --omit=dev @openai/codex@0.153.3 \
+RUN npm install --prefix /opt/native --omit=dev @openai/codex@0.159.0 \
     && mkdir /out \
     && find /opt/native/node_modules -type f -name codex -path '*/vendor/*' > /out/paths \
     && test "$(wc -l < /out/paths)" -eq 1 \

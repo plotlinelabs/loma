@@ -14,7 +14,7 @@ import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { useFileDrop } from "./composer/useFileDrop";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
-import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath } from "../lib/api";
+import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
@@ -650,6 +650,12 @@ export default function ChatPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const queuedMessagesRef = useRef<{ text: string; files?: ChatFile[] }[]>([]);
+  // Text of a send that has started but may not have re-rendered yet: a second
+  // Enter/click in the same render sees a stale `isStreaming`/`input`.
+  const sendInFlightRef = useRef<string | null>(null);
+  const handleSendRef = useRef<
+    ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] }) => Promise<void>) | null
+  >(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const [editingQueuedIndex, setEditingQueuedIndex] = useState<number | null>(null);
   const [editingQueuedText, setEditingQueuedText] = useState("");
@@ -854,7 +860,18 @@ export default function ChatPanel({
           setIsRecovering(false);
           setIsStreaming(false);
           setItems((prev) => withTerminalStatus(prev, data.conversation));
-          requestAnimationFrame(() => inputRef.current?.focus());
+          // Messages queued while the run was going are sent now, one run at a time.
+          const queued = queuedMessagesRef.current;
+          if (queued.length > 0) {
+            queuedMessagesRef.current = [];
+            setQueuedCount(0);
+            setItems((prev) => prev.map((item) => (item.queued ? { ...item, queued: false } : item)));
+            const combinedFiles = queued.flatMap((q) => q.files || []);
+            const combinedText = queued.map((q) => q.text).join("\n\n");
+            requestAnimationFrame(() => handleSendRef.current?.(combinedText, { fromQueue: true, files: combinedFiles }));
+          } else {
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }
           return;
         }
       } catch {
@@ -893,14 +910,22 @@ export default function ChatPanel({
 
   const handleSend = async (
     overrideMessage?: string,
-    { fromQueue, includePendingFiles }: { fromQueue?: boolean; includePendingFiles?: boolean } = {},
+    {
+      fromQueue,
+      includePendingFiles,
+      files: queuedFiles,
+    }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] } = {},
   ) => {
     const displayText = overrideMessage ?? input.trim();
-    if (!displayText && pendingFiles.length === 0) return;
+    // Files that rode a queued message are sent with it, not re-read from the composer.
+    const carriedFiles = queuedFiles && queuedFiles.length > 0 ? queuedFiles : undefined;
+    if (!displayText && pendingFiles.length === 0 && !carriedFiles) return;
+    // Double Enter/click before re-render: same text, already on its way.
+    if (!isStreaming && sendInFlightRef.current === displayText) return;
 
-    if (isStreaming) {
+    if (isStreaming || sendInFlightRef.current !== null) {
       const isOverride = overrideMessage !== undefined;
-      const filesToQueue = !isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined;
+      const filesToQueue = carriedFiles ?? (!isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined);
       const fileNames = filesToQueue?.map((f) => f.name);
       const hasFiles = filesToQueue && filesToQueue.length > 0;
 
@@ -943,9 +968,9 @@ export default function ChatPanel({
       : displayText;
 
     const isOverride = overrideMessage !== undefined;
-    const filesToSend = (!isOverride || includePendingFiles) && pendingFiles.length > 0
+    const filesToSend = carriedFiles ?? ((!isOverride || includePendingFiles) && pendingFiles.length > 0
       ? [...pendingFiles]
-      : undefined;
+      : undefined);
     const fileNames = filesToSend?.map((f) => f.name);
     const displayMessage = displayText || `[${fileNames?.join(", ")}]`;
 
@@ -977,6 +1002,7 @@ export default function ChatPanel({
     }
     setIsStreaming(true);
     setStreamStartedAt(performance.now());
+    sendInFlightRef.current = displayText;
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -1156,6 +1182,25 @@ export default function ChatPanel({
           ...prev,
           { role: "assistant", content: STOPPED_BY_USER_MESSAGE },
         ]);
+      } else if (error instanceof ConversationBusyError && activeConversationId) {
+        // A run is already going (another tab, a retry, a race). The server
+        // injected it, dropped a duplicate, or we queue it for when the run
+        // ends; either way follow the running run instead of starting one.
+        if (error.duplicate) {
+          setItems((prev) => {
+            const idx = prev.map((item) => item.role).lastIndexOf("user");
+            return idx >= 0 && !fromQueue ? prev.filter((_, i) => i !== idx) : prev;
+          });
+        } else if (!error.injected) {
+          queuedMessagesRef.current.push({ text: displayText, files: filesToSend });
+          setQueuedCount(queuedMessagesRef.current.length);
+          setItems((prev) => {
+            const idx = prev.map((item) => item.role).lastIndexOf("user");
+            return prev.map((item, i) => (i === idx ? { ...item, queued: true } : item));
+          });
+        }
+        enteredRecovery = true;
+        setIsRecovering(true);
       } else if (activeConversationId) {
         // Stream broke but agent may still be running — enter recovery mode
         enteredRecovery = true;
@@ -1174,6 +1219,7 @@ export default function ChatPanel({
         ]);
       }
     } finally {
+      sendInFlightRef.current = null;
       const responseTimeSeconds = Math.max(0.1, (performance.now() - responseStartedAt) / 1000);
       setItems((prev) => {
         const finalized = removeTransientStatusItems(finalizeSteps(prev));
@@ -1209,10 +1255,7 @@ export default function ChatPanel({
           if (toSend.length > 0) {
             const combinedText = toSend.map((q) => q.text).join("\n\n");
             const combinedFiles = toSend.flatMap((q) => q.files || []);
-            if (combinedFiles.length) {
-              setPendingFiles(combinedFiles);
-            }
-            requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+            requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true, files: combinedFiles }));
           }
         } else {
           queuedMessagesRef.current = [];
@@ -1222,10 +1265,7 @@ export default function ChatPanel({
           ));
           const combinedText = queued.map((q) => q.text).join("\n\n");
           const combinedFiles = queued.flatMap((q) => q.files || []);
-          if (combinedFiles.length) {
-            setPendingFiles(combinedFiles);
-          }
-          requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+          requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true, files: combinedFiles }));
         }
       } else if (!enteredRecovery) {
         requestAnimationFrame(() => {
@@ -1234,6 +1274,8 @@ export default function ChatPanel({
       }
     }
   };
+
+  handleSendRef.current = handleSend;
 
   const handleClarifySubmit = useCallback(
     (itemIndex: number, selectedLabels: string[], otherText: string) => {
