@@ -58,3 +58,56 @@ export function CostChip({ conversationId, className }: {
           type="button"
           title="Chat cost so far (all time)"
           className={cn(
+            "h-9 px-3 flex items-center rounded-full border border-border bg-background/80 backdrop-blur",
+            "text-xs font-medium tabular-nums text-muted-foreground press-scale",
+            className,
+          )}
+        >
+          {formatUsd(cost.total_cost_usd)}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 p-3 text-[13px]">
+        <div className="font-medium">Spent on this chat</div>
+        <div className="mb-2 text-xs text-muted-foreground">All time, across every run</div>
+        <dl className="space-y-1 text-muted-foreground">
+          <div className="flex justify-between">
+            <dt>Total</dt>
+            <dd className="tabular-nums text-foreground">{formatUsd(cost.total_cost_usd)}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt>Tokens in</dt>
+            <dd className="tabular-nums">{formatTokens(cost.input_tokens)}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt>Tokens out</dt>
+            <dd className="tabular-nums">{formatTokens(cost.output_tokens)}</dd>
+          </div>
+          {/* Cache traffic is billed too — without it the totals above can't
+              explain the $ figure. Zero (hidden) on pre-capture chats. */}
+          {cost.cache_read_tokens > 0 && (
+            <div className="flex justify-between">
+              <dt>Cache read</dt>
+              <dd className="tabular-nums">{formatTokens(cost.cache_read_tokens)}</dd>
+            </div>
+          )}
+          {cost.cache_creation_tokens > 0 && (
+            <div className="flex justify-between">
+              <dt>Cache write</dt>
+              <dd className="tabular-nums">{formatTokens(cost.cache_creation_tokens)}</dd>
+            </div>
+          )}
+          <div className="flex justify-between">
+            <dt>Turns</dt>
+            <dd className="tabular-nums">{cost.total_turns}</dd>
+          </div>
+        </dl>
+        <Link
+          href="/my-usage"
+          className="mt-2.5 flex items-center gap-1 text-xs text-brand-600 hover:underline"
+        >
+          See all my usage <RiArrowRightUpLine size={12} />
+        </Link>
+      </PopoverContent>
+    </Popover>
+  );
+}
