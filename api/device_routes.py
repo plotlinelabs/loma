@@ -19,8 +19,8 @@ from pathlib import Path
 
 from aiohttp import web
 
-from api.auth_helpers import get_user_email, is_loopback
-from devices import store
+from api.auth_helpers import get_system_role, get_user_email, is_loopback, require_admin
+from devices import builds, store
 from devices.builds import blobs, FILENAME, MAX_BLOB
 from devices.hub import DeviceError, hub
 from devices.service import DeviceService
@@ -275,6 +275,69 @@ async def handle_force_release(request):
         return _error(str(exc), 403)
 
 
+MAX_BUILD_SOURCES = 50
+
+
+def _build_settings_view(saved, request):
+    return {'repos': saved.get('repos') or [], 'workflows': saved.get('workflows') or [],
+            'env_repos': sorted(builds.env_repos()), 'env_workflows': sorted(builds.env_workflows()),
+            'can_edit': get_system_role(request) == 'admin',
+            'updated_by': saved.get('updated_by'),
+            'updated_at': store.aware(saved['updated_at']).isoformat() if saved.get('updated_at') else None}
+
+
+async def handle_get_build_settings(request):
+    """Which repos' CI builds devices may install, and which workflows the agent may start. Any user may read."""
+    db = _db_or_503()
+    if not get_user_email(request):
+        return _error('Authentication required', 401)
+    saved = await db.device_settings.find_one({'_id': builds.SETTINGS_ID}) or {}
+    return web.json_response(_build_settings_view(saved, request))
+
+
+def _clean_list(value, pattern, lower, what):
+    items = builds.split_list(value) if isinstance(value, str) else value
+    if not isinstance(items, list) or len(items) > MAX_BUILD_SOURCES:
+        raise ValueError(f'{what} must be a list of at most {MAX_BUILD_SOURCES} entries')
+    cleaned = []
+    for item in items:
+        item = str(item).strip()
+        if not item:
+            continue
+        if not pattern.fullmatch(item):
+            raise ValueError(f'Invalid {what[:-1]}: {item[:120]}')
+        item = item.lower() if lower else item
+        if item not in cleaned:
+            cleaned.append(item)
+    return cleaned
+
+
+async def handle_put_build_settings(request):
+    """Admin-only: these lists decide what code can run on shared devices and which CI workflows start."""
+    db = _db_or_503()
+    require_admin(request)
+    body = await _json_object(request)
+    if body is None:
+        return _error('Invalid JSON')
+    update = {}
+    try:
+        if 'repos' in body:
+            update['repos'] = _clean_list(body['repos'], builds.REPO_NAME, True, 'repos')
+        if 'workflows' in body:
+            update['workflows'] = _clean_list(body['workflows'], builds.WORKFLOW_NAME, False, 'workflows')
+    except ValueError as exc:
+        return _error(str(exc))
+    if not update:
+        return _error('Nothing to update')
+    update.update(updated_by=get_user_email(request), updated_at=store.now())
+    await db.device_settings.update_one({'_id': builds.SETTINGS_ID}, {'$set': update}, upsert=True)
+    builds.invalidate_settings()
+    logger.info('Device build sources updated by %s: %s', update['updated_by'],
+                {k: v for k, v in update.items() if k in ('repos', 'workflows')})
+    saved = await db.device_settings.find_one({'_id': builds.SETTINGS_ID}) or {}
+    return web.json_response(_build_settings_view(saved, request))
+
+
 # ── Internal endpoints for the legacy agent CLI ───────────────────────────
 
 
@@ -363,5 +426,7 @@ def setup_device_routes(app):
     app.router.add_patch('/api/devices/runners/{runner_id}', handle_update_runner)
     app.router.add_delete('/api/devices/runners/{runner_id}', handle_revoke_runner)
     app.router.add_post('/api/devices/release', handle_force_release)
+    app.router.add_get('/api/devices/build-settings', handle_get_build_settings)
+    app.router.add_put('/api/devices/build-settings', handle_put_build_settings)
     app.router.add_post('/internal/devices/call', handle_internal_call)
     app.router.add_post('/internal/devices/upload', handle_internal_upload)

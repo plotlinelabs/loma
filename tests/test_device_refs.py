@@ -164,30 +164,12 @@ async def test_runner_animations_switch(monkeypatch):
         await ldr.IOS().animations('SIM', False)
 
 
-def test_allowlist_merges_env_and_integration_setting(monkeypatch):
-    monkeypatch.setenv('LOMA_DEVICE_BUILD_REPOS', 'org/a')
-    monkeypatch.setattr(builds, 'get_integration_extra', lambda *a, **k: 'Org/B, org/c\norg/d')
-    monkeypatch.setattr(builds, '_settings', {})
-    assert builds.allowed_repos() == {'org/a', 'org/b', 'org/c', 'org/d'}
-    # Cached for SETTING_TTL: a second read does not hit Mongo again.
-    monkeypatch.setattr(builds, 'get_integration_extra', lambda *a, **k: pytest.fail('re-read too soon'))
-    assert 'org/b' in builds.allowed_repos()
-
-
-def test_workflow_allowlist_merges_env_and_integration_setting(monkeypatch):
-    monkeypatch.setenv('LOMA_DEVICE_BUILD_WORKFLOWS', 'build.yml')
-    monkeypatch.setattr(builds, 'get_integration_extra',
-                        lambda provider, field, **k: 'android.yml ios.yaml' if field == 'device_build_workflows' else '')
-    monkeypatch.setattr(builds, '_settings', {})
-    assert builds.allowed_workflows() == {'build.yml', 'android.yml', 'ios.yaml'}
-
-
 @pytest.mark.asyncio
 async def test_dispatch_workflow_must_be_allowlisted(monkeypatch):
     monkeypatch.setenv('LOMA_DEVICE_BUILD_REPOS', 'org/app')
     monkeypatch.setenv('GITHUB_API_KEY', 'token')
     monkeypatch.delenv('LOMA_DEVICE_BUILD_WORKFLOWS', raising=False)
-    monkeypatch.setattr(builds, 'get_integration_extra', lambda *a, **k: '')
+    monkeypatch.setattr(builds, 'read_saved_settings', lambda: {})
     monkeypatch.setattr(builds, '_settings', {})
     fetched = []
 

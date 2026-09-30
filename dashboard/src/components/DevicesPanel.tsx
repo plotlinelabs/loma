@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import { CopyButton } from "@/components/CopyButton";
+import DeviceBuildSources from "@/components/DeviceBuildSources";
 import {
   DeviceRecord,
   DeviceRunner,
@@ -215,6 +216,8 @@ export default function DevicesPanel() {
           {enrollError && <div className="text-xs text-red-500">{enrollError}</div>}
         </CardContent>
       </Card>
+
+      <DeviceBuildSources />
 
       <div className="flex items-center justify-between pt-1">
         <div className="text-[13px] font-semibold text-foreground">Machines</div>

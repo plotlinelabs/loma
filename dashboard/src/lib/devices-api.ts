@@ -71,3 +71,21 @@ export function revokeRunner(runnerId: string): Promise<{ revoked: boolean }> {
 export function releaseDevice(deviceId: string): Promise<{ released: boolean }> {
   return request("/api/devices/release", { method: "POST", body: JSON.stringify({ device_id: deviceId }) });
 }
+
+export interface BuildSettings {
+  repos: string[];
+  workflows: string[];
+  env_repos: string[];
+  env_workflows: string[];
+  can_edit: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export function fetchBuildSettings(): Promise<BuildSettings> {
+  return request("/api/devices/build-settings");
+}
+
+export function saveBuildSettings(update: { repos: string[]; workflows: string[] }): Promise<BuildSettings> {
+  return request("/api/devices/build-settings", { method: "PUT", body: JSON.stringify(update) });
+}

@@ -65,8 +65,8 @@ cheapest test is the one with the fewest calls, so:
 3. **Install the build**:
    - CI artifact: `install --repo OWNER/NAME --artifact-name NAME --pr N --app-id PKG --wait 1200`.
      `--wait` (max 1200 s) makes the backend wait for the CI run (no model turns); `--dispatch-workflow FILE.yml`
-     starts it if the PR has no run. Only workflows an admin allowed can be dispatched (Integrations > GitHub >
-     Device build workflows, or `LOMA_DEVICE_BUILD_WORKFLOWS`). Report the returned `head_sha`.
+     starts it if the PR has no run. Only workflows an admin allowed can be dispatched (Integrations > Devices >
+     Build sources, or `LOMA_DEVICE_BUILD_WORKFLOWS`). Report the returned `head_sha`.
    - The runner updates in place (keeps app data), reinstalls only on a signature mismatch,
      and skips an identical build. `--force` reinstalls anyway.
    - Pre-grant permissions in the same call: `--grant-appop SCHEDULE_EXACT_ALARM` (Android),
@@ -135,7 +135,7 @@ explicitly want that.
 | iOS "needs idb" | iOS taps, swipes, typing, keys and ui_tree need `idb` on the runner machine; screenshots, install, launch and deep links still work |
 | `"pending": true` | Still running on the device; repeat the same tool call on the same device to wait |
 | "Timed out on the runner" | The device did not finish in time; check `ui_tree`/`logs`, then retry once |
-| "Builds from this repository are not allowed" | An admin adds `owner/name` under Integrations → GitHub → Device build repos (or the `LOMA_DEVICE_BUILD_REPOS` env var) |
+| "Builds from this repository are not allowed" | An admin adds `owner/name` under Integrations → Devices → Build sources (or the `LOMA_DEVICE_BUILD_REPOS` env var) |
 | "Ref e3 is unknown or expired" | The screen changed or 120 s passed: `ui-tree --compact` again and use the new ref |
 
 ## Isolated-worker tool mapping
