@@ -19,7 +19,7 @@ from urllib.parse import quote, urljoin, urlparse
 import aiohttp
 
 from devices.hub import DeviceError
-from tools._integration_key import get_integration_key
+from tools._integration_key import get_integration_extra, get_integration_key
 
 MAX_BLOB = 500 * 1024 * 1024
 BLOB_TTL = 30 * 60
@@ -43,9 +43,20 @@ class ArtifactMissing(DeviceError):
         self.head_sha, self.head_ref, self.same_repo = head_sha, head_ref, same_repo
 
 
+REPO_SETTING_FIELD = 'device_build_repos'  # optional field on the GitHub integration (dashboard)
+REPO_SETTING_TTL = 60
+_repo_setting = {'at': None, 'value': ''}
+
+
 def allowed_repos():
-    raw = os.environ.get('LOMA_DEVICE_BUILD_REPOS', '')
-    return {repo.strip().lower() for repo in raw.split(',') if repo.strip()}
+    """Repos CI builds may be installed from: LOMA_DEVICE_BUILD_REPOS plus the GitHub integration's
+    "Device build repos" field, so an admin can allow a repo from the dashboard without a redeploy.
+    Blocking (Mongo read, cached for REPO_SETTING_TTL s): call it off the event loop."""
+    now = time.monotonic()
+    if _repo_setting['at'] is None or now - _repo_setting['at'] > REPO_SETTING_TTL:
+        _repo_setting.update(at=now, value=get_integration_extra('github', REPO_SETTING_FIELD, use_cache=False))
+    raw = os.environ.get('LOMA_DEVICE_BUILD_REPOS', '') + ',' + (_repo_setting['value'] or '')
+    return {repo.strip().lower() for repo in re.split(r'[,\s]+', raw) if repo.strip()}
 
 
 class BlobStore:
@@ -147,10 +158,10 @@ class BlobStore:
         wait_s > 0 polls the workflow run here in the backend (no model turns) until the artifact
         exists; dispatch_workflow starts that workflow on the PR branch if no run exists for its head.
         """
-        repos = allowed_repos()
+        repos = await asyncio.to_thread(allowed_repos)
         if repo.lower() not in repos:
-            raise DeviceError('Builds from this repository are not allowed. An operator can add it to '
-                              'LOMA_DEVICE_BUILD_REPOS' + (f' (allowed: {", ".join(sorted(repos))})' if repos else ''))
+            raise DeviceError('Builds from this repository are not allowed. An admin can add it under '
+                              'Integrations > GitHub > Device build repos (or LOMA_DEVICE_BUILD_REPOS)' + (f' (allowed: {", ".join(sorted(repos))})' if repos else ''))
         # Same lookup as isolation/automation.request: env var, else the dashboard-managed integration.
         token = os.environ.get('GITHUB_API_KEY') or await asyncio.to_thread(get_integration_key, 'github')
         if not token:

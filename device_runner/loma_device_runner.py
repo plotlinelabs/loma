@@ -99,6 +99,10 @@ SWIPE_MS = 1000  # scroll_until_visible: slow, fixed-distance swipes give the sa
 ANDROID_UI_DUMP = ('rm -f /sdcard/loma_ui.xml; uiautomator dump --compressed /sdcard/loma_ui.xml >&2 '
                    '&& cat /sdcard/loma_ui.xml')
 ANDROID_WAKEUP = 'input keyevent 224; wm dismiss-keyguard'
+# Animation scales off (0) or back to the default (1), in one round trip. With animations off,
+# uiautomator reaches "idle" quickly (a running animation blocks ui_tree for seconds), and taps
+# and screenshots don't land mid-transition. Turn them back on to test an animation itself.
+ANDROID_ANIMATION_SCALES = ('window_animation_scale', 'transition_animation_scale', 'animator_duration_scale')
 MAX_EXTRACT_BYTES = 2 * MAX_BLOB
 MAX_EXTRACT_MEMBERS = 20000
 MAX_NESTED_ZIPS = 5
@@ -556,6 +560,12 @@ class Android:
             await run(self._sh(serial, 'input', 'keyevent', str(ANDROID_KEYS[key])), timeout=15)
         return {'key': key}
 
+    async def animations(self, serial, enabled):
+        scale = '1' if enabled else '0'
+        script = '; '.join(f'settings put global {name} {scale}' for name in ANDROID_ANIMATION_SCALES)
+        await run(self._sh(serial, script), timeout=15)
+        return {'animations': enabled}
+
     async def capture(self, serial):
         return 'png', await self.screenshot(serial)
 
@@ -771,6 +781,9 @@ class IOS:
                 elements.append({k: v for k, v in element.items() if v not in ('', None)})
         return {'units': 'points', 'screen': screen, 'elements': elements}
 
+    async def animations(self, serial, enabled):
+        raise OpError('animations is Android-only; iOS simulators have no global animation switch')
+
     async def tap(self, serial, x, y):
         await run([self._idb(), 'ui', 'tap', '--udid', serial, str(x), str(y)], timeout=15)
         return {'tapped': [x, y]}
@@ -923,7 +936,8 @@ def find_file(path, suffix):
 class Runner:
     OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
            'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow',
-           'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record'}
+           'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record',
+           'animations'}
     APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
     LAUNCHING_OPS = {'burst', 'record'}  # may launch app_id right before capturing
     CACHE_KEEP = 4
@@ -1013,6 +1027,8 @@ class Runner:
             if len(data) > MAX_MEDIA_BYTES:
                 raise OpError('Recording is larger than 16 MB; use a shorter duration')
             return {'mp4_base64': base64.b64encode(data).decode(), 'bytes': len(data), 'duration_s': seconds}
+        if op == 'animations':
+            return await driver.animations(serial, need_bool(args, 'enabled'))
         if op == 'open_url':
             return await driver.open_url(serial, check_url(need_str(args, 'url', max_len=2000)))
         if op == 'screenshot':

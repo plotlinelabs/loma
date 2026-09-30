@@ -16,12 +16,13 @@ Commands:
   device.py ... app --device-id ID --action launch|stop|reset_app|uninstall --app-id PKG
                 [--extra KEY=VALUE ...] [--bool-extra KEY=true|false ...] [--activity .Main] [--console]
   device.py ... open-url --device-id ID --url URL
-  device.py ... tap --device-id ID --x X --y Y
+  device.py ... tap --device-id ID (--ref e3 | --x X --y Y)      (refs come from ui-tree)
   device.py ... tap-text --device-id ID --match TEXT [--by any|text|id|label] [--exact] [--timeout S]
   device.py ... wait-for --device-id ID --match TEXT [--by ...] [--exact] [--timeout S] [--gone]
   device.py ... scroll-until-visible --device-id ID --match TEXT [--direction down|up] [--max-swipes N]
-  device.py ... set-text --device-id ID --text TEXT [--match FIELD [--by ...]] [--no-clear]
-  device.py ... clear-text --device-id ID [--match FIELD [--by ...]]
+  device.py ... set-text --device-id ID --text TEXT [--ref e3 | --match FIELD [--by ...]] [--no-clear]
+  device.py ... clear-text --device-id ID [--ref e3 | --match FIELD [--by ...]]
+  device.py ... animations --device-id ID --off|--on                (Android emulators)
   device.py ... swipe --device-id ID --x1 . --y1 . --x2 . --y2 . [--duration-ms MS]
   device.py ... type --device-id ID --text TEXT
   device.py ... key --device-id ID --key back|home|enter|delete|escape|wakeup|...
@@ -160,7 +161,15 @@ def build_body(args):
     if args.command == 'open-url':
         return {**call, 'op': 'open_url', 'args': {'url': args.url}}
     if args.command == 'tap':
+        if args.ref:
+            if args.x is not None or args.y is not None:
+                raise SystemExit('tap takes either --ref or --x/--y')
+            return {**call, 'op': 'tap', 'args': {'ref': args.ref}}
+        if args.x is None or args.y is None:
+            raise SystemExit('tap needs --ref, or both --x and --y')
         return {**call, 'op': 'tap', 'args': {'x': args.x, 'y': args.y}}
+    if args.command == 'animations':
+        return {**call, 'op': 'animations', 'args': {'enabled': args.on}}
     if args.command in ('tap-text', 'wait-for'):
         call_args = _selector(args)
         if args.timeout is not None:
@@ -171,13 +180,15 @@ def build_body(args):
     if args.command == 'scroll-until-visible':
         call_args = {**_selector(args), 'direction': args.direction, 'max_swipes': args.max_swipes}
         return {**call, 'op': 'scroll_until_visible', 'args': call_args}
+    if args.command in ('set-text', 'clear-text') and args.ref and args.match:
+        raise SystemExit('Use either --ref or --match, not both')
     if args.command == 'set-text':
-        call_args = {'text': args.text, **_selector(args)}
+        call_args = {'text': args.text, **_selector(args), **({'ref': args.ref} if args.ref else {})}
         if args.no_clear:
             call_args['clear'] = False
         return {**call, 'op': 'set_text', 'args': call_args}
     if args.command == 'clear-text':
-        return {**call, 'op': 'clear_text', 'args': _selector(args)}
+        return {**call, 'op': 'clear_text', 'args': {**_selector(args), **({'ref': args.ref} if args.ref else {})}}
     if args.command == 'swipe':
         return {**call, 'op': 'swipe', 'args': {'x1': args.x1, 'y1': args.y1, 'x2': args.x2, 'y2': args.y2,
                                                'duration_ms': args.duration_ms}}
@@ -271,8 +282,13 @@ def parser():
     s.add_argument('--console', action='store_true', help='iOS: capture the app stdout (print) for `logs`')
     with_device('open-url').add_argument('--url', required=True)
     s = with_device('tap')
-    s.add_argument('--x', type=int, required=True)
-    s.add_argument('--y', type=int, required=True)
+    s.add_argument('--ref', help='Element ref from the latest ui-tree (e.g. e3)')
+    s.add_argument('--x', type=int)
+    s.add_argument('--y', type=int)
+    s = with_device('animations')
+    toggle = s.add_mutually_exclusive_group(required=True)
+    toggle.add_argument('--off', dest='on', action='store_false', help='Faster, steadier ui-tree / taps')
+    toggle.add_argument('--on', dest='on', action='store_true', help='Restore default animation scales')
     for name in ('tap-text', 'wait-for'):
         s = with_device(name)
         selector(s)
@@ -286,8 +302,11 @@ def parser():
     s = with_device('set-text')
     s.add_argument('--text', required=True)
     selector(s, required=False)
+    s.add_argument('--ref', help='Field ref from the latest ui-tree (e.g. e3)')
     s.add_argument('--no-clear', action='store_true', help='Append instead of replacing the field content')
-    selector(with_device('clear-text'), required=False)
+    s = with_device('clear-text')
+    selector(s, required=False)
+    s.add_argument('--ref', help='Field ref from the latest ui-tree (e.g. e3)')
     s = with_device('swipe')
     for name in ('--x1', '--y1', '--x2', '--y2'):
         s.add_argument(name, type=int, required=True)
@@ -295,7 +314,7 @@ def parser():
     with_device('type').add_argument('--text', required=True)
     with_device('key').add_argument('--key', required=True)
     s = with_device('ui-tree')
-    s.add_argument('--compact', action='store_true', help='One line per element: type text #id @x,y (* clickable)')
+    s.add_argument('--compact', action='store_true', help='One line per element: ref type text #id @x,y (* clickable)')
     s.add_argument('--clickable-only', action='store_true')
     s.add_argument('--filter', help='Keep elements whose text/label/id contains this')
     s = with_device('screenshot')

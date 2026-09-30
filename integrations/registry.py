@@ -145,6 +145,10 @@ PROVIDER_CATALOG = {
         "auth_type": "api_key",
         "auth_label": "Personal Access Token",
         "auth_help_url": "https://github.com/settings/tokens",
+        "extra_fields": [
+            {"key": "device_build_repos", "label": "Device build repos",
+             "placeholder": "owner/app-repo, owner/other-repo", "required": False},
+        ],
         "mcp_config_template": {
             "type": "http",
             "url": "https://api.githubcopilot.com/mcp",

@@ -39,8 +39,14 @@ cheapest test is the one with the fewest calls, so:
 - **Configure by launch arguments, not by typing.** If the app reads its settings from intent
   extras (Android) or UserDefaults (iOS), pass them with `app --action launch --extra KEY=VALUE`.
   Typing a URL into a settings screen is the slowest, least reliable step in any test.
-- **Read the tree small.** `ui-tree --compact` (one line per element), plus `--filter` or
-  `--clickable-only`. Use `screenshot --preview` and open the JPEG; keep the PNG for evidence.
+- **Read the tree small, act by ref.** `ui-tree --compact` prints one line per element with a
+  ref (`e3 Button 'Save' @540,1800 *`); add `--filter` or `--clickable-only`. Then
+  `tap --ref e3` / `set-text --ref e2 --text ...`: never copy coordinates. Refs expire after
+  120 s or any screen-changing op (launch, swipe, open-url, ...); read the tree again then.
+  Use `screenshot --preview` and open the JPEG; keep the PNG for evidence.
+- **Animations off on Android emulators** (`animations --off`) at the start of a session:
+  `ui-tree` stops stalling on "UI not idle" and taps don't land mid-transition. Turn them back
+  on (`--on`) before testing an animation or loader, and at the end of the session.
 - **Time-sensitive states** (loaders, toasts, animations): use `burst` or `record`, which
   time the frames on the runner. Screenshots taken turn by turn arrive seconds late.
 - **Repeat work goes in a Maestro flow.** Once a path works, run it with `run-flow` in one call.
@@ -64,15 +70,16 @@ cheapest test is the one with the fewest calls, so:
    - Pre-grant permissions in the same call: `--grant-appop SCHEDULE_EXACT_ALARM` (Android),
      `--grant-privacy photos` (iOS). Runtime permissions are granted on Android installs.
    - Local file (legacy only): `install --file /path/app.apk --app-id PKG`.
-4. **Wake and clean**: `key --key wakeup` (Android), then `app --action reset_app` only if the
+4. **Wake and clean**: `key --key wakeup` and `animations --off` (Android), then `app --action reset_app` only if the
    test needs a fresh state, then `logs --clear`.
 5. **Launch configured**: `app --action launch --app-id PKG --extra endpoint=... --bool-extra test_mode=true`.
    On iOS add `--console` if the app logs with `print`, then read it with `logs --source console`.
    Use deep links (`open-url`) to reach a screen instead of tapping through menus.
 6. **Drive by element, not coordinates**: `tap-text --match "Got it"`, `set-text --match "User ID" --text u1`,
    `wait-for --match "Welcome" --timeout 15`, `scroll-until-visible --match "Offers"`.
-   Fall back to `tap --x --y` only when the element has no text, id or label, and take the
-   coordinates from the latest `ui-tree` (Android pixels, iOS points).
+   When the element has no useful text (icons, empty fields), use its ref from
+   `ui-tree --compact`: `tap --ref e7`. Use `tap --x --y` only for things not in the tree
+   (Flutter canvases, games, some WebViews), taking coordinates from a screenshot.
 7. **Collect evidence**: one screenshot at the key moment (every capture gets a new file name),
    `logs --filter <tag>`, plus any backend checks your team's skills describe.
 8. **Make it repeatable**: write the scenario as a Maestro flow and run it with `run-flow`.
@@ -126,7 +133,8 @@ explicitly want that.
 | iOS "needs idb" | iOS taps, swipes, typing, keys and ui_tree need `idb` on the runner machine; screenshots, install, launch and deep links still work |
 | `"pending": true` | Still running on the device; repeat the same tool call on the same device to wait |
 | "Timed out on the runner" | The device did not finish in time; check `ui_tree`/`logs`, then retry once |
-| "Builds from this repository are not allowed" | An operator must add the repo to `LOMA_DEVICE_BUILD_REPOS` |
+| "Builds from this repository are not allowed" | An admin adds `owner/name` under Integrations → GitHub → Device build repos (or the `LOMA_DEVICE_BUILD_REPOS` env var) |
+| "Ref e3 is unknown or expired" | The screen changed or 120 s passed: `ui-tree --compact` again and use the new ref |
 
 ## Isolated-worker tool mapping
 
@@ -137,7 +145,8 @@ The steps above use `tools/device.py` spellings. In isolated runs use the `devic
 | `open-url` | `device.input action=open_url` |
 | `tap-text` / `set-text` / `clear-text` / `wait-for` / `scroll-until-visible` | `device.input action=tap_text|set_text|clear_text|wait_for|scroll_until_visible` |
 | `app --action launch --extra K=V` | `device.app action=launch extras={...} bool_extras={...}` |
-| `tap` / `type` / `swipe` / `key` | `device.input action=tap|type|swipe|key` |
+| `tap` / `type` / `swipe` / `key` | `device.input action=tap|type|swipe|key` (`tap ref=e3` works too) |
+| `animations --off` | `device.input action=animations enabled=false` |
 | `ui-tree --compact` | `device.observe what=ui_tree compact=true` |
 | `screenshot` | `device.observe what=screenshot` |
 | `logs --clear` / `logs --filter X` | `device.observe what=logs clear=true` / `filter=X` |

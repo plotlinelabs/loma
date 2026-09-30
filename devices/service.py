@@ -5,6 +5,7 @@ through DeviceService, so ACLs, leases, argument validation and audit are
 enforced once. Arguments are validated here before they reach a runner, and
 the runner validates them again.
 """
+import asyncio
 import base64
 import re
 import time
@@ -47,19 +48,20 @@ OPS = {
     'open_url': ({'url'}, set()),
     'screenshot': (set(), set()),
     'ui_tree': (set(), {'compact', 'clickable_only', 'filter'}),
-    'tap': ({'x', 'y'}, set()),
+    'tap': (set(), {'x', 'y', 'ref'}),
     'swipe': ({'x1', 'y1', 'x2', 'y2'}, {'duration_ms'}),
     'type': ({'text'}, set()),
     'key': ({'key'}, set()),
     'logs': (set(), {'lines', 'filter', 'clear', 'source'}),
     'run_flow': ({'flow'}, {'verbose'}),
-    'set_text': ({'text'}, {'match', 'clear'} | SELECTOR),
-    'clear_text': (set(), {'match'} | SELECTOR),
+    'set_text': ({'text'}, {'match', 'clear', 'ref'} | SELECTOR),
+    'clear_text': (set(), {'match', 'ref'} | SELECTOR),
     'wait_for': ({'match'}, {'timeout_s', 'gone'} | SELECTOR),
     'tap_text': ({'match'}, {'timeout_s'} | SELECTOR),
     'scroll_until_visible': ({'match'}, {'direction', 'max_swipes'} | SELECTOR),
     'burst': ({'count'}, {'interval_ms', 'app_id'} | LAUNCH),
     'record': ({'duration_s'}, {'app_id'} | LAUNCH),
+    'animations': ({'enabled'}, set()),
 }
 # Arguments the backend consumes itself; never forwarded to the runner.
 BACKEND_ARGS = {'ui_tree': {'compact', 'clickable_only', 'filter'}, 'run_flow': {'verbose'},
@@ -68,10 +70,20 @@ INTS = {'x': (0, 10000), 'y': (0, 10000), 'x1': (0, 10000), 'y1': (0, 10000), 'x
         'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 60),
         'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 20),
         'wait_s': (0, MAX_WAIT)}
-BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose'}
+BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled'}
 ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'}}
 STRS = {'url': 2000, 'text': 500, 'filter': 200, 'flow': 64 * 1024, 'key': 32, 'app_id': 255, 'upload_id': 64,
-        'match': 200, 'activity': 255, 'dispatch_workflow': 100}
+        'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8}
+REF = re.compile(r'e[1-9][0-9]{0,3}\Z')
+# Element refs (e1, e2, ...) from the latest ui_tree, per (user, scope, device). Module level:
+# the HTTP routes build a new DeviceService per request. The model taps by ref instead of copying
+# coordinates (fewer tokens, no mis-typed coordinates); the backend resolves the ref to the centre.
+REF_TTL = 120
+REF_KEYS_MAX = 500
+_REFS = {}
+# Ops after which the screen is very likely different, so earlier refs must not be reused.
+REF_RESET_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'swipe',
+                 'scroll_until_visible', 'run_flow', 'record', 'burst'}
 
 
 def _validate(op, args):
@@ -125,6 +137,14 @@ def _validate(op, args):
         if 'dispatch_workflow' in args:
             if not WORKFLOW.fullmatch(args['dispatch_workflow']) or 'pr' not in args.get('build', {}):
                 raise DeviceError('dispatch_workflow must be a workflow file name (e.g. build.yml) and needs build.pr')
+    if 'ref' in args and not REF.fullmatch(args['ref']):
+        raise DeviceError('Invalid ref (e.g. e3, from ui_tree)')
+    if op == 'tap' and ('ref' in args) == ('x' in args or 'y' in args):
+        raise DeviceError('tap needs either ref, or x and y')
+    if op == 'tap' and 'ref' not in args and not {'x', 'y'} <= set(args):
+        raise DeviceError('tap needs both x and y')
+    if op in ('set_text', 'clear_text') and 'ref' in args and 'match' in args:
+        raise DeviceError('Use either ref or match, not both')
     if op == 'key' and args['key'] not in KEYS:
         raise DeviceError('Unsupported key: ' + ', '.join(sorted(KEYS)))
     if op == 'open_url':
@@ -148,19 +168,25 @@ def _validate_extras(name, extras):
 
 
 def compact_tree(data, compact=False, clickable_only=False, needle=None):
-    """Shrink a ui_tree result: filter elements, optionally one line per element."""
+    """Shrink a ui_tree result: filter elements, number them (e1, e2, ...), optionally one line each.
+
+    Refs are numbered after filtering, so every ref the model sees is one it can tap. The
+    returned '_refs' map (ref -> centre) is stripped by DeviceService.call before replying.
+    """
     elements = data.get('elements') or []
     if clickable_only:
         elements = [e for e in elements if e.get('clickable')]
     if needle:
         low = needle.lower()
         elements = [e for e in elements if any(low in str(e.get(k) or '').lower() for k in ('text', 'label', 'id'))]
+    elements = [{'ref': f'e{i}', **e} for i, e in enumerate(elements, 1)]
+    refs = {e['ref']: e['center'] for e in elements if isinstance(e.get('center'), list) and len(e['center']) == 2}
     result = {k: v for k, v in data.items() if k != 'elements'}
     if not compact:
-        return {**result, 'elements': elements}
+        return {**result, 'elements': elements, '_refs': refs}
     lines = []
     for e in elements:
-        parts = [e.get('type') or '?']
+        parts = [e['ref'], e.get('type') or '?']
         if e.get('text'):
             parts.append(repr(e['text'][:80]))
         if e.get('label') and e.get('label') != e.get('text'):
@@ -170,8 +196,30 @@ def compact_tree(data, compact=False, clickable_only=False, needle=None):
         center = e.get('center') or ['?', '?']
         parts.append(f'@{center[0]},{center[1]}' + (' *' if e.get('clickable') else ''))
         lines.append(' '.join(parts))
-    return {**result, 'count': len(lines), 'tree': '\n'.join(lines),
-            'legend': 'type text [label=] [#id] @center_x,center_y (* = clickable)'}
+    return {**result, 'count': len(lines), 'tree': '\n'.join(lines), '_refs': refs,
+            'legend': f'ref type text [label=] [#id] @center_x,center_y (* = clickable). '
+                      f'Tap with tap --ref e3; refs expire after {REF_TTL}s or a screen-changing op'}
+
+
+def _ref_key(user_email, scope, device_id):
+    return (user_email, scope, device_id)
+
+
+def remember_refs(user_email, scope, device_id, refs):
+    if len(_REFS) >= REF_KEYS_MAX:
+        for key in sorted(_REFS, key=lambda k: _REFS[k][0])[:len(_REFS) // 2]:
+            _REFS.pop(key, None)
+    _REFS[_ref_key(user_email, scope, device_id)] = (time.monotonic(), refs)
+
+
+def resolve_ref(user_email, scope, device_id, ref):
+    entry = _REFS.get(_ref_key(user_email, scope, device_id))
+    if entry is None or time.monotonic() - entry[0] > REF_TTL:
+        raise DeviceError(f'Ref {ref} is unknown or expired; read ui_tree again')
+    center = entry[1].get(ref)
+    if center is None:
+        raise DeviceError(f'No element {ref} in the latest ui_tree ({len(entry[1])} refs); read ui_tree again')
+    return center
 
 
 FAILURE_LINE = re.compile(r'FAILED|❌|Assertion|not visible|not found|Exception|Error', re.I)
@@ -353,6 +401,14 @@ class DeviceService:
             GITHUB_FETCH_TIMEOUT + args.get('wait_s', 0) if op == 'install' else 0)
         local = {k: args[k] for k in BACKEND_ARGS.get(op, ()) if k in args}
         args = {k: v for k, v in args.items() if k not in local}
+        ref = args.pop('ref', None)
+        tap_first = None
+        if ref is not None:
+            center = resolve_ref(user_email, scope, device_id, ref)
+            if op == 'tap':
+                args.update(x=int(center[0]), y=int(center[1]))
+            else:  # set_text / clear_text: focus the field by ref, then edit the focused field
+                tap_first = {'x': int(center[0]), 'y': int(center[1])}
         lease = await self._acquire(device_id, user_email, scope, LEASE_TTL + timedelta(seconds=worst))
         if lease is None:
             raise DeviceError('Device is leased by another session. Pick another device or wait for it to be released.')
@@ -361,10 +417,20 @@ class DeviceService:
             build_meta = None
             if op == 'install':
                 args, build_meta = await self._prepare_install(user_email, runner['runner_id'], args, local)
+            if tap_first:
+                await self.hub.call(runner['runner_id'], 'tap', serial, tap_first)
+                await asyncio.sleep(0.3)
             data = await self.hub.call(runner['runner_id'], op, serial, args)
+            if ref is not None:
+                data = {**data, 'ref': ref}
             if build_meta:
                 data['build'] = build_meta
             data = self._shape(op, data, local)
+            refs = data.pop('_refs', None) if isinstance(data, dict) else None
+            if refs is not None:
+                remember_refs(user_email, scope, device_id, refs)
+            elif op in REF_RESET_OPS:
+                _REFS.pop(_ref_key(user_email, scope, device_id), None)
         except Exception as exc:
             message = str(exc) if isinstance(exc, DeviceError) else f'internal error: {type(exc).__name__}'
             try:

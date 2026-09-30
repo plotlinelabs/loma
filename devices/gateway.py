@@ -33,7 +33,7 @@ WAIT_SECONDS = 90  # below the worker's 120 s per-call RPC timeout
 TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'device.app',
          'device.input', 'device.observe', 'device.run_flow'}
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
-INPUT_ACTIONS = {'tap', 'swipe', 'type', 'key', 'open_url', 'set_text', 'clear_text', 'tap_text', 'wait_for',
+INPUT_ACTIONS = {'animations', 'tap', 'swipe', 'type', 'key', 'open_url', 'set_text', 'clear_text', 'tap_text', 'wait_for',
                  'scroll_until_visible'}
 OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs'}
 
