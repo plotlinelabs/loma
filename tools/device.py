@@ -32,6 +32,9 @@ Commands:
   device.py ... record --device-id ID --duration S [--app-id PKG [--extra K=V ...]]
   device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console]
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
+  device.py ... netcap --device-id ID --action start|stop|read [--filter /sdk/] [--limit N]   (Android)
+  device.py ... plotline-check --device-id ID --product-id P --user-id U [--flow-id F] [--since S]
+  device.py ... visual-check --device-id ID --expect "bottom sheet with a Claim button, nothing clipped"
   device.py ... configure --device-id ID [--locale ar-SA --app-id PKG] [--timezone Asia/Dubai]
                 [--clock-offset SECONDS] [--location LAT,LON] [--dark-mode on|off] [--font-scale 1.3]
                 [--grant PERM ... --revoke PERM ... --app-id PKG] | --reset
@@ -228,6 +231,16 @@ def build_body(args):
         if args.source:
             log_args['source'] = args.source
         return {**call, 'op': 'logs', 'args': log_args}
+    if args.command == 'netcap':
+        call_args = {'action': args.action, **({'filter': args.filter} if args.filter else {}),
+                     **({'limit': args.limit} if args.limit else {})}
+        return {**call, 'op': 'netcap', 'args': call_args}
+    if args.command == 'plotline-check':
+        call_args = {'product_id': args.product_id, 'user_id': args.user_id,
+                     **({'flow_id': args.flow_id} if args.flow_id else {}), **({'since_s': args.since} if args.since else {})}
+        return {**call, 'action': 'plotline_check', 'args': call_args}
+    if args.command == 'visual-check':
+        return {**call, 'action': 'visual_check', 'args': {'expect': args.expect}}
     if args.command == 'configure':
         if args.reset:
             return {**call, 'op': 'configure', 'args': {'reset': True}}
@@ -311,6 +324,16 @@ def parser():
     s.add_argument('--ref', help='Element ref from the latest ui-tree (e.g. e3)')
     s.add_argument('--x', type=int)
     s.add_argument('--y', type=int)
+    s = with_device('netcap')
+    s.add_argument('--action', required=True, choices=['start', 'stop', 'read'])
+    s.add_argument('--filter', help='URL substring, e.g. /sdk/')
+    s.add_argument('--limit', type=int)
+    s = with_device('plotline-check')
+    s.add_argument('--product-id', required=True)
+    s.add_argument('--user-id', required=True)
+    s.add_argument('--flow-id')
+    s.add_argument('--since', type=int, metavar='SECONDS', help='Look back this far (default 900)')
+    with_device('visual-check').add_argument('--expect', required=True)
     s = with_device('configure')
     s.add_argument('--app-id', help='Needed for --locale (per-app language) and --grant/--revoke')
     s.add_argument('--locale', help='e.g. ar-SA (RTL), hi-IN')

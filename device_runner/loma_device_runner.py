@@ -141,6 +141,53 @@ BOOT_TIMEOUT = 360
 IDLE_SHUTDOWN_S = 1800  # a device this runner booted is shut down after this long without calls
 RUNNER_DEVICE = '-'  # the `device` of runner-level calls (boot), which have no device yet
 UPDATE_EXIT_CODE = 75  # non-zero: launchd (KeepAlive SuccessfulExit=false) and systemd (on-failure) restart us
+# Network capture: mitmdump on this machine's loopback only; the emulator reaches it as 10.0.2.2.
+NETCAP_PORTS = range(18080, 18120)
+NETCAP_MAX_FILE = 20 * 1024 * 1024
+NETCAP_ADDON = r'''
+"""Loma network capture addon (written by the Loma Device Runner). One JSON line per flow."""
+import json, os, time
+OUT = os.environ["LOMA_NETCAP_OUT"]
+LIMIT = int(os.environ.get("LOMA_NETCAP_LIMIT", "20971520"))
+SECRET = {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token", "apikey",
+          "api-key", "x-access-token"}
+BODY = 4096
+
+def _headers(headers):
+    return {k: ("<redacted>" if k.lower() in SECRET else v[:300]) for k, v in list(headers.items())[:40]}
+
+def _body(message):
+    try:
+        text = message.get_text(strict=False)
+    except Exception:
+        return None
+    return None if text is None else text[:BODY]
+
+def _write(entry):
+    try:
+        if os.path.exists(OUT) and os.path.getsize(OUT) > LIMIT:
+            return
+        with open(OUT, "a") as handle:
+            handle.write(json.dumps(entry, default=str) + "\n")
+    except OSError:
+        pass
+
+def response(flow):
+    request, reply = flow.request, flow.response
+    _write({"t": request.timestamp_start, "method": request.method, "url": request.pretty_url[:2000],
+            "status": reply.status_code, "ms": int(((reply.timestamp_end or time.time()) - request.timestamp_start) * 1000),
+            "req_headers": _headers(request.headers), "req_body": _body(request),
+            "res_type": reply.headers.get("content-type", "")[:100], "res_body": _body(reply)})
+
+def error(flow):
+    request = flow.request
+    _write({"t": request.timestamp_start if request else time.time(), "method": request.method if request else None,
+            "url": request.pretty_url[:2000] if request else None, "error": str(flow.error)[:300]})
+
+def tls_failed_client(data):
+    sni = getattr(getattr(data, "conn", None), "sni", None)
+    _write({"t": time.time(), "tls_failed": True, "host": str(sni or "")[:200]})
+'''
 MAX_SCRIPT_BYTES = 2 * 1024 * 1024
 
 
@@ -850,6 +897,20 @@ class Android:
         await run([self.adb, '-s', serial, 'emu', 'kill'], timeout=30, check=False)
         return {'shutdown': serial}
 
+    async def set_proxy(self, serial, port):
+        """Route the device's HTTP(S) through 127.0.0.1:port on this machine (None clears it)."""
+        if port is None:
+            await run(self._sh(serial, 'settings', 'put', 'global', 'http_proxy', ':0'), timeout=15, check=False)
+            if not serial.startswith('emulator-'):
+                await run([self.adb, '-s', serial, 'reverse', '--remove-all'], timeout=15, check=False)
+            return
+        if serial.startswith('emulator-'):
+            host = '10.0.2.2'  # the emulator's alias for this machine's loopback
+        else:  # physical device: tunnel the device's own loopback port back to this machine
+            await run([self.adb, '-s', serial, 'reverse', f'tcp:{port}', f'tcp:{port}'], timeout=15)
+            host = '127.0.0.1'
+        await run(self._sh(serial, 'settings', 'put', 'global', 'http_proxy', f'{host}:{port}'), timeout=15)
+
     async def capture(self, serial):
         return 'png', await self.screenshot(serial)
 
@@ -1366,7 +1427,7 @@ class Runner:
     OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
            'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow',
            'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record',
-           'animations', 'configure', 'boot', 'shutdown'}
+           'animations', 'configure', 'boot', 'shutdown', 'netcap'}
     APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
     LAUNCHING_OPS = {'burst', 'record'}  # may launch app_id right before capturing
     CACHE_KEEP = 4
@@ -1388,6 +1449,8 @@ class Runner:
         self.booted_path = Path(config.get('state_dir') or CONFIG_DIR) / 'booted.json'
         self.booted = self._load_booted()  # serial -> {template, platform, clone, last_used}: devices WE booted
         self.boot_lock = None  # created lazily on the running loop (3.9 binds locks at creation)
+        self.netcap_dir = Path(config.get('state_dir') or CONFIG_DIR) / 'netcap'
+        self.captures = {}  # serial -> {'proc', 'port', 'path'}
         self.calls = set()  # in-flight call tasks; a self-update waits for these to finish
         self.update_task = None
         self.exit_code = None  # set when the runner should exit (e.g. restart into an updated script)
@@ -1404,7 +1467,125 @@ class Runner:
             caps.append('self_update')
         if self.templates:
             caps.append('lifecycle')
+        if shutil.which('mitmdump') and any(d.platform == 'android' for d in self.drivers):
+            caps.append('netcap')
         return caps
+
+    # ── Network capture (Android) ──
+
+    def _save_captures(self):
+        try:
+            self.netcap_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            (self.netcap_dir / 'active.json').write_text(json.dumps(sorted(self.captures)))
+        except OSError:
+            pass
+
+    async def clear_stale_proxies(self):
+        """A capture left running by a crashed/restarted runner leaves the device pointing at a dead proxy
+        (no network at all), so clear the proxy of every device that was being captured."""
+        try:
+            stale = json.loads((self.netcap_dir / 'active.json').read_text())
+        except (OSError, ValueError):
+            return
+        for serial in stale if isinstance(stale, list) else []:
+            if serial in self.captures:  # a live capture in this process (just a reconnect): keep it
+                continue
+            entry = self.inventory.get(serial) if isinstance(serial, str) else None
+            if entry is not None and entry[0].platform == 'android':
+                await entry[0].set_proxy(serial, None)
+        self._save_captures()
+
+    async def netcap(self, driver, serial, args):
+        action = args.get('action')
+        if action not in ('start', 'stop', 'read'):
+            raise OpError('Invalid action (start, stop or read)')
+        if driver.platform != 'android':
+            raise OpError('Network capture is Android-only for now (iOS simulators use the Mac network stack)')
+        if action == 'start':
+            return await self._netcap_start(driver, serial)
+        if action == 'stop':
+            return await self._netcap_stop(driver, serial)
+        return self._netcap_read(serial, need_str(args, 'filter', max_len=200, optional=True),
+                                 need_int(args, 'limit', 1, 200, default=50))
+
+    async def _netcap_start(self, driver, serial):
+        capture = self.captures.get(serial)
+        if capture is not None and capture['proc'].poll() is None:
+            return {'capturing': True, 'port': capture['port'], 'note': 'Already capturing'}
+        mitmdump = shutil.which('mitmdump')
+        if not mitmdump:
+            raise OpError('mitmdump is not installed on the runner machine: brew install mitmproxy (or pipx install '
+                          'mitmproxy), then re-run setup')
+        self.netcap_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        addon, path = self.netcap_dir / 'loma_netcap.py', self.netcap_dir / f'{serial}.jsonl'
+        addon.write_text(NETCAP_ADDON)
+        path.write_bytes(b'')
+        used = {c['port'] for c in self.captures.values()}
+        port = next((p for p in NETCAP_PORTS if p not in used and not port_in_use(p)), None)
+        if port is None:
+            raise OpError('No free local port for the capture proxy')
+        env = {**os.environ, 'LOMA_NETCAP_OUT': str(path), 'LOMA_NETCAP_LIMIT': str(NETCAP_MAX_FILE)}
+        with open(self.netcap_dir / f'{serial}.log', 'ab') as log:
+            # Loopback only: nothing on the LAN can use this proxy.
+            proc = subprocess.Popen([mitmdump, '-q', '--listen-host', '127.0.0.1', '--listen-port', str(port),
+                                     '-s', str(addon)], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                    env=env, start_new_session=True)
+        for _ in range(60):
+            if proc.poll() is not None:
+                raise OpError('mitmdump exited on start: ' + (self.netcap_dir / f'{serial}.log').read_text(
+                    errors='replace')[-300:])
+            if port_in_use(port):
+                break
+            await asyncio.sleep(0.25)
+        else:
+            proc.kill()
+            raise OpError('mitmdump did not start listening')
+        try:
+            await driver.set_proxy(serial, port)
+        except BaseException:
+            proc.kill()
+            raise
+        self.captures[serial] = {'proc': proc, 'port': port, 'path': path}
+        self._save_captures()
+        return {'capturing': True, 'port': port, 'ca_cert': str(Path.home() / '.mitmproxy' / 'mitmproxy-ca-cert.cer'),
+                'note': 'HTTPS is readable only for debug builds that trust user CAs, with this mitmproxy CA '
+                        'installed on the device (bake it into the template snapshot). Hosts that reject the '
+                        'proxy show up as tls_failures. Stop the capture (or release) to restore the network.'}
+
+    async def _netcap_stop(self, driver, serial):
+        await driver.set_proxy(serial, None)  # first: the device must never keep a dead proxy
+        capture = self.captures.pop(serial, None)
+        self._save_captures()
+        if capture is not None and capture['proc'].poll() is None:
+            capture['proc'].terminate()
+            try:
+                await asyncio.wait_for(asyncio.to_thread(capture['proc'].wait), 10)
+            except asyncio.TimeoutError:
+                capture['proc'].kill()
+        return {'capturing': False, **self._netcap_read(serial, None, 1)}
+
+    def _netcap_read(self, serial, needle, limit):
+        path = self.netcap_dir / f'{serial}.jsonl'
+        flows, tls = [], set()
+        try:
+            with open(path, 'rb') as handle:
+                handle.seek(max(0, path.stat().st_size - NETCAP_MAX_FILE))
+                lines = handle.read().decode('utf-8', 'replace').splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if entry.get('tls_failed'):
+                tls.add(str(entry.get('host') or '?'))
+            elif not needle or needle.lower() in str(entry.get('url') or '').lower():
+                flows.append(entry)
+        return {'flows': flows[-limit:], 'matched': len(flows), 'tls_failures': sorted(tls)[:50],
+                'capturing': serial in self.captures}
 
     def template_list(self):
         platforms = {d.platform for d in self.drivers}
@@ -1556,7 +1737,11 @@ class Runner:
         if op == 'animations':
             return await driver.animations(serial, need_bool(args, 'enabled'))
         if op == 'shutdown':
+            if serial in self.captures:
+                await self._netcap_stop(driver, serial)
             return await self.shutdown(driver, serial)
+        if op == 'netcap':
+            return await self.netcap(driver, serial, args)
         if op == 'configure':
             if need_bool(args, 'reset'):
                 saved = self.saved_settings.pop(serial, {})
@@ -1872,6 +2057,10 @@ class Runner:
                 'os': f'{platform.system()} {platform.release()}', 'capabilities': self.capabilities(),
                 'devices': devices, 'templates': self.template_list()})
             print(f'Connected to {self.config["server"]} with {len(devices)} device(s)', flush=True)
+            try:
+                await self.clear_stale_proxies()
+            except Exception:
+                pass
             beat = asyncio.create_task(self.heartbeat(ws))
             # A dead heartbeat would leave a silent socket the server marks offline: reconnect instead.
             beat.add_done_callback(lambda task: task.cancelled() or asyncio.ensure_future(ws.close()))

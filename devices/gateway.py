@@ -36,7 +36,7 @@ TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'dev
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
 INPUT_ACTIONS = {'animations', 'tap', 'swipe', 'type', 'key', 'open_url', 'set_text', 'clear_text', 'tap_text', 'wait_for',
                  'scroll_until_visible'}
-OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs', 'record', 'burst'}
+OBSERVE_ACTIONS = {'screenshot', 'ui_tree', 'logs', 'record', 'burst', 'network', 'plotline', 'visual'}
 
 
 def failure(message, **extra):
@@ -128,9 +128,33 @@ class DeviceTools:
         if tool == 'device.input':
             return await service.call(owner, scope, device_id, _action(args, 'action', INPUT_ACTIONS), args)
         if tool == 'device.configure':
-            return await service.call(owner, scope, device_id, 'configure', args)
+            capture = args.pop('capture_network', None)
+            result = {}
+            if capture is not None:
+                if type(capture) is not bool:
+                    raise DeviceError('capture_network must be true or false')
+                result['network_capture'] = await service.call(owner, scope, device_id, 'netcap',
+                                                               {'action': 'start' if capture else 'stop'})
+            if args or capture is None:
+                result.update(await service.call(owner, scope, device_id, 'configure', args))
+            return result
         if tool == 'device.observe':
             what = _action(args, 'what', OBSERVE_ACTIONS)
+            if what == 'network':
+                return await service.call(owner, scope, device_id, 'netcap', {'action': 'read', **_pick(
+                    args, set(), {'filter', 'limit'}, 'device.observe network')})
+            if what == 'plotline':
+                return await service.plotline_check(owner, scope, device_id, _pick(
+                    args, {'product_id', 'user_id'}, {'flow_id', 'since_s'}, 'device.observe plotline'))
+            if what == 'visual':
+                picked = _pick(args, {'expect'}, set(), 'device.observe visual')
+                verdict = await service.visual_check(owner, scope, device_id, picked['expect'])
+                png = verdict.pop('png')
+                try:
+                    verdict['screenshot'] = await self._store_png(png, 'visual')
+                except DeviceError:
+                    pass  # the verdict still stands without the evidence file
+                return verdict
             if what == 'record' and self.recordings >= MAX_RECORDINGS:
                 raise DeviceError(f'Recording limit for this run reached ({MAX_RECORDINGS}); keep recordings for '
                                   'the final evidence')

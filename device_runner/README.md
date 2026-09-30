@@ -118,6 +118,32 @@ name, emulator flags or a simulator of its choice.
 
 Devices booted for a session shut down when it releases them. Run `setup` again after editing.
 
+## Network capture (Android, optional)
+
+With `mitmdump` installed (`brew install mitmproxy`, then re-run `setup`), the agent can route an
+Android device through a capture proxy (`device.configure capture_network=true`) and read the
+HTTP calls it made, with Plotline SDK calls (`/sdk/init`, `/sdk/campaign/trigger`, ...) grouped per
+endpoint. The proxy listens on this machine's loopback only (emulators reach it as `10.0.2.2`,
+physical devices through `adb reverse`). Authorization, cookie and API-key headers are redacted
+and bodies are cut to 4 KB before anything leaves the machine.
+
+- HTTPS content is only readable for **debug builds that trust user CAs**
+  (`<debug-overrides><trust-anchors><certificates src="user"/>` in the network security config)
+  with the mitmproxy CA (`~/.mitmproxy/mitmproxy-ca-cert.cer`) installed on the device. Install it
+  once in the AVD and save that state into the template's clean snapshot.
+- Release builds and pinned hosts reject the proxy; they are reported as `tls_failures`, and the
+  app may show network errors while the capture runs.
+- The capture stops, and the device proxy is cleared, on `capture_network=false`, on release and
+  when a crashed runner comes back.
+
+## Backend settings for verification
+
+| Setting | Purpose |
+|---|---|
+| `LOMA_DEVICE_PLOTLINE_PRODUCTS` | Comma-separated Plotline product IDs the agent may query with `device.observe what=plotline`. Keep it to test products. Unset = the check is off. |
+| ClickHouse integration, or `LOMA_DEVICE_CLICKHOUSE_URL` / `_USER` / `_PASSWORD` / `_DATABASE` | Where the Plotline analytics check reads events, triggers and flow actions (read-only GET queries with typed parameters). |
+| `ANTHROPIC_API_KEY` (or another Anthropic credential on the backend), `LOMA_DEVICE_VISION_MODEL` | The `visual` check (default model `claude-opus-5-5`). The screenshot goes to the Anthropic API. |
+
 Run `setup` again after editing the policy to restart the runner.
 
 ## Tips for reliable agent testing

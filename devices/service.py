@@ -18,6 +18,7 @@ from pymongo.errors import DuplicateKeyError
 from devices import store
 from devices.builds import GITHUB_FETCH_TIMEOUT, blobs as default_blobs
 from devices.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError, hub as default_hub
+from devices.verify import plotline_activity, summarize_network, visual_check as judge_screenshot
 
 LEASE_TTL = timedelta(minutes=15)
 MAX_WAIT_ONLINE = 600
@@ -69,6 +70,8 @@ OPS = {
     # everything this runner changed on the device; release does that automatically.
     'configure': (set(), {'locale', 'timezone', 'clock_offset_s', 'location', 'dark_mode', 'font_scale',
                           'app_id', 'grant', 'revoke', 'reset'}),
+    # Android network capture through a loopback mitmproxy on the runner machine.
+    'netcap': ({'action'}, {'filter', 'limit'}),
 }
 CONFIGURE_SETTINGS = {'locale', 'timezone', 'clock_offset_s', 'location', 'dark_mode', 'font_scale', 'grant', 'revoke'}
 LOCALE = re.compile(r'[a-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}\Z')
@@ -81,10 +84,11 @@ BACKEND_ARGS = {'ui_tree': {'compact', 'clickable_only', 'filter'}, 'run_flow': 
 INTS = {'x': (0, 10000), 'y': (0, 10000), 'x1': (0, 10000), 'y1': (0, 10000), 'x2': (0, 10000),
         'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 60),
         'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 20),
-        'wait_s': (0, MAX_WAIT), 'clock_offset_s': (-MAX_CLOCK_OFFSET, MAX_CLOCK_OFFSET)}
+        'wait_s': (0, MAX_WAIT), 'clock_offset_s': (-MAX_CLOCK_OFFSET, MAX_CLOCK_OFFSET), 'limit': (1, 200)}
 BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled',
          'dark_mode', 'reset'}
-ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'}}
+ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'},
+         'action': {'start', 'stop', 'read'}}
 STRS = {'url': 2000, 'text': 500, 'filter': 200, 'flow': 64 * 1024, 'key': 32, 'app_id': 255, 'upload_id': 64,
         'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8, 'locale': 35, 'timezone': 64}
 REF = re.compile(r'e[1-9][0-9]{0,3}\Z')
@@ -108,7 +112,7 @@ NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
                    'install': {'grant_appops', 'grant_privacy', 'force'}, 'logs': {'source'}}
 # Minimum runner version per op; ops not listed work on every runner.
 OP_MIN_RUNNER = {**{op: NEEDS_RUNNER for op in NEW_RUNNER_OPS}, 'configure': (1, 2, 0), 'boot': (1, 2, 0),
-                 'shutdown': (1, 2, 0)}
+                 'shutdown': (1, 2, 0), 'netcap': (1, 2, 0)}
 TEMPLATE = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
 
 
@@ -603,6 +607,12 @@ class DeviceService:
         lease = await self.db.device_leases.find_one_and_delete(
             {'_id': device_id, 'owner_email': user_email, 'scope': scope})
         result = {'released': lease is not None}
+        if lease is not None and lease.get('netcap'):  # never leave a device pointing at the capture proxy
+            try:
+                await self.hub.call(runner['runner_id'], 'netcap', serial, {'action': 'stop'})
+                result['capture_stopped'] = True
+            except DeviceError:
+                result['capture_stopped'] = False
         # A clean boot is discarded at shutdown anyway, so only restore settings on devices that persist.
         if lease is not None and lease.get('configured') and not (lease.get('booted') and lease.get('clean')):
             result['settings_restored'] = await self._restore_settings(runner['runner_id'], serial)
@@ -689,6 +699,9 @@ class DeviceService:
             if op == 'configure':  # release restores the device only when this session changed it
                 await self.db.device_leases.update_one({'_id': device_id}, {'$set': {
                     'configured': not args.get('reset', False)}})
+            if op == 'netcap' and args['action'] in ('start', 'stop'):  # release stops a capture left running
+                await self.db.device_leases.update_one({'_id': device_id}, {'$set': {
+                    'netcap': args['action'] == 'start'}})
             if ref is not None:
                 data = {**data, 'ref': ref}
             if build_meta:
@@ -722,6 +735,8 @@ class DeviceService:
         elif op == 'ui_tree':
             data = compact_tree(data, local.get('compact', False), local.get('clickable_only', False),
                                 local.get('filter'))
+        elif op == 'netcap' and 'flows' in data:
+            data = summarize_network(data)
         elif op == 'run_flow':
             shots = [{'name': s.get('name'), 'png': _decode(s.get('png_base64'), 'flow screenshot')}
                      for s in data.pop('screenshots', None) or []]
@@ -729,6 +744,40 @@ class DeviceService:
             if shots:
                 data['screenshots'] = shots
         return data
+
+    # ── Verification (backend-side, text results only) ───────────────────
+
+    async def _hold(self, user_email, scope, device_id):
+        """These checks belong to a device session: the caller must hold (or be able to take) the lease."""
+        self._check_scope(scope)
+        await self._resolve(user_email, device_id)
+        if await self._acquire(device_id, user_email, scope) is None:
+            raise DeviceError('Device is leased by another session. Pick another device or wait for it to be released.')
+
+    async def plotline_check(self, user_email, scope, device_id, args):
+        await self._hold(user_email, scope, device_id)
+        started = time.monotonic()
+        detail = {k: args[k] for k in ('product_id', 'flow_id', 'since_s') if k in args}
+        try:
+            result = await plotline_activity(args)
+        except DeviceError as exc:
+            await self._audit(user_email, scope, device_id, 'plotline_check', False, str(exc), started, detail)
+            raise
+        await self._audit(user_email, scope, device_id, 'plotline_check', True, None, started, detail)
+        return result
+
+    async def visual_check(self, user_email, scope, device_id, expect):
+        """Screenshot (through the normal op path, so it is leased and audited) judged by a vision model."""
+        shot = await self.call(user_email, scope, device_id, 'screenshot', {})
+        started = time.monotonic()
+        try:
+            verdict = await judge_screenshot(shot['png'], expect)
+        except DeviceError as exc:
+            await self._audit(user_email, scope, device_id, 'visual_check', False, str(exc), started)
+            raise
+        await self._audit(user_email, scope, device_id, 'visual_check', True, None, started,
+                          {'passed': verdict['passed']})
+        return {**verdict, 'png': shot['png']}
 
     async def _prepare_install(self, user_email, runner_id, args, local=None):
         local = local or {}

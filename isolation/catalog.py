@@ -120,14 +120,18 @@ CATALOG = [
         'key': {'type': 'string', 'enum': ['back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up',
                                            'volume_down', 'power', 'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup']},
         'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}, ['device_id', 'action']),
-    _tool('device.observe', 'Observe the device: ui_tree (visible elements with a ref, text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true), record (an mp4 of duration_s seconds, max 20, 2 per run; app_id launches the app as recording starts) or burst (count screenshots every interval_ms, e.g. to catch a nudge animating in). record and burst are shown to the user as evidence; keep them for the final proof.', {
-        'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs', 'record', 'burst']},
+    _tool('device.observe', 'Observe the device: ui_tree (visible elements with a ref, text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true), record (an mp4 of duration_s seconds, max 20, 2 per run; app_id launches the app as recording starts) or burst (count screenshots every interval_ms, e.g. to catch a nudge animating in). record and burst are shown to the user as evidence; keep them for the final proof. Verification: network (HTTP calls captured since device.configure capture_network=true, Plotline SDK calls grouped by endpoint; filter by URL substring, limit), plotline (the test user\'s events, campaign triggers and flow shows/clicks from Plotline analytics; needs product_id and user_id, optional flow_id for a triggered/shown/clicked verdict, since_s), visual (a vision model judges the current screen against expect, e.g. "bottom sheet with a Claim button, nothing clipped"; supporting evidence only).', {
+        'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs', 'record', 'burst',
+                                                               'network', 'plotline', 'visual']},
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 200}, 'product_id': {'type': 'string', 'maxLength': 64},
+        'user_id': {'type': 'string', 'maxLength': 200}, 'flow_id': {'type': 'string', 'maxLength': 64},
+        'since_s': {'type': 'integer', 'minimum': 60, 'maximum': 86400}, 'expect': {'type': 'string', 'maxLength': 500},
         'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': {'type': 'string', 'minLength': 1, 'maxLength': 200},
         'clear': {'type': 'boolean'}, 'compact': {'type': 'boolean'}, 'clickable_only': {'type': 'boolean'},
         'source': {'type': 'string', 'enum': ['auto', 'system', 'console']},
         'duration_s': {'type': 'integer', 'minimum': 1, 'maximum': 20}, 'count': {'type': 'integer', 'minimum': 2, 'maximum': 12},
         'interval_ms': {'type': 'integer', 'minimum': 100, 'maximum': 5000}, 'app_id': TEXT}, ['device_id', 'what']),
-    _tool('device.configure', 'Change device settings for a test: locale (per app, needs app_id; e.g. ar-SA for RTL), timezone (IANA, Android), clock_offset_s (move the clock, Android; e.g. 86400 = tomorrow, for streaks/milestones), location {lat, lon}, dark_mode, font_scale (0.85-2.0), grant / revoke permissions (need app_id; Android CAMERA or android.permission.X, iOS privacy services such as photos, location). Relaunch the app afterwards. Unsupported settings are reported, not fatal. release restores the changed settings automatically; reset=true restores them now.', {
+    _tool('device.configure', 'Change device settings for a test: capture_network (Android: route the device through a capture proxy on the runner so device.observe network shows the HTTP calls; false stops it; release stops it too), locale (per app, needs app_id; e.g. ar-SA for RTL), timezone (IANA, Android), clock_offset_s (move the clock, Android; e.g. 86400 = tomorrow, for streaks/milestones), location {lat, lon}, dark_mode, font_scale (0.85-2.0), grant / revoke permissions (need app_id; Android CAMERA or android.permission.X, iOS privacy services such as photos, location). Relaunch the app afterwards. Unsupported settings are reported, not fatal. release restores the changed settings automatically; reset=true restores them now.', {
         'device_id': TEXT, 'app_id': TEXT,
         'locale': {'type': 'string', 'minLength': 2, 'maxLength': 35}, 'timezone': {'type': 'string', 'minLength': 1, 'maxLength': 64},
         'clock_offset_s': {'type': 'integer', 'minimum': -34560000, 'maximum': 34560000},
@@ -137,7 +141,7 @@ CATALOG = [
         'dark_mode': {'type': 'boolean'}, 'font_scale': {'type': 'number', 'minimum': 0.85, 'maximum': 2.0},
         'grant': {'type': 'array', 'minItems': 1, 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 100}},
         'revoke': {'type': 'array', 'minItems': 1, 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 100}},
-        'reset': {'type': 'boolean'}}, ['device_id']),
+        'reset': {'type': 'boolean'}, 'capture_network': {'type': 'boolean'}}, ['device_id']),
     _tool('device.run_flow', 'Run a Maestro YAML flow on the device. Returns pass/fail, test counts and only the failed steps (verbose=true for the full output and JUnit report); takeScreenshot images are delivered to the user. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
         'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}, 'verbose': {'type': 'boolean'}},
         ['device_id', 'flow']),

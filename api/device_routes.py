@@ -455,6 +455,12 @@ async def handle_internal_call(request):
         if action == 'call':
             data = await service.call(user_email, scope, body.get('device_id'), body.get('op'), body.get('args') or {})
             return web.json_response(_encode_media(data))
+        if action == 'plotline_check':
+            return web.json_response(await service.plotline_check(user_email, scope, body.get('device_id'),
+                                                                  body.get('args') or {}))
+        if action == 'visual_check':
+            data = await service.visual_check(user_email, scope, body.get('device_id'), (body.get('args') or {}).get('expect'))
+            return web.json_response(_encode_media(data))
     except DeviceError as exc:
         return _error(str(exc), 409)
     return _error('Unknown action')
