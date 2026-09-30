@@ -249,9 +249,11 @@ class CodexWorker:
     a replacement in the background.
     """
 
-    def __init__(self, account: dict, model: str | None = None):
+    def __init__(self, account: dict, model: str | None = None, extra_env: dict | None = None):
         self.account = account
         self.model = model or default_codex_model()
+        # Env for a worker started for one run (e.g. LOMA_CONVERSATION_DIR).
+        self.extra_env = dict(extra_env or {})
         self._proc: asyncio.subprocess.Process | None = None
         # Workers are single-use: the tag scopes run-end cleanup to this run.
         self.proc_tag = new_proc_tag()
@@ -428,7 +430,10 @@ class CodexWorker:
         """
         write_managed_codex_config(self.account["config_dir"], mcp_servers or {})
 
-        env = {**os.environ, "CODEX_HOME": self.account["config_dir"], PROC_TAG_ENV: self.proc_tag}
+        env = {
+            **os.environ, **self.extra_env,
+            "CODEX_HOME": self.account["config_dir"], PROC_TAG_ENV: self.proc_tag,
+        }
         env.pop("OPENAI_API_KEY", None)  # subscription auth only — never fall back to API billing
         self._proc = await asyncio.create_subprocess_exec(
             "codex", "app-server",
@@ -744,10 +749,13 @@ async def run_codex_agent(
     source: str = "dashboard",
     user_email: str | None = None,
     user_mcp_overrides: dict | None = None,
+    extra_env: dict | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     """Run one turn through the Codex account pool, yielding dashboard events.
 
     Same event contract as run_opencode_agent / the Claude SDK path.
+    ``extra_env`` reaches the worker only when one is started for this run
+    (per-user MCP overrides); warm pooled workers were started without it.
     """
     from agent.codex_pool import get_codex_pool
 
@@ -766,7 +774,8 @@ async def run_codex_agent(
             shutil.copyfile(Path(worker.account["config_dir"]) / "auth.json",
                             Path(execution_home.name) / "auth.json")
             (Path(execution_home.name) / "auth.json").chmod(0o600)
-            worker = CodexWorker({**borrowed_worker.account, "config_dir": execution_home.name}, model=model_id)
+            worker = CodexWorker({**borrowed_worker.account, "config_dir": execution_home.name},
+                                 model=model_id, extra_env=extra_env)
             from agent.prompt import build_pooled_system_prompt
             await worker.connect(mcp_servers={**pool._mcp_servers(), **user_mcp_overrides},
                                  system_prompt=build_pooled_system_prompt())

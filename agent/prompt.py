@@ -112,7 +112,7 @@ Apps Script notes: the API cannot run scripts or grant their authorization — s
 
 ## Run Lifecycle & Resumable State
 
-Background processes you start (proxies, tunnels, shell loops) are killed when the run ends — finished, stopped, or failed — so never promise the user that something keeps running afterwards. Each conversation has a stable work dir, given as `[Conversation Work Dir: ...]` / `LOMA_CONVERSATION_DIR` in the message. Keep long-lived harness state there in `state.json` (clone path, build SHA, device/simulator config, tunnel URLs, PIDs); when continuing a conversation, read it first and reuse the clone/build instead of starting over, re-checking recorded PIDs/URLs because their processes did not survive the previous run.
+Background processes you start (proxies, tunnels, shell loops) are killed when the run ends — finished, stopped, or failed — so never promise the user that something keeps running afterwards. Each conversation has a stable work dir, given as an absolute path in `[Conversation Work Dir: ...]` in the message; always use that literal path (the `LOMA_CONVERSATION_DIR` env var is not set in every runtime, and an unset `$LOMA_CONVERSATION_DIR/state.json` becomes `/state.json`). Keep long-lived harness state there in `state.json` (clone path, build SHA, device/simulator config, tunnel URLs, PIDs); when continuing a conversation, read it first and reuse the clone/build instead of starting over, re-checking recorded PIDs/URLs because their processes did not survive the previous run.
 """.strip()
 
 

@@ -123,6 +123,12 @@ class _OpenCodeServer:
                 await self.process.wait()
         if self.process is not None:
             await kill_tagged(self.proc_tag)
+        if self.log_file is not None:
+            try:
+                self.log_file.close()
+            except OSError:
+                pass
+            self.log_file = None
 
     async def sweep_detached(self) -> None:
         """Kill background jobs runs left behind, once no turn is in flight.
@@ -134,12 +140,6 @@ class _OpenCodeServer:
             return
         since, self.swept_at_ticks = self.swept_at_ticks, clock_ticks_now()
         await kill_tagged(self.proc_tag, started_after=since, detached_from=self.process.pid)
-        if self.log_file is not None:
-            try:
-                self.log_file.close()
-            except OSError:
-                pass
-            self.log_file = None
 
 
 # Managed OpenCode servers keyed by config hash. Running one server per config
@@ -1329,24 +1329,20 @@ async def _run_opencode_agent(
         logger.info("Reusing OpenCode session %s for conversation=%s model=%s", session_id, conversation_id, selected_model)
     session_created_at = time.perf_counter()
 
-    # Register a stop handle so POST /conversations/{id}/interrupt can abort
-    # this turn. The target is mutable because a retry swaps the session.
+    # Stop handle so POST /conversations/{id}/interrupt can abort this turn.
+    # The target is mutable because a retry swaps the session. It is
+    # registered inside the try below so its finally always unregisters it; a
+    # stop arriving before then is kept as a pending stop and applied.
     active_stream = None
     abort_target = {"session_id": session_id, "base_url": base_url}
-    if conversation_id:
-        from agent.active_streams import RunHandle, register
 
-        async def _abort_turn() -> None:
-            await _request_json(
-                "POST",
-                f"/session/{abort_target['session_id']}/abort",
-                params={"directory": str(PROJECT_ROOT)},
-                timeout=30,
-                base_url=abort_target["base_url"],
-            )
-
-        active_stream = await register(
-            conversation_id, RunHandle(_abort_turn, "OpenCode"), user_email or ""
+    async def _abort_turn() -> None:
+        await _request_json(
+            "POST",
+            f"/session/{abort_target['session_id']}/abort",
+            params={"directory": str(PROJECT_ROOT)},
+            timeout=30,
+            base_url=abort_target["base_url"],
         )
 
     pool_status = get_opencode_pool_status()
@@ -1556,6 +1552,12 @@ async def _run_opencode_agent(
     server.active_turns += 1
     attempt = 1
     try:
+        if conversation_id:
+            from agent.active_streams import RunHandle, register
+
+            active_stream = await register(
+                conversation_id, RunHandle(_abort_turn, "OpenCode"), user_email or ""
+            )
         while True:
             if active_stream is not None and active_stream.stopped:
                 logger.info("Stop requested before the OpenCode turn started; skipping prompt")

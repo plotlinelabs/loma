@@ -114,13 +114,17 @@ async def _record_flow_run(db, flow_id, conversation_id):
 
 async def _handle_agent_request(
     client, channel, thread_ts, event_ts, prompt, context, files, source, user_id,
-    flow_id=None,
+    flow_id=None, message_has_files=None,
 ):
     """Common flow: hourglass \u2192 observer \u2192 stream agent \u2192 post responses.
 
     Used by app_mention, DM, monitored-channel, and Slack-flow handlers to avoid
     duplication. When ``flow_id`` is set, the run is attributed to that flow.
+    ``message_has_files`` says whether this message itself carries files
+    (``files`` may also hold earlier thread files); defaults to ``bool(files)``.
     """
+    if message_has_files is None:
+        message_has_files = bool(files)
     # A deploy is waiting for in-flight runs to finish; tell the user to retry
     # rather than start a run that the restart would cut short.
     if is_draining():
@@ -182,7 +186,11 @@ async def _handle_agent_request(
                 claimed_conversation_id = existing_convo["conversation_id"]
                 run_id = uuid.uuid4().hex
                 if not await active_streams.try_claim(claimed_conversation_id, run_id):
-                    if await _inject_into_active_run(claimed_conversation_id, prompt, db):
+                    # Injection only carries text, so a message with files
+                    # waits for its own run instead of losing them.
+                    if not message_has_files and await _inject_into_active_run(
+                        claimed_conversation_id, prompt, db, user_email,
+                    ):
                         try:
                             await client.reactions_remove(
                                 name=THINKING_EMOJI, channel=channel, timestamp=event_ts,
@@ -202,6 +210,22 @@ async def _handle_agent_request(
                     )
                     while not await active_streams.try_claim(claimed_conversation_id, run_id):
                         await active_streams.wait_for_release(claimed_conversation_id)
+                    # A deploy may have started draining while this waited.
+                    if is_draining():
+                        logger.info(
+                            "[SLACK] Draining for a deploy; dropping queued run in %s/%s",
+                            channel, thread_ts,
+                        )
+                        try:
+                            await client.reactions_remove(
+                                name=THINKING_EMOJI, channel=channel, timestamp=event_ts,
+                            )
+                        except Exception:
+                            pass
+                        await client.chat_postMessage(
+                            channel=channel, text=DRAIN_MESSAGE, thread_ts=thread_ts,
+                        )
+                        return
                 observer = ConversationObserver(
                     db, metadata=metadata,
                     conversation_id=existing_convo["conversation_id"],
@@ -267,10 +291,21 @@ async def _handle_agent_request(
             await active_streams.release_claim(claimed_conversation_id, run_id)
 
 
-async def _inject_into_active_run(conversation_id, prompt, db) -> bool:
-    """Send a follow-up into a running Claude SDK turn; False if unsupported."""
-    stream = await active_streams.get_for_user(conversation_id, "")
-    if stream is None or not active_streams.supports_injection(stream):
+async def _inject_into_active_run(conversation_id, prompt, db, user_email) -> bool:
+    """Send a follow-up into a running Claude SDK turn; False if unsupported.
+
+    Only the run's owner may inject: the run acts with its owner's identity and
+    personal-tool credentials, so another user's (or an unresolved sender's)
+    message waits for its own run instead.
+    """
+    if not user_email:
+        return False
+    stream = await active_streams.get_for_user(conversation_id, user_email)
+    if (
+        stream is None
+        or stream.user_email != user_email
+        or not active_streams.supports_injection(stream)
+    ):
         return False
     try:
         await stream.client.query(prompt)
@@ -338,6 +373,7 @@ def register_handlers(app):
         await _handle_agent_request(
             client, channel, thread_ts, event_ts, prompt, context, files, source, user,
             flow_id=channel_config.get("flow_id") if channel_config else None,
+            message_has_files=bool(raw_files),
         )
 
     @app.event("message")
@@ -430,7 +466,7 @@ def register_handlers(app):
         prompt = text or "What is in this file?"
         await _handle_agent_request(
             client, channel, thread_ts, event_ts, prompt, context, files,
-            "slack_dm", user,
+            "slack_dm", user, message_has_files=bool(raw_files),
         )
 
     @app.event("reaction_added")

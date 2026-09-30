@@ -107,7 +107,7 @@ async def test_codex_override_uses_private_home_and_cleans_up(monkeypatch, tmp_p
     monkeypatch.setattr(codex_pool, 'get_codex_pool', lambda: pool)
     homes = []
     class Worker:
-        def __init__(self, account, model): self.account=account
+        def __init__(self, account, model, **kwargs): self.account=account
         async def connect(self, **kwargs):
             from pathlib import Path
             home = Path(self.account['config_dir']); homes.append(home)

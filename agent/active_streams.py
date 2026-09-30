@@ -54,6 +54,13 @@ class ActiveStream:
     # kept so Stop still reaches that run too.
     superseded: "ActiveStream | None" = None
     ended: bool = False
+    # The task running the run; if it finished without unregistering (crash,
+    # abandoned generator) the handle is dead even though ``ended`` is False.
+    task: asyncio.Task | None = None
+
+    @property
+    def live(self) -> bool:
+        return not self.ended and (self.task is None or not self.task.done())
 
     @property
     def stopped(self) -> bool:
@@ -102,10 +109,11 @@ async def register(conversation_id: str, client: Any, user_email: str) -> Active
         conversation_id=conversation_id,
         client=client,
         user_email=user_email,
+        task=asyncio.current_task(),
     )
     async with _lock:
         existing = _streams.get(conversation_id)
-        if existing is not None and not existing.ended:
+        if existing is not None and existing.live:
             # try_claim should make this impossible; never drop the old
             # handle silently or its run becomes unstoppable.
             logger.error(
@@ -138,7 +146,7 @@ async def unregister(conversation_id: str, stream: ActiveStream) -> None:
         if _streams.get(conversation_id) is not stream:
             return
         previous = stream.superseded
-        if previous is not None and not previous.ended:
+        if previous is not None and previous.live:
             _streams[conversation_id] = previous
         else:
             _streams.pop(conversation_id, None)

@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 PROC_TAG_ENV = "LOMA_PROC_TAG"
 TERM_GRACE_SECONDS = 3.0
+# Upper bound on the run-end kill that gates releasing a conversation claim.
+RUN_END_KILL_TIMEOUT_SECONDS = 10.0
 _PROC = "/proc"
 
 
@@ -139,4 +141,19 @@ async def kill_tagged(tag: str, *, started_after: int | None = None,
         return len(pids)
     except Exception:
         logger.exception("Run process cleanup failed (tag=%s)", tag[:8])
+        return 0
+
+
+async def kill_run_processes(tag, timeout: float = RUN_END_KILL_TIMEOUT_SECONDS) -> int:
+    """Kill a finished run's tagged processes, bounded by ``timeout``.
+
+    Awaited before a run gives up its conversation claim so the next run of
+    that conversation never overlaps the last one's processes.
+    """
+    if not isinstance(tag, str) or not tag:
+        return 0
+    try:
+        return await asyncio.wait_for(kill_tagged(tag), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("Run process cleanup timed out after %.0fs (tag=%s)", timeout, tag[:8])
         return 0

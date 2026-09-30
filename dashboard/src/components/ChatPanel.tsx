@@ -654,7 +654,7 @@ export default function ChatPanel({
   // Enter/click in the same render sees a stale `isStreaming`/`input`.
   const sendInFlightRef = useRef<string | null>(null);
   const handleSendRef = useRef<
-    ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean }) => Promise<void>) | null
+    ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] }) => Promise<void>) | null
   >(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const [editingQueuedIndex, setEditingQueuedIndex] = useState<number | null>(null);
@@ -867,9 +867,8 @@ export default function ChatPanel({
             setQueuedCount(0);
             setItems((prev) => prev.map((item) => (item.queued ? { ...item, queued: false } : item)));
             const combinedFiles = queued.flatMap((q) => q.files || []);
-            if (combinedFiles.length) setPendingFiles(combinedFiles);
             const combinedText = queued.map((q) => q.text).join("\n\n");
-            requestAnimationFrame(() => handleSendRef.current?.(combinedText, { fromQueue: true }));
+            requestAnimationFrame(() => handleSendRef.current?.(combinedText, { fromQueue: true, files: combinedFiles }));
           } else {
             requestAnimationFrame(() => inputRef.current?.focus());
           }
@@ -911,16 +910,22 @@ export default function ChatPanel({
 
   const handleSend = async (
     overrideMessage?: string,
-    { fromQueue, includePendingFiles }: { fromQueue?: boolean; includePendingFiles?: boolean } = {},
+    {
+      fromQueue,
+      includePendingFiles,
+      files: queuedFiles,
+    }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] } = {},
   ) => {
     const displayText = overrideMessage ?? input.trim();
-    if (!displayText && pendingFiles.length === 0) return;
+    // Files that rode a queued message are sent with it, not re-read from the composer.
+    const carriedFiles = queuedFiles && queuedFiles.length > 0 ? queuedFiles : undefined;
+    if (!displayText && pendingFiles.length === 0 && !carriedFiles) return;
     // Double Enter/click before re-render: same text, already on its way.
     if (!isStreaming && sendInFlightRef.current === displayText) return;
 
     if (isStreaming || sendInFlightRef.current !== null) {
       const isOverride = overrideMessage !== undefined;
-      const filesToQueue = !isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined;
+      const filesToQueue = carriedFiles ?? (!isOverride && pendingFiles.length > 0 ? [...pendingFiles] : undefined);
       const fileNames = filesToQueue?.map((f) => f.name);
       const hasFiles = filesToQueue && filesToQueue.length > 0;
 
@@ -963,9 +968,9 @@ export default function ChatPanel({
       : displayText;
 
     const isOverride = overrideMessage !== undefined;
-    const filesToSend = (!isOverride || includePendingFiles) && pendingFiles.length > 0
+    const filesToSend = carriedFiles ?? ((!isOverride || includePendingFiles) && pendingFiles.length > 0
       ? [...pendingFiles]
-      : undefined;
+      : undefined);
     const fileNames = filesToSend?.map((f) => f.name);
     const displayMessage = displayText || `[${fileNames?.join(", ")}]`;
 
@@ -1250,10 +1255,7 @@ export default function ChatPanel({
           if (toSend.length > 0) {
             const combinedText = toSend.map((q) => q.text).join("\n\n");
             const combinedFiles = toSend.flatMap((q) => q.files || []);
-            if (combinedFiles.length) {
-              setPendingFiles(combinedFiles);
-            }
-            requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+            requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true, files: combinedFiles }));
           }
         } else {
           queuedMessagesRef.current = [];
@@ -1263,10 +1265,7 @@ export default function ChatPanel({
           ));
           const combinedText = queued.map((q) => q.text).join("\n\n");
           const combinedFiles = queued.flatMap((q) => q.files || []);
-          if (combinedFiles.length) {
-            setPendingFiles(combinedFiles);
-          }
-          requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true }));
+          requestAnimationFrame(() => handleSend(combinedText, { fromQueue: true, files: combinedFiles }));
         }
       } else if (!enteredRecovery) {
         requestAnimationFrame(() => {

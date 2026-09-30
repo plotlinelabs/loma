@@ -32,6 +32,7 @@ from claude_agent_sdk import (
 
 from agent.pool import get_pool
 from agent.prompt import build_reply_format_reminder
+from agent.run_processes import PROC_TAG_ENV, new_proc_tag
 
 logger = logging.getLogger(__name__)
 
@@ -851,14 +852,21 @@ async def _stream_agent(
             f"tool call, or the conversation the notification points to will be empty."
         )
 
+    # Env for runtime processes started for this run only. Pooled Claude
+    # clients / Codex workers and the shared OpenCode server were started
+    # before the run and can't take it, so the prompt gives the literal path.
+    run_env: dict[str, str] = {}
     if conversation_id:
         conversation_dir = conversation_work_dir(conversation_id)
         if conversation_dir:
+            run_env["LOMA_CONVERSATION_DIR"] = conversation_dir
             text_parts.append(
                 f"[Conversation Work Dir: {conversation_dir}]\n"
-                f"LOMA_CONVERSATION_DIR={conversation_dir} (stable across runs of this "
-                f"conversation; read/update `state.json` there — see Run Lifecycle & "
-                f"Resumable State)."
+                f"This conversation's work dir, stable across its runs, is "
+                f"`{conversation_dir}`: read/update `{conversation_dir}/state.json` "
+                f"(see Run Lifecycle & Resumable State). Always use this literal "
+                f"absolute path; do not use `$LOMA_CONVERSATION_DIR`, which may be "
+                f"unset in your shell."
             )
 
     if conversation_context:
@@ -1015,6 +1023,7 @@ async def _stream_agent(
                 source=source,
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
+                extra_env=run_env,
             ):
                 yield event
         except Exception as e:
@@ -1107,8 +1116,11 @@ async def _stream_agent(
                 enabled_set.add("Skill")
                 allowed_tools = [t for t in allowed_tools if t in enabled_set]
             options.allowed_tools = allowed_tools
-            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"]}
+            # Per-run client: tag it for run-end cleanup and give it the run env.
+            proc_tag = new_proc_tag()
+            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"], PROC_TAG_ENV: proc_tag, **run_env}
             client = ClaudeSDKClient(options=options)
+            client._loma_proc_tag = proc_tag
             await asyncio.wait_for(client.connect(), timeout=90)
             client._pool_account = account
             client._pool_model = options.model
@@ -1128,7 +1140,7 @@ async def _stream_agent(
 
     if client is None:
         try:
-            client = await pool.acquire(model=selected_claude_model)
+            client = await pool.acquire(model=selected_claude_model, extra_env=run_env)
             account = getattr(client, '_pool_account', {})
             account_email = account.get('email')
             active_claude_model = getattr(client, "_pool_model", None) or selected_claude_model
@@ -1838,6 +1850,12 @@ async def stream_agent(prompt: str, conversation_context: str = "", files=None,
             )
             while not await try_claim(conversation_id, run_id):
                 await wait_for_release(conversation_id)
+            # A deploy may have started draining while this waited.
+            from api.drain import DRAIN_MESSAGE, is_draining
+            if is_draining():
+                logger.info("Draining for a deploy; dropping queued run of %s", conversation_id)
+                yield DRAIN_MESSAGE
+                return
             # The finished run marked the conversation completed; flip it back.
             await observer.resume(record_prompt=False)
         if remote_workers_enabled():

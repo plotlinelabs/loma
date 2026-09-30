@@ -29,7 +29,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 from agent.prompt import build_pooled_system_prompt
-from agent.run_processes import PROC_TAG_ENV, kill_tagged, new_proc_tag
+from agent.run_processes import PROC_TAG_ENV, kill_run_processes, kill_tagged, new_proc_tag
 
 logger = logging.getLogger(__name__)
 
@@ -411,15 +411,23 @@ class ClientPool:
             include_partial_messages=True,
         )
 
-    async def _create_client(self, account: dict, model_override: str | None = None) -> ClaudeSDKClient:
-        """Create and connect a new ClaudeSDKClient for a specific account."""
+    async def _create_client(
+        self, account: dict, model_override: str | None = None, extra_env: dict | None = None,
+    ) -> ClaudeSDKClient:
+        """Create and connect a new ClaudeSDKClient for a specific account.
+
+        ``extra_env`` is only meaningful for a one-off client created for a
+        single run; warm pool clients are shared by whichever run takes them.
+        """
         self._warming += 1
         client = None
         try:
             options = self._build_options(model_override=model_override)
             # Clients are single-use, so the tag scopes cleanup to one run.
             proc_tag = new_proc_tag()
-            options.env = {"CLAUDE_CONFIG_DIR": account["config_dir"], PROC_TAG_ENV: proc_tag}
+            options.env = {
+                "CLAUDE_CONFIG_DIR": account["config_dir"], PROC_TAG_ENV: proc_tag, **(extra_env or {}),
+            }
             client = ClaudeSDKClient(options=options)
             client._loma_proc_tag = proc_tag  # type: ignore[attr-defined]
             await asyncio.wait_for(client.connect(), timeout=_env_int("AGENT_CONNECT_TIMEOUT"))
@@ -476,7 +484,7 @@ class ClientPool:
             self._available.put_nowait(client)
         return chosen
 
-    async def acquire(self, model: str | None = None) -> ClaudeSDKClient:
+    async def acquire(self, model: str | None = None, extra_env: dict | None = None) -> ClaudeSDKClient:
         """Get a warm client from the pool.
 
         The pool is bounded — at most pool_size clients exist. Strategy:
@@ -506,7 +514,9 @@ class ClientPool:
                 self._in_use,
             )
             try:
-                return await self._create_client(account, model_override=requested_model)
+                return await self._create_client(
+                    account, model_override=requested_model, extra_env=extra_env,
+                )
             except Exception:
                 self._in_use = max(0, self._in_use - 1)
                 raise
@@ -537,8 +547,13 @@ class ClientPool:
 
         The old client is fully disconnected BEFORE warming a replacement
         to avoid overlapping memory usage (old + new subprocesses coexisting).
+
+        The run's tagged processes are killed before this returns: the caller
+        releases the conversation claim next, and a queued run of the same
+        conversation must not start next to the old run's leftovers.
         """
         self._in_use = max(0, self._in_use - 1)
+        await kill_run_processes(getattr(client, "_loma_proc_tag", None))
         if getattr(client, "_pool_ephemeral", False):
             asyncio.create_task(self.safe_disconnect(client))
             return

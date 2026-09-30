@@ -944,11 +944,15 @@ async def _is_recent_duplicate(db, conversation_id: str, message: str) -> bool:
     return datetime.now(timezone.utc) - sent_at <= timedelta(seconds=CHAT_DUPLICATE_WINDOW_SECONDS)
 
 
-async def _busy_conversation_response(db, conversation_id: str, user_email: str, message: str):
+async def _busy_conversation_response(
+    db, conversation_id: str, user_email: str, message: str, files=None,
+):
     """409 for a message that arrived while the conversation already has a run.
 
     Claude SDK runs take it mid-stream (``injected``); other runtimes can't, so
-    the dashboard queues it and sends it once the current run finishes.
+    the dashboard queues it and sends it once the current run finishes. A
+    message with attachments is always queued: injection only carries text,
+    so its files would be silently dropped.
     """
     from agent.active_streams import get_for_user, supports_injection
 
@@ -959,7 +963,7 @@ async def _busy_conversation_response(db, conversation_id: str, user_email: str,
             {**body, "duplicate": True, "error": "Already sent — the agent is working on it."},
             status=409,
         )
-    stream = await get_for_user(conversation_id, user_email)
+    stream = None if files else await get_for_user(conversation_id, user_email)
     if stream is not None and supports_injection(stream):
         try:
             await stream.client.query(message)
@@ -1039,207 +1043,210 @@ async def handle_chat(request: web.Request) -> web.Response:
     run_id = None
     db = get_db()
     existing_conversation_id = body.get("conversation_id")
-    if db is not None:
-        metadata = {
-            "source": "dashboard",
-            "prompt": message,
-            "model": selected_model or os.environ.get("AGENT_DEFAULT_MODEL", "opencode-go/deepseek-v4-flash"),
-            "user_name": user_email,
-        }
-        if existing_conversation_id:
-            # Check if conversation already exists (resume) or is client-generated (start)
-            existing = await db.conversations.find_one(
-                {"conversation_id": existing_conversation_id},
-                {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1},
-            )
-            if existing and not _check_conversation_access(
-                existing, user_email, get_system_role(request)
-            ):
-                return web.json_response({"error": "Not found"}, status=404)
-            # One active run per conversation: a second concurrent run would
-            # fight the first over devices, proxies, files and branches. The
-            # claim is taken before the message is recorded, so a busy
-            # conversation never gets a duplicate user message either.
-            from agent.active_streams import try_claim
-            run_id = uuid.uuid4().hex
-            if not await try_claim(existing_conversation_id, run_id):
-                return await _busy_conversation_response(
-                    db, existing_conversation_id, user_email, message,
-                )
-
-        # Agent identity: an explicit selection wins; resumed conversations fall
-        # back to the agent pinned on the conversation.
-        requested_agent_id = body.get("agent_id")
-        if requested_agent_id is not None and not isinstance(requested_agent_id, str):
-            return web.json_response({"error": "agent_id must be a string"}, status=400)
-        pinned_agent_id = ((existing or {}).get("metadata") or {}).get("agent_id")
-        if requested_agent_id:
-            agent_identity = await resolve_agent_for_chat(db, requested_agent_id, user_email)
-            if agent_identity is None:
-                return web.json_response({"error": "Agent not found"}, status=404)
-        elif pinned_agent_id:
-            # Pinned agent may have been deleted, disabled, or unshared since —
-            # degrade to the default agent rather than blocking the conversation.
-            agent_identity = await resolve_agent_for_chat(db, pinned_agent_id, user_email)
-        if agent_identity:
-            metadata["agent_id"] = agent_identity["agent_id"]
-            metadata["agent_name"] = agent_identity["name"]
-            if existing and pinned_agent_id != agent_identity["agent_id"]:
-                await db.conversations.update_one(
+    try:
+        if db is not None:
+            metadata = {
+                "source": "dashboard",
+                "prompt": message,
+                "model": selected_model or os.environ.get("AGENT_DEFAULT_MODEL", "opencode-go/deepseek-v4-flash"),
+                "user_name": user_email,
+            }
+            if existing_conversation_id:
+                # Check if conversation already exists (resume) or is client-generated (start)
+                existing = await db.conversations.find_one(
                     {"conversation_id": existing_conversation_id},
-                    {"$set": {
-                        "metadata.agent_id": agent_identity["agent_id"],
-                        "metadata.agent_name": agent_identity["name"],
-                    }},
+                    {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1},
                 )
+                if existing and not _check_conversation_access(
+                    existing, user_email, get_system_role(request)
+                ):
+                    return web.json_response({"error": "Not found"}, status=404)
+                # One active run per conversation: a second concurrent run would
+                # fight the first over devices, proxies, files and branches. The
+                # claim is taken before the message is recorded, so a busy
+                # conversation never gets a duplicate user message either.
+                from agent.active_streams import try_claim
+                run_id = uuid.uuid4().hex
+                if not await try_claim(existing_conversation_id, run_id):
+                    return await _busy_conversation_response(
+                        db, existing_conversation_id, user_email, message, files,
+                    )
 
-        if existing_conversation_id:
-            observer = ConversationObserver(
-                db, metadata=metadata,
-                conversation_id=existing_conversation_id,
-            )
-            if existing:
-                if existing.get("task_status") == "todo":
-                    # Sending on a staged board task flips it to active. This
-                    # covers both fresh drafts (set started_at — resume() never
-                    # does, and Activity sorts by it) and parked chats resumed
-                    # from a lane (keep their original timestamps).
-                    now = datetime.now(timezone.utc)
-                    flip: dict = {"task_status": "active"}
-                    if not existing.get("started_at"):
-                        flip["started_at"] = now
-                        flip["task_started_at"] = now
+            # Agent identity: an explicit selection wins; resumed conversations fall
+            # back to the agent pinned on the conversation.
+            requested_agent_id = body.get("agent_id")
+            if requested_agent_id is not None and not isinstance(requested_agent_id, str):
+                return web.json_response({"error": "agent_id must be a string"}, status=400)
+            pinned_agent_id = ((existing or {}).get("metadata") or {}).get("agent_id")
+            if requested_agent_id:
+                agent_identity = await resolve_agent_for_chat(db, requested_agent_id, user_email)
+                if agent_identity is None:
+                    return web.json_response({"error": "Agent not found"}, status=404)
+            elif pinned_agent_id:
+                # Pinned agent may have been deleted, disabled, or unshared since —
+                # degrade to the default agent rather than blocking the conversation.
+                agent_identity = await resolve_agent_for_chat(db, pinned_agent_id, user_email)
+            if agent_identity:
+                metadata["agent_id"] = agent_identity["agent_id"]
+                metadata["agent_name"] = agent_identity["name"]
+                if existing and pinned_agent_id != agent_identity["agent_id"]:
                     await db.conversations.update_one(
                         {"conversation_id": existing_conversation_id},
-                        # Draft attachments ride the first message (the client
-                        # seeds them as pending files) — drop the staged copy.
-                        {"$set": flip, "$unset": {"draft_files": ""}},
+                        {"$set": {
+                            "metadata.agent_id": agent_identity["agent_id"],
+                            "metadata.agent_name": agent_identity["name"],
+                        }},
                     )
-                await observer.resume()
-                # Use stored tool_config from existing conversation if not in request
-                if tool_config is None and existing.get("tool_config"):
-                    tool_config = existing["tool_config"]
+
+            if existing_conversation_id:
+                observer = ConversationObserver(
+                    db, metadata=metadata,
+                    conversation_id=existing_conversation_id,
+                )
+                if existing:
+                    if existing.get("task_status") == "todo":
+                        # Sending on a staged board task flips it to active. This
+                        # covers both fresh drafts (set started_at — resume() never
+                        # does, and Activity sorts by it) and parked chats resumed
+                        # from a lane (keep their original timestamps).
+                        now = datetime.now(timezone.utc)
+                        flip: dict = {"task_status": "active"}
+                        if not existing.get("started_at"):
+                            flip["started_at"] = now
+                            flip["task_started_at"] = now
+                        await db.conversations.update_one(
+                            {"conversation_id": existing_conversation_id},
+                            # Draft attachments ride the first message (the client
+                            # seeds them as pending files) — drop the staged copy.
+                            {"$set": flip, "$unset": {"draft_files": ""}},
+                        )
+                    await observer.resume()
+                    # Use stored tool_config from existing conversation if not in request
+                    if tool_config is None and existing.get("tool_config"):
+                        tool_config = existing["tool_config"]
+                else:
+                    await observer.start()
             else:
+                observer = ConversationObserver(db, metadata=metadata)
                 await observer.start()
-        else:
-            observer = ConversationObserver(db, metadata=metadata)
-            await observer.start()
 
-        # Persist tool_config on the conversation document
-        if tool_config and observer:
-            await db.conversations.update_one(
-                {"conversation_id": observer.conversation_id},
-                {"$set": {"tool_config": tool_config}},
-            )
-
-        # Board tasks carry the global default context plus the owner's
-        # personal working context on every turn.
-        if existing and existing.get("task_status"):
-            from api.task_routes import build_board_context
-
-            owner = (existing.get("metadata") or {}).get("user_name") or user_email
-            context_block = await build_board_context(db, owner)
-            if context_block:
-                conversation_context = (
-                    f"{context_block}\n\n{conversation_context}"
-                    if conversation_context else context_block
+            # Persist tool_config on the conversation document
+            if tool_config and observer:
+                await db.conversations.update_one(
+                    {"conversation_id": observer.conversation_id},
+                    {"$set": {"tool_config": tool_config}},
                 )
 
-        # The active agent's persona and skill/tool scope lead the context.
-        if agent_identity:
-            agent_block = await build_agent_context_block(db, agent_identity)
-            conversation_context = (
-                f"{agent_block}\n\n{conversation_context}"
-                if conversation_context else agent_block
-            )
+            # Board tasks carry the global default context plus the owner's
+            # personal working context on every turn.
+            if existing and existing.get("task_status"):
+                from api.task_routes import build_board_context
 
-    from api.recall_session import launch_recall
-    recall_session = await launch_recall(request, observer.conversation_id if observer else None, user_email)
+                owner = (existing.get("metadata") or {}).get("user_name") or user_email
+                context_block = await build_board_context(db, owner)
+                if context_block:
+                    conversation_context = (
+                        f"{context_block}\n\n{conversation_context}"
+                        if conversation_context else context_block
+                    )
 
-    response = web.StreamResponse(
-        status=200,
-        reason="OK",
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-        },
-    )
-    await response.prepare(request)
+            # The active agent's persona and skill/tool scope lead the context.
+            if agent_identity:
+                agent_block = await build_agent_context_block(db, agent_identity)
+                conversation_context = (
+                    f"{agent_block}\n\n{conversation_context}"
+                    if conversation_context else agent_block
+                )
 
-    # Emit conversation_id as the first event so the client can track it
-    if observer:
-        cid_event = json.dumps({"type": "conversation_id", "conversation_id": observer.conversation_id})
-        await response.write(f"data: {cid_event}\n\n".encode())
+        from api.recall_session import launch_recall
+        recall_session = await launch_recall(request, observer.conversation_id if observer else None, user_email)
 
-    disconnected = False
+        response = web.StreamResponse(
+            status=200,
+            reason="OK",
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+        await response.prepare(request)
 
-    # Send SSE keepalive comments every 10s so proxies (e.g. Next.js dev
-    # server) don't kill the connection during the long MCP startup phase.
-    keepalive_task: asyncio.Task | None = None
+        # Emit conversation_id as the first event so the client can track it
+        if observer:
+            cid_event = json.dumps({"type": "conversation_id", "conversation_id": observer.conversation_id})
+            await response.write(f"data: {cid_event}\n\n".encode())
 
-    async def _send_keepalive():
-        try:
-            while True:
-                await asyncio.sleep(10)
-                if disconnected:
-                    return
-                await response.write(b": keepalive\n\n")
-                await response.drain()
-        except (ConnectionResetError, ConnectionError, asyncio.CancelledError):
-            pass
-        except Exception:
-            pass
+        disconnected = False
 
-    keepalive_task = asyncio.create_task(_send_keepalive())
+        # Send SSE keepalive comments every 10s so proxies (e.g. Next.js dev
+        # server) don't kill the connection during the long MCP startup phase.
+        keepalive_task: asyncio.Task | None = None
 
-    try:
-        async for event in stream_agent(
-            prompt=message,
-            conversation_context=conversation_context,
-            files=files,
-            observer=observer,
-            include_steps=True,
-            source="dashboard",
-            user_email=user_email,
-            selected_model=selected_model,
-            tool_config=tool_config,
-            recall_session=recall_session,
-        ):
-            # If the client already disconnected, keep consuming events so the
-            # agent runs to completion (observability still records everything)
-            # but skip writing to the closed response.
-            if disconnected:
-                continue
-
+        async def _send_keepalive():
             try:
-                if isinstance(event, dict):
-                    data = json.dumps(event)
-                else:
-                    data = json.dumps({"type": "text", "text": event})
-                await response.write(f"data: {data}\n\n".encode())
-                await response.drain()
-            except (ConnectionResetError, ConnectionError, Exception) as write_err:
-                if "closing transport" in str(write_err) or "reset" in str(write_err).lower():
-                    logger.info("Dashboard chat: client disconnected — agent will continue in background")
-                    disconnected = True
-                    continue
-                raise
-    except Exception as e:
-        logger.exception("Dashboard chat error")
-        if not disconnected:
-            try:
-                await response.write(f"data: {json.dumps({'error': str(e)})}\n\n".encode())
+                while True:
+                    await asyncio.sleep(10)
+                    if disconnected:
+                        return
+                    await response.write(b": keepalive\n\n")
+                    await response.drain()
+            except (ConnectionResetError, ConnectionError, asyncio.CancelledError):
+                pass
             except Exception:
                 pass
-    finally:
-        if keepalive_task:
-            keepalive_task.cancel()
 
-    if run_id:
-        from agent.active_streams import release_claim
-        await release_claim(existing_conversation_id, run_id)
+        keepalive_task = asyncio.create_task(_send_keepalive())
+
+        try:
+            async for event in stream_agent(
+                prompt=message,
+                conversation_context=conversation_context,
+                files=files,
+                observer=observer,
+                include_steps=True,
+                source="dashboard",
+                user_email=user_email,
+                selected_model=selected_model,
+                tool_config=tool_config,
+                recall_session=recall_session,
+            ):
+                # If the client already disconnected, keep consuming events so the
+                # agent runs to completion (observability still records everything)
+                # but skip writing to the closed response.
+                if disconnected:
+                    continue
+
+                try:
+                    if isinstance(event, dict):
+                        data = json.dumps(event)
+                    else:
+                        data = json.dumps({"type": "text", "text": event})
+                    await response.write(f"data: {data}\n\n".encode())
+                    await response.drain()
+                except (ConnectionResetError, ConnectionError, Exception) as write_err:
+                    if "closing transport" in str(write_err) or "reset" in str(write_err).lower():
+                        logger.info("Dashboard chat: client disconnected — agent will continue in background")
+                        disconnected = True
+                        continue
+                    raise
+        except Exception as e:
+            logger.exception("Dashboard chat error")
+            if not disconnected:
+                try:
+                    await response.write(f"data: {json.dumps({'error': str(e)})}\n\n".encode())
+                except Exception:
+                    pass
+        finally:
+            if keepalive_task:
+                keepalive_task.cancel()
+    finally:
+        # Release the claim on every exit (early error returns included);
+        # a no-op when this request never won it.
+        if run_id:
+            from agent.active_streams import release_claim
+            await release_claim(existing_conversation_id, run_id)
 
     # Fire-and-forget: ingest this chat turn as a change-stream event.
     if observer:
