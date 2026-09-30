@@ -101,9 +101,11 @@ CATALOG = [
         'extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'string', 'maxLength': 1000}},
         'bool_extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'boolean'}},
         'activity': {'type': 'string', 'maxLength': 255}, 'console': {'type': 'boolean'}}, ['device_id', 'action', 'app_id']),
-    _tool('device.input', 'Interact with the device: tap (x,y), swipe (x1,y1,x2,y2[,duration_ms]), type (text), key (back/home/enter/delete/tab/escape/wakeup...), open_url (deep link). Compound actions, one call each: set_text (text; optional match focuses the field first; clears it unless clear=false), clear_text, tap_text (match; waits up to timeout_s), wait_for (match, timeout_s, gone), scroll_until_visible (match, direction, max_swipes). match finds by text/id/label (by, exact). Coordinates come from device.observe ui_tree centers.', {
+    _tool('device.input', 'Interact with the device: tap (ref from ui_tree, e.g. e3; or x,y), swipe (x1,y1,x2,y2[,duration_ms]), type (text), key (back/home/enter/delete/tab/escape/wakeup...), open_url (deep link). Compound actions, one call each: set_text (text; optional match focuses the field first; clears it unless clear=false), clear_text, tap_text (match; waits up to timeout_s), wait_for (match, timeout_s, gone), scroll_until_visible (match, direction, max_swipes), animations (enabled; Android: false = faster, steadier ui_tree). match finds by text/id/label (by, exact); set_text/clear_text also take ref. Refs come from the latest device.observe ui_tree and expire after 120 s or a screen change.', {
         'device_id': TEXT, 'action': {'type': 'string', 'enum': ['tap', 'swipe', 'type', 'key', 'open_url', 'set_text',
-                                                                'clear_text', 'tap_text', 'wait_for', 'scroll_until_visible']},
+                                                                'clear_text', 'tap_text', 'wait_for', 'scroll_until_visible',
+                                                                'animations']},
+        'ref': {'type': 'string', 'pattern': '^e[1-9][0-9]{0,3}$'}, 'enabled': {'type': 'boolean'},
         'match': {'type': 'string', 'minLength': 1, 'maxLength': 200},
         'by': {'type': 'string', 'enum': ['any', 'text', 'id', 'label']}, 'exact': {'type': 'boolean'},
         'timeout_s': {'type': 'integer', 'minimum': 0, 'maximum': 60}, 'gone': {'type': 'boolean'}, 'clear': {'type': 'boolean'},
@@ -116,7 +118,7 @@ CATALOG = [
         'key': {'type': 'string', 'enum': ['back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up',
                                            'volume_down', 'power', 'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup']},
         'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}, ['device_id', 'action']),
-    _tool('device.observe', 'Observe the device: ui_tree (visible elements with text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), or logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true).', {
+    _tool('device.observe', 'Observe the device: ui_tree (visible elements with a ref, text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), or logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true).', {
         'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs']},
         'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': {'type': 'string', 'minLength': 1, 'maxLength': 200},
         'clear': {'type': 'boolean'}, 'compact': {'type': 'boolean'}, 'clickable_only': {'type': 'boolean'},
