@@ -8,14 +8,15 @@ logger = logging.getLogger(__name__)
 
 
 async def sync_due_skills():
-    if not skill_sync_service.enabled():
+    types = [t for t in ("google_doc", "google_sheet") if skill_sync_service.enabled(t)]
+    if not types:
         return
     db = get_db()
     if db is None:
         return
-    due = await db.skills.find({"enabled": True, "source.type": "google_doc",
+    due = await db.skills.find({"enabled": True, "source.type": {"$in": types},
         "source.next_check": {"$lte": skill_service.now_utc()},
-        "$or": [{"source.auto_sync_enabled": True}, {"source.pending": {"$exists": True}}]}, {"slug": 1}).limit(100).to_list(100)
+        "$or": [{"source.auto_sync_enabled": True}, {"source.pending": {"$exists": True}}]}, {"slug": 1}).sort("source.next_check", 1).limit(100).to_list(100)
     semaphore = asyncio.Semaphore(4)
     async def run(record):
         async with semaphore:

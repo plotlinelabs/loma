@@ -372,6 +372,7 @@ async def test_emergency_off_switch_stops_dispatch_before_db_access(monkeypatch)
     from scheduler import skill_sync as worker
     from unittest.mock import Mock
     monkeypatch.setenv("LOMA_GOOGLE_DOCS_SKILLS_ENABLED", "false")
+    monkeypatch.setenv("LOMA_GOOGLE_SHEETS_SKILLS_ENABLED", "false")
     get_db = Mock(side_effect=AssertionError("Disabled dispatcher must not access DB"))
     monkeypatch.setattr(worker, "get_db", get_db)
     await worker.sync_due_skills()
