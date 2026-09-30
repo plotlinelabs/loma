@@ -28,6 +28,27 @@ message and act on it (see Troubleshooting). A long call (install, a Maestro flo
 same `device_id`** again to wait for its result. Other calls on that device report it busy
 until then.
 
+## Cost rules (read first)
+
+Every device call is a model turn, and every turn re-sends the whole conversation. The
+cheapest test is the one with the fewest calls, so:
+
+- **One call per intent, not per key press.** Use `set-text` (not `type` + many `key delete`),
+  `tap-text` (not `ui-tree` + `tap`), `wait-for` (not sleep + screenshot), and
+  `scroll-until-visible` (not repeated swipes). These poll on the runner machine.
+- **Configure by launch arguments, not by typing.** If the app reads its settings from intent
+  extras (Android) or UserDefaults (iOS), pass them with `app --action launch --extra KEY=VALUE`.
+  Typing a URL into a settings screen is the slowest, least reliable step in any test.
+- **Read the tree small.** `ui-tree --compact` (one line per element), plus `--filter` or
+  `--clickable-only`. Use `screenshot --preview` and open the JPEG; keep the PNG for evidence.
+- **Time-sensitive states** (loaders, toasts, animations): use `burst` or `record`, which
+  time the frames on the runner. Screenshots taken turn by turn arrive seconds late.
+- **Repeat work goes in a Maestro flow.** Once a path works, run it with `run-flow` in one call.
+- **Keep device work out of long threads.** For a large matrix, run the device loop in a
+  subagent that returns only pass/fail per scenario and screenshot paths.
+- **State file.** Write the device id, installed build SHA, app id and anything you started
+  (servers, tunnels) to `$LOMA_CONVERSATION_DIR/state.json`. Read it first when resuming.
+
 ## The loop
 
 1. **Find a device**: `list`. If nothing is online, stop and tell the user exactly what
@@ -35,24 +56,38 @@ until then.
 2. **Lease it**: `lease --platform android|ios` (or a specific `device_id`). A lease lasts
    15 idle minutes and renews on every call. Another chat cannot use a leased device.
 3. **Install the build**:
-   - CI artifact: `install --repo OWNER/NAME --artifact-name NAME --pr N --app-id PKG`
-     (or `--run-id`). The backend fetches it; the result includes the installed `head_sha`.
-     Report that SHA, so reviewers know exactly what was tested.
+   - CI artifact: `install --repo OWNER/NAME --artifact-name NAME --pr N --app-id PKG --wait 1500`.
+     `--wait` makes the backend wait for the CI run (no model turns); `--dispatch-workflow FILE.yml`
+     starts it if the PR has no run. Report the returned `head_sha`.
+   - The runner updates in place (keeps app data), reinstalls only on a signature mismatch,
+     and skips an identical build. `--force` reinstalls anyway.
+   - Pre-grant permissions in the same call: `--grant-appop SCHEDULE_EXACT_ALARM` (Android),
+     `--grant-privacy photos` (iOS). Runtime permissions are granted on Android installs.
    - Local file (legacy only): `install --file /path/app.apk --app-id PKG`.
-   - Always pass `--app-id` so the old app is removed first (avoids signature mismatch).
-4. **Clean state**: `app --action reset_app` (Android) or reinstall (iOS), then `logs --clear`.
-5. **Launch and drive**: `app --action launch`, then prefer **deep links**
-   (`open-url`) to reach a screen or fire a test event. Tapping through menus is slow
-   and fragile.
-6. **Observe with ui_tree, not pixels**: read `ui-tree`, find the element by `text` / `id` /
-   `label`, tap its `center`. Assert on the text/ids that must be present after each step.
-   Android coordinates are pixels; iOS are points. Always take coordinates from the
-   latest ui_tree, never guess them.
-7. **Collect evidence**: one screenshot at the key moment, `logs --filter <tag>` for
-   the SDK/app log lines, plus any backend checks your team's skills describe.
-8. **Make it repeatable**: once a scenario works interactively, write it as a Maestro flow
-   and run it with `run-flow` / `device.run_flow`. The same YAML can be committed as a regression test.
+4. **Wake and clean**: `key --key wakeup` (Android), then `app --action reset_app` only if the
+   test needs a fresh state, then `logs --clear`.
+5. **Launch configured**: `app --action launch --app-id PKG --extra endpoint=... --bool-extra test_mode=true`.
+   On iOS add `--console` if the app logs with `print`, then read it with `logs --source console`.
+   Use deep links (`open-url`) to reach a screen instead of tapping through menus.
+6. **Drive by element, not coordinates**: `tap-text --match "Got it"`, `set-text --match "User ID" --text u1`,
+   `wait-for --match "Welcome" --timeout 15`, `scroll-until-visible --match "Offers"`.
+   Fall back to `tap --x --y` only when the element has no text, id or label, and take the
+   coordinates from the latest `ui-tree` (Android pixels, iOS points).
+7. **Collect evidence**: one screenshot at the key moment (every capture gets a new file name),
+   `logs --filter <tag>`, plus any backend checks your team's skills describe.
+8. **Make it repeatable**: write the scenario as a Maestro flow and run it with `run-flow`.
 9. **Release the device** (`release`) when finished, including after failures.
+
+## Common blockers on a fresh install
+
+| Blocker | Fix in one call |
+|---|---|
+| Screen off / lock screen | `key --key wakeup` |
+| Runtime permission dialog (Android) | Already granted by `install` (`-g`); special ones need `--grant-appop` |
+| Notification / photos prompt (iOS) | `--grant-privacy` where supported; otherwise `tap-text --match "Allow"` |
+| Keyboard onboarding sheet | `tap-text --match "Got it"` or `key --key back`, then `set-text` |
+| App settings screen on launch | Pass the settings as launch extras instead |
+| Live in-app campaign or promo blocking the screen | Use a test user or test project with none live; else `tap-text` its close button |
 
 ## Reporting
 
@@ -100,7 +135,9 @@ The steps above use `tools/device.py` spellings. In isolated runs use the `devic
 | CLI | Isolated tool |
 |---|---|
 | `open-url` | `device.input action=open_url` |
+| `tap-text` / `set-text` / `clear-text` / `wait-for` / `scroll-until-visible` | `device.input action=tap_text|set_text|clear_text|wait_for|scroll_until_visible` |
+| `app --action launch --extra K=V` | `device.app action=launch extras={...} bool_extras={...}` |
 | `tap` / `type` / `swipe` / `key` | `device.input action=tap|type|swipe|key` |
-| `ui-tree` | `device.observe what=ui_tree` |
+| `ui-tree --compact` | `device.observe what=ui_tree compact=true` |
 | `screenshot` | `device.observe what=screenshot` |
 | `logs --clear` / `logs --filter X` | `device.observe what=logs clear=true` / `filter=X` |

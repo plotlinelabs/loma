@@ -10,26 +10,45 @@ Commands:
   device.py --user-email E --auth-token T --scope CONVERSATION_ID list
   device.py ... lease [--platform android|ios] [--device-id ID]
   device.py ... release --device-id ID
-  device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N] | --file PATH) [--app-id PKG]
+  device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N]
+                [--wait SECONDS] [--dispatch-workflow FILE.yml] | --file PATH) [--app-id PKG]
+                [--grant-appop OP ...] [--grant-privacy SERVICE ...] [--force]
   device.py ... app --device-id ID --action launch|stop|reset_app|uninstall --app-id PKG
+                [--extra KEY=VALUE ...] [--bool-extra KEY=true|false ...] [--activity .Main] [--console]
   device.py ... open-url --device-id ID --url URL
   device.py ... tap --device-id ID --x X --y Y
+  device.py ... tap-text --device-id ID --match TEXT [--by any|text|id|label] [--exact] [--timeout S]
+  device.py ... wait-for --device-id ID --match TEXT [--by ...] [--exact] [--timeout S] [--gone]
+  device.py ... scroll-until-visible --device-id ID --match TEXT [--direction down|up] [--max-swipes N]
+  device.py ... set-text --device-id ID --text TEXT [--match FIELD [--by ...]] [--no-clear]
+  device.py ... clear-text --device-id ID [--match FIELD [--by ...]]
   device.py ... swipe --device-id ID --x1 . --y1 . --x2 . --y2 . [--duration-ms MS]
   device.py ... type --device-id ID --text TEXT
-  device.py ... key --device-id ID --key back|home|enter|...
-  device.py ... ui-tree --device-id ID
-  device.py ... screenshot --device-id ID [--out /tmp/shot.png]     (then Read the PNG to view it)
-  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear]
-  device.py ... run-flow --device-id ID --flow-file flow.yaml
+  device.py ... key --device-id ID --key back|home|enter|delete|escape|wakeup|...
+  device.py ... ui-tree --device-id ID [--compact] [--clickable-only] [--filter TEXT]
+  device.py ... screenshot --device-id ID [--out PATH] [--preview]    (then Read the PNG / preview JPEG)
+  device.py ... burst --device-id ID --count N [--interval-ms MS] [--app-id PKG [--extra K=V ...]] [--preview]
+  device.py ... record --device-id ID --duration S [--app-id PKG [--extra K=V ...]]
+  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console]
+  device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
+
+Files (screenshots, burst frames, recordings, flow screenshots) are written to
+$LOMA_CONVERSATION_DIR/device/ when that is set, else /tmp/loma-device/, always under
+a new unique name, so a later capture never reuses (or shadows) an earlier file.
 """
 import argparse
 import base64
+import itertools
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+PREVIEW_MAX = 1024
+_counter = itertools.count(1)
 
 
 def _base_url():
@@ -55,6 +74,42 @@ def _request(path, headers, body=None, data=None, timeout=1800):
                          'the operation may still finish, check with ui-tree'}
 
 
+def _pairs(items, flag, as_bool=False):
+    """--extra KEY=VALUE (repeatable) -> dict. Keys/values are validated by the backend and runner."""
+    result = {}
+    for item in items or []:
+        key, sep, value = item.partition('=')
+        if not sep or not key:
+            raise SystemExit(f'{flag} expects KEY=VALUE, got {item!r}')
+        if as_bool:
+            if value.lower() not in ('true', 'false'):
+                raise SystemExit(f'{flag} {key} must be true or false')
+            value = value.lower() == 'true'
+        result[key] = value
+    return result
+
+
+def _launch_args(args):
+    out = {}
+    extras, flags = _pairs(args.extra, '--extra'), _pairs(args.bool_extra, '--bool-extra', as_bool=True)
+    if extras:
+        out['extras'] = extras
+    if flags:
+        out['bool_extras'] = flags
+    if args.activity:
+        out['activity'] = args.activity
+    return out
+
+
+def _selector(args):
+    out = {'match': args.match} if args.match else {}
+    if args.by != 'any':
+        out['by'] = args.by
+    if args.exact:
+        out['exact'] = True
+    return out
+
+
 def build_body(args):
     """Translate CLI arguments into the /internal/devices/call body (pure; unit-tested)."""
     # Same lease scope as isolated runs (conv:<id>), so both runtimes agree.
@@ -71,7 +126,7 @@ def build_body(args):
         if args.app_id:
             call_args['app_id'] = args.app_id
         if args.file:  # main() adds upload_id after uploading the file
-            if args.repo or args.artifact_name or args.pr or args.run_id:
+            if args.repo or args.artifact_name or args.pr or args.run_id or args.wait or args.dispatch_workflow:
                 raise SystemExit('install takes either --file or --repo/--artifact-name, not both')
         else:
             if not (args.repo and args.artifact_name):
@@ -82,13 +137,47 @@ def build_body(args):
             if args.run_id:
                 build['run_id'] = args.run_id
             call_args['build'] = build
+            if args.wait:
+                call_args['wait_s'] = args.wait
+            if args.dispatch_workflow:
+                call_args['dispatch_workflow'] = args.dispatch_workflow
+        if args.grant_appop:
+            call_args['grant_appops'] = args.grant_appop
+        if args.grant_privacy:
+            call_args['grant_privacy'] = args.grant_privacy
+        if args.force:
+            call_args['force'] = True
         return {**call, 'op': 'install', 'args': call_args}
     if args.command == 'app':
-        return {**call, 'op': args.action, 'args': {'app_id': args.app_id}}
+        call_args = {'app_id': args.app_id}
+        if args.action == 'launch':
+            call_args.update(_launch_args(args))
+            if args.console:
+                call_args['console'] = True
+        elif args.extra or args.bool_extra or args.activity or args.console:
+            raise SystemExit('--extra/--bool-extra/--activity/--console only apply to --action launch')
+        return {**call, 'op': args.action, 'args': call_args}
     if args.command == 'open-url':
         return {**call, 'op': 'open_url', 'args': {'url': args.url}}
     if args.command == 'tap':
         return {**call, 'op': 'tap', 'args': {'x': args.x, 'y': args.y}}
+    if args.command in ('tap-text', 'wait-for'):
+        call_args = _selector(args)
+        if args.timeout is not None:
+            call_args['timeout_s'] = args.timeout
+        if args.command == 'wait-for' and args.gone:
+            call_args['gone'] = True
+        return {**call, 'op': args.command.replace('-', '_'), 'args': call_args}
+    if args.command == 'scroll-until-visible':
+        call_args = {**_selector(args), 'direction': args.direction, 'max_swipes': args.max_swipes}
+        return {**call, 'op': 'scroll_until_visible', 'args': call_args}
+    if args.command == 'set-text':
+        call_args = {'text': args.text, **_selector(args)}
+        if args.no_clear:
+            call_args['clear'] = False
+        return {**call, 'op': 'set_text', 'args': call_args}
+    if args.command == 'clear-text':
+        return {**call, 'op': 'clear_text', 'args': _selector(args)}
     if args.command == 'swipe':
         return {**call, 'op': 'swipe', 'args': {'x1': args.x1, 'y1': args.y1, 'x2': args.x2, 'y2': args.y2,
                                                'duration_ms': args.duration_ms}}
@@ -97,17 +186,37 @@ def build_body(args):
     if args.command == 'key':
         return {**call, 'op': 'key', 'args': {'key': args.key}}
     if args.command == 'ui-tree':
-        return {**call, 'op': 'ui_tree', 'args': {}}
+        call_args = {}
+        if args.compact:
+            call_args['compact'] = True
+        if args.clickable_only:
+            call_args['clickable_only'] = True
+        if args.filter:
+            call_args['filter'] = args.filter
+        return {**call, 'op': 'ui_tree', 'args': call_args}
     if args.command == 'screenshot':
         return {**call, 'op': 'screenshot', 'args': {}}
+    if args.command in ('burst', 'record'):
+        call_args = {'count': args.count, 'interval_ms': args.interval_ms} if args.command == 'burst' \
+            else {'duration_s': args.duration}
+        if args.app_id:
+            call_args.update({'app_id': args.app_id, **_launch_args(args)})
+        elif args.extra or args.bool_extra or args.activity:
+            raise SystemExit('--extra/--bool-extra/--activity need --app-id (the app launched when capture starts)')
+        return {**call, 'op': args.command, 'args': call_args}
     if args.command == 'logs':
         log_args = {'lines': args.lines, 'clear': args.clear}
         if args.filter:
             log_args['filter'] = args.filter
+        if args.source:
+            log_args['source'] = args.source
         return {**call, 'op': 'logs', 'args': log_args}
     if args.command == 'run-flow':
         with open(args.flow_file) as handle:
-            return {**call, 'op': 'run_flow', 'args': {'flow': handle.read()}}
+            flow_args = {'flow': handle.read()}
+        if args.verbose:
+            flow_args['verbose'] = True
+        return {**call, 'op': 'run_flow', 'args': flow_args}
     raise SystemExit('Unknown command')
 
 
@@ -128,6 +237,18 @@ def parser():
         cmd.add_argument('--device-id', required=True)
         return cmd
 
+    def launch_options(cmd):
+        cmd.add_argument('--extra', action='append', metavar='KEY=VALUE',
+                         help='Android: am start --es KEY VALUE; iOS: launch argument -KEY VALUE (UserDefaults)')
+        cmd.add_argument('--bool-extra', action='append', metavar='KEY=true|false',
+                         help='Android: am start --ez; iOS: -KEY YES|NO')
+        cmd.add_argument('--activity', help='Android activity to start (default: the launcher activity)')
+
+    def selector(cmd, required=True):
+        cmd.add_argument('--match', required=required, help='Text, resource-id / accessibility id, or label')
+        cmd.add_argument('--by', choices=['any', 'text', 'id', 'label'], default='any')
+        cmd.add_argument('--exact', action='store_true', help='Whole-value match (case-insensitive)')
+
     with_device('release')
     s = with_device('install')
     s.add_argument('--repo')
@@ -136,27 +257,139 @@ def parser():
     s.add_argument('--run-id', type=int)
     s.add_argument('--file')
     s.add_argument('--app-id')
+    s.add_argument('--wait', type=int, default=0, metavar='SECONDS',
+                   help='Backend waits (no model turns) up to SECONDS for the CI run to produce the artifact')
+    s.add_argument('--dispatch-workflow', metavar='FILE.yml',
+                   help='With --pr: dispatch this workflow on the PR branch if no run exists for its head')
+    s.add_argument('--grant-appop', action='append', metavar='OP', help='Android app-op to allow, e.g. SCHEDULE_EXACT_ALARM')
+    s.add_argument('--grant-privacy', action='append', metavar='SERVICE', help='iOS simctl privacy service, e.g. photos')
+    s.add_argument('--force', action='store_true', help='Reinstall even if this exact build is already installed')
     s = with_device('app')
     s.add_argument('--action', required=True, choices=['launch', 'stop', 'reset_app', 'uninstall'])
     s.add_argument('--app-id', required=True)
+    launch_options(s)
+    s.add_argument('--console', action='store_true', help='iOS: capture the app stdout (print) for `logs`')
     with_device('open-url').add_argument('--url', required=True)
     s = with_device('tap')
     s.add_argument('--x', type=int, required=True)
     s.add_argument('--y', type=int, required=True)
+    for name in ('tap-text', 'wait-for'):
+        s = with_device(name)
+        selector(s)
+        s.add_argument('--timeout', type=int, metavar='SECONDS')
+        if name == 'wait-for':
+            s.add_argument('--gone', action='store_true', help='Wait until no element matches')
+    s = with_device('scroll-until-visible')
+    selector(s)
+    s.add_argument('--direction', choices=['down', 'up'], default='down')
+    s.add_argument('--max-swipes', type=int, default=8)
+    s = with_device('set-text')
+    s.add_argument('--text', required=True)
+    selector(s, required=False)
+    s.add_argument('--no-clear', action='store_true', help='Append instead of replacing the field content')
+    selector(with_device('clear-text'), required=False)
     s = with_device('swipe')
     for name in ('--x1', '--y1', '--x2', '--y2'):
         s.add_argument(name, type=int, required=True)
     s.add_argument('--duration-ms', type=int, default=300)
     with_device('type').add_argument('--text', required=True)
     with_device('key').add_argument('--key', required=True)
-    with_device('ui-tree')
-    with_device('screenshot').add_argument('--out')
+    s = with_device('ui-tree')
+    s.add_argument('--compact', action='store_true', help='One line per element: type text #id @x,y (* clickable)')
+    s.add_argument('--clickable-only', action='store_true')
+    s.add_argument('--filter', help='Keep elements whose text/label/id contains this')
+    s = with_device('screenshot')
+    s.add_argument('--out')
+    s.add_argument('--preview', action='store_true', help=f'Also write a JPEG (max {PREVIEW_MAX}px) for viewing')
+    s = with_device('burst')
+    s.add_argument('--count', type=int, required=True)
+    s.add_argument('--interval-ms', type=int, default=500)
+    s.add_argument('--app-id', help='Launch this app right before the first frame')
+    s.add_argument('--preview', action='store_true')
+    launch_options(s)
+    s = with_device('record')
+    s.add_argument('--duration', type=int, required=True, metavar='SECONDS')
+    s.add_argument('--app-id', help='Launch this app once recording has started')
+    launch_options(s)
     s = with_device('logs')
     s.add_argument('--lines', type=int, default=300)
     s.add_argument('--filter')
     s.add_argument('--clear', action='store_true')
-    with_device('run-flow').add_argument('--flow-file', required=True)
+    s.add_argument('--source', choices=['auto', 'system', 'console'])
+    s = with_device('run-flow')
+    s.add_argument('--flow-file', required=True)
+    s.add_argument('--verbose', action='store_true', help='Full Maestro output and JUnit report')
     return p
+
+
+def output_dir():
+    base = os.environ.get('LOMA_CONVERSATION_DIR')
+    folder = Path(base) / 'device' if base else Path('/tmp/loma-device')
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def unique_path(stem, ext, requested=None):
+    """A path that does not exist yet: timestamp + pid + counter. --out is kept if it is free."""
+    if requested:
+        path = Path(requested)
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            return path
+        folder, stem, ext = path.parent, path.stem, path.suffix or ext
+    else:
+        folder = output_dir()
+    while True:
+        stamp = time.strftime('%Y%m%d-%H%M%S') + f'-{int(time.time() * 1000) % 1000:03d}'
+        path = folder / f'{stem}-{stamp}-{os.getpid()}-{next(_counter)}{ext}'
+        if not path.exists():
+            return path
+
+
+def write_preview(png_path, max_side=PREVIEW_MAX):
+    """Downscaled JPEG next to the PNG for viewing (cheaper to read); the PNG stays for uploads."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(png_path) as image:
+            image = image.convert('RGB')
+            image.thumbnail((max_side, max_side))
+            target = png_path.with_suffix('.preview.jpg')
+            image.save(target, 'JPEG', quality=80)
+            return str(target)
+    except OSError:
+        return None
+
+
+def save_media(args, result):
+    """Write media returned as base64 to unique files and replace it with paths."""
+    preview = getattr(args, 'preview', False)
+    if 'png_base64' in result:
+        path = unique_path('screenshot', '.png', getattr(args, 'out', None))
+        path.write_bytes(base64.b64decode(result.pop('png_base64')))
+        result['saved_to'] = str(path)
+        if preview:
+            result['preview'] = write_preview(path)
+    for index, frame in enumerate(result.get('frames') or []):
+        if 'png_base64' in frame:
+            path = unique_path(f'burst-{index:02d}-{frame.get("at_ms", 0)}ms', '.png')
+            path.write_bytes(base64.b64decode(frame.pop('png_base64')))
+            frame['saved_to'] = str(path)
+            if preview:
+                frame['preview'] = write_preview(path)
+    for shot in result.get('screenshots') or []:
+        if 'png_base64' in shot:
+            name = ''.join(c for c in str(shot.get('name') or 'flow') if c.isalnum() or c in '-_.')[:60]
+            path = unique_path('flow-' + (name[:-4] if name.endswith('.png') else name), '.png')
+            path.write_bytes(base64.b64decode(shot.pop('png_base64')))
+            shot['saved_to'] = str(path)
+    if 'mp4_base64' in result:
+        path = unique_path('recording', '.mp4')
+        path.write_bytes(base64.b64decode(result.pop('mp4_base64')))
+        result['saved_to'] = str(path)
+    return result
 
 
 def main(argv=None):
@@ -171,14 +404,10 @@ def main(argv=None):
             print(json.dumps(upload))
             return 1
         body['args']['upload_id'] = upload['upload_id']
-    result = _request('/internal/devices/call', headers, body)
-    if args.command == 'screenshot' and 'png_base64' in result:
-        out = args.out or f'/tmp/loma-device-{int(time.time())}.png'
-        with open(out, 'wb') as handle:
-            handle.write(base64.b64decode(result.pop('png_base64')))
-        result['saved_to'] = out
+    timeout = 1800 + (getattr(args, 'wait', 0) or 0)
+    result = save_media(args, _request('/internal/devices/call', headers, body, timeout=timeout))
     print(json.dumps(result, indent=2))
-    return 1 if 'error' in result else 0
+    return 1 if 'error' in result or result.get('found') is False else 0
 
 
 if __name__ == '__main__':

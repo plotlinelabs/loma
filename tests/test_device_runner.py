@@ -38,12 +38,37 @@ elif args[2:4] == ['exec-out', 'cat']:
     sys.stdout.buffer.write(open(os.environ['FAKE_UI'], 'rb').read())
 elif args[2:5] == ['shell', 'uiautomator', 'dump']:
     print('UI hierchary dumped to: /sdcard/loma_ui.xml')
+elif args[2] == 'shell' and len(args) == 4 and 'uiautomator dump' in args[3]:
+    sys.stderr.write('UI hierchary dumped to: /sdcard/loma_ui.xml\n')
+    ui = os.environ['FAKE_UI']
+    screens = sorted(p for p in os.listdir(os.path.dirname(ui)) if p.startswith('ui-seq-'))
+    if screens:  # a scripted sequence of screens, one per dump
+        ui = os.path.join(os.path.dirname(ui), screens[0])
+        data = open(ui, 'rb').read()
+        if len(screens) > 1:
+            os.unlink(ui)
+    else:
+        data = open(ui, 'rb').read()
+    sys.stdout.buffer.write(data)
+elif args[2:5] == ['shell', 'dumpsys', 'package']:
+    state = os.environ['FAKE_ADB_LOG'] + '.installed'
+    if os.path.exists(state) and open(state).read().strip() == args[5]:
+        print('    lastUpdateTime=' + str(os.path.getmtime(state)))
+elif args[2:7] == ['shell', 'cmd', 'package', 'resolve-activity', '--brief']:
+    print('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true')
+    print(args[-1] + '/.MainActivity')
 elif args[2:6] == ['shell', 'pm', 'list', 'packages']:
     state = os.environ['FAKE_ADB_LOG'] + '.installed'
     print('package:com.android.settings')
     if os.path.exists(state):
         print('package:' + open(state).read().strip())
 elif args[2] == 'install':
+    flag = os.environ['FAKE_ADB_LOG'] + '.incompatible'
+    if os.path.exists(flag) and '-r' in args:
+        os.unlink(flag)
+        print('adb: failed to install app.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: '
+              'Existing package com.example.demo signatures do not match newer version; ignoring!]')
+        sys.exit(1)
     open(os.environ['FAKE_ADB_LOG'] + '.installed', 'w').write(os.environ.get('FAKE_INSTALL_PKG', 'com.example.demo'))
     print('Success')
 '''
@@ -67,7 +92,8 @@ def adb(tmp_path, monkeypatch):
 
 
 def runner(driver, **policy):
-    return ldr.Runner({'server': 'https://loma.test', 'secret': 's', 'runner_id': 'r', 'policy': policy}, drivers=[driver])
+    return ldr.Runner({'server': 'https://loma.test', 'secret': 's', 'runner_id': 'r', 'policy': policy,
+                       'cache_dir': os.environ.get('FAKE_ADB_LOG', '/nonexistent') + '.cache'}, drivers=[driver])
 
 
 @pytest.mark.asyncio
@@ -585,3 +611,245 @@ def test_extend_path_finds_private_idb_and_homebrew(home, monkeypatch):
     monkeypatch.setenv('PATH', '/usr/bin')
     path = ldr.extend_path().split(os.pathsep)
     assert path[0] == '/usr/bin' and str(home / 'venv' / 'bin') in path and '/opt/homebrew/bin' in path
+
+
+# ── Device ops v2: launch extras, compound ops, faster ui_tree, install reuse ──
+
+FORM_XML = b'''<?xml version="1.0"?><hierarchy rotation="0">
+<node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
+  <node class="android.widget.EditText" text="https://old.example.com" resource-id="com.example.demo:id/endpoint" clickable="true" bounds="[40,400][1040,520]"/>
+  <node class="android.widget.Button" text="Save" resource-id="com.example.demo:id/save" clickable="true" bounds="[40,600][540,700]"/>
+  <node class="android.widget.TextView" text="Save settings below" bounds="[40,800][1040,860]"/>
+</node></hierarchy>'''
+
+
+def shell_calls(calls):  # device shell commands, without the inventory refresh probes
+    return [c[3:] for c in calls() if c[:3] == ['-s', 'emulator-5554', 'shell'] and c[3] != 'getprop']
+
+
+@pytest.mark.asyncio
+async def test_ui_tree_is_one_adb_round_trip_with_screen_size(adb):
+    driver, calls = adb
+    tree = await runner(driver).call('ui_tree', 'emulator-5554', {})
+    assert tree['screen'] == [1080, 2400] and tree['elements'][0]['text'] == 'Show modal'
+    assert shell_calls(calls) == [[ldr.ANDROID_UI_DUMP]]  # was rm + dump + cat
+    assert not any('exec-out' in c for c in calls())
+
+
+@pytest.mark.asyncio
+async def test_android_launch_with_extras_quotes_each_value(adb):
+    driver, calls = adb
+    r = runner(driver)
+    await r.call('launch', 'emulator-5554', {'app_id': 'com.example.demo'})
+    assert ['monkey', '-p', 'com.example.demo', '-c', 'android.intent.category.LAUNCHER', '1'] in shell_calls(calls)
+    result = await r.call('launch', 'emulator-5554', {
+        'app_id': 'com.example.demo', 'extras': {'api_endpoint': "https://a-b.example.com/x?y=1&z='q' $(id)"},
+        'bool_extras': {'clearCache': True}})
+    assert result['component'] == 'com.example.demo/.MainActivity'
+    start = next(c for c in shell_calls(calls) if c[:2] == ['am', 'start'])
+    assert start[:6] == ['am', 'start', '-W', '-S', '-n', "com.example.demo/.MainActivity"]
+    assert start[6:9] == ['--es', 'api_endpoint', "'https://a-b.example.com/x?y=1&z='\"'\"'q'\"'\"' $(id)'"]
+    assert start[9:] == ['--ez', 'clearCache', 'true']
+    for bad in [{'extras': {'a;b': 'x'}}, {'extras': {'k': 5}}, {'bool_extras': {'k': 'yes'}},
+                {'activity': '.Main; reboot'}, {'extras': {f'k{i}': 'v' for i in range(21)}}]:
+        with pytest.raises(ldr.OpError):
+            await r.call('launch', 'emulator-5554', {'app_id': 'com.example.demo', **bad})
+
+
+@pytest.mark.asyncio
+async def test_ios_launch_arguments_and_console(monkeypatch, tmp_path):
+    assert ldr.IOS.launch_arguments({'api_endpoint': 'https://x'}, {'debug': True, 'b': False}) == [
+        '-api_endpoint', 'https://x', '-debug', 'YES', '-b', 'NO']
+    seen = []
+
+    async def fake_run(args, **kwargs):
+        seen.append(args)
+        return 0, b'', ''
+    monkeypatch.setattr(ldr, 'run', fake_run)
+    ios = ldr.IOS()
+    await ios.launch('UDID-1', 'com.example.demo', extras={'demo_user_id': 'u1'})
+    assert seen[-1] == ['xcrun', 'simctl', 'launch', '--terminate-running-process', 'UDID-1', 'com.example.demo',
+                        '-demo_user_id', 'u1']
+    await ios.launch('UDID-1', 'com.example.demo')
+    assert seen[-1] == ['xcrun', 'simctl', 'launch', 'UDID-1', 'com.example.demo']
+    # Console capture: logs reads the app's stdout file, and clear truncates it.
+    log = tmp_path / 'UDID-1.log'
+    log.write_text('DemoSDK: widget skeleton shown\r\nDemoSDK: widget loaded\n')
+    ios.consoles['UDID-1'] = (None, log)
+    assert await ios.logs('UDID-1', 1, False) == ['DemoSDK: widget loaded']
+    assert await ios.logs('UDID-1', 10, True) == [] and log.read_text() == ''
+    with pytest.raises(ldr.OpError, match='console=true'):
+        await ldr.IOS().logs('UDID-2', 10, False, 'console')
+
+
+@pytest.mark.asyncio
+async def test_set_text_focuses_clears_and_types_in_three_calls(adb, tmp_path):
+    driver, calls = adb
+    (tmp_path / 'ui.xml').write_bytes(FORM_XML)
+    result = await runner(driver).call('set_text', 'emulator-5554', {
+        'match': 'endpoint', 'by': 'id', 'text': 'https://my-endpoint.example.com/v1'})
+    assert result['focused']['id'] == 'com.example.demo:id/endpoint' and result['typed'] == 34
+    shell = shell_calls(calls)[1:]  # after the one ui_tree dump
+    assert shell[0] == ['input', 'tap', '540', '460']
+    keys = shell[1]
+    assert keys[:3] == ['input', 'keyevent', '123'] and keys.count('67') == len('https://old.example.com') + 8
+    assert shell[2] == ['input', 'text', 'https://my-endpoint.example.com/v1'] and len(shell) == 3
+
+
+@pytest.mark.asyncio
+async def test_clear_text_and_ascii_rules(adb):
+    driver, calls = adb
+    r = runner(driver)
+    await r.call('clear_text', 'emulator-5554', {})
+    keys = shell_calls(calls)[-1]
+    assert keys.count('67') == 64 and keys[2] == '123'
+    await r.call('set_text', 'emulator-5554', {'text': 'a b', 'clear': False})
+    assert shell_calls(calls)[-1] == ['input', 'text', 'a%sb']
+    with pytest.raises(ldr.OpError, match='%s'):
+        await r.call('set_text', 'emulator-5554', {'text': '100%sure'})
+
+
+@pytest.mark.asyncio
+async def test_wait_for_and_tap_text(adb, tmp_path):
+    driver, calls = adb
+    (tmp_path / 'ui.xml').write_bytes(FORM_XML)
+    r = runner(driver)
+    found = await r.call('wait_for', 'emulator-5554', {'match': 'save', 'exact': True, 'timeout_s': 0})
+    assert found['found'] and found['element']['text'] == 'Save' and found['matches'] == 1
+    ranked = await r.call('wait_for', 'emulator-5554', {'match': 'save', 'timeout_s': 0})
+    assert ranked['element']['text'] == 'Save' and ranked['matches'] == 2  # exact + clickable first
+    missing = await r.call('wait_for', 'emulator-5554', {'match': 'Nope', 'timeout_s': 0})
+    assert missing['found'] is False and 'Save' in missing['visible']
+    gone = await r.call('wait_for', 'emulator-5554', {'match': 'Nope', 'gone': True, 'timeout_s': 0})
+    assert gone['found'] is True
+    tapped = await r.call('tap_text', 'emulator-5554', {'match': 'Save', 'exact': True})
+    assert tapped['tapped'] == [290, 650] and ['input', 'tap', '290', '650'] in shell_calls(calls)
+    with pytest.raises(ldr.OpError, match='Visible'):
+        await r.call('tap_text', 'emulator-5554', {'match': 'Nope', 'timeout_s': 0})
+    for bad in [{'match': 'x', 'by': 'xpath'}, {'match': 'x', 'timeout_s': 61}, {'match': ''}, {'match': 'x', 'gone': 1}]:
+        with pytest.raises(ldr.OpError):
+            await r.call('wait_for', 'emulator-5554', bad)
+
+
+@pytest.mark.asyncio
+async def test_scroll_until_visible_uses_fixed_slow_swipes(adb, tmp_path):
+    driver, calls = adb
+    (tmp_path / 'ui-seq-1.xml').write_bytes(UI_XML)
+    (tmp_path / 'ui-seq-2.xml').write_bytes(FORM_XML)
+    result = await runner(driver).call('scroll_until_visible', 'emulator-5554', {'match': 'Save', 'exact': True})
+    assert result['found'] and result['swipes'] == 1
+    swipes = [c for c in shell_calls(calls) if c[:2] == ['input', 'swipe']]
+    assert swipes == [['input', 'swipe', '540', '1680', '540', '720', str(ldr.SWIPE_MS)]]
+
+
+@pytest.mark.asyncio
+async def test_wakeup_key(adb):
+    driver, calls = adb
+    await runner(driver).call('key', 'emulator-5554', {'key': 'wakeup'})
+    assert shell_calls(calls)[-1] == [ldr.ANDROID_WAKEUP]
+    assert (await ldr.IOS().key('UDID', 'wakeup'))['note']
+
+
+@pytest.mark.asyncio
+async def test_install_updates_in_place_and_reinstalls_only_on_signature_change(adb, tmp_path):
+    driver, calls = adb
+    apk = tmp_path / 'app.apk'
+    apk.write_bytes(b'apk')
+    result = await driver.install('emulator-5554', apk, 'com.example.demo')
+    assert result['data_kept'] is True
+    assert not any(c[2:3] == ['uninstall'] for c in calls())
+    assert next(c for c in calls() if c[2:3] == ['install'])[3:7] == ['-r', '-d', '-t', '-g']
+    open(os.environ['FAKE_ADB_LOG'] + '.incompatible', 'w').close()
+    result = await driver.install('emulator-5554', apk, None)  # package taken from the adb error
+    assert result['data_kept'] is False
+    assert ['-s', 'emulator-5554', 'uninstall', 'com.example.demo'] in calls()
+
+
+@pytest.mark.asyncio
+async def test_same_build_is_not_downloaded_or_installed_twice(adb, tmp_path, monkeypatch):
+    driver, calls = adb
+    r = runner(driver)
+    downloads = []
+
+    async def fake_download(args, target):
+        downloads.append(args['blob_id'])
+        path = target / args['filename']
+        path.write_bytes(b'apk')
+        return path
+    monkeypatch.setattr(r, 'download', fake_download)
+    args = {'blob_id': 'blob12345', 'sha256': 'a' * 64, 'filename': 'app.apk', 'app_id': 'com.example.demo',
+            'grant_appops': ['SCHEDULE_EXACT_ALARM']}
+    first = await r.call('install', 'emulator-5554', args)
+    assert first['granted'] == ['SCHEDULE_EXACT_ALARM']
+    assert ['appops', 'set', 'com.example.demo', 'SCHEDULE_EXACT_ALARM', 'allow'] in shell_calls(calls)
+    second = await r.call('install', 'emulator-5554', args)
+    assert second['skipped'] is True and downloads == ['blob12345']
+    await r.call('install', 'emulator-5554', {**args, 'force': True})
+    await r.call('install', 'emulator-5554', {**args, 'sha256': 'b' * 64})
+    assert len(downloads) == 3
+    for bad in [['schedule_exact_alarm'], ['X; reboot'], 'SCHEDULE_EXACT_ALARM']:
+        with pytest.raises(ldr.OpError, match='grant'):
+            await r.call('install', 'emulator-5554', {**args, 'grant_appops': bad})
+
+
+@pytest.mark.asyncio
+async def test_download_cache_by_checksum(tmp_path):
+    import hashlib
+    r = ldr.Runner({'server': 'https://loma.test', 'secret': 's', 'runner_id': 'r', 'cache_dir': str(tmp_path / 'c')},
+                   drivers=[])
+    sha = hashlib.sha256(b'build').hexdigest()
+    src = tmp_path / 'x.apk'
+    src.write_bytes(b'build')
+    r._store_in_cache(src, sha)
+    target = tmp_path / 't'
+    target.mkdir()
+    path = await r.download({'blob_id': 'blob12345', 'sha256': sha, 'filename': 'app.apk'}, target)  # no session
+    assert path.read_bytes() == b'build' and path.parent == target
+    for i in range(6):
+        r._store_in_cache(src, f'{i:064x}')
+    assert len(list((tmp_path / 'c').iterdir())) == r.CACHE_KEEP
+
+
+class TimedDriver:
+    platform = 'android'
+
+    def __init__(self):
+        self.launched = []
+
+    async def capture(self, serial):
+        await asyncio.sleep(0.05)
+        return 'png', PNG
+
+    async def launch(self, serial, app_id, **options):
+        self.launched.append((app_id, options))
+
+
+@pytest.mark.asyncio
+async def test_burst_is_timed_on_the_runner_and_can_launch_first():
+    driver = TimedDriver()
+    r = runner(driver)
+    r.inventory = {'emulator-5554': (driver, {'serial': 'emulator-5554'})}
+    result = await r.call('burst', 'emulator-5554', {'count': 4, 'interval_ms': 100, 'app_id': 'com.example.demo',
+                                                     'extras': {'api_endpoint': 'https://x'}})
+    offsets = [f['at_ms'] for f in result['frames']]
+    assert len(offsets) == 4 and all(abs(at - i * 100) < 60 for i, at in enumerate(offsets))
+    assert driver.launched == [('com.example.demo', {'extras': {'api_endpoint': 'https://x'}, 'bool_extras': {},
+                                                     'activity': None, 'console': False})]
+    for bad in [{'count': 1}, {'count': 13}, {'count': 2, 'interval_ms': 50}]:
+        with pytest.raises(ldr.OpError):
+            await r.call('burst', 'emulator-5554', bad)
+
+
+def test_flow_screenshots_are_collected_before_cleanup(tmp_path):
+    (tmp_path / 'after_dismiss.png').write_bytes(PNG)
+    (tmp_path / 'report.xml').write_text('<x/>')
+    shots = ldr.collect_screenshots(tmp_path)
+    assert [s['name'] for s in shots] == ['after_dismiss.png'] and base64.b64decode(shots[0]['png_base64']) == PNG
+
+
+def test_find_elements_ranking():
+    elements = [{'text': 'Save settings'}, {'text': 'save', 'clickable': True}, {'id': 'com.app:id/save'},
+                {'label': 'Saved'}]
+    assert ldr.find_elements(elements, 'save', 'any', True) == [elements[1], elements[2]]
+    assert ldr.find_elements(elements, 'SAVE')[:2] == [elements[1], elements[2]]
+    assert ldr.find_elements(elements, 'save', 'label') == [elements[3]]

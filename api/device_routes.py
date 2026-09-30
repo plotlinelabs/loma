@@ -287,6 +287,17 @@ def _internal_identity(request):
     return user_email
 
 
+def _encode_media(value):
+    """Media bytes (screenshots, burst frames, recordings) become '<key>_base64' strings for the CLI."""
+    if isinstance(value, dict):
+        return {(f'{key}_base64' if isinstance(item, bytes) else key): _encode_media(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_encode_media(item) for item in value]
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode()
+    return value
+
+
 async def handle_internal_call(request):
     db = _db_or_503()
     user_email = _internal_identity(request)
@@ -305,9 +316,7 @@ async def handle_internal_call(request):
             return web.json_response(await service.release(user_email, scope, body.get('device_id')))
         if action == 'call':
             data = await service.call(user_email, scope, body.get('device_id'), body.get('op'), body.get('args') or {})
-            if 'png' in data:
-                data['png_base64'] = base64.b64encode(data.pop('png')).decode()
-            return web.json_response(data)
+            return web.json_response(_encode_media(data))
     except DeviceError as exc:
         return _error(str(exc), 409)
     return _error('Unknown action')

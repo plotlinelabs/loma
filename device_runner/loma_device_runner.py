@@ -78,8 +78,27 @@ BLOB_ID = re.compile(r'[A-Za-z0-9_-]{8,64}\Z')
 SHA256 = re.compile(r'[a-f0-9]{64}\Z')
 FILENAME = re.compile(r'[A-Za-z0-9._-]{1,128}\Z')
 ANDROID_KEYS = {'back': 4, 'home': 3, 'enter': 66, 'delete': 67, 'tab': 61, 'app_switch': 187,
-                'volume_up': 24, 'volume_down': 25, 'power': 26}
+                'volume_up': 24, 'volume_down': 25, 'power': 26, 'escape': 111, 'wakeup': 224}
 IOS_BUTTONS = {'home': 'HOME', 'lock': 'LOCK', 'siri': 'SIRI', 'side': 'SIDE_BUTTON', 'apple_pay': 'APPLE_PAY'}
+# USB HID usage codes for `idb ui key` / `idb ui key-sequence` (simulator hardware keyboard).
+IOS_HID_KEYS = {'enter': 40, 'escape': 41, 'delete': 42, 'tab': 43}
+IOS_FORWARD_DELETE = 76
+ANDROID_MOVE_END, ANDROID_FORWARD_DEL = 123, 112
+EXTRA_KEY = re.compile(r'[A-Za-z0-9_.]{1,100}\Z')
+ACTIVITY = re.compile(r'[A-Za-z0-9_.$]{1,255}\Z')
+APPOP = re.compile(r'[A-Z][A-Z0-9_]{2,63}\Z')
+# Services accepted by `xcrun simctl privacy <udid> grant <service> <bundle>`.
+IOS_PRIVACY = {'all', 'calendar', 'contacts-limited', 'contacts', 'location', 'location-always', 'photos-add',
+               'photos', 'media-library', 'microphone', 'motion', 'reminders', 'siri'}
+SELECT_BY = {'any', 'text', 'id', 'label'}
+MAX_EXTRAS = 20
+MAX_MEDIA_BYTES = 16 * 1024 * 1024  # burst frames / recordings / flow screenshots per result (WS frame: 24 MiB)
+POLL_SECONDS = 0.4
+SWIPE_MS = 1000  # scroll_until_visible: slow, fixed-distance swipes give the same scroll every run
+# One adb round trip for the UI tree: dump and cat in a single device-side shell (a constant string).
+ANDROID_UI_DUMP = ('rm -f /sdcard/loma_ui.xml; uiautomator dump --compressed /sdcard/loma_ui.xml >&2 '
+                   '&& cat /sdcard/loma_ui.xml')
+ANDROID_WAKEUP = 'input keyevent 224; wm dismiss-keyguard'
 MAX_EXTRACT_BYTES = 2 * MAX_BLOB
 MAX_EXTRACT_MEMBERS = 20000
 MAX_NESTED_ZIPS = 5
@@ -199,6 +218,63 @@ def need_int(args, key, low, high, default=None):
     if type(value) is not int or not low <= value <= high:
         raise OpError(f'Invalid {key}')
     return value
+
+
+def need_bool(args, key, default=False):
+    value = args.get(key, default)
+    if type(value) is not bool:
+        raise OpError(f'Invalid {key}')
+    return value
+
+
+def need_selector(args):
+    """(match, by, exact) for the element-finding ops."""
+    match = need_str(args, 'match', max_len=200)
+    by = args.get('by', 'any')
+    if by not in SELECT_BY:
+        raise OpError('Invalid by (any, text, id or label)')
+    return match, by, need_bool(args, 'exact')
+
+
+def need_launch(args):
+    """Validated launch options: string extras, bool extras, explicit activity, console capture."""
+    extras, flags = args.get('extras') or {}, args.get('bool_extras') or {}
+    if not isinstance(extras, dict) or not isinstance(flags, dict) or len(extras) + len(flags) > MAX_EXTRAS:
+        raise OpError('Invalid extras')
+    for key, value in list(extras.items()) + list(flags.items()):
+        if not isinstance(key, str) or not EXTRA_KEY.fullmatch(key):
+            raise OpError('Invalid extra key (letters, digits, _ and . only)')
+    for value in extras.values():
+        if not isinstance(value, str) or len(value) > 1000 or '\x00' in value:
+            raise OpError('Invalid extra value')
+    if any(type(value) is not bool for value in flags.values()):
+        raise OpError('Invalid bool_extras value')
+    return {'extras': extras, 'bool_extras': flags,
+            'activity': need_str(args, 'activity', ACTIVITY, 255, optional=True),
+            'console': need_bool(args, 'console')}
+
+
+def find_elements(elements, match, by='any', exact=False):
+    """Elements whose text / id / label matches; exact (case-insensitive) matches first.
+
+    An Android resource-id also matches by its short name (com.app:id/endpoint -> endpoint).
+    """
+    fields = ('text', 'label', 'id') if by == 'any' else (by,)
+    needle = match.lower()
+    ranked = []
+    for element in elements:
+        best = None
+        for field in fields:
+            value = str(element.get(field) or '')
+            names = {value.lower(), value.rsplit('/', 1)[-1].lower()} if field == 'id' else {value.lower()}
+            if needle in names:
+                best = 0
+                break
+            if not exact and value and needle in value.lower():
+                best = 1
+        if best is not None:
+            ranked.append((best, not element.get('clickable', False), len(ranked), element))
+    return [item[-1] for item in sorted(ranked, key=lambda item: item[:3])]
 
 
 def check_url(url):
@@ -336,29 +412,83 @@ class Android:
 
     async def install(self, serial, path, app_id, allowed=()):
         apk = await asyncio.to_thread(find_file, path, '.apk')  # big archives: keep the loop (heartbeats) free
-        if app_id:
-            # Debug keys differ between CI runs: always start from a clean install.
-            await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60, check=False)
-        # With an app allowlist, never replace an existing package (no -r) and verify
-        # the package that actually got installed, not just the app_id we were told.
-        before = await self.packages(serial) if allowed else set()
-        flags = ['-t', '-g'] if allowed else ['-r', '-t', '-g']
-        _, out, err = await run([self.adb, '-s', serial, 'install', *flags, str(apk)], timeout=300)
         if allowed:
+            # With an app allowlist, never replace an existing package (no -r) and verify
+            # the package that actually got installed, not just the app_id we were told.
+            if app_id:
+                await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60, check=False)
+            before = await self.packages(serial)
+            _, out, err = await run([self.adb, '-s', serial, 'install', '-t', '-g', str(apk)], timeout=300)
             added = await self.packages(serial) - before
             if not added or not added <= set(allowed):
                 for package in added:
                     await run([self.adb, '-s', serial, 'uninstall', package], timeout=60, check=False)
                 raise OpError(f'Installed package {sorted(added) or "unknown"} is not in allowed_app_ids; removed it')
-        return {'installed': apk.name, 'output': (out.decode('utf-8', 'replace') + err).strip()[-500:]}
+            return {'installed': apk.name, 'data_kept': False,
+                    'output': (out.decode('utf-8', 'replace') + err).strip()[-500:]}
+        # Update in place first: keeps app data (config, logins) and pre-grants runtime permissions.
+        # Only a signature change (each CI debug build has its own key) forces uninstall + install.
+        argv = [self.adb, '-s', serial, 'install', '-r', '-d', '-t', '-g', str(apk)]
+        code, out, err = await run(argv, timeout=300, check=False)
+        text = (out.decode('utf-8', 'replace') + err).strip()
+        data_kept = True
+        if code != 0 or 'Success' not in text:
+            if 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' not in text:
+                raise OpError(f'adb install failed: {text[-1500:]}')
+            found = re.search(r'(?:Existing package|Package) ([A-Za-z0-9_.]+) signatures', text)
+            package = app_id or (found.group(1) if found else None)
+            if not package or not APP_ID.fullmatch(package):
+                raise OpError('Installed app has a different signature; pass app_id so it can be reinstalled')
+            await run([self.adb, '-s', serial, 'uninstall', package], timeout=60, check=False)
+            _, out, err = await run(argv, timeout=300)
+            text, data_kept = (out.decode('utf-8', 'replace') + err).strip(), False
+        return {'installed': apk.name, 'data_kept': data_kept, 'output': text[-500:]}
+
+    async def install_stamp(self, serial, package):
+        """Identifies the installed build of a package (None if not installed)."""
+        code, out, _ = await run(self._sh(serial, 'dumpsys', 'package', package), timeout=30, check=False)
+        found = re.search(rb'lastUpdateTime=([^\r\n]+)', out) if code == 0 else None
+        return found.group(1).decode('utf-8', 'replace').strip() if found else None
+
+    async def grant(self, serial, package, appops=(), privacy=()):
+        granted = []
+        for op in appops:
+            await run(self._sh(serial, 'appops', 'set', package, op, 'allow'), timeout=30)
+            granted.append(op)
+        return {'granted': granted, **({'ignored': sorted(privacy)} if privacy else {})}
 
     async def uninstall(self, serial, app_id):
         await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60)
         return {'uninstalled': app_id}
 
-    async def launch(self, serial, app_id):
-        await run(self._sh(serial, 'monkey', '-p', app_id, '-c', 'android.intent.category.LAUNCHER', '1'), timeout=30)
-        return {'launched': app_id}
+    async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False):
+        extras, bool_extras = extras or {}, bool_extras or {}
+        if not (extras or bool_extras or activity):
+            await run(self._sh(serial, 'monkey', '-p', app_id, '-c', 'android.intent.category.LAUNCHER', '1'),
+                      timeout=30)
+            return {'launched': app_id}
+        component = f'{app_id}/{activity or await self._launcher_activity(serial, app_id)}'
+        # adb joins shell args into one device-side shell string: every value is quoted as one word.
+        argv = ['am', 'start', '-W', '-S', '-n', shlex.quote(component)]
+        for key, value in extras.items():
+            argv += ['--es', key, shlex.quote(value)]
+        for key, value in bool_extras.items():
+            argv += ['--ez', key, 'true' if value else 'false']
+        _, out, _ = await run(self._sh(serial, *argv), timeout=45)
+        text = out.decode('utf-8', 'replace')
+        if 'Error' in text:
+            raise OpError(text.strip()[-500:])
+        return {'launched': app_id, 'component': component, 'extras': sorted(extras) + sorted(bool_extras)}
+
+    async def _launcher_activity(self, serial, app_id):
+        _, out, _ = await run(self._sh(serial, 'cmd', 'package', 'resolve-activity', '--brief',
+                                       '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER',
+                                       app_id), timeout=30, check=False)
+        for line in reversed(out.decode('utf-8', 'replace').splitlines()):
+            name = line.strip().partition('/')[2]
+            if line.strip().startswith(app_id + '/') and ACTIVITY.fullmatch(name):
+                return name
+        raise OpError(f'Could not find the launcher activity of {app_id}; pass activity')
 
     async def stop(self, serial, app_id):
         await run(self._sh(serial, 'am', 'force-stop', app_id), timeout=30)
@@ -382,14 +512,16 @@ class Android:
         return out
 
     async def ui_tree(self, serial):
-        path = '/sdcard/loma_ui.xml'
-        await run(self._sh(serial, 'rm', '-f', path), timeout=15, check=False)
-        _, out, err = await run(self._sh(serial, 'uiautomator', 'dump', '--compressed', path), timeout=30)
-        if b'dumped to' not in out and 'dumped to' not in err:
+        # One adb round trip (was three: rm, dump, cat). uiautomator itself still waits for the UI
+        # to go idle, so a running animation (shimmer, video) can make any dump slow.
+        _, out, err = await run(self._sh(serial, ANDROID_UI_DUMP), timeout=30, check=False)
+        start, end = out.find(b'<?xml'), out.rfind(b'</hierarchy>')
+        start = out.find(b'<hierarchy') if start < 0 else start
+        if start < 0 or end < 0:
             raise OpError('uiautomator could not capture the screen (UI not idle?); retry: '
                           + (out.decode('utf-8', 'replace') + err).strip()[-300:])
-        _, out, _ = await run([self.adb, '-s', serial, 'exec-out', 'cat', path], timeout=30)
-        return {'units': 'pixels', 'elements': parse_uiautomator(out)}
+        elements, screen = parse_uiautomator(out[start:end + len(b'</hierarchy>')], with_screen=True)
+        return {'units': 'pixels', 'screen': screen, 'elements': elements}
 
     async def tap(self, serial, x, y):
         await run(self._sh(serial, 'input', 'tap', str(x), str(y)), timeout=15)
@@ -402,16 +534,44 @@ class Android:
     async def type_text(self, serial, text):
         if not all(32 <= ord(c) < 127 for c in text):
             raise OpError('Android text input supports printable ASCII only')
+        if '%s' in text:
+            raise OpError('Android `input text` cannot type a literal "%s"')
+        # The whole string in ONE `input text` call, quoted as one device-side shell word
+        # (spaces are %s for `input text`), instead of one key press per character.
         await run(self._sh(serial, 'input', 'text', shlex.quote(text.replace(' ', '%s'))), timeout=30)
         return {'typed': len(text)}
+
+    async def clear_text(self, serial, length):
+        # Cursor to the end, then enough DEL + forward-DEL presses, all in ONE `input keyevent` call.
+        codes = [ANDROID_MOVE_END] + [ANDROID_KEYS['delete']] * length + [ANDROID_FORWARD_DEL] * min(length, 20)
+        await run(self._sh(serial, 'input', 'keyevent', *map(str, codes)), timeout=60)
+        return {'cleared': True}
 
     async def key(self, serial, key):
         if key not in ANDROID_KEYS:
             raise OpError('Unsupported key on Android: ' + ', '.join(sorted(ANDROID_KEYS)))
-        await run(self._sh(serial, 'input', 'keyevent', str(ANDROID_KEYS[key])), timeout=15)
+        if key == 'wakeup':  # wake the screen and dismiss a swipe-only keyguard in one round trip
+            await run(self._sh(serial, ANDROID_WAKEUP), timeout=15)
+        else:
+            await run(self._sh(serial, 'input', 'keyevent', str(ANDROID_KEYS[key])), timeout=15)
         return {'key': key}
 
-    async def logs(self, serial, lines, clear):
+    async def capture(self, serial):
+        return 'png', await self.screenshot(serial)
+
+    async def record(self, serial, seconds, started=None):
+        path = '/sdcard/loma_rec.mp4'
+        task = asyncio.ensure_future(run(self._sh(serial, 'screenrecord', '--time-limit', str(seconds),
+                                                  '--bit-rate', '4000000', path), timeout=seconds + 30))
+        await asyncio.sleep(0.8)  # screenrecord needs a moment before frames flow
+        if started is not None:
+            await started()
+        await task
+        _, out, _ = await run([self.adb, '-s', serial, 'exec-out', 'cat', path], timeout=60)
+        await run(self._sh(serial, 'rm', '-f', path), timeout=15, check=False)
+        return out
+
+    async def logs(self, serial, lines, clear, source='auto'):
         if clear:
             await run([self.adb, '-s', serial, 'logcat', '-c'], timeout=15)
             return []
@@ -420,28 +580,27 @@ class Android:
         return out.decode('utf-8', 'replace').splitlines()
 
 
-def parse_uiautomator(xml_bytes):
+def parse_uiautomator(xml_bytes, with_screen=False):
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
         raise OpError('Could not parse the Android UI hierarchy') from None
-    elements = []
+    elements, screen = [], [0, 0]
     for node in root.iter('node'):
-        text, rid, desc = node.get('text', ''), node.get('resource-id', ''), node.get('content-desc', '')
-        clickable = node.get('clickable') == 'true'
-        if not (text or desc or rid or clickable):
-            continue
         match = re.fullmatch(r'\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]', node.get('bounds', ''))
         if not match:
             continue
         x1, y1, x2, y2 = map(int, match.groups())
+        screen = [max(screen[0], x2), max(screen[1], y2)]
+        text, rid, desc = node.get('text', ''), node.get('resource-id', ''), node.get('content-desc', '')
+        clickable = node.get('clickable') == 'true'
+        if not (text or desc or rid or clickable) or len(elements) >= MAX_UI_ELEMENTS:
+            continue
         element = {'type': node.get('class', '').rsplit('.', 1)[-1], 'text': text[:200],
                    'id': rid, 'label': desc[:200], 'clickable': clickable,
                    'bounds': [x1, y1, x2, y2], 'center': [(x1 + x2) // 2, (y1 + y2) // 2]}
         elements.append({k: v for k, v in element.items() if v not in ('', False)})
-        if len(elements) >= MAX_UI_ELEMENTS:
-            break
-    return elements
+    return (elements, screen) if with_screen else elements
 
 
 # ── iOS simulators ────────────────────────────────────────────────────────
@@ -452,6 +611,7 @@ class IOS:
 
     def __init__(self):
         self.log_start = {}  # serial -> local time of the last logs clear (the unified log cannot be cleared)
+        self.consoles = {}  # serial -> (process, file path) of an app launched with console capture
 
     def available(self):
         return sys.platform == 'darwin' and shutil.which('xcrun') is not None
@@ -476,21 +636,83 @@ class IOS:
         app, bundle_id = await asyncio.to_thread(prepare_app_bundle, path)
         if allowed and bundle_id not in allowed:
             raise OpError(f'Bundle {bundle_id} is not in allowed_app_ids; not installed')
-        if app_id:
-            await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60, check=False)
-        await run(['xcrun', 'simctl', 'install', serial, str(app)], timeout=300)
-        return {'installed': app.name, 'bundle_id': bundle_id}
+        # Simulators do not check signatures: install over the old app and keep its data.
+        # Fall back to a clean install only if the in-place update fails.
+        code, _, err = await run(['xcrun', 'simctl', 'install', serial, str(app)], timeout=300, check=False)
+        data_kept = True
+        if code != 0:
+            if bundle_id or app_id:
+                await run(['xcrun', 'simctl', 'uninstall', serial, bundle_id or app_id], timeout=60, check=False)
+            await run(['xcrun', 'simctl', 'install', serial, str(app)], timeout=300)
+            data_kept = False
+        return {'installed': app.name, 'bundle_id': bundle_id, 'data_kept': data_kept}
+
+    async def install_stamp(self, serial, package):
+        code, out, _ = await run(['xcrun', 'simctl', 'get_app_container', serial, package, 'app'],
+                                 timeout=30, check=False)
+        path = Path(out.decode('utf-8', 'replace').strip()) if code == 0 else None
+        try:
+            return f'{path}@{path.stat().st_mtime_ns}' if path else None
+        except OSError:
+            return None
+
+    async def grant(self, serial, package, appops=(), privacy=()):
+        granted = []
+        for service in privacy:
+            await run(['xcrun', 'simctl', 'privacy', serial, 'grant', service, package], timeout=30)
+            granted.append(service)
+        return {'granted': granted, **({'ignored': sorted(appops)} if appops else {})}
 
     async def uninstall(self, serial, app_id):
         await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60)
         return {'uninstalled': app_id}
 
-    async def launch(self, serial, app_id):
-        await run(['xcrun', 'simctl', 'launch', serial, app_id], timeout=60)
-        return {'launched': app_id}
+    @staticmethod
+    def launch_arguments(extras=None, bool_extras=None):
+        """UserDefaults argument domain: `-key value` overrides UserDefaults.standard for this launch."""
+        argv = []
+        for key, value in (extras or {}).items():
+            argv += ['-' + key, value]
+        for key, value in (bool_extras or {}).items():
+            argv += ['-' + key, 'YES' if value else 'NO']
+        return argv
+
+    async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False):
+        args = self.launch_arguments(extras, bool_extras)
+        await self._stop_console(serial)
+        restart = ['--terminate-running-process'] if args or console else []
+        if not console:
+            await run(['xcrun', 'simctl', 'launch', *restart, serial, app_id, *args], timeout=60)
+            return {'launched': app_id, **({'extras': sorted(extras or {}) + sorted(bool_extras or {})} if args else {})}
+        # --console-pty keeps simctl attached to the app's stdout/stderr through a pty, so Swift
+        # `print` is line-buffered and lands in this file as it happens; `logs` reads it back.
+        folder = Path(tempfile.gettempdir()) / f'loma-console-{os.getuid()}'
+        folder.mkdir(mode=0o700, exist_ok=True)
+        path = folder / f'{serial}.log'
+        path.write_bytes(b'')
+        with open(path, 'ab') as handle:  # O_APPEND: `logs clear` can truncate it while the app writes
+            proc = await asyncio.create_subprocess_exec(
+                'xcrun', 'simctl', 'launch', '--console-pty', *restart, serial, app_id, *args,
+                stdin=asyncio.subprocess.DEVNULL, stdout=handle, stderr=handle)
+        self.consoles[serial] = (proc, path)
+        await asyncio.sleep(1.5)
+        if proc.returncode not in (None, 0):
+            raise OpError('simctl launch failed: ' + path.read_text(errors='replace')[-500:])
+        return {'launched': app_id, 'console': True, **({'extras': sorted(extras or {}) + sorted(bool_extras or {})}
+                                                          if args else {})}
+
+    async def _stop_console(self, serial):
+        proc, _ = self.consoles.get(serial, (None, None))
+        if proc is not None and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), 5)
+            except asyncio.TimeoutError:
+                proc.kill()
 
     async def stop(self, serial, app_id):
         await run(['xcrun', 'simctl', 'terminate', serial, app_id], timeout=30, check=False)
+        await self._stop_console(serial)
         return {'stopped': app_id}
 
     async def reset_app(self, serial, app_id):
@@ -506,24 +728,48 @@ class IOS:
             await run(['xcrun', 'simctl', 'io', serial, 'screenshot', '--type=png', str(target)], timeout=30)
             return target.read_bytes()
 
+    async def capture(self, serial):
+        return 'png', await self.screenshot(serial)
+
+    async def record(self, serial, seconds, started=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'rec.mp4'
+            proc = await asyncio.create_subprocess_exec(
+                'xcrun', 'simctl', 'io', serial, 'recordVideo', '--codec=h264', '--force', str(target),
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+            try:
+                await asyncio.sleep(0.8)
+                if started is not None:
+                    await started()
+                await asyncio.sleep(seconds)
+                proc.send_signal(2)  # SIGINT finalises the movie file
+                await asyncio.wait_for(proc.wait(), 20)
+            except BaseException:
+                if proc.returncode is None:
+                    proc.kill()
+                raise
+            if not target.exists():
+                raise OpError('simctl recordVideo produced no file')
+            return target.read_bytes()
+
     async def ui_tree(self, serial):
         _, out, _ = await run([self._idb(), 'ui', 'describe-all', '--udid', serial, '--json'], timeout=30)
         try:
             raw = json.loads(out)
         except ValueError:
             raw = [json.loads(line) for line in out.decode().splitlines() if line.strip().startswith('{')]
-        elements = []
+        elements, screen = [], [0, 0]
         for node in raw if isinstance(raw, list) else []:
             frame = node.get('frame') or {}
             x, y, w, h = (float(frame.get(k, 0)) for k in ('x', 'y', 'width', 'height'))
+            screen = [max(screen[0], round(x + w)), max(screen[1], round(y + h))]
             element = {'type': node.get('type', ''), 'text': str(node.get('AXValue') or '')[:200],
                        'label': str(node.get('AXLabel') or '')[:200], 'id': node.get('AXUniqueId') or '',
                        'bounds': [round(x), round(y), round(x + w), round(y + h)],
                        'center': [round(x + w / 2), round(y + h / 2)]}
-            elements.append({k: v for k, v in element.items() if v not in ('', None)})
-            if len(elements) >= MAX_UI_ELEMENTS:
-                break
-        return {'units': 'points', 'elements': elements}
+            if len(elements) < MAX_UI_ELEMENTS:
+                elements.append({k: v for k, v in element.items() if v not in ('', None)})
+        return {'units': 'points', 'screen': screen, 'elements': elements}
 
     async def tap(self, serial, x, y):
         await run([self._idb(), 'ui', 'tap', '--udid', serial, str(x), str(y)], timeout=15)
@@ -538,20 +784,61 @@ class IOS:
         await run([self._idb(), 'ui', 'text', '--udid', serial, '--', text], timeout=30)
         return {'typed': len(text)}
 
+    async def clear_text(self, serial, length):
+        # Backspace then forward-delete: clears the field wherever the tap left the cursor. One call.
+        codes = [IOS_HID_KEYS['delete']] * length + [IOS_FORWARD_DELETE] * length
+        await run([self._idb(), 'ui', 'key-sequence', '--udid', serial, *map(str, codes)], timeout=60)
+        return {'cleared': True}
+
     async def key(self, serial, key):
+        if key == 'wakeup':
+            return {'key': key, 'note': 'Simulators do not sleep; nothing to do'}
+        if key in IOS_HID_KEYS:
+            await run([self._idb(), 'ui', 'key', '--udid', serial, str(IOS_HID_KEYS[key])], timeout=15)
+            return {'key': key}
         if key not in IOS_BUTTONS:
-            raise OpError('Unsupported key on iOS: ' + ', '.join(sorted(IOS_BUTTONS)))
+            raise OpError('Unsupported key on iOS: ' + ', '.join(sorted({*IOS_BUTTONS, *IOS_HID_KEYS, 'wakeup'})))
         await run([self._idb(), 'ui', 'button', '--udid', serial, IOS_BUTTONS[key]], timeout=15)
         return {'key': key}
 
-    async def logs(self, serial, lines, clear):
+    def console_lines(self, serial, clear=False):
+        """stdout/stderr of the app last launched with console capture, or None if there is none."""
+        _, path = self.consoles.get(serial, (None, None))
+        if path is None or not path.exists():
+            return None
+        if clear:
+            with open(path, 'r+b') as handle:
+                handle.truncate(0)
+            return []
+        with open(path, 'rb') as handle:
+            handle.seek(max(0, path.stat().st_size - MAX_OUTPUT))
+            return handle.read().decode('utf-8', 'replace').replace('\r\n', '\n').splitlines()
+
+    async def logs(self, serial, lines, clear, source='auto'):
+        console = self.console_lines(serial, clear) if source in ('auto', 'console') else None
+        if source == 'console' and console is None:
+            raise OpError('No console capture on this simulator: launch the app with console=true first')
         if clear:
             self.log_start[serial] = time.strftime('%Y-%m-%d %H:%M:%S')
             return []
+        if console is not None:
+            return console[-lines:]
         window = ['--start', self.log_start[serial]] if serial in self.log_start else ['--last', '2m']
         _, out, _ = await run(['xcrun', 'simctl', 'spawn', serial, 'log', 'show', *window,
                                '--style', 'compact'], timeout=60, keep='tail')
         return out.decode('utf-8', 'replace').splitlines()[-lines:]
+
+
+def collect_screenshots(folder):
+    """takeScreenshot outputs, read before the flow's temp dir is deleted (16 MB budget)."""
+    shots, total = [], 0
+    for path in sorted(folder.rglob('*.png'), key=lambda p: p.stat().st_mtime):
+        data = path.read_bytes()
+        total += len(data)
+        if total > MAX_MEDIA_BYTES:
+            break
+        shots.append({'name': path.name, 'png_base64': base64.b64encode(data).decode()})
+    return shots
 
 
 # ── Build files ───────────────────────────────────────────────────────────
@@ -635,8 +922,11 @@ def find_file(path, suffix):
 
 class Runner:
     OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
-           'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow'}
+           'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow',
+           'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record'}
     APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
+    LAUNCHING_OPS = {'burst', 'record'}  # may launch app_id right before capturing
+    CACHE_KEEP = 4
 
     def __init__(self, config, drivers=None, session=None):
         self.config = config
@@ -648,6 +938,8 @@ class Runner:
         self.inventory = {}
         self.send_lock = None  # created per connection: on 3.9 a Lock binds to the loop current at creation
         self.cf_headers = {}
+        self.installed = {}  # (serial, package) -> (build sha256, install stamp) of builds this runner installed
+        self.cache_dir = Path(config.get('cache_dir') or CONFIG_DIR / 'build-cache')
 
     def capabilities(self):
         caps = [d.platform for d in self.drivers]
@@ -678,9 +970,9 @@ class Runner:
             raise OpError('Device is not connected to this runner (is the emulator/simulator running?)')
         driver, _ = self.inventory[serial]
         app_id = None
-        if op in self.APP_OPS:
-            app_id = need_str(args, 'app_id', APP_ID, 255, optional=op == 'install')
-            if self.allowed_apps and app_id not in self.allowed_apps:
+        if op in self.APP_OPS or op in self.LAUNCHING_OPS:
+            app_id = need_str(args, 'app_id', APP_ID, 255, optional=op in ('install', *self.LAUNCHING_OPS))
+            if self.allowed_apps and app_id not in self.allowed_apps and (app_id or op in self.APP_OPS):
                 raise OpError(f"App {app_id} is not in this runner's allowed_app_ids (install needs app_id)")
         lock = self.locks.setdefault(serial, asyncio.Lock())
         async with lock:
@@ -688,11 +980,39 @@ class Runner:
 
     async def _dispatch(self, driver, op, serial, args, app_id):
         if op == 'install':
-            with tempfile.TemporaryDirectory(prefix='loma-build-') as tmp:
-                path = await self.download(args, Path(tmp))
-                return await driver.install(serial, path, app_id, self.allowed_apps)
-        if op in ('uninstall', 'launch', 'stop', 'reset_app'):
+            return await self.install(driver, serial, args, app_id)
+        if op == 'launch':
+            return await driver.launch(serial, app_id, **need_launch(args))
+        if op in ('uninstall', 'stop', 'reset_app'):
             return await getattr(driver, op)(serial, app_id)
+        if op in ('set_text', 'clear_text'):
+            return await self.set_text(driver, serial, args, op == 'set_text')
+        if op in ('wait_for', 'tap_text'):
+            timeout = need_int(args, 'timeout_s', 0, 60, default=10 if op == 'wait_for' else 5)
+            gone = need_bool(args, 'gone') if op == 'wait_for' else False
+            found = await self.wait_for(driver, serial, need_selector(args), timeout, gone)
+            if op == 'wait_for':
+                return found
+            if not found['found']:
+                raise OpError(f"No element matching {args.get('match')!r}. Visible: {found['visible']}")
+            element = found['element']
+            await driver.tap(serial, *element['center'])
+            return {'tapped': element['center'], 'element': element, 'elapsed_ms': found['elapsed_ms']}
+        if op == 'scroll_until_visible':
+            direction = args.get('direction', 'down')
+            if direction not in ('down', 'up'):
+                raise OpError('Invalid direction (down or up)')
+            return await self.scroll_until_visible(driver, serial, need_selector(args), direction,
+                                                   need_int(args, 'max_swipes', 1, 20, default=8))
+        if op == 'burst':
+            return await self.burst(driver, serial, need_int(args, 'count', 2, 12),
+                                    need_int(args, 'interval_ms', 100, 5000, default=500), self._launcher(driver, serial, args, app_id))
+        if op == 'record':
+            seconds = need_int(args, 'duration_s', 1, 20)
+            data = await driver.record(serial, seconds, self._launcher(driver, serial, args, app_id))
+            if len(data) > MAX_MEDIA_BYTES:
+                raise OpError('Recording is larger than 16 MB; use a shorter duration')
+            return {'mp4_base64': base64.b64encode(data).decode(), 'bytes': len(data), 'duration_s': seconds}
         if op == 'open_url':
             return await driver.open_url(serial, check_url(need_str(args, 'url', max_len=2000)))
         if op == 'screenshot':
@@ -716,7 +1036,10 @@ class Runner:
             if type(clear) is not bool:
                 raise OpError('Invalid clear')
             needle = need_str(args, 'filter', max_len=200, optional=True)
-            output = await driver.logs(serial, 5000 if needle else lines, clear)
+            source = args.get('source', 'auto')
+            if source not in ('auto', 'system', 'console'):
+                raise OpError('Invalid source (auto, system or console)')
+            output = await driver.logs(serial, 5000 if needle else lines, clear, source)
             if needle:
                 output = [line for line in output if needle.lower() in line.lower()]
             return {'lines': [line[:2000] for line in output[-lines:]], 'cleared': clear}
@@ -724,13 +1047,165 @@ class Runner:
             return await self.run_flow(serial, need_str(args, 'flow', max_len=MAX_FLOW))
         raise OpError('Unsupported operation')
 
+    # ── Compound ops: one round trip from the agent, polling here on the runner machine ──
+
+    def _launcher(self, driver, serial, args, app_id):
+        """For burst/record: a callback that launches app_id right when capture starts."""
+        if not app_id:
+            return None
+        options = need_launch(args)
+
+        async def launch():
+            await driver.launch(serial, app_id, **options)
+        return launch
+
+    async def wait_for(self, driver, serial, selector, timeout, gone=False):
+        loop = asyncio.get_running_loop()
+        start, polls, visible, error = loop.time(), 0, [], None
+        while True:
+            polls += 1
+            try:
+                tree = await driver.ui_tree(serial)
+                hits = find_elements(tree['elements'], *selector)
+                visible = [e.get('text') or e.get('label') for e in tree['elements'] if e.get('text') or e.get('label')]
+                error = None
+            except OpError as exc:  # UI not idle (animations): keep polling until the deadline
+                hits, error = None, str(exc)[:300]
+            elapsed = loop.time() - start
+            if hits is not None and bool(hits) != gone:
+                result = {'found': True, 'elapsed_ms': int(elapsed * 1000), 'polls': polls}
+                return {**result, 'element': hits[0], 'matches': len(hits)} if hits else result
+            if elapsed >= timeout:
+                return {'found': False, 'elapsed_ms': int(elapsed * 1000), 'polls': polls,
+                        'visible': [v[:60] for v in visible[:40]], **({'last_error': error} if error else {})}
+            await asyncio.sleep(POLL_SECONDS)
+
+    async def set_text(self, driver, serial, args, typing):
+        text = need_str(args, 'text', max_len=MAX_TEXT) if typing else None
+        clear = need_bool(args, 'clear', default=True) if typing else True
+        length, element = 64, None
+        if args.get('match') is not None:
+            found = await self.wait_for(driver, serial, need_selector(args), 5)
+            if not found['found']:
+                raise OpError(f"No element matching {args.get('match')!r}. Visible: {found['visible']}")
+            element = found['element']
+            await driver.tap(serial, *element['center'])
+            await asyncio.sleep(0.3)
+            length = min(len(element.get('text') or '') + 8, MAX_TEXT)
+        result = {'focused': element} if element else {}
+        if clear:
+            result.update(await driver.clear_text(serial, length))
+        if typing:
+            result.update(await driver.type_text(serial, text))
+        return result
+
+    async def scroll_until_visible(self, driver, serial, selector, direction, max_swipes):
+        swipes = 0
+        while True:
+            tree = await driver.ui_tree(serial)
+            hits = find_elements(tree['elements'], *selector)
+            if hits:
+                return {'found': True, 'element': hits[0], 'swipes': swipes}
+            if swipes >= max_swipes:
+                visible = [e.get('text') or e.get('label') for e in tree['elements'] if e.get('text') or e.get('label')]
+                return {'found': False, 'swipes': swipes, 'visible': [v[:60] for v in visible[:40]]}
+            width, height = tree.get('screen') or [0, 0]
+            if width < 10 or height < 10:
+                raise OpError('Could not determine the screen size from the UI tree')
+            x, top, bottom = width // 2, height * 30 // 100, height * 70 // 100
+            start, end = (bottom, top) if direction == 'down' else (top, bottom)
+            await driver.swipe(serial, x, start, x, end, SWIPE_MS)
+            swipes += 1
+            await asyncio.sleep(0.5)  # let the list settle before looking again
+
+    async def burst(self, driver, serial, count, interval_ms, launch=None):
+        """count screenshots at fixed offsets, timed here (not by model turns). Capture calls overlap
+        if one takes longer than the interval, so each frame starts on schedule; at_ms is its offset."""
+        loop = asyncio.get_running_loop()
+        if launch is not None:
+            await launch()
+        start = loop.time()
+
+        async def shot(index):
+            await asyncio.sleep(max(0.0, start + index * interval_ms / 1000 - loop.time()))
+            at = int((loop.time() - start) * 1000)
+            _, data = await driver.capture(serial)
+            return at, data
+
+        frames, total, dropped = [], 0, 0
+        for at, data in await asyncio.gather(*(shot(i) for i in range(count))):
+            total += len(data)
+            if total > MAX_MEDIA_BYTES:
+                dropped += 1
+                continue
+            width, height = png_size(data)
+            frames.append({'png_base64': base64.b64encode(data).decode(), 'at_ms': at, 'width': width, 'height': height})
+        return {'frames': frames, 'interval_ms': interval_ms, **({'dropped': dropped} if dropped else {}),
+                **({'launched': True} if launch is not None else {})}
+
+    # ── Install: update in place, skip identical builds, cache downloads ──
+
+    async def install(self, driver, serial, args, app_id):
+        expected = need_str(args, 'sha256', SHA256)
+        force = need_bool(args, 'force')
+        appops, privacy = args.get('grant_appops') or [], args.get('grant_privacy') or []
+        if (not isinstance(appops, list) or not isinstance(privacy, list) or len(appops) > 10 or len(privacy) > 10
+                or not all(isinstance(o, str) and APPOP.fullmatch(o) for o in appops)
+                or not all(s in IOS_PRIVACY for s in privacy)):
+            raise OpError('Invalid grant_appops / grant_privacy')
+        if not force:
+            for (seen_serial, package), (sha, stamp) in list(self.installed.items()):
+                if seen_serial == serial and sha == expected and (not app_id or package == app_id):
+                    if stamp is not None and await driver.install_stamp(serial, package) == stamp:
+                        result = {'installed': need_str(args, 'filename', FILENAME), 'skipped': True,
+                                  'note': 'This exact build is already installed; pass force to reinstall',
+                                  'package': package}
+                        return await self._grant(driver, serial, package, appops, privacy, result)
+        with tempfile.TemporaryDirectory(prefix='loma-build-') as tmp:
+            path = await self.download(args, Path(tmp))
+            result = await driver.install(serial, path, app_id, self.allowed_apps)
+        package = result.get('bundle_id') or app_id
+        if package:
+            self.installed[(serial, package)] = (expected, await driver.install_stamp(serial, package))
+        return await self._grant(driver, serial, package, appops, privacy, result)
+
+    async def _grant(self, driver, serial, package, appops, privacy, result):
+        if appops or privacy:
+            if not package:
+                raise OpError('Granting permissions needs app_id')
+            result.update(await driver.grant(serial, package, appops, privacy))
+        return result
+
+    def _cached(self, sha256):
+        path = self.cache_dir / sha256
+        return path if path.is_file() else None
+
+    def _store_in_cache(self, path, sha256):
+        """Best effort: keep the last few verified builds, keyed by checksum."""
+        try:
+            self.cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            tmp = self.cache_dir / (sha256 + '.part')
+            shutil.copyfile(path, tmp)
+            os.replace(tmp, self.cache_dir / sha256)
+            entries = sorted((p for p in self.cache_dir.iterdir() if SHA256.fullmatch(p.name)),
+                             key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in entries[self.CACHE_KEEP:]:
+                old.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     async def download(self, args, target):
         blob_id = need_str(args, 'blob_id', BLOB_ID)
         expected = need_str(args, 'sha256', SHA256)
         name = need_str(args, 'filename', FILENAME)
+        path = target / name
+        cached = self._cached(expected)
+        if cached is not None:
+            await asyncio.to_thread(shutil.copyfile, cached, path)
+            os.utime(cached)  # most recently used
+            return path
         url = f"{self.config['server']}/device-runner/blobs/{blob_id}"
         digest, size = hashlib.sha256(), 0
-        path = target / name
         import aiohttp
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120)
         async with self.session.get(url, headers=self.auth_headers(), timeout=timeout) as response:
@@ -745,6 +1220,7 @@ class Runner:
                     handle.write(chunk)
         if digest.hexdigest() != expected:
             raise OpError('Build checksum mismatch; refusing to install')
+        await asyncio.to_thread(self._store_in_cache, path, expected)
         return path
 
     async def run_flow(self, serial, flow):
@@ -758,7 +1234,8 @@ class Runner:
                                         '--output', str(report)], timeout=600, check=False, cwd=tmp)
             return {'passed': code == 0, 'exit_code': code,
                     'report': report.read_text()[-20000:] if report.exists() else '',
-                    'output': (out.decode('utf-8', 'replace') + err)[-8000:]}
+                    'output': (out.decode('utf-8', 'replace') + err)[-8000:],
+                    'screenshots': collect_screenshots(Path(tmp))}
 
     def auth_headers(self):
         return {'Authorization': 'Bearer ' + self.config['secret'], 'X-Loma-Runner-Id': self.config['runner_id'],

@@ -89,27 +89,41 @@ CATALOG = [
     _tool('device.lease', 'Reserve a device for this conversation (renews on every call, expires after 15 idle minutes). Give device_id, or platform to pick any free online device.', {
         'device_id': TEXT, 'platform': {'type': 'string', 'enum': ['android', 'ios']}}, []),
     _tool('device.release', 'Release a device you leased so other sessions can use it. Always release when done.', {'device_id': TEXT}),
-    _tool('device.install', 'Install a CI build on a device. The backend fetches the named GitHub Actions artifact (latest for the PR head, or from run_id) and the runner verifies its checksum. Pass app_id to uninstall the old app first (avoids signature mismatches). Returns the installed commit.', {
+    _tool('device.install', 'Install a CI build on a device. The backend fetches the named GitHub Actions artifact (latest for the PR head, or from run_id) and the runner verifies its checksum. Updates in place (keeps app data) and only reinstalls on a signature mismatch; an identical build is skipped unless force. wait_s waits server-side for the CI run to produce the artifact; dispatch_workflow (e.g. build.yml, needs pr) starts it if no run exists. grant_appops (Android, e.g. SCHEDULE_EXACT_ALARM; needs app_id) / grant_privacy (iOS) grant permissions after install. Returns the installed commit.', {
         'device_id': TEXT, 'repo': TEXT, 'artifact_name': TEXT, 'pr': {'type': 'integer', 'minimum': 1},
-        'run_id': {'type': 'integer', 'minimum': 1}, 'app_id': TEXT}, ['device_id', 'repo', 'artifact_name']),
-    _tool('device.app', 'Launch, stop, clear data of (reset_app, Android only) or uninstall an app by package name / bundle id.', {
-        'device_id': TEXT, 'action': {'type': 'string', 'enum': ['launch', 'stop', 'reset_app', 'uninstall']}, 'app_id': TEXT}),
-    _tool('device.input', 'Interact with the device: tap (x,y), swipe (x1,y1,x2,y2[,duration_ms]), type (text), key (back/home/enter/delete/tab/app_switch...), open_url (deep link). Coordinates come from device.observe ui_tree centers.', {
-        'device_id': TEXT, 'action': {'type': 'string', 'enum': ['tap', 'swipe', 'type', 'key', 'open_url']},
+        'run_id': {'type': 'integer', 'minimum': 1}, 'app_id': TEXT,
+        'wait_s': {'type': 'integer', 'minimum': 0, 'maximum': 1200}, 'dispatch_workflow': {'type': 'string', 'maxLength': 100},
+        'grant_appops': {'type': 'array', 'maxItems': 10, 'items': {'type': 'string', 'pattern': '^[A-Z][A-Z0-9_]{2,63}$'}},
+        'grant_privacy': {'type': 'array', 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 40}},
+        'force': {'type': 'boolean'}}, ['device_id', 'repo', 'artifact_name']),
+    _tool('device.app', 'Launch, stop, clear data of (reset_app, Android only) or uninstall an app by package name / bundle id. launch takes extras (string values) and bool_extras: Android intent extras (am start --es/--ez), iOS launch arguments (-key value, overriding UserDefaults). console=true (iOS) captures the app stdout (print) for device.observe logs.', {
+        'device_id': TEXT, 'action': {'type': 'string', 'enum': ['launch', 'stop', 'reset_app', 'uninstall']}, 'app_id': TEXT,
+        'extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'string', 'maxLength': 1000}},
+        'bool_extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'boolean'}},
+        'activity': {'type': 'string', 'maxLength': 255}, 'console': {'type': 'boolean'}}, ['device_id', 'action', 'app_id']),
+    _tool('device.input', 'Interact with the device: tap (x,y), swipe (x1,y1,x2,y2[,duration_ms]), type (text), key (back/home/enter/delete/tab/escape/wakeup...), open_url (deep link). Compound actions, one call each: set_text (text; optional match focuses the field first; clears it unless clear=false), clear_text, tap_text (match; waits up to timeout_s), wait_for (match, timeout_s, gone), scroll_until_visible (match, direction, max_swipes). match finds by text/id/label (by, exact). Coordinates come from device.observe ui_tree centers.', {
+        'device_id': TEXT, 'action': {'type': 'string', 'enum': ['tap', 'swipe', 'type', 'key', 'open_url', 'set_text',
+                                                                'clear_text', 'tap_text', 'wait_for', 'scroll_until_visible']},
+        'match': {'type': 'string', 'minLength': 1, 'maxLength': 200},
+        'by': {'type': 'string', 'enum': ['any', 'text', 'id', 'label']}, 'exact': {'type': 'boolean'},
+        'timeout_s': {'type': 'integer', 'minimum': 0, 'maximum': 60}, 'gone': {'type': 'boolean'}, 'clear': {'type': 'boolean'},
+        'direction': {'type': 'string', 'enum': ['down', 'up']}, 'max_swipes': {'type': 'integer', 'minimum': 1, 'maximum': 20},
         'x': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
         'x1': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y1': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
         'x2': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y2': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
         'duration_ms': {'type': 'integer', 'minimum': 50, 'maximum': 5000},
         'text': {'type': 'string', 'minLength': 1, 'maxLength': 500},
         'key': {'type': 'string', 'enum': ['back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up',
-                                           'volume_down', 'power', 'lock', 'siri', 'side', 'apple_pay']},
+                                           'volume_down', 'power', 'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup']},
         'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}, ['device_id', 'action']),
-    _tool('device.observe', 'Observe the device: ui_tree (visible elements with text/id/bounds/center; use it for all checks), screenshot (shown to the user as evidence; you cannot view it), or logs (logcat / simulator log; optional filter, lines, clear).', {
+    _tool('device.observe', 'Observe the device: ui_tree (visible elements with text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), or logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true).', {
         'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs']},
         'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': {'type': 'string', 'minLength': 1, 'maxLength': 200},
-        'clear': {'type': 'boolean'}}, ['device_id', 'what']),
-    _tool('device.run_flow', 'Run a Maestro YAML flow on the device and return pass/fail with the JUnit report. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
-        'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}}),
+        'clear': {'type': 'boolean'}, 'compact': {'type': 'boolean'}, 'clickable_only': {'type': 'boolean'},
+        'source': {'type': 'string', 'enum': ['auto', 'system', 'console']}}, ['device_id', 'what']),
+    _tool('device.run_flow', 'Run a Maestro YAML flow on the device. Returns pass/fail, test counts and only the failed steps (verbose=true for the full output and JUnit report); takeScreenshot images are delivered to the user. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
+        'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}, 'verbose': {'type': 'boolean'}},
+        ['device_id', 'flow']),
     _tool('workspace.list', 'List files in this disposable worker workspace, including staged attachments.', {}),
     _tool('workspace.import', 'Import a newly granted artifact, such as a skill asset, into this workspace.', {'artifact_id': TEXT}),
     _tool('workspace.read', 'Read a UTF-8 file relative to this private workspace.', {'path': PATH}),
