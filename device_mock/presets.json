@@ -1,0 +1,42 @@
+{
+  "_comment": "Device-mock presets for the widget skeleton feature (widgetSkeletonSettings). Each preset is deep-merged onto `base`. Payloads mirror api-go BuildWidgetSkeletonSettings / ApplyProductWidgetLottie (plotline-services #1990) as used in the SDK device tests. Schema: docs/device-mock.md.",
+  "base": {
+    "init_path": "/sdk/init",
+    "request_patch": {"oldResponseBody": null},
+    "asset_scope": "data.widgets",
+    "init_patch": {"data": {"flows": []}}
+  },
+  "presets": {
+    "absent": {
+      "description": "Old api-go: no widgetSkeletonSettings key. Widget images delayed 9s.",
+      "init_patches": [{"data": {"widgetSkeletonSettings": null}}],
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 9000}]
+    },
+    "disabled": {
+      "description": "Setting present but disabled (what existing customers get). Images delayed 9s.",
+      "init_patches": [{"data": {"widgetSkeletonSettings": {"enabled": false, "mode": "shimmer", "lottieUrl": "", "baseColor": "#E8E9EC", "highlightColor": "#F6F7F8", "cornerRadius": 8.0, "durationMs": 1200}}}],
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 9000}]
+    },
+    "shimmer": {
+      "description": "Shimmer skeleton with default colors. Images delayed 9s so the loading state is visible.",
+      "init_patches": [{"data": {"widgetSkeletonSettings": {"enabled": true, "mode": "shimmer", "lottieUrl": "", "baseColor": "#E8E9EC", "highlightColor": "#F6F7F8", "cornerRadius": 8.0, "durationMs": 1200}}}],
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 9000}]
+    },
+    "lottie": {
+      "description": "Lottie skeleton; widgets with no/default widgetLoaderUrl get the product Lottie. Images delayed 9s.",
+      "init_patches": [{"data": {"widgetSkeletonSettings": {"enabled": true, "mode": "lottie", "lottieUrl": "https://cdn.plotline.so/media/642a79bb0df16f999c3a8464/67d9a88f63b299bd938990c5-1742317735302.lottie", "baseColor": "#E8E9EC", "highlightColor": "#F6F7F8", "cornerRadius": 8.0, "durationMs": 1200}}}],
+      "item_patches": [{"path": "data.widgets", "where": {"widgetLoaderUrl": ["", null, "https://cdn.plotline.so/media/642a79bb0df16f999c3a8464/67d9a88f63b299bd938990c5-1742317735302.lottie"]}, "merge": {"widgetLoaderUrl": "https://cdn.plotline.so/media/642a79bb0df16f999c3a8464/67d9a88f63b299bd938990c5-1742317735302.lottie"}}],
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 9000}]
+    },
+    "failure": {
+      "description": "Shimmer on; widget images fail with 404 after 4s (no stuck shimmer expected).",
+      "init_patches": [{"data": {"widgetSkeletonSettings": {"enabled": true, "mode": "shimmer", "lottieUrl": "", "baseColor": "#E8E9EC", "highlightColor": "#F6F7F8", "cornerRadius": 8.0, "durationMs": 1200}}}],
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 4000, "status": 404}]
+    },
+    "timeout": {
+      "description": "Shimmer on; widget images delayed 25s, past the SDK's 10s skeleton cap.",
+      "init_patches": [{"data": {"widgetSkeletonSettings": {"enabled": true, "mode": "shimmer", "lottieUrl": "", "baseColor": "#E8E9EC", "highlightColor": "#F6F7F8", "cornerRadius": 8.0, "durationMs": 1200}}}],
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 25000}]
+    }
+  }
+}
