@@ -55,10 +55,14 @@ function getMongoClient(): Promise<MongoClient> {
   return mongoClientPromise;
 }
 
-export async function getUsersCollection() {
+export async function getDashboardDb() {
   const client = await getMongoClient();
   const dbName = process.env.OBSERVABILITY_DB_NAME || "loma_observability";
-  return client.db(dbName).collection("users");
+  return client.db(dbName);
+}
+
+export async function getUsersCollection() {
+  return (await getDashboardDb()).collection("users");
 }
 
 export function normalizeEmail(value: unknown): string {

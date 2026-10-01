@@ -4,12 +4,9 @@ Legacy X-User-Email alone cannot approve, change grants or read private work.
 The planner has no API caller, session cookie, signing secret or HTTP tool.
 """
 import asyncio
-import hashlib
-import hmac
 import json
 import logging
 import os
-import time
 
 from aiohttp import web
 from pymongo import ReturnDocument
@@ -30,20 +27,8 @@ def enabled():
 async def verify(request):
     if not enabled():
         raise web.HTTPNotFound(text='Bounded work is not enabled')
-    key = os.getenv('LOMA_WORK_GATEWAY_SECRET', '')
-    stamp = request.headers.get('X-Work-Time', '')
-    email = get_user_email(request)
-    if request.content_length and request.content_length > 100000:
-        raise web.HTTPRequestEntityTooLarge(max_size=100000, actual_size=request.content_length)
-    raw = await request.read()
-    try:
-        fresh = abs(time.time() - int(stamp)) < 60
-    except ValueError:
-        fresh = False
-    payload = '\n'.join([stamp, request.method, request.path, email, hashlib.sha256(raw).hexdigest()])
-    signature = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    if len(key) < 32 or not fresh or not email or not hmac.compare_digest(signature, request.headers.get('X-Work-Signature', '')):
-        raise web.HTTPUnauthorized(text='Verified dashboard session required')
+    from api.session_gateway import verify_dashboard_signature
+    email, raw = await verify_dashboard_signature(request)
     db = get_db()
     if db is None:
         raise web.HTTPServiceUnavailable(text='Database unavailable')
