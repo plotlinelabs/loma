@@ -10,11 +10,11 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from mongomock_motor import AsyncMongoMockClient
 
-from api.device_routes import setup_device_routes
-from devices import service as service_module
-from devices import store
-from devices.hub import DeviceError
-from devices.service import DeviceService
+from device_loader.api.device_routes import setup_device_routes
+from device_loader.backend import service as service_module
+from device_loader.backend import store
+from device_loader.backend.hub import DeviceError
+from device_loader.backend.service import DeviceService
 
 OWNER = 'owner@example.com'
 PNG = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR' + (1080).to_bytes(4, 'big') + (2400).to_bytes(4, 'big')
@@ -127,10 +127,10 @@ async def fake_identity(request, handler):
 async def test_routes(env, monkeypatch):
     db, make, device = env
     service, hub = make()
-    monkeypatch.setattr('api.device_routes.DeviceService', lambda db: service)
+    monkeypatch.setattr('device_loader.api.device_routes.DeviceService', lambda db: service)
     app = web.Application(middlewares=[fake_identity])
     setup_device_routes(app)
-    with patch('api.device_routes.get_db', return_value=db):
+    with patch('device_loader.api.device_routes.get_db', return_value=db):
         server = TestServer(app)
         await server.start_server()
         try:

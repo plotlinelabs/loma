@@ -9,16 +9,15 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from mongomock_motor import AsyncMongoMockClient
 
-from device_runner import loma_device_runner as ldr
-from devices import store, verify
-from devices.gateway import DeviceTools, TOOLS
-from devices.hub import DeviceError
-from devices.service import DeviceService, _validate
+from device_loader.runner import loma_device_runner as ldr
+from device_loader.backend import store, verify
+from device_loader.backend.gateway import DeviceTools, TOOLS
+from device_loader.backend.hub import DeviceError
+from device_loader.backend.service import DeviceService, _validate
 from isolation.catalog import CATALOG
 from isolation.protocol import RunAuthority
 
-sys.path.insert(0, 'tests')
-from test_devices_agent import FakeArtifacts  # noqa: E402
+from device_loader.tests.test_devices_agent import FakeArtifacts  # noqa: E402
 
 OWNER = 'owner@example.com'
 
@@ -278,7 +277,7 @@ async def test_agent_verification_tools(wired, monkeypatch):
 
     async def fake_judge(png, expect):
         return {'passed': True, 'confidence': 'high', 'observed': expect, 'issues': []}
-    monkeypatch.setattr('devices.service.judge_screenshot', fake_judge)
+    monkeypatch.setattr('device_loader.backend.service.judge_screenshot', fake_judge)
     tools = DeviceTools(db, auth, 'c1', artifacts=FakeArtifacts(auth), service=service, on_artifact=on_artifact)
     started = await tools(auth, 'device.configure', {'device_id': device, 'capture_network': True})
     assert started == {'network_capture': {'capturing': True}}

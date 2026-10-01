@@ -5,14 +5,13 @@ import pytest
 import pytest_asyncio
 from mongomock_motor import AsyncMongoMockClient
 
-from device_runner import loma_device_runner as ldr
-from devices import builds, service as service_mod, store
-from devices.builds import BlobStore
-from devices.hub import DeviceError, RunnerHub
-from devices.service import DeviceService, _validate, compact_tree
-from tools import device as device_cli
+from device_loader.runner import loma_device_runner as ldr
+from device_loader.backend import builds, service as service_mod, store
+from device_loader.backend.builds import BlobStore
+from device_loader.backend.hub import DeviceError, RunnerHub
+from device_loader.backend.service import DeviceService, _validate, compact_tree
+from device_loader.cli import device as device_cli
 
-sys.path.insert(0, 'tests')
 OWNER = 'owner@example.com'
 TREE = {'units': 'pixels', 'screen': [1080, 2400], 'elements': [
     {'type': 'TextView', 'text': 'Welcome'},

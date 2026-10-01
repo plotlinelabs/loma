@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from devices.hub import DeviceError
+from device_loader.backend.hub import DeviceError
 
 PRODUCT_ID = re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
 CAMPAIGN_ID = re.compile(r'[A-Za-z0-9_-]{1,64}\Z')

@@ -10,19 +10,18 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from mongomock_motor import AsyncMongoMockClient
 
-from api.device_routes import setup_device_routes
-from device_runner import loma_device_runner as ldr
-from devices import service as service_module
-from devices import store
-from devices.gateway import DeviceTools, MAX_RECORDINGS, TOOLS
-from devices.hub import DeviceError, RunnerHub
-from devices.service import DeviceOffline, DeviceService, _check_runner_version, _validate, audit_detail
+from device_loader.api.device_routes import setup_device_routes
+from device_loader.runner import loma_device_runner as ldr
+from device_loader.backend import service as service_module
+from device_loader.backend import store
+from device_loader.backend.gateway import DeviceTools, MAX_RECORDINGS, TOOLS
+from device_loader.backend.hub import DeviceError, RunnerHub
+from device_loader.backend.service import DeviceOffline, DeviceService, _check_runner_version, _validate, audit_detail
 from isolation.catalog import CATALOG
 from isolation.protocol import RunAuthority
 
-sys.path.insert(0, 'tests')
-from test_device_runner import FAKE_ADB, PNG, UI_XML  # noqa: E402
-from test_devices_agent import FakeArtifacts  # noqa: E402
+from device_loader.tests.test_device_runner import FAKE_ADB, PNG, UI_XML  # noqa: E402
+from device_loader.tests.test_devices_agent import FakeArtifacts  # noqa: E402
 
 OWNER = 'owner@example.com'
 DEVICE = 'r_0123456789abcdef/emulator-5554'
@@ -378,20 +377,20 @@ async def fake_identity(request, handler):
 @pytest.mark.asyncio
 async def test_server_offers_updates_and_serves_the_timeline(db, monkeypatch):
     test_hub = RunnerHub()
-    monkeypatch.setattr('api.device_routes.hub', test_hub)
+    monkeypatch.setattr('device_loader.api.device_routes.hub', test_hub)
     runner_id = await seed_runner(db)
     token, _ = await store.create_enrollment(db, OWNER, 'Old Mac')
     creds = await store.redeem_enrollment(db, token, {})
     app = web.Application(middlewares=[fake_identity])
     setup_device_routes(app)
-    with patch('api.device_routes.get_db', return_value=db):
+    with patch('device_loader.api.device_routes.get_db', return_value=db):
         server = TestServer(app)
         await server.start_server()
         base = str(server.make_url('')).rstrip('/')
         try:
             async with aiohttp.ClientSession() as http:
                 headers = {'Authorization': 'Bearer ' + creds['secret'], 'X-Loma-Runner-Id': creds['runner_id']}
-                from api.device_routes import runner_release
+                from device_loader.api.device_routes import runner_release
                 served_version, served_digest = runner_release()
                 assert served_version == ldr.VERSION  # the served script is the one in this repo
                 async with http.ws_connect(base + '/device-runner/ws', headers=headers) as ws:
@@ -426,7 +425,7 @@ async def test_server_offers_updates_and_serves_the_timeline(db, monkeypatch):
 
 
 def test_cli_configure_and_wait_online():
-    from tools import device
+    from device_loader.cli import device
     p = device.parser()
     base = ['--user-email', OWNER, '--auth-token', 't', '--scope', 'c']
     body = device.build_body(p.parse_args(base + ['configure', '--device-id', DEVICE, '--locale', 'ar-SA',

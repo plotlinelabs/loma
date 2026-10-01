@@ -15,10 +15,10 @@ from datetime import timedelta
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from devices import store
-from devices.builds import GITHUB_FETCH_TIMEOUT, blobs as default_blobs
-from devices.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError, hub as default_hub
-from devices.verify import plotline_activity, summarize_network, visual_check as judge_screenshot
+from device_loader.backend import store
+from device_loader.backend.builds import GITHUB_FETCH_TIMEOUT, blobs as default_blobs
+from device_loader.backend.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError, hub as default_hub
+from device_loader.backend.verify import plotline_activity, summarize_network, visual_check as judge_screenshot
 
 LEASE_TTL = timedelta(minutes=15)
 HOLD_TTL = timedelta(minutes=10)  # a dashboard take-over lapses this long after the person's last input

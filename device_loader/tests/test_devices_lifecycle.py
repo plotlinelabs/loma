@@ -5,11 +5,11 @@ import sys
 import pytest
 from mongomock_motor import AsyncMongoMockClient
 
-from device_runner import loma_device_runner as ldr
-from devices import store
-from devices.gateway import DeviceTools, TOOLS
-from devices.hub import DeviceError
-from devices.service import DeviceService
+from device_loader.runner import loma_device_runner as ldr
+from device_loader.backend import store
+from device_loader.backend.gateway import DeviceTools, TOOLS
+from device_loader.backend.hub import DeviceError
+from device_loader.backend.service import DeviceService
 from isolation.protocol import RunAuthority
 
 OWNER = 'owner@example.com'

@@ -5,8 +5,8 @@ import pytest
 from aiohttp import web
 from mongomock_motor import AsyncMongoMockClient
 
-from api import device_routes
-from devices import builds
+from device_loader.api import device_routes
+from device_loader.backend import builds
 
 
 class FakeRequest(dict):

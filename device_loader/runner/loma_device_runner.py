@@ -60,7 +60,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = '1.2.0'  # the backend gates newer ops/arguments on this (devices/service.py OP_MIN_RUNNER)
+VERSION = '1.2.0'  # the backend gates newer ops/arguments on this (device_loader/backend/service.py OP_MIN_RUNNER)
 PROTOCOL = 1
 CONFIG_DIR = Path(os.environ.get('LOMA_DEVICE_RUNNER_HOME', Path.home() / '.loma-device-runner'))
 CONFIG_PATH = CONFIG_DIR / 'config.json'

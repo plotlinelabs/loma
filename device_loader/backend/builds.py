@@ -18,7 +18,7 @@ from urllib.parse import quote, urljoin, urlparse
 
 import aiohttp
 
-from devices.hub import DeviceError
+from device_loader.backend.hub import DeviceError
 from tools._integration_key import get_integration_key
 
 MAX_BLOB = 500 * 1024 * 1024

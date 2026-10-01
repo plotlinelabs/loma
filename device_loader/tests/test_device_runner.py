@@ -9,7 +9,7 @@ import sys
 import zipfile
 import pytest
 
-from device_runner import loma_device_runner as ldr
+from device_loader.runner import loma_device_runner as ldr
 
 PNG = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\rIHDR' + (1080).to_bytes(4, 'big') + (2400).to_bytes(4, 'big') + b'\x08\x06\x00\x00\x00'
 UI_XML = b'''<?xml version="1.0"?><hierarchy rotation="0">

@@ -22,8 +22,8 @@ import asyncio
 import json
 import logging
 
-from devices.hub import DeviceError
-from devices.service import DeviceService
+from device_loader.backend.hub import DeviceError
+from device_loader.backend.service import DeviceService
 
 logger = logging.getLogger(__name__)
 MAX_RESULT = 200 * 1024
