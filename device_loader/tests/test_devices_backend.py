@@ -226,8 +226,25 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
                 tree = await service.call(OWNER, 'conv-1', device, 'ui_tree', {})
                 assert tree['elements'][0]['text'] == 'Show modal'
                 await service.call(OWNER, 'conv-1', device, 'tap', {'x': 300, 'y': 250})
-                with pytest.raises(DeviceError, match='ASCII'):
+                with pytest.raises(DeviceError, match='ASCII') as caught:
                     await service.call(OWNER, 'conv-1', device, 'type', {'text': 'héllo'})
+                assert caught.value.code == 'unsupported' and caught.value.dispatched == 'no'  # across the wire
+
+                # Ambiguity and settle, end to end: candidates and the post-action diff cross the WebSocket.
+                two_buys = (b'<?xml version="1.0"?><hierarchy rotation="0"><node class="android.widget.FrameLayout" '
+                            b'bounds="[0,0][1080,2400]"><node class="android.widget.Button" text="Buy" clickable="true" '
+                            b'bounds="[0,100][500,200]"/><node class="android.widget.Button" text="Buy" clickable="true" '
+                            b'bounds="[0,300][500,400]"/></node></hierarchy>')
+                (tmp_path / 'ui-seq-00.xml').write_bytes(two_buys)
+                with pytest.raises(DeviceError) as caught:
+                    await service.call(OWNER, 'conv-1', device, 'tap_text', {'match': 'Buy'})
+                assert caught.value.code == 'ambiguous' and len(caught.value.details['candidates']) == 2
+                await service.call(OWNER, 'conv-1', device, 'ui_tree', {'compact': True})
+                result = await service.call(OWNER, 'conv-1', device, 'tap_text',
+                                            {'match': 'Buy', 'nth': 1, 'settle': True, 'settle_ms': 2000})
+                assert result['tapped'] == [250, 150] and result['screen_after']['settled'] is True
+                assert result['screen_after']['note'] == 'Nothing on screen changed'
+                (tmp_path / 'ui-seq-00.xml').unlink()
 
                 # Install: backend blob → runner downloads with its secret → checksum → adb install.
                 apk = tmp_path / 'upload.apk'

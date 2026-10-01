@@ -8,6 +8,8 @@ import {
   RiCloseLine,
   RiComputerLine,
   RiDeleteBinLine,
+  RiHistoryLine,
+  RiLiveLine,
   RiLockUnlockLine,
   RiRefreshLine,
   RiShareLine,
@@ -21,6 +23,8 @@ import { EmptyState } from "@/components/EmptyState";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import { CopyButton } from "@/components/CopyButton";
 import DeviceBuildSources from "@/components/DeviceBuildSources";
+import DeviceActivity from "@/components/DeviceActivity";
+import DeviceLiveView from "@/components/DeviceLiveView";
 import {
   DeviceRecord,
   DeviceRunner,
@@ -41,47 +45,76 @@ function StatusDot({ online }: { online: boolean }) {
   );
 }
 
-function DeviceRow({ device, canRelease, busy, onRelease }: {
+function DeviceRow({ device, canRelease, busy, online, onRelease }: {
   device: DeviceRecord;
+  online: boolean;
   canRelease: boolean;
   busy: boolean;
   onRelease: (id: string) => void;
 }) {
   const Icon = device.platform === "ios" ? RiAppleLine : device.platform === "android" ? RiAndroidLine : RiSmartphoneLine;
+  const [showActivity, setShowActivity] = useState(false);
+  const [showLive, setShowLive] = useState(false);
   return (
-    <div className="flex items-center gap-2 rounded-md border px-3 py-2">
-      <Icon size={15} className="text-muted-foreground shrink-0" />
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] text-foreground truncate">
-          {device.name} <span className="text-muted-foreground">· {device.platform} {device.os_version}</span>
-          {!device.virtual && <span className="ml-1 text-amber-600 text-xs">physical</span>}
+    <div className="rounded-md border px-3 py-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <Icon size={15} className="text-muted-foreground shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] text-foreground truncate">
+            {device.name} <span className="text-muted-foreground">· {device.platform} {device.os_version}</span>
+            {!device.virtual && <span className="ml-1 text-amber-600 text-xs">physical</span>}
+          </div>
+          <div className="text-xs text-muted-foreground truncate">
+            <code>{device.device_id}</code>
+            {device.leased_by ? (
+              <>
+                {" · in use by "}
+                {device.leased_by.owner}
+                {" until "}
+                <ClientTimestamp iso={device.leased_by.expires_at} variant="short" />
+              </>
+            ) : (
+              " · free"
+            )}
+          </div>
         </div>
-        <div className="text-xs text-muted-foreground truncate">
-          <code>{device.device_id}</code>
-          {device.leased_by ? (
-            <>
-              {" · in use by "}
-              {device.leased_by.owner}
-              {" until "}
-              <ClientTimestamp iso={device.leased_by.expires_at} variant="short" />
-            </>
-          ) : (
-            " · free"
-          )}
-        </div>
-      </div>
-      {device.leased_by && canRelease && (
+        {device.leased_by && canRelease && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs shrink-0"
+            disabled={busy}
+            onClick={() => onRelease(device.device_id)}
+          >
+            <RiLockUnlockLine size={14} />
+            Release
+          </Button>
+        )}
+        {online && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs shrink-0"
+            aria-expanded={showLive}
+            onClick={() => setShowLive((value) => !value)}
+          >
+            <RiLiveLine size={14} />
+            Live
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
           className="h-8 px-2 text-xs shrink-0"
-          disabled={busy}
-          onClick={() => onRelease(device.device_id)}
+          aria-expanded={showActivity}
+          onClick={() => setShowActivity((value) => !value)}
         >
-          <RiLockUnlockLine size={14} />
-          Release
+          <RiHistoryLine size={14} />
+          Activity
         </Button>
-      )}
+      </div>
+      {showLive && online && <DeviceLiveView deviceId={device.device_id} platform={device.platform} />}
+      {showActivity && <DeviceActivity deviceId={device.device_id} />}
     </div>
   );
 }
@@ -270,6 +303,13 @@ export default function DevicesPanel() {
                       {runner.version ? ` · runner ${runner.version}` : ""}
                       {runner.capabilities.length ? ` · ${runner.capabilities.join(", ")}` : ""}
                     </div>
+                    {runner.update_available && (
+                      <div className="text-xs text-amber-600">
+                        {runner.self_update
+                          ? `Updating itself to runner ${runner.latest_version} after its current work finishes.`
+                          : `Runner ${runner.latest_version} is available. Re-run \`python3 loma_device_runner.py setup\` on this machine once; later versions install themselves.`}
+                      </div>
+                    )}
                   </div>
                   {runner.is_owner && (
                     <>
@@ -316,6 +356,14 @@ export default function DevicesPanel() {
                     </Button>
                   </div>
                 )}
+                {(runner.templates?.length ?? 0) > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    Can boot:{" "}
+                    {runner.templates!
+                      .map((t) => `${t.name} (${t.platform}${t.clean ? ", clean" : ""})`)
+                      .join(", ")}
+                  </div>
+                )}
                 {runner.shared_with.length > 0 && sharing?.id !== runner.runner_id && (
                   <div className="text-xs text-muted-foreground">Shared with {runner.shared_with.join(", ")}</div>
                 )}
@@ -323,7 +371,9 @@ export default function DevicesPanel() {
                 {mine.length === 0 ? (
                   <div className="text-xs text-muted-foreground">
                     {runner.online
-                      ? "No emulators or simulators running. Boot one and it will appear within ~15s."
+                      ? (runner.templates?.length ?? 0) > 0
+                        ? "No emulators or simulators running. The agent boots one from a template when it needs a device."
+                        : "No emulators or simulators running. Boot one and it will appear within ~15s."
                       : "Start the runner on this machine to see its devices."}
                   </div>
                 ) : (
@@ -333,6 +383,7 @@ export default function DevicesPanel() {
                         key={device.device_id}
                         device={device}
                         canRelease={runner.is_owner}
+                        online={runner.online}
                         busy={busy}
                         onRelease={(id) => run(() => releaseDevice(id))}
                       />

@@ -85,9 +85,11 @@ CATALOG = [
             'type': 'array', 'minItems': 1, 'maxItems': 50, 'items': {'type': ['string', 'number', 'boolean']}}}, 'reason': REASON}),
     _tool('proposals.status', 'Read the current status of one proposal in this conversation. Statuses other than executed mean nothing was sent.', {'proposal_id': TEXT}),
     _tool('proposals.list', 'List recent proposals in this conversation with their statuses.', {}),
-    _tool('device.list', 'List mobile devices (Android emulators / iOS simulators) on Loma Device Runners you own or that are shared with you, with online and lease status.', {}),
-    _tool('device.lease', 'Reserve a device for this conversation (renews on every call, expires after 15 idle minutes). Give device_id, or platform to pick any free online device.', {
-        'device_id': TEXT, 'platform': {'type': 'string', 'enum': ['android', 'ios']}}, []),
+    _tool('device.list', 'List mobile devices (Android emulators / iOS simulators) on Loma Device Runners you own or that are shared with you, with online and lease status, and the device templates those runners can boot.', {}),
+    _tool('device.lease', 'Reserve a device for this conversation (renews on every call, expires after 15 idle minutes). Give device_id, or platform to pick any free online device; if none is running, an online runner boots one from a template. template boots a new device from a named template (device.list); clean=true boots it from the template\'s clean state (fresh app data, permissions and settings) - use it for reproducible tests. Devices booted for you shut down on release. If no device is online the runner owner gets a Loma notification; wait_online_s (up to 600) keeps waiting. Booting takes 1-3 minutes: call again with the same arguments while it reports pending.', {
+        'device_id': TEXT, 'platform': {'type': 'string', 'enum': ['android', 'ios']},
+        'wait_online_s': {'type': 'integer', 'minimum': 0, 'maximum': 600},
+        'template': {'type': 'string', 'pattern': '^[A-Za-z0-9_.-]{1,64}$'}, 'clean': {'type': 'boolean'}}, []),
     _tool('device.release', 'Release a device you leased so other sessions can use it. Always release when done.', {'device_id': TEXT}),
     _tool('device.install', 'Install a CI build on a device. The backend fetches the named GitHub Actions artifact (latest for the PR head, or from run_id) and the runner verifies its checksum. Updates in place (keeps app data) and only reinstalls on a signature mismatch; an identical build is skipped unless force. wait_s waits server-side for the CI run to produce the artifact; dispatch_workflow (e.g. build.yml, needs pr) starts it if no run exists; only workflows an admin allowed (Integrations > Devices > Build sources) can be dispatched. grant_appops (Android, e.g. SCHEDULE_EXACT_ALARM; needs app_id) / grant_privacy (iOS) grant permissions after install. Returns the installed commit.', {
         'device_id': TEXT, 'repo': TEXT, 'artifact_name': TEXT, 'pr': {'type': 'integer', 'minimum': 1},
@@ -96,16 +98,18 @@ CATALOG = [
         'grant_appops': {'type': 'array', 'maxItems': 10, 'items': {'type': 'string', 'pattern': '^[A-Z][A-Z0-9_]{2,63}$'}},
         'grant_privacy': {'type': 'array', 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 40}},
         'force': {'type': 'boolean'}}, ['device_id', 'repo', 'artifact_name']),
-    _tool('device.app', 'Launch, stop, clear data of (reset_app, Android only) or uninstall an app by package name / bundle id. launch takes extras (string values) and bool_extras: Android intent extras (am start --es/--ez), iOS launch arguments (-key value, overriding UserDefaults). console=true (iOS) captures the app stdout (print) for device.observe logs.', {
+    _tool('device.app', 'Launch, stop, clear data of (reset_app; iOS keeps keychain items) or uninstall an app by package name / bundle id. launch takes extras (string values) and bool_extras: Android intent extras (am start --es/--ez), iOS launch arguments (-key value, overriding UserDefaults). console=true (iOS) captures the app stdout (print) for device.observe logs.', {
         'device_id': TEXT, 'action': {'type': 'string', 'enum': ['launch', 'stop', 'reset_app', 'uninstall']}, 'app_id': TEXT,
         'extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'string', 'maxLength': 1000}},
         'bool_extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'boolean'}},
         'activity': {'type': 'string', 'maxLength': 255}, 'console': {'type': 'boolean'}}, ['device_id', 'action', 'app_id']),
-    _tool('device.input', 'Interact with the device: tap (ref from ui_tree, e.g. e3; or x,y), swipe (x1,y1,x2,y2[,duration_ms]), type (text), key (back/home/enter/delete/tab/escape/wakeup...), open_url (deep link). Compound actions, one call each: set_text (text; optional match focuses the field first; clears it unless clear=false), clear_text, tap_text (match; waits up to timeout_s), wait_for (match, timeout_s, gone), scroll_until_visible (match, direction, max_swipes), animations (enabled; Android: false = faster, steadier ui_tree). match finds by text/id/label (by, exact); set_text/clear_text also take ref. Refs come from the latest device.observe ui_tree and expire after 120 s or any action that may change the screen (tap, type, key, set_text, swipe, ...).', {
+    _tool('device.input', 'Interact with the device: tap (ref from ui_tree, e.g. e3; or x,y), swipe (x1,y1,x2,y2[,duration_ms]), type (text), key (back/home/enter/delete/tab/escape/wakeup...), open_url (deep link). Compound actions, one call each: set_text (text; optional match focuses the field first; clears it unless clear=false), clear_text, tap_text (match; waits up to timeout_s), wait_for (match, timeout_s, gone), scroll_until_visible (match, direction, max_swipes; stops early at the end of the list), animations (enabled; Android: false = faster, steadier ui_tree). match finds by text/id/label (by, exact); if several separate elements match equally well, tap_text/set_text fail with code ambiguous and the candidates: pick one with nth. set_text/clear_text also take ref. Refs come from the latest device.observe ui_tree and stay valid until an action that may change the screen. settle=true (tap, tap_text, swipe, key, type, set_text, clear_text, open_url) waits until the screen stops changing (settle_ms, default 3000) and returns screen_after: added / removed elements with refs for the new screen, so you can act again without another ui_tree. Failures carry code, retriable, dispatched (no = the input never reached the device, safe to retry; unknown = check before retrying) and a hint.', {
         'device_id': TEXT, 'action': {'type': 'string', 'enum': ['tap', 'swipe', 'type', 'key', 'open_url', 'set_text',
                                                                 'clear_text', 'tap_text', 'wait_for', 'scroll_until_visible',
                                                                 'animations']},
         'ref': {'type': 'string', 'pattern': '^e[1-9][0-9]{0,3}$'}, 'enabled': {'type': 'boolean'},
+        'settle': {'type': 'boolean'}, 'settle_ms': {'type': 'integer', 'minimum': 500, 'maximum': 10000},
+        'nth': {'type': 'integer', 'minimum': 1, 'maximum': 20},
         'match': {'type': 'string', 'minLength': 1, 'maxLength': 200},
         'by': {'type': 'string', 'enum': ['any', 'text', 'id', 'label']}, 'exact': {'type': 'boolean'},
         'timeout_s': {'type': 'integer', 'minimum': 0, 'maximum': 60}, 'gone': {'type': 'boolean'}, 'clear': {'type': 'boolean'},
@@ -118,11 +122,28 @@ CATALOG = [
         'key': {'type': 'string', 'enum': ['back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up',
                                            'volume_down', 'power', 'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup']},
         'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}, ['device_id', 'action']),
-    _tool('device.observe', 'Observe the device: ui_tree (visible elements with a ref, text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), or logs (logcat / simulator log; optional filter, lines, clear; source=console for iOS apps launched with console=true).', {
-        'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs']},
+    _tool('device.observe', 'Observe the device: ui_tree (visible elements with a ref, text/id/bounds/center; use it for all checks; compact=true gives one line per element, clickable_only and filter narrow it), screenshot (shown to the user as evidence; you cannot view it), logs (logcat / simulator log; optional filter, lines, clear, app_id for one app\'s lines only; source=console for iOS apps launched with console=true), record (an mp4 of duration_s seconds, max 20, 2 per run; app_id launches the app as recording starts) or burst (count screenshots every interval_ms, e.g. to catch a nudge animating in). record and burst are shown to the user as evidence; keep them for the final proof. Verification: network (HTTP calls captured since device.configure capture_network=true, SDK calls grouped by endpoint; filter by URL substring, limit), sdk_events (the test user\'s events, campaign triggers and flow shows/clicks from SDK analytics; needs product_id and user_id, optional flow_id for a triggered/shown/clicked verdict, since_s), visual (a vision model judges the current screen against expect, e.g. "bottom sheet with a Claim button, nothing clipped"; supporting evidence only).', {
+        'device_id': TEXT, 'what': {'type': 'string', 'enum': ['ui_tree', 'screenshot', 'logs', 'record', 'burst',
+                                                               'network', 'sdk_events', 'visual']},
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 200}, 'product_id': {'type': 'string', 'maxLength': 64},
+        'user_id': {'type': 'string', 'maxLength': 200}, 'flow_id': {'type': 'string', 'maxLength': 64},
+        'since_s': {'type': 'integer', 'minimum': 60, 'maximum': 86400}, 'expect': {'type': 'string', 'maxLength': 500},
         'lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000}, 'filter': {'type': 'string', 'minLength': 1, 'maxLength': 200},
         'clear': {'type': 'boolean'}, 'compact': {'type': 'boolean'}, 'clickable_only': {'type': 'boolean'},
-        'source': {'type': 'string', 'enum': ['auto', 'system', 'console']}}, ['device_id', 'what']),
+        'source': {'type': 'string', 'enum': ['auto', 'system', 'console']},
+        'duration_s': {'type': 'integer', 'minimum': 1, 'maximum': 20}, 'count': {'type': 'integer', 'minimum': 2, 'maximum': 12},
+        'interval_ms': {'type': 'integer', 'minimum': 100, 'maximum': 5000}, 'app_id': TEXT}, ['device_id', 'what']),
+    _tool('device.configure', 'Change device settings for a test: capture_network (Android: route the device through a capture proxy on the runner so device.observe network shows the HTTP calls; false stops it; release stops it too), locale (per app, needs app_id; e.g. ar-SA for RTL), timezone (IANA, Android), clock_offset_s (move the clock, Android; e.g. 86400 = tomorrow, for streaks/milestones), location {lat, lon}, dark_mode, font_scale (0.85-2.0), grant / revoke permissions (need app_id; Android CAMERA or android.permission.X, iOS privacy services such as photos, location). Relaunch the app afterwards. Unsupported settings are reported, not fatal. release restores the changed settings automatically; reset=true restores them now.', {
+        'device_id': TEXT, 'app_id': TEXT,
+        'locale': {'type': 'string', 'minLength': 2, 'maxLength': 35}, 'timezone': {'type': 'string', 'minLength': 1, 'maxLength': 64},
+        'clock_offset_s': {'type': 'integer', 'minimum': -34560000, 'maximum': 34560000},
+        'location': {'type': 'object', 'properties': {'lat': {'type': 'number', 'minimum': -90, 'maximum': 90},
+                                                      'lon': {'type': 'number', 'minimum': -180, 'maximum': 180}},
+                     'required': ['lat', 'lon'], 'additionalProperties': False},
+        'dark_mode': {'type': 'boolean'}, 'font_scale': {'type': 'number', 'minimum': 0.85, 'maximum': 2.0},
+        'grant': {'type': 'array', 'minItems': 1, 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 100}},
+        'revoke': {'type': 'array', 'minItems': 1, 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 100}},
+        'reset': {'type': 'boolean'}, 'capture_network': {'type': 'boolean'}}, ['device_id']),
     _tool('device.run_flow', 'Run a Maestro YAML flow on the device. Returns pass/fail, test counts and only the failed steps (verbose=true for the full output and JUnit report); takeScreenshot images are delivered to the user. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
         'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}, 'verbose': {'type': 'boolean'}},
         ['device_id', 'flow']),
