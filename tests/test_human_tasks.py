@@ -282,7 +282,7 @@ async def test_restart_marks_dispatched_review_not_replay(monkeypatch):
     monkeypatch.setattr('observability.db.get_db', lambda: db)
     monkeypatch.setenv('LOMA_ENABLE_SCHEDULER', 'true')
     monkeypatch.setattr(worker, 'tick', AsyncMock())
-    lifecycle = worker.lifecycle(None)
+    lifecycle = worker.lifecycle({})
     await anext(lifecycle)
     latest = await h.get(db, OWNER, doc['conversation_id'])
     assert latest['human_task']['resume_state'] == 'needs_review'

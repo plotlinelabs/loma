@@ -1,3 +1,4 @@
+import { getGatewaySecret } from "@/lib/gateway-config";
 import { auth } from "@/auth";
 import { createHmac, createHash } from "node:crypto";
 
@@ -9,7 +10,9 @@ export async function sessionGateway(request: Request, context: { params: Promis
   if (request.method !== "GET" && request.headers.get("origin") !== new URL(request.url).origin) {
     return Response.json({ error: "Same-origin request required" }, { status: 403 });
   }
-  const secret = process.env.LOMA_WORK_GATEWAY_SECRET || "";
+  let secret: string;
+  try { secret = await getGatewaySecret(); }
+  catch { return Response.json({ error: "Gateway configuration unavailable" }, { status: 503 }); }
   if (secret.length < 32) return Response.json({ error: "The human-session gateway is not configured. Ask an admin to connect it." }, { status: 503 });
   const { path } = await context.params;
   if (path.some(part => !/^[a-zA-Z0-9-]+$/.test(part))) return new Response(null, { status: 400 });

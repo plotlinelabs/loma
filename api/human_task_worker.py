@@ -152,6 +152,7 @@ async def tick(db, runner=run_source, schedule=None):
 async def lifecycle(app):
     from observability.db import get_db
     worker = None
+    app["human_task_worker_running"] = False
     running = {}
     db = get_db()
     if db is not None and os.getenv("LOMA_ENABLE_SCHEDULER", "true").lower() == "true":
@@ -179,7 +180,9 @@ async def lifecycle(app):
                     logger.exception("Human task sweep failed")
                 await asyncio.sleep(5)
         worker = asyncio.create_task(loop())
+        app["human_task_worker_running"] = True
     yield
+    app["human_task_worker_running"] = False
     if worker:
         worker.cancel()
         with suppress(asyncio.CancelledError):

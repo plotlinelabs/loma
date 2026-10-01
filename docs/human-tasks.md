@@ -54,10 +54,11 @@ The requester receives a completion notification or a review-needed warning.
 ## Deployment
 
 - Deploy backend and dashboard together.
-- Set the **same existing `LOMA_WORK_GATEWAY_SECRET`** (32+ random characters) in
-  backend and dashboard. The shared Next.js session gateway is also used by
-  bounded work. No separate approval service or bounded-work feature flag is
-  required. With no key, decision endpoints fail closed (503 in the UI).
+- Open **Admin > Environment > Human task approvals** and click **Set up approvals**.
+  A managed key in the existing Loma database connects the shared session gateway;
+  no manual backend/dashboard secret copying is needed. Legacy environment keys
+  remain supported until setup. See [setup and security details](human-task-setup.md).
+  No separate approval service or bounded-work feature flag is required.
 - Keep `LOMA_ENABLE_SCHEDULER=true` for notification delivery and continuation.
   Isolated local tests must keep it false and drive the worker with fixtures.
 - Existing conversations/notifications collections hold requests and receipts.

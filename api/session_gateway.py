@@ -5,10 +5,17 @@ import os
 import time
 from aiohttp import web
 from api.auth_helpers import get_user_email
+from observability.db import get_db
 
 
 async def verify_dashboard_signature(request):
-    key = os.getenv('LOMA_WORK_GATEWAY_SECRET', '')
+    db = get_db()
+    try:
+        config = await db.gateway_config.find_one({"_id": "human-session"}) if db is not None else None
+    except Exception:
+        raise web.HTTPServiceUnavailable(text="Gateway configuration unavailable")
+    # A managed key takes precedence on both sides, including migrated deployments.
+    key = config.get("secret", "") if config else os.getenv('LOMA_WORK_GATEWAY_SECRET', '')
     stamp = request.headers.get('X-Work-Time', '')
     email = get_user_email(request)
     if request.content_length and request.content_length > 100000:

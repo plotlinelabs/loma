@@ -27,8 +27,16 @@ async def handle(request):
         return web.json_response({"error": str(exc)}, status=getattr(exc, "status", 400))
 
 
+async def setup_status(request):
+    await verify_dashboard_signature(request)
+    return web.json_response({"connected": True,
+                              "scheduler_running": request.app.get("human_task_worker_running", False)},
+                             headers={"Cache-Control": "no-store"})
+
+
 def setup_human_task_routes(app):
     from api.human_task_worker import lifecycle
+    app.router.add_get("/api/human-tasks/setup-status", setup_status)
     app.router.add_get("/api/human-tasks/{conversation_id}", handle)
     app.router.add_post("/api/human-tasks/{conversation_id}", handle)
     app.cleanup_ctx.append(lifecycle)
