@@ -44,7 +44,7 @@ def test_overwritten_env_blocks_deploy_and_keeps_good_backup(tmp_path):
     env.write_text(FULL_ENV)
     run(tmp_path)
     run(tmp_path, "--record")
-    env.write_text("PLOTLINE_BASE_URL=https://example.test\n")
+    env.write_text("TEST_BASE_URL=https://example.test\n")
     r = run(tmp_path)
     assert r.returncode == 1
     assert "SLACK_BOT_TOKEN" in r.stdout and "OBSERVABILITY_MONGODB_URI" in r.stdout
