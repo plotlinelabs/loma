@@ -75,7 +75,7 @@ async def init_observability():
     await ensure_offboarding_indexes(_db)
 
     # Device runners (Loma Devices): enrollment, runners, leases, audit
-    from devices.store import ensure_indexes as ensure_device_indexes
+    from device_loader.backend.store import ensure_indexes as ensure_device_indexes
     await ensure_device_indexes(_db)
 
     # Draft with Loma indexes

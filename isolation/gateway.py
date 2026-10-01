@@ -156,7 +156,7 @@ class ToolGateway:
                     raise GatewayDenied('Run access is no longer valid')
                 await self.audit(authority, {'tool': tool, 'stage': 'completed'})
                 return result
-            from devices.gateway import TOOLS as DEVICE_TOOLS
+            from device_loader.backend.gateway import TOOLS as DEVICE_TOOLS
             if tool in DEVICE_TOOLS:
                 # Remote device control through the backend policy layer
                 # (ACL, leases, validation, audit). No runner URL or credential
