@@ -133,7 +133,7 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
             from isolation.automation import read
             return await read(db, owner, tool, args)
 
-        from devices.gateway import DeviceTools
+        from device_loader.backend.gateway import DeviceTools
         devices = DeviceTools(db, authority, conversation_id, artifacts=artifacts, on_artifact=registry)
         gateway = ToolGateway(authority, authorize=context.authorize, audit=audit, artifacts=artifacts,
             connector=personal_read, models=relay, knowledge=knowledge, on_artifact=registry, proposals=proposals, automation=automation,

@@ -4,12 +4,9 @@ Legacy X-User-Email alone cannot approve, change grants or read private work.
 The planner has no API caller, session cookie, signing secret or HTTP tool.
 """
 import asyncio
-import hashlib
-import hmac
 import json
 import logging
 import os
-import time
 
 from aiohttp import web
 from pymongo import ReturnDocument
@@ -23,27 +20,16 @@ from isolation import proposals as worker_proposals
 logger = logging.getLogger(__name__)
 
 
-def enabled():
-    return os.getenv('LOMA_BOUNDED_WORK_ENABLED', '').lower() == 'true'
+async def enabled():
+    from api.runtime_settings import read
+    return (await read(get_db()))["bounded_work_enabled"]
 
 
 async def verify(request):
-    if not enabled():
+    if not await enabled():
         raise web.HTTPNotFound(text='Bounded work is not enabled')
-    key = os.getenv('LOMA_WORK_GATEWAY_SECRET', '')
-    stamp = request.headers.get('X-Work-Time', '')
-    email = get_user_email(request)
-    if request.content_length and request.content_length > 100000:
-        raise web.HTTPRequestEntityTooLarge(max_size=100000, actual_size=request.content_length)
-    raw = await request.read()
-    try:
-        fresh = abs(time.time() - int(stamp)) < 60
-    except ValueError:
-        fresh = False
-    payload = '\n'.join([stamp, request.method, request.path, email, hashlib.sha256(raw).hexdigest()])
-    signature = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    if len(key) < 32 or not fresh or not email or not hmac.compare_digest(signature, request.headers.get('X-Work-Signature', '')):
-        raise web.HTTPUnauthorized(text='Verified dashboard session required')
+    from api.session_gateway import verify_dashboard_signature
+    email, raw = await verify_dashboard_signature(request)
     db = get_db()
     if db is None:
         raise web.HTTPServiceUnavailable(text='Database unavailable')
@@ -268,7 +254,7 @@ async def handle_hook(request):
     The payload never carries instructions, approvals or identity - only a
     dedup key and an optional bounded note stored as untrusted data.
     """
-    if not enabled():
+    if not await enabled():
         raise web.HTTPNotFound(text='Bounded work is not enabled')
     db = get_db()
     if db is None:
@@ -299,41 +285,39 @@ async def handle_hook(request):
 
 
 async def lifecycle(app):
-    task = None
-    reconciliation_task = None
-    if enabled():
-        db = get_db()
-        if db is not None:
-            await core.indexes(db)
-            await worker_proposals.indexes(db)
-        if os.getenv('LOMA_ENABLE_SCHEDULER', 'true').lower() == 'true':
-            async def work_loop():
-                while True:
-                    try:
-                        if db is not None:
-                            await tick(db)
-                    except Exception:
-                        logger.exception('Bounded worker tick failed')
-                    await asyncio.sleep(2)
-            task = asyncio.create_task(work_loop())
-            async def reconciliation_loop():
-                from autonomy.reconciliation import sweep
-                while True:
-                    try:
-                        if db is not None:
-                            await sweep(db)
-                    except Exception:
-                        logger.warning('Provider reconciliation sweep failed')
-                    await asyncio.sleep(60)
-            reconciliation_task = asyncio.create_task(reconciliation_loop())
+    # Poll settings so admin activation/deactivation needs no restart. A missing
+    # database must not prevent the rest of Loma from starting.
+    tasks = []
+    db = get_db()
+    if db is not None and os.getenv('LOMA_ENABLE_SCHEDULER', 'true').lower() == 'true':
+        async def work_loop():
+            initialized = False
+            while True:
+                try:
+                    if await enabled():
+                        if not initialized:
+                            await core.indexes(db)
+                            await worker_proposals.indexes(db)
+                            initialized = True
+                        await tick(db)
+                except Exception:
+                    logger.exception('Bounded worker tick failed')
+                await asyncio.sleep(2)
+
+        async def reconciliation_loop():
+            from autonomy.reconciliation import sweep
+            while True:
+                try:
+                    if await enabled():
+                        await sweep(db)
+                except Exception:
+                    logger.warning('Provider reconciliation sweep failed')
+                await asyncio.sleep(60)
+        tasks = [asyncio.create_task(work_loop()), asyncio.create_task(reconciliation_loop())]
     yield
-    for background in (task, reconciliation_task):
-        if background:
-            background.cancel()
-            try:
-                await background
-            except asyncio.CancelledError:
-                pass
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def setup_bounded_work_routes(app):

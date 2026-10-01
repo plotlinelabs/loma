@@ -101,7 +101,7 @@ export function MobileTaskCard({
               <RiPlayLine className="h-4 w-4" />
             </Button>
           )}
-          {(task.column === "working" || task.column === "needs_input" || isParked) && (
+          {!task.human_task && (task.column === "working" || task.column === "needs_input" || isParked) && (
             <Button
               variant="ghost" size="icon" className="h-8 w-8"
               title="Mark done"
@@ -110,7 +110,7 @@ export function MobileTaskCard({
               <RiCheckLine className="h-4 w-4" />
             </Button>
           )}
-          <DropdownMenu>
+          {!task.human_task && <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-8 w-8">
                 <RiMoreLine className="h-4 w-4" />
@@ -176,7 +176,7 @@ export function MobileTaskCard({
                 </>
               )}
             </DropdownMenuContent>
-          </DropdownMenu>
+          </DropdownMenu>}
         </div>}
       </div>
     </div>

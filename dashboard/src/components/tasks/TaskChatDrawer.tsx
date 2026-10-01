@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { usePetSettingsOpen } from "@/components/PetCompanion";
+import { HumanTaskPanel } from "./HumanTaskPanel";
 import ChatWithArtifacts from "@/components/ChatWithArtifacts";
 import { rebuildItemsFromConversation, type ChatItem } from "@/components/ChatPanel";
 import type { Artifact } from "@/components/ArtifactViewer";
@@ -25,6 +26,7 @@ function DrawerConversation({
   readOnly?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
+  const [humanTask, setHumanTask] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initialItems, setInitialItems] = useState<ChatItem[] | undefined>();
   const [initialArtifacts, setInitialArtifacts] = useState<Artifact[] | undefined>();
@@ -40,6 +42,7 @@ function DrawerConversation({
       try {
         const data = await fetchConversation(conversationId);
         if (cancelled) return;
+        setHumanTask(!!data.conversation.human_task);
         setModel(data.conversation.model || null);
         setToolConfig(data.conversation.tool_config || null);
         if (data.conversation.task_status === "todo" && !data.conversation.status) {
@@ -93,6 +96,8 @@ function DrawerConversation({
       </div>
     );
   }
+
+  if (humanTask) return <HumanTaskPanel conversationId={conversationId} />;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -194,12 +199,13 @@ export function TaskChatDrawer({
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(1100px,92vw)]"
       >
         <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
-          {task && !canRename && (
+          {task?.human_task && <SheetTitle className="flex-1 text-sm">{task.title}</SheetTitle>}
+          {task && !task.human_task && !canRename && (
             <SheetTitle className="min-w-0 flex-1 truncate font-heading text-base font-semibold">
               {task.title || task.prompt || "New task"}
             </SheetTitle>
           )}
-          {task && canRename && (
+          {task && !task.human_task && canRename && (
             <EditableTaskTitle
               key={`${task.conversation_id}:${task.title || task.prompt}`}
               task={task}

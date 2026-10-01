@@ -45,6 +45,8 @@ async def init_observability():
 
     # Chat isolation — index for filtering conversations by user
     await _db.conversations.create_index("metadata.user_name")
+    await _db.conversations.create_index("human_task.assignment_notice", sparse=True)
+    await _db.conversations.create_index("human_task.resume_state", sparse=True)
 
     # Governance: users collection
     await _db.users.create_index("email", unique=True)
@@ -70,8 +72,12 @@ async def init_observability():
     await _db.api_keys.create_index("key_hash", unique=True)
     await _db.api_keys.create_index("user_email")
 
+    # Customer offboarding: proposed plans and their approval audit trail
+    from customer_offboarding.store import ensure_indexes as ensure_offboarding_indexes
+    await ensure_offboarding_indexes(_db)
+
     # Device runners (Loma Devices): enrollment, runners, leases, audit
-    from devices.store import ensure_indexes as ensure_device_indexes
+    from device_loader.backend.store import ensure_indexes as ensure_device_indexes
     await ensure_device_indexes(_db)
 
     # Draft with Loma indexes

@@ -108,7 +108,7 @@ export function TaskCard({
               <RiPlayLine className="h-3.5 w-3.5" />
             </Button>
           )}
-          {(task.column === "working" || task.column === "needs_input" || isParked) && (
+          {!task.human_task && (task.column === "working" || task.column === "needs_input" || isParked) && (
             <Button
               variant="ghost" size="icon" className="h-6 w-6"
               title="Mark done"

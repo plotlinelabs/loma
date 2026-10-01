@@ -11,9 +11,9 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from mongomock_motor import AsyncMongoMockClient
 
-from devices.gateway import DeviceTools, TOOLS
-from devices.hub import DeviceError
-from devices.service import _validate
+from device_loader.backend.gateway import DeviceTools, TOOLS
+from device_loader.backend.hub import DeviceError
+from device_loader.backend.service import _validate
 from isolation.catalog import CATALOG
 from isolation.gateway import ToolGateway, GatewayDenied
 from isolation.protocol import RunAuthority
@@ -106,7 +106,7 @@ async def test_screenshot_is_registered_for_the_user_not_returned_as_base64():
 
 @pytest.mark.asyncio
 async def test_large_results_are_capped_and_unexpected_errors_contained():
-    from devices.gateway import cap_result, MAX_RESULT
+    from device_loader.backend.gateway import cap_result, MAX_RESULT
     import json as _json
     big = {'lines': ['x' * 1999] * 2000, 'cleared': False}
     capped = cap_result(big)
@@ -139,7 +139,7 @@ async def test_device_failures_do_not_poison_the_worker_broker():
 
 @pytest.mark.asyncio
 async def test_long_operations_report_pending_then_deliver(monkeypatch):
-    import devices.gateway as gateway
+    import device_loader.backend.gateway as gateway
     monkeypatch.setattr(gateway, 'WAIT_SECONDS', 0.05)
     release = asyncio.Event()
 
@@ -205,7 +205,7 @@ async def test_tool_gateway_routes_device_tools_and_audits():
 
 
 def test_cli_build_body(tmp_path):
-    from tools import device
+    from device_loader.cli import device
     p = device.parser()
     body = device.build_body(p.parse_args(['--user-email', OWNER, '--auth-token', 't', '--scope', 'conv-1',
                                            'install', '--device-id', 'r_0123456789abcdef/e', '--repo', 'example-org/mobile-sdk',
@@ -229,11 +229,11 @@ def test_cli_build_body(tmp_path):
 async def test_internal_endpoint_accepts_valid_hmac_token(monkeypatch):
     monkeypatch.setenv('OAUTH_ENCRYPTION_KEY', 'test-key')
     from tools._auth_token import create_user_auth_token
-    from api.device_routes import setup_device_routes
+    from device_loader.api.device_routes import setup_device_routes
     db = AsyncMongoMockClient()['loma_devices_agent']
     app = web.Application()
     setup_device_routes(app)
-    with patch('api.device_routes.get_db', return_value=db):
+    with patch('device_loader.api.device_routes.get_db', return_value=db):
         server = TestServer(app)
         await server.start_server()
         try:
