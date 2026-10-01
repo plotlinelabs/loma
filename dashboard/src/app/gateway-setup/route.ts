@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { getUsersCollection } from "@/auth-node";
 import { configureGateway, getGatewaySecret, saveRuntimeSettings } from "@/lib/gateway-config";
+import { isSameOrigin } from "@/lib/same-origin";
 import { sessionGateway } from "@/lib/session-gateway";
 
 export const runtime = "nodejs";
@@ -17,7 +18,7 @@ async function handle(request: Request) {
       return reply({ error: "Admin or maintainer access required" }, 403);
     }
     if (request.method === "POST") {
-      if (request.headers.get("origin") !== new URL(request.url).origin) return reply({ error: "Same-origin request required" }, 403);
+      if (!isSameOrigin(request)) return reply({ error: "Same-origin request required" }, 403);
       const raw = await request.text();
       if (raw.length > 100000) return reply({ error: "Request too large" }, 413);
       if (raw) {
