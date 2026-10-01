@@ -10,15 +10,14 @@ from aiohttp.test_utils import TestServer
 import aiohttp
 from mongomock_motor import AsyncMongoMockClient
 
-from api.device_routes import setup_device_routes
-from device_runner import loma_device_runner as ldr
-from devices import store
-from devices.builds import BlobStore
-from devices.hub import DeviceError, RunnerHub
-from devices.service import DeviceService, _validate
+from device_loader.api.device_routes import setup_device_routes
+from device_loader.runner import loma_device_runner as ldr
+from device_loader.backend import store
+from device_loader.backend.builds import BlobStore
+from device_loader.backend.hub import DeviceError, RunnerHub
+from device_loader.backend.service import DeviceService, _validate
 
-sys.path.insert(0, 'tests')
-from test_device_runner import FAKE_ADB, PNG, UI_XML  # noqa: E402
+from device_loader.tests.test_device_runner import FAKE_ADB, PNG, UI_XML  # noqa: E402
 
 OWNER = 'owner@example.com'
 
@@ -180,11 +179,11 @@ async def fake_identity(request, handler):
 async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypatch):
     adb_path, adb_log = fake_adb
     test_hub, test_blobs = RunnerHub(), BlobStore(tmp_path / 'blobs')
-    monkeypatch.setattr('api.device_routes.hub', test_hub)
-    monkeypatch.setattr('api.device_routes.blobs', test_blobs)
+    monkeypatch.setattr('device_loader.api.device_routes.hub', test_hub)
+    monkeypatch.setattr('device_loader.api.device_routes.blobs', test_blobs)
     app = web.Application(middlewares=[fake_identity])
     setup_device_routes(app)
-    with patch('api.device_routes.get_db', return_value=db):
+    with patch('device_loader.api.device_routes.get_db', return_value=db):
         server = TestServer(app)
         await server.start_server()
         base = str(server.make_url('')).rstrip('/')
@@ -269,7 +268,7 @@ async def test_end_to_end_runner_over_websocket(db, fake_adb, tmp_path, monkeypa
 async def test_runner_download_and_internal_loopback(db):
     app = web.Application()
     setup_device_routes(app)
-    with patch('api.device_routes.get_db', return_value=db):
+    with patch('device_loader.api.device_routes.get_db', return_value=db):
         server = TestServer(app)
         await server.start_server()
         base = str(server.make_url('')).rstrip('/')
@@ -309,7 +308,7 @@ def test_blob_budget_and_orphan_cleanup(tmp_path, monkeypatch):
     blobs = BlobStore(root)
     blobs.new_path()
     assert not (root / 'orphan').exists()
-    monkeypatch.setattr('devices.builds.MAX_OWNER_BYTES', 10)
+    monkeypatch.setattr('device_loader.backend.builds.MAX_OWNER_BYTES', 10)
     with pytest.raises(DeviceError, match='storage is full'):
         blobs.reserve(OWNER, 11)
     blobs.reserve('other@x.com', 5)
@@ -317,7 +316,7 @@ def test_blob_budget_and_orphan_cleanup(tmp_path, monkeypatch):
 
 def test_inflight_builds_count_against_the_budget(tmp_path, monkeypatch):
     blobs = BlobStore(tmp_path / 'b')
-    monkeypatch.setattr('devices.builds.MAX_OWNER_BYTES', 10)
+    monkeypatch.setattr('device_loader.backend.builds.MAX_OWNER_BYTES', 10)
     with blobs.reservation(OWNER, 8):
         with pytest.raises(DeviceError, match='storage is full'):
             blobs.reserve(OWNER, 5)
@@ -340,7 +339,7 @@ async def test_long_ops_hold_the_lease_for_their_worst_case(db):
 async def test_github_token_falls_back_to_the_integration(monkeypatch):
     monkeypatch.setenv('LOMA_DEVICE_BUILD_REPOS', 'example-org/mobile-sdk')
     monkeypatch.delenv('GITHUB_API_KEY', raising=False)
-    monkeypatch.setattr('devices.builds.get_integration_key', lambda provider: '')
+    monkeypatch.setattr('device_loader.backend.builds.get_integration_key', lambda provider: '')
     with pytest.raises(DeviceError, match='No GitHub token'):
         await BlobStore().from_github(OWNER, 'example-org/mobile-sdk', 'app', pr=1)
     seen = {}
@@ -349,14 +348,14 @@ async def test_github_token_falls_back_to_the_integration(monkeypatch):
         seen.update(headers)
         return 'b_x', {}
 
-    monkeypatch.setattr('devices.builds.get_integration_key', lambda provider: 'ghp_integration')
+    monkeypatch.setattr('device_loader.backend.builds.get_integration_key', lambda provider: 'ghp_integration')
     monkeypatch.setattr(BlobStore, '_from_github', fake_fetch)
     await BlobStore().from_github(OWNER, 'example-org/mobile-sdk', 'app', pr=1)
     assert seen['Authorization'] == 'Bearer ghp_integration'
 
 
 def test_malformed_runner_frames_are_ignored():
-    from api.device_routes import _clean_devices
+    from device_loader.api.device_routes import _clean_devices
     assert _clean_devices({'serial': 'x'}) == [] and _clean_devices(None) == []
 
 
@@ -379,7 +378,7 @@ async def test_concurrent_first_lease_same_holder_does_not_report_busy(db):
 async def test_patch_rejects_non_object_and_enroll_command_is_quoted(db):
     app = web.Application(middlewares=[fake_identity])
     setup_device_routes(app)
-    with patch('api.device_routes.get_db', return_value=db):
+    with patch('device_loader.api.device_routes.get_db', return_value=db):
         server = TestServer(app)
         await server.start_server()
         try:

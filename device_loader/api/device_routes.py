@@ -4,7 +4,7 @@ Three audiences, three auth modes:
   /device-runner/*        the runner daemon (enrollment token, then runner secret). Served
                           outside /api because nginx session-gates /api/*.
   /api/devices*           dashboard users (nginx-injected X-User-Email session identity).
-  /internal/devices/*     the legacy agent CLI (tools/device.py) running inside the backend
+  /internal/devices/*     the legacy agent CLI (device_loader/cli/device.py, via tools/device.py) running inside the backend
                           container: loopback-only AND an HMAC user auth token.
 """
 import asyncio
@@ -20,16 +20,16 @@ from pathlib import Path
 from aiohttp import web
 
 from api.auth_helpers import get_system_role, get_user_email, is_loopback, require_admin
-from devices import builds, store
-from devices.builds import blobs, FILENAME, MAX_BLOB
-from devices.hub import DeviceError, hub
-from devices.service import DeviceService
+from device_loader.backend import builds, store
+from device_loader.backend.builds import blobs, FILENAME, MAX_BLOB
+from device_loader.backend.hub import DeviceError, hub
+from device_loader.backend.service import DeviceService
 from observability.db import get_db
 from tools._auth_token import verify_user_auth_token
 
 logger = logging.getLogger(__name__)
 
-RUNNER_SCRIPT = Path(__file__).resolve().parent.parent / 'device_runner' / 'loma_device_runner.py'
+RUNNER_SCRIPT = Path(__file__).resolve().parent.parent / 'runner' / 'loma_device_runner.py'
 MAX_RUNNER_FRAME = 24 * 1024 * 1024
 HELLO_TIMEOUT = 10
 EMAIL = re.compile(r'[^@\s]{1,64}@[^@\s]{1,190}\Z')

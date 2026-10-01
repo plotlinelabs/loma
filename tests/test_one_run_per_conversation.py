@@ -633,7 +633,7 @@ async def test_one_off_claude_client_gets_the_conversation_dir_env(monkeypatch):
 
 @pytest.mark.parametrize("env_value", [None, "", "/"])
 def test_device_output_dir_never_falls_back_to_the_filesystem_root(env_value, monkeypatch):
-    from tools import device
+    from device_loader.cli import device
 
     if env_value is None:
         monkeypatch.delenv("LOMA_CONVERSATION_DIR", raising=False)
@@ -645,7 +645,7 @@ def test_device_output_dir_never_falls_back_to_the_filesystem_root(env_value, mo
 
 
 def test_device_output_dir_uses_the_conversation_dir_when_set(tmp_path, monkeypatch):
-    from tools import device
+    from device_loader.cli import device
 
     monkeypatch.setenv("LOMA_CONVERSATION_DIR", str(tmp_path))
     assert device.output_dir("ignored") == tmp_path / "device"

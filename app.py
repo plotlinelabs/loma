@@ -37,7 +37,7 @@ from api.webhook_log_routes import setup_webhook_log_routes
 from api.env_routes import setup_env_routes
 from api.usage_routes import setup_usage_routes
 from api.terminal_routes import setup_terminal_routes
-from api.device_routes import setup_device_routes
+from device_loader.api.device_routes import setup_device_routes
 from api.claude_auth_routes import setup_claude_auth_routes
 from api.codex_auth_routes import setup_codex_auth_routes
 from api.file_routes import setup_file_routes
