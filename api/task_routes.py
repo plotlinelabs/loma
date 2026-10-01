@@ -251,7 +251,6 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "prompt": prompt[:200],
         "model": task.get("model") or None,
         "tool_config": task.get("tool_config"),
-        "human_task": _serialize(task.get("human_task")),
         "status": task.get("status"),
         "task_status": task.get("task_status"),
         "task_lane": task.get("task_lane"),
@@ -272,7 +271,6 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
 
 
 _TASK_PROJECTION = {
-    "human_task": 1,
     "conversation_id": 1, "title": 1, "prompt": 1, "model": 1, "status": 1, "tool_config": 1,
     "task_status": 1, "task_lane": 1, "task_rank": 1,
     "total_turns": 1, "started_at": 1, "finished_at": 1,
@@ -434,8 +432,6 @@ async def handle_fork_task(request: web.Request) -> web.Response:
     })
     if not source:
         return web.json_response({"error": "Not found"}, status=404)
-    if source.get("human_task"):
-        return web.json_response({"error": "Human requests cannot be forked"}, status=409)
 
     from api.routes import _check_conversation_access
     if not _check_conversation_access(source, user_email, get_system_role(request)):
@@ -627,9 +623,6 @@ async def handle_update_task(request: web.Request) -> web.Response:
     has_run = conversation.get("status") is not None
 
     # Removing from the board clears all task fields.
-    if conversation.get("human_task"):
-        return web.json_response({"error": "Use the human task controls; board completion is not approval"}, status=409)
-
     if "task_status" in body and body["task_status"] is None:
         await db.conversations.update_one(
             {"conversation_id": cid},

@@ -26,7 +26,6 @@ READONLY_KEYS = frozenset({"OBSERVABILITY_MONGODB_URI", "WEBHOOK_PORT", "ENV"})
 
 # Keys whose changes require a process restart (pre-initialized clients)
 CONNECTION_VARS = frozenset({
-    "LOMA_ENABLE_SCHEDULER",
     "SLACK_BOT_TOKEN",
     "SLACK_APP_TOKEN",
     "OBSERVABILITY_MONGODB_URI",

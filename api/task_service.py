@@ -15,8 +15,6 @@ async def create_staged_task(
     model: str = "",
     metadata: dict | None = None,
     dedupe_filter: dict | None = None,
-    document_id: str | None = None,
-    fields: dict | None = None,
 ) -> tuple[dict, bool]:
     """Create a Todo task, returning ``(document, created)``.
 
@@ -64,19 +62,5 @@ async def create_staged_task(
         "task_priority": None,
         "task_deadline": None,
     }
-    doc.update(fields or {})
-    if document_id:
-        # Mongo's _id uniqueness makes event-driven creation race safe.
-        doc["_id"] = document_id
-        from pymongo.errors import DuplicateKeyError
-        try:
-            result = await db.conversations.update_one(
-                {"_id": document_id}, {"$setOnInsert": doc}, upsert=True)
-            created = bool(result.upserted_id)
-        except DuplicateKeyError:
-            created = False
-        if not created:
-            return await db.conversations.find_one({"_id": document_id}), False
-    else:
-        await db.conversations.insert_one(doc)
+    await db.conversations.insert_one(doc)
     return doc, True

@@ -40,7 +40,6 @@ async def create_notification(
     link: str | None = None,
     source: str = "agent",
     fire_push: bool = True,
-    dedupe_key: str | None = None,
 ) -> dict:
     """Insert a notification and (best-effort) fire a web push to its owner.
 
@@ -67,20 +66,7 @@ async def create_notification(
         "dismissed": False,
         "created_at": datetime.now(timezone.utc),
     }
-    if dedupe_key:
-        from pymongo.errors import DuplicateKeyError
-        try:
-            result = await db.notifications.update_one(
-                {"_id": dedupe_key}, {"$setOnInsert": doc}, upsert=True)
-            created = bool(result.upserted_id)
-        except DuplicateKeyError:
-            created = False
-        if not created:
-            existing = await db.notifications.find_one({"_id": dedupe_key})
-            existing.pop("_id", None)
-            return existing
-    else:
-        await db.notifications.insert_one({**doc})
+    await db.notifications.insert_one({**doc})
 
     if fire_push:
         base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")

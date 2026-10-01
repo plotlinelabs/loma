@@ -238,16 +238,6 @@ async def _resume_conversation(convo: dict):
             )
         return
 
-    # Human handoff continuations can have performed external writes. Never
-    # replay them after a crash; the handoff worker surfaces a review task.
-    if metadata.get("human_task_resume_id"):
-        db = get_db()
-        await db.conversations.update_one(
-            {"conversation_id": conversation_id},
-            {"$set": {"status": "interrupted", "finished_at": datetime.now(timezone.utc),
-                      "error": "Human handoff interrupted; review external records before continuing"}})
-        return
-
     # Reconstruct conversation context from stored messages.
     # All messages except the last user prompt form the context.
     conversation_context = ""
