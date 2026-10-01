@@ -45,8 +45,6 @@ async def init_observability():
 
     # Chat isolation — index for filtering conversations by user
     await _db.conversations.create_index("metadata.user_name")
-    await _db.conversations.create_index("human_task.assignment_notice", sparse=True)
-    await _db.conversations.create_index("human_task.resume_state", sparse=True)
 
     # Governance: users collection
     await _db.users.create_index("email", unique=True)

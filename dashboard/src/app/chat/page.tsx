@@ -21,7 +21,6 @@ import { rebuildItemsFromConversation } from "../../components/ChatPanel";
 import { withTerminalStatus } from "../../lib/terminal-status";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import { CostChip } from "../../components/CostChip";
-import { HumanTaskPanel } from "@/components/tasks/HumanTaskPanel";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
 import { fetchConversation, fetchFlow, basePath } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
@@ -60,8 +59,6 @@ function ChatPageContent() {
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
   const [conversationOwner, setConversationOwner] = useState<string | null>(null);
   const [conversationShared, setConversationShared] = useState(false);
-  const [humanTaskId, setHumanTaskId] = useState<string | null>(null);
-  const humanTask = !!continueId && humanTaskId === continueId;
 
   // Track the active conversation ID — starts from URL param but also updates
   // when a fresh chat creates a new conversation (via onConversationCreated callback)
@@ -127,7 +124,6 @@ function ChatPageContent() {
     async function loadConversation() {
       try {
         const data = await fetchConversation(continueId!);
-        setHumanTaskId(data.conversation.human_task ? continueId : null);
         setConversationOwner(data.conversation.metadata?.user_name || null);
         setConversationShared(data.conversation.metadata?.visibility === "shared");
         setPinnedAgentId(data.conversation.metadata?.agent_id || null);
@@ -213,7 +209,7 @@ function ChatPageContent() {
       {/* Mobile: no header bar — chat actions live in a floating menu on the
           right (mirrors the floating hamburger on the left). ChatContextMenu
           carries pin/rename/board/project/delete. */}
-      {activeConversationId && !humanTask && user?.email === conversationOwner && (
+      {activeConversationId && user?.email === conversationOwner && (
         <div className="md:hidden fixed right-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30 flex items-center gap-2">
           <CostChip conversationId={activeConversationId} />
           <ChatContextMenu
@@ -284,19 +280,19 @@ function ChatPageContent() {
                   className={cn(
                     "text-[15px] font-semibold text-foreground truncate",
                     headerTitle === "New Chat" && "editorial-heading text-[19px]",
-                    activeConversationId && !humanTask && user?.email === conversationOwner && "cursor-pointer hover:text-brand-600 transition-colors"
+                    activeConversationId && user?.email === conversationOwner && "cursor-pointer hover:text-brand-600 transition-colors"
                   )}
                   onClick={() => {
-                    if (activeConversationId && !humanTask && user?.email === conversationOwner) {
+                    if (activeConversationId && user?.email === conversationOwner) {
                       setTitleValue(conversationTitle || promptPreview || "");
                       setEditingTitle(true);
                     }
                   }}
-                  title={activeConversationId && !humanTask && user?.email === conversationOwner ? "Click to rename" : undefined}
+                  title={activeConversationId && user?.email === conversationOwner ? "Click to rename" : undefined}
                 >
                   {headerTitle}
                 </h1>
-                {activeConversationId && !humanTask && user?.email === conversationOwner && (
+                {activeConversationId && user?.email === conversationOwner && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -319,7 +315,7 @@ function ChatPageContent() {
           </div>
 
           {/* Action buttons — visible once a conversation exists */}
-          {activeConversationId && !humanTask && (
+          {activeConversationId && (
             <div className="flex items-center gap-1 flex-shrink-0">
               {/* Live chat cost */}
               <CostChip conversationId={activeConversationId} className="h-8 mr-1" />
@@ -347,7 +343,7 @@ function ChatPageContent() {
               </Tooltip>
 
               {/* More actions (project, etc.) */}
-              {!humanTask && user?.email === conversationOwner && <ChatContextMenu
+              {user?.email === conversationOwner && <ChatContextMenu
                 conversationId={activeConversationId}
                 conversationTitle={conversationTitle || promptPreview || "Untitled"}
                 isPinned={isPinned(activeConversationId)}
@@ -379,7 +375,7 @@ function ChatPageContent() {
               />}
 
               {/* Delete */}
-              {!humanTask && user?.email === conversationOwner && <div className="relative">
+              {user?.email === conversationOwner && <div className="relative">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -433,7 +429,7 @@ function ChatPageContent() {
       )}
 
       {/* Split pane content area — uses shared ChatWithArtifacts wrapper */}
-      {humanTask && activeConversationId ? <HumanTaskPanel conversationId={activeConversationId} /> : <ChatWithArtifacts
+      <ChatWithArtifacts
         initialItems={initialItems}
         initialArtifacts={initialArtifacts}
         conversationId={activeConversationId || undefined}
@@ -448,7 +444,7 @@ function ChatPageContent() {
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
         onStreamComplete={handleStreamComplete}
-      />}
+      />
     </div>
   );
 }

@@ -1055,14 +1055,12 @@ async def handle_chat(request: web.Request) -> web.Response:
                 # Check if conversation already exists (resume) or is client-generated (start)
                 existing = await db.conversations.find_one(
                     {"conversation_id": existing_conversation_id},
-                    {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1, "human_task": 1},
+                    {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1},
                 )
                 if existing and not _check_conversation_access(
                     existing, user_email, get_system_role(request)
                 ):
                     return web.json_response({"error": "Not found"}, status=404)
-                if existing and existing.get("human_task"):
-                    return web.json_response({"error": "Use the human task decision controls, not an agent chat"}, status=409)
                 # One active run per conversation: a second concurrent run would
                 # fight the first over devices, proxies, files and branches. The
                 # claim is taken before the message is recorded, so a busy
@@ -2048,8 +2046,6 @@ MAX_PINS = 10
 
 def _check_conversation_access(conversation: dict, user_email: str, system_role: str) -> bool:
     """Return True if the user has access to this conversation."""
-    if conversation.get("human_task"):
-        return user_email in (conversation["human_task"]["requested_by"], (conversation.get("metadata") or {}).get("user_name"))
     owner = (conversation.get("metadata") or {}).get("user_name", "")
     conv_source = conversation.get("source", "")
     visibility = (conversation.get("metadata") or {}).get("visibility")
@@ -2090,8 +2086,6 @@ async def handle_share_conversation(request: web.Request) -> web.Response:
     })
     if not conversation:
         return web.json_response({"error": "Not found"}, status=404)
-    if conversation.get("human_task"):
-        return web.json_response({"error": "Human requests are immutable; use their decision controls"}, status=409)
 
     owner = (conversation.get("metadata") or {}).get("user_name", "")
     if owner != user_email:
@@ -2190,8 +2184,6 @@ async def handle_update_conversation(request: web.Request) -> web.Response:
     })
     if not conversation:
         return web.json_response({"error": "Not found"}, status=404)
-    if conversation.get("human_task"):
-        return web.json_response({"error": "Human requests are immutable; use their decision controls"}, status=409)
 
     system_role = get_system_role(request)
     if not _check_conversation_manage_access(conversation, user_email, system_role):
@@ -2241,8 +2233,6 @@ async def handle_delete_conversation(request: web.Request) -> web.Response:
     })
     if not conversation:
         return web.json_response({"error": "Not found"}, status=404)
-    if conversation.get("human_task"):
-        return web.json_response({"error": "Human requests are immutable; use their decision controls"}, status=409)
 
     system_role = get_system_role(request)
     if not _check_conversation_manage_access(conversation, user_email, system_role):
@@ -2372,8 +2362,6 @@ def setup_api_routes(app: web.Application):
     # Tasks board routes (kanban layer over conversations)
     from api.task_routes import setup_task_routes
     setup_task_routes(app)
-    from api.human_task_routes import setup_human_task_routes
-    setup_human_task_routes(app)
 
     # Web push subscription routes (tasks-board notifications)
     from api.push_routes import setup_push_routes
