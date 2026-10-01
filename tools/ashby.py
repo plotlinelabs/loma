@@ -43,9 +43,8 @@ Ashby key + per-user access control:
     HMAC-signed token used by the personal Google/Slack tools. The token is
     minted server-side for the authenticated Loma user, so one user cannot
     invoke this tool as another user.
-  * Only allowlisted users may use this tool at all. Allowlist comes from the
-    ASHBY_ALLOWED_USERS env var (comma-separated emails); if unset, ALL access
-    is denied (deny-by-default — the allowlist must be configured explicitly).
+  * Only allowlisted users may use this tool at all. Allowlist is managed in Admin → Environment → Agent settings. The legacy
+    ASHBY_ALLOWED_USERS override still takes precedence. Unconfigured access is denied.
   * The API key is resolved per user: ASHBY_API_KEY__<EMAIL_UPPERCASED_WITH_
     NON_ALNUM_AS_UNDERSCORE> (e.g. ASHBY_API_KEY__JANE_EXAMPLE_COM for
     jane@example.com) is checked first, then the shared ASHBY_API_KEY as
@@ -168,17 +167,28 @@ class AshbyToolError(Exception):
 # Per-user access control
 # ---------------------------------------------------------------------------
 
-# If ASHBY_ALLOWED_USERS is not set, NO user may use the tool (deny-by-default).
-# Configure the allowlist via the ASHBY_ALLOWED_USERS env var, never in code.
+# Legacy deployment overrides remain supported; normal setup uses the admin UI.
 DEFAULT_ALLOWED_USERS = ""
-
-# Set by _authorize_user() after the auth token is verified.
 _AUTHED_EMAIL: str | None = None
 
 
 def _allowed_users() -> set[str]:
-    raw = os.environ.get("ASHBY_ALLOWED_USERS", "").strip() or DEFAULT_ALLOWED_USERS
-    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+    if "ASHBY_ALLOWED_USERS" in os.environ:
+        return {e.strip().lower() for e in os.environ["ASHBY_ALLOWED_USERS"].split(",") if e.strip()}
+    from pymongo import MongoClient
+    uri = os.environ.get("OBSERVABILITY_MONGODB_URI", "")
+    if not uri:
+        raise AshbyToolError("Access denied: admin permissions database unavailable")
+    try:
+        with MongoClient(uri, serverSelectionTimeoutMS=5000) as client:
+            db = client[os.environ.get("OBSERVABILITY_DB_NAME", "loma_observability")]
+            config = db.gateway_config.find_one({"_id": "runtime-settings"}) or {}
+            allowed = [e.strip().lower() for e in config.get("ashby_allowed_users", [])]
+            return {user["email"] for user in db.users.find(
+                {"email": {"$in": allowed}, "deleted": {"$ne": True},
+                 "status": {"$in": ["active", None]}}, {"email": 1})}
+    except Exception:
+        raise AshbyToolError("Access denied: admin permissions unavailable") from None
 
 
 def _authorize_user(user_email: str | None, auth_token: str | None) -> None:
@@ -200,7 +210,7 @@ def _authorize_user(user_email: str | None, auth_token: str | None) -> None:
     if email not in _allowed_users():
         raise AshbyToolError(
             f"Access denied: {email} is not authorized to use the Ashby tool. "
-            "Allowed users are configured via the ASHBY_ALLOWED_USERS env var."
+            "Allowed users are configured in Admin → Environment → Agent settings."
         )
     try:
         from _auth_token import verify_user_auth_token
