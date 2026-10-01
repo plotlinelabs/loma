@@ -145,6 +145,52 @@ async def test_client_sends_plan_requests(monkeypatch):
     client._request.assert_awaited_with("GET", "/search?query=acme%20pay")
 
 
+class _Resp:
+    def __init__(self, status, body):
+        self.status, self._body = status, body
+
+    async def json(self, content_type=None):
+        return self._body
+
+    async def text(self):
+        return str(self._body)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _Session:
+    def __init__(self, resp):
+        self._resp = resp
+
+    def request(self, *args, **kwargs):
+        return self._resp
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_plan_error_field_is_not_a_request_error(monkeypatch):
+    monkeypatch.setenv("CUSTOMER_ADMIN_API_SECRET", "s")
+    monkeypatch.setenv("CUSTOMER_ADMIN_BASE_URL", "https://admin.example.com")
+    body = {"planId": "p1", "status": "PLANNED", "error": None, "summary": SUMMARY}
+    with patch.object(client.aiohttp, "ClientSession", lambda: _Session(_Resp(200, body))):
+        plan = await client.get_plan("p1")
+    assert "error" not in plan
+    assert plan["run_error"] is None and plan["status"] == "PLANNED"
+
+    with patch.object(client.aiohttp, "ClientSession", lambda: _Session(_Resp(409, {"success": False, "message": "plan is APPLIED"}))):
+        failed = await client.apply_plan("p1", "lead@example.com")
+    assert failed == {"error": "plan is APPLIED", "status": 409}
+
+
 @pytest.mark.asyncio
 async def test_client_reports_missing_integration(monkeypatch):
     monkeypatch.delenv("CUSTOMER_ADMIN_API_SECRET", raising=False)

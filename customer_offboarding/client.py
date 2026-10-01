@@ -67,6 +67,9 @@ async def _request(method: str, path: str, body: dict[str, Any] | None = None, t
                 if resp.status != 200:
                     message = (data or {}).get("message") if isinstance(data, dict) else None
                     return {"error": message or f"HTTP {resp.status}", "status": resp.status}
+                # A plan's own failure field is not a request error; keep "error" for failed calls only.
+                if isinstance(data, dict) and "error" in data:
+                    data["run_error"] = data.pop("error")
                 return data
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         return {"error": f"Failed to reach the customer-admin API: {e or type(e).__name__}"}
