@@ -1,5 +1,6 @@
 "use client";
 
+import HumanTaskSetup from "./HumanTaskSetup";
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -1000,6 +1001,7 @@ export default function AdminPage() {
       {/* ── Environment tab ── */}
       {tab === "environment" && (
         <div className="space-y-2">
+          <HumanTaskSetup />
           {/* Alerts */}
           {envError && (
             <Alert variant="destructive" className="bg-red-50 border-red-200 text-red-700">
