@@ -2,10 +2,10 @@
 import type { ToolConfig } from "@/lib/api";
 
 import PetCompanion from "@/components/PetCompanion";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line, RiUserAddLine } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line, RiUserAddLine, RiUserLine } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -18,6 +18,7 @@ import {
   BoardNotFoundError,
   PERSONAL_BOARD_ID,
   basePath,
+  canRunTask,
   createTask,
   createTaskCard,
   saveBoardSettings,
@@ -55,6 +56,8 @@ import { BoardSwitcher } from "@/components/tasks/BoardSwitcher";
 import { ManageBoardDialog } from "@/components/tasks/ManageBoardDialog";
 import { CardBoard } from "@/components/tasks/CardBoard";
 import { CardPanel } from "@/components/tasks/CardPanel";
+import { MoveToCardDialog } from "@/components/tasks/MoveTaskDialogs";
+import { BoardExtrasContext, assignablePeople, type BoardExtras } from "@/components/tasks/boardExtras";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 const POLL_INTERVAL_MS = 5000;
@@ -104,6 +107,10 @@ export default function TasksPage() {
   const [includedTagIds, setIncludedTagIds] = useState<string[]>([]);
   const [excludedTagIds, setExcludedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  // Shared boards: only show tasks (or cards holding tasks) assigned to me.
+  const [assignedToMe, setAssignedToMe] = useState(false);
+  // Personal task being moved into a card.
+  const [movingTask, setMovingTask] = useState<Task | null>(null);
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
   const [pushState, setPushState] = useState<PushState | null>(null);
   // Pause polling while a mutation is in flight to avoid clobbering optimistic state.
@@ -312,14 +319,27 @@ export default function TasksPage() {
   const liveCard = board?.cards?.find((c) => c.card_id === panelCard?.card_id) ?? panelCard;
   const canShare = !!currentBoard?.shared && currentBoard.role === "owner";
   const myEmail = session?.user?.email ?? null;
-  // A teammate's task runs with their accounts, so its chat is read-only for you.
-  const chatReadOnly = !!chatTask?.owner && !!myEmail && chatTask.owner !== myEmail;
+  // Only a task's creator or its assignee can message it; each run uses the
+  // sender's accounts. Everyone else on the board reads the chat.
+  const chatReadOnly = !!chatTask?.owner && !!myEmail && !canRunTask(chatTask, myEmail, currentBoard?.role);
+  const assignable = assignablePeople(currentBoard);
+  const assignedFilterOn = assignedToMe && !!currentBoard?.shared;
+  const boardExtras = useMemo<BoardExtras>(() => ({
+    myEmail,
+    role: currentBoard?.role ?? null,
+    assignable,
+    assignedToMe: assignedFilterOn,
+    // Your own tasks can move into a card on a card board you can edit.
+    onMoveToCard: cardMode ? undefined : (task: Task) => setMovingTask(task),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [myEmail, currentBoard?.role, assignable.join(","), assignedFilterOn, cardMode]);
   const openManageBoard = (target: TaskBoardSummary | null) => {
     setManagingBoard(target);
     setManageOpen(true);
   };
 
   return (
+    <BoardExtrasContext.Provider value={boardExtras}>
     <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
       <div className="pwa-header-offset flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -338,6 +358,12 @@ export default function TasksPage() {
           <PetCompanion state={board?.tasks.some((task) => task.column === "needs_input") ? "attention" : petCompleted ? "completed" : board?.tasks.some((task) => task.column === "working") ? "working" : "idle"} />
         </div>
         <div className="flex items-center gap-1">
+          {currentBoard?.shared && (
+            <Button variant={assignedFilterOn ? "secondary" : "ghost"} size="sm" aria-pressed={assignedFilterOn}
+              onClick={() => setAssignedToMe((on) => !on)}>
+              <RiUserLine className="h-4 w-4" /> Assigned to me
+            </Button>
+          )}
           {board && board.tags.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -618,6 +644,13 @@ export default function TasksPage() {
           } : current);
         }}
       />
+      <MoveToCardDialog
+        task={movingTask}
+        open={!!movingTask}
+        onOpenChange={(open) => { if (!open) setMovingTask(null); }}
+        onMoved={refresh}
+      />
     </div>
+    </BoardExtrasContext.Provider>
   );
 }

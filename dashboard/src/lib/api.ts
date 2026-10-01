@@ -1160,15 +1160,26 @@ export interface Task {
   task_board_id?: string | null;
   /** Card the task lives in (card boards only). */
   task_card_id?: string | null;
-  /** Creator's email. Only the creator can message the task (runs use their accounts). */
+  /** Creator's email. The creator and the assignee can message the task. */
   owner?: string | null;
+  /** Shared boards: the owner/editor this task is assigned to. Each run uses the sender's accounts. */
+  assignee?: string | null;
+}
+
+/** Whether `me` can message (run) a task: its creator, or its assignee while they can edit the board. */
+export function canRunTask(task: Pick<Task, "owner" | "assignee"> | null | undefined, me: string | null | undefined,
+  boardRole?: TaskBoardRole | null): boolean {
+  if (!task || !me) return false;
+  if (task.owner === me) return true;
+  return !!task.assignee && task.assignee === me && (boardRole === "owner" || boardRole === "editor");
 }
 
 export type TaskBoardRole = "owner" | "editor" | "viewer";
 
 export interface TaskBoardMember {
   email: string;
-  role: "editor" | "viewer";
+  /** "owner" members are co-owners: they can share, rename and delete the board. */
+  role: "owner" | "editor" | "viewer";
 }
 
 export interface TaskBoardSummary {
@@ -1206,11 +1217,28 @@ export interface TaskCardItem {
   fields: Record<string, CardFieldValue>;
   /** Notes for Loma: added to the context of every task inside the card. */
   notes: string;
+  /** Values Loma filled in through a task: field id -> who ran it. Cleared when a person edits the value. */
+  field_meta?: Record<string, LomaStamp>;
+  /** Notes Loma added through a task (kept apart from the user's notes). */
+  loma_notes?: LomaNote[];
   created_by?: string | null;
   task_total: number;
   task_done: number;
   task_running: number;
   task_needs_input: number;
+}
+
+export interface LomaStamp {
+  by: "loma";
+  /** Whose run (and accounts) wrote it. */
+  run_by: string;
+  conversation_id?: string;
+  at?: string;
+}
+
+export interface LomaNote extends LomaStamp {
+  id: string;
+  text: string;
 }
 
 export type BoardTemplate = "blank" | "deals" | "hiring" | "projects";
@@ -1312,6 +1340,8 @@ export function updateTaskCard(
     /** Partial: only the given field ids change; null clears a value. */
     fields?: Record<string, CardFieldValue>;
     notes?: string;
+    /** Delete one of Loma's notes by id. */
+    remove_loma_note?: string;
   },
 ): Promise<{ card: TaskCardItem }> {
   return cardRequest(`/${encodeURIComponent(cardId)}`, "PATCH", updates);
@@ -1383,6 +1413,10 @@ export async function updateTask(
     task_deadline?: string | null;
     /** Move to another board ("personal" = the creator's own board). */
     task_board_id?: string | null;
+    /** Card on a card board to move the task into (alone: move to another card). */
+    task_card_id?: string | null;
+    /** Shared boards: assign to an owner/editor's email, or null to clear. */
+    task_assignee?: string | null;
   },
 ): Promise<{ task: Task | null }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}`, {

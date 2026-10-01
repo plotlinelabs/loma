@@ -162,7 +162,8 @@ async def test_creator_moves_task_to_shared_board(monkeypatch):
         FakeRequest({"task_board_id": "deals1"}, match_info={"conversation_id": "c1"}))
     assert response.status == 200
     update = db.conversations.update_one.await_args.args[1]["$set"]
-    assert update == {"task_board_id": "deals1", "task_lane": "lead", "task_tag_ids": []}
+    assert update == {"task_board_id": "deals1", "task_lane": "lead", "task_tag_ids": [],
+                      "task_assignee": None}
 
 
 @pytest.mark.asyncio

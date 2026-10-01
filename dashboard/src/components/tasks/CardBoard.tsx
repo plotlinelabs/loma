@@ -22,6 +22,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { RiAddLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
+import { AssigneeBadge, useBoardExtras } from "./boardExtras";
 import { Input } from "@/components/ui/input";
 import {
   createTaskCard,
@@ -45,11 +46,14 @@ interface CardBoardProps {
   readOnly?: boolean;
 }
 
-function CardTile({ card, fields, readOnly, onOpen }: {
+function CardTile({ card, fields, readOnly, onOpen, assignees = [], me = null }: {
   card: TaskCardItem;
   fields: BoardField[];
   readOnly: boolean;
   onOpen: (card: TaskCardItem) => void;
+  /** People assigned to the card's open tasks. */
+  assignees?: string[];
+  me?: string | null;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: card.card_id, disabled: readOnly });
@@ -104,6 +108,13 @@ function CardTile({ card, fields, readOnly, onOpen }: {
           <span className="flex items-center gap-1 text-amber-600">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
             {card.task_needs_input} need input
+          </span>
+        )}
+        {assignees.length > 0 && (
+          <span className="ml-auto flex -space-x-1">
+            {assignees.slice(0, 3).map((email) => (
+              <AssigneeBadge key={email} email={email} me={me} className="ring-2 ring-card" />
+            ))}
           </span>
         )}
       </div>
@@ -194,9 +205,21 @@ export function CardBoard({ board, onBoardChange, onRefresh, onOpenCard, onError
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const { myEmail, assignedToMe } = useBoardExtras();
+  // Assignees of each card's open tasks; "Assigned to me" keeps only cards
+  // holding a task assigned to you.
+  const assigneesByCard: Record<string, string[]> = {};
+  for (const task of board.tasks) {
+    if (!task.task_card_id || !task.assignee || task.column === "done") continue;
+    const list = (assigneesByCard[task.task_card_id] ??= []);
+    if (!list.includes(task.assignee)) list.push(task.assignee);
+  }
   const cardsByLane: Record<string, TaskCardItem[]> = {};
   for (const lane of board.lanes) cardsByLane[lane.id] = [];
-  for (const card of cards) (cardsByLane[card.lane] ??= []).push(card);
+  for (const card of cards) {
+    if (assignedToMe && !board.tasks.some((t) => t.task_card_id === card.card_id && t.assignee === myEmail)) continue;
+    (cardsByLane[card.lane] ??= []).push(card);
+  }
   for (const list of Object.values(cardsByLane)) list.sort((a, b) => a.rank - b.rank);
 
   const addCard = async (laneId: string, title: string) => {
@@ -269,7 +292,8 @@ export function CardBoard({ board, onBoardChange, onRefresh, onOpenCard, onError
               onAdd={(title) => addCard(lane.id, title)}
             >
               {laneCards.map((card) => (
-                <CardTile key={card.card_id} card={card} fields={fields} readOnly={readOnly} onOpen={onOpenCard} />
+                <CardTile key={card.card_id} card={card} fields={fields} readOnly={readOnly} onOpen={onOpenCard}
+                  assignees={assigneesByCard[card.card_id]} me={myEmail} />
               ))}
             </CardColumn>
           );

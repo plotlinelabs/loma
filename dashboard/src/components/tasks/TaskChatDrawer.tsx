@@ -11,6 +11,7 @@ import ChatWithArtifacts from "@/components/ChatWithArtifacts";
 import { rebuildItemsFromConversation, type ChatItem } from "@/components/ChatPanel";
 import type { Artifact } from "@/components/ArtifactViewer";
 import { basePath, fetchConversation, updateTask, type ChatFile, type Task } from "@/lib/api";
+import { AssigneeSelect, useBoardExtras } from "./boardExtras";
 
 /** Loads and renders one conversation inside the drawer. Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
@@ -165,6 +166,21 @@ export function TaskChatDrawer({
   }, []);
 
   const petSettingsOpen = usePetSettingsOpen();
+  const { myEmail, role, assignable } = useBoardExtras();
+  const [assignError, setAssignError] = useState<string | null>(null);
+  // Shared-board tasks can be assigned to an owner/editor, who can then run it.
+  const showAssignee = !!task?.task_board_id && assignable.length > 0;
+  const canAssign = role === "owner" || role === "editor";
+  const assign = async (email: string | null) => {
+    if (!task) return;
+    setAssignError(null);
+    try {
+      const { task: updated } = await updateTask(task.conversation_id, { task_assignee: email });
+      if (updated) onTaskChange?.(updated);
+    } catch (e) {
+      setAssignError(e instanceof Error ? e.message : "Could not assign task");
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -191,7 +207,15 @@ export function TaskChatDrawer({
             />
           )}
           {task && readOnly && task.owner && (
-            <span className="shrink-0 truncate text-xs text-muted-foreground">by {task.owner}</span>
+            <span className="shrink-0 truncate text-xs text-muted-foreground"
+              title="Only the task's creator or its assignee can message it">by {task.owner}</span>
+          )}
+          {task && showAssignee && (
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Assignee</span>
+              <AssigneeSelect key={task.conversation_id} value={task.assignee} people={assignable} me={myEmail}
+                disabled={!canAssign} onChange={(email) => void assign(email)} className="h-7 w-44 text-xs" />
+            </div>
           )}
           {task && !readOnly && (
             <Tooltip>
@@ -211,6 +235,7 @@ export function TaskChatDrawer({
             </Tooltip>
           )}
         </div>
+        {assignError && <p className="border-b border-border px-4 py-1.5 text-xs text-destructive">{assignError}</p>}
         {task && (
           <DrawerConversation
             key={task.conversation_id}

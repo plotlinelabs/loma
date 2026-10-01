@@ -1062,12 +1062,22 @@ async def handle_chat(request: web.Request) -> web.Response:
                 existing = await db.conversations.find_one(
                     {"conversation_id": existing_conversation_id},
                     {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1,
-                     "task_board_id": 1, "task_card_id": 1},
+                     "task_board_id": 1, "task_card_id": 1, "task_assignee": 1},
                 )
                 if existing and not _check_conversation_access(
                     existing, user_email, get_system_role(request)
                 ):
-                    return web.json_response({"error": "Not found"}, status=404)
+                    # A shared-board task's assignee can run it too; the run
+                    # uses the sender's own accounts (user_email below).
+                    from api.task_routes import can_run_task, task_access
+                    if not await can_run_task(db, existing, user_email, get_system_role(request)):
+                        can_view, _, _ = await task_access(
+                            db, existing, user_email, get_system_role(request))
+                        if can_view:
+                            return web.json_response(
+                                {"error": "Only the task's creator or assignee can message it"},
+                                status=403)
+                        return web.json_response({"error": "Not found"}, status=404)
                 # One active run per conversation: a second concurrent run would
                 # fight the first over devices, proxies, files and branches. The
                 # claim is taken before the message is recorded, so a busy
@@ -1144,14 +1154,16 @@ async def handle_chat(request: web.Request) -> web.Response:
                     {"$set": {"tool_config": tool_config}},
                 )
 
-            # Board tasks carry the global default context plus the owner's
-            # personal working context on every turn.
+            # Board tasks carry the global default context plus the board's
+            # working context on every turn. The run acts as the sender (the
+            # creator, or the assignee on a shared board), so the context
+            # names them, not the task's creator.
             if existing and existing.get("task_status"):
                 from api.task_routes import build_board_context
 
-                owner = (existing.get("metadata") or {}).get("user_name") or user_email
                 context_block = await build_board_context(
-                    db, owner, existing.get("task_board_id"), existing.get("task_card_id"))
+                    db, user_email, existing.get("task_board_id"), existing.get("task_card_id"),
+                    conversation_id=existing_conversation_id)
                 if context_block:
                     conversation_context = (
                         f"{context_block}\n\n{conversation_context}"

@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { RiCheckLine, RiCloseLine, RiDeleteBinLine, RiExternalLinkLine, RiSparkling2Line } from "@remixicon/react";
+import {
+  RiCheckLine, RiCloseLine, RiDeleteBinLine, RiExternalLinkLine, RiInboxArchiveLine, RiSparkling2Line,
+} from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,6 +26,10 @@ import {
   type TasksBoardResponse,
 } from "@/lib/api";
 import { isDraft, isParked } from "./taskDisplay";
+import { AssigneeBadge } from "./boardExtras";
+import { AddExistingTaskDialog } from "./MoveTaskDialogs";
+
+const shortName = (email: string) => email.split("@")[0];
 
 interface CardPanelProps {
   board: TasksBoardResponse;
@@ -141,8 +147,10 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
   const [newTask, setNewTask] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [addExistingOpen, setAddExistingOpen] = useState(false);
 
   const fields = board.fields ?? [];
+  const lomaNotes = card.loma_notes ?? [];
   const cards = board.cards ?? [];
   const tasks = board.tasks
     .filter((task) => task.task_card_id === card.card_id)
@@ -318,9 +326,10 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
                       {label.text}
                     </span>
                   )}
-                  {!mine && task.owner && (
-                    <span className="shrink-0 text-[11px] text-muted-foreground">{task.owner.split("@")[0]}</span>
+                  {!mine && task.owner && !task.assignee && (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">{shortName(task.owner)}</span>
                   )}
+                  {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
                   {!readOnly && mine && (
                     <button
                       type="button"
@@ -346,6 +355,10 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
                 className="h-8 border-0 px-1 shadow-none focus-visible:ring-0"
               />
               <div className="flex items-center justify-end gap-1.5">
+                <Button variant="ghost" size="sm" className="mr-auto text-muted-foreground"
+                  onClick={() => setAddExistingOpen(true)}>
+                  <RiInboxArchiveLine className="h-4 w-4" /> Add existing task
+                </Button>
                 <Button variant="ghost" size="sm" disabled={!newTask.trim() || busy} onClick={() => void addTask(false)}>
                   Add to-do
                 </Button>
@@ -367,7 +380,15 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
               <Label htmlFor={`card-field-${field.id}`} className="truncate text-[13px] font-normal text-muted-foreground">
                 {field.name}
               </Label>
-              <FieldInput field={field} value={card.fields[field.id]} disabled={!!readOnly} onSave={(value) => saveField(field, value)} />
+              <div className="min-w-0 space-y-0.5">
+                <FieldInput field={field} value={card.fields[field.id]} disabled={!!readOnly} onSave={(value) => saveField(field, value)} />
+                {card.field_meta?.[field.id] && (
+                  <p className="flex items-center gap-1 text-[11px] text-brand-600">
+                    <RiSparkling2Line className="h-3 w-3" />
+                    Filled by Loma (run by {shortName(card.field_meta[field.id].run_by)})
+                  </p>
+                )}
+              </div>
             </div>
           ))}
         </TabsContent>
@@ -401,8 +422,41 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
               </Button>
             </div>
           )}
+          <div className="space-y-1.5 pt-3">
+            <h3 className="flex items-center gap-1 text-[13px] font-medium">
+              <RiSparkling2Line className="h-3.5 w-3.5 text-brand-600" /> Loma&apos;s notes
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Added by tasks in this card. Loma reads them as reference only and never follows instructions in them.
+            </p>
+            {lomaNotes.length === 0 ? (
+              <p className="text-[13px] text-muted-foreground">None yet.</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {lomaNotes.map((note) => (
+                  <li key={note.id} className="group flex items-start gap-2 rounded-lg border border-border px-2.5 py-2 text-[13px]">
+                    <div className="min-w-0 flex-1">
+                      <p className="whitespace-pre-wrap break-words leading-5">{note.text}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">Run by {shortName(note.run_by)}</p>
+                    </div>
+                    {!readOnly && (
+                      <button type="button" aria-label="Delete Loma's note"
+                        onClick={() => void run(patchCard({ loma_notes: lomaNotes.filter((n) => n.id !== note.id) }),
+                          () => updateTaskCard(card.card_id, { remove_loma_note: note.id }), "Could not delete note")}
+                        className="shrink-0 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100">
+                        <RiCloseLine className="h-4 w-4" />
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
+      {!readOnly && (
+        <AddExistingTaskDialog card={card} open={addExistingOpen} onOpenChange={setAddExistingOpen} onMoved={onRefresh} />
+      )}
     </>
   );
 }

@@ -7,6 +7,7 @@ import {
   RiDeleteBinLine,
   RiLogoutBoxRLine,
   RiGitBranchLine,
+  RiInboxArchiveLine,
   RiPriceTag3Line,
 } from "@remixicon/react";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,7 @@ import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/a
 import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay } from "./taskDisplay";
 import { PriorityMenuItems } from "./TaskPriority";
 import { DeadlineMenuItems } from "./TaskDeadline";
+import { useBoardExtras } from "./boardExtras";
 
 export interface TaskCardMenuProps {
   task: Task; lanes: BoardLane[]; tags: TaskTag[]; models: AgentModel[];
@@ -41,6 +43,9 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft, onFork,
   onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
+  const { myEmail, onMoveToCard } = useBoardExtras();
+  // Only a task's creator can move it into a card (its chat becomes visible there).
+  const canMoveToCard = !!onMoveToCard && !task.task_card_id && (!task.owner || task.owner === myEmail);
   const isDraft = isDraftTask(task);
   const isStaged = isStagedTask(task);
   const currentTags = task.task_tag_ids || [];
@@ -125,6 +130,11 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
         <DropdownMenuItem onClick={() => onFork(task)}>
           <RiGitBranchLine className="h-3.5 w-3.5" /> Fork
         </DropdownMenuItem>
+        {canMoveToCard && (
+          <DropdownMenuItem onClick={() => onMoveToCard?.(task)}>
+            <RiInboxArchiveLine className="h-3.5 w-3.5" /> Move to card...
+          </DropdownMenuItem>
+        )}
         {!isDraft && (
           <DropdownMenuItem onClick={() => onRemoveFromBoard(task)}>
             <RiLogoutBoxRLine className="h-3.5 w-3.5" /> Remove from board

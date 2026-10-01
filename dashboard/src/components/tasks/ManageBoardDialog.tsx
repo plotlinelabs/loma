@@ -49,6 +49,7 @@ function RoleSelect({ value, onChange }: { value: MemberRole; onChange: (role: M
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
+        <SelectItem value="owner">Owner</SelectItem>
         <SelectItem value="editor">Editor</SelectItem>
         <SelectItem value="viewer">Viewer</SelectItem>
       </SelectContent>
@@ -148,7 +149,7 @@ export function ManageBoardDialog({ open, onOpenChange, board, onSaved, onDelete
         <DialogHeader>
           <DialogTitle>{board ? "Share board" : "New board"}</DialogTitle>
           <DialogDescription>
-            Each board has its own columns, tags and context. Tasks always run with the accounts of the person who created them.
+            Each board has its own columns, tags and context. A task runs with the accounts of whoever sends it a message: its creator or its assignee.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -195,7 +196,8 @@ export function ManageBoardDialog({ open, onOpenChange, board, onSaved, onDelete
           <div className="space-y-1.5">
             <Label htmlFor="board-member-email">People with access</Label>
             <p className="text-xs text-muted-foreground">
-              Editors can add and move tasks and change columns, tags and context. Viewers can only look.
+              Owners can also share, rename and delete the board. Editors can add, move and assign tasks and
+              change columns, tags and context. Viewers can only look.
             </p>
             <div className="flex items-center gap-1.5">
               <Input
@@ -219,7 +221,7 @@ export function ManageBoardDialog({ open, onOpenChange, board, onSaved, onDelete
             <div className="divide-y divide-border rounded-lg border border-border">
               <div className="flex items-center gap-2 px-3 py-2 text-[13px]">
                 <span className="min-w-0 flex-1 truncate">{board?.owner ?? "You"}</span>
-                <span className="text-xs text-muted-foreground">Owner</span>
+                <span className="text-xs text-muted-foreground">Owner (creator)</span>
               </div>
               {members.map((member) => (
                 <div key={member.email} className="flex items-center gap-2 px-3 py-1.5 text-[13px]">

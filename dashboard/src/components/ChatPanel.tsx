@@ -106,6 +106,8 @@ export interface ChatItem {
   elapsedSeconds?: number;
   /** True when this user message is queued to be sent after the current stream finishes */
   queued?: boolean;
+  /** Who sent this user message (shared-board tasks: the run used their accounts). */
+  sender?: string;
 }
 
 /** Pretty-print a tool name for display */
@@ -259,7 +261,7 @@ function extractClarifyBlock(text: string): {
  * Each turn may contain tool_calls, tool_results, and text_blocks.
  */
 export function rebuildItemsFromConversation(
-  messages: Array<{ role: string; content: string; timestamp?: string }> | undefined,
+  messages: Array<{ role: string; content: string; timestamp?: string; sender?: string }> | undefined,
   prompt: string,
   finalResponse: string,
   turns: Turn[],
@@ -272,6 +274,7 @@ export function rebuildItemsFromConversation(
         items: messages.map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
+          ...(m.role === "user" && m.sender ? { sender: m.sender } : {}),
         })),
         artifacts: [],
       };
@@ -284,7 +287,7 @@ export function rebuildItemsFromConversation(
   }
 
   // Collect follow-up user messages (skip the first one — it's the initial prompt)
-  const followUpUserMessages: Array<{ content: string; timestamp: string }> = [];
+  const followUpUserMessages: Array<{ content: string; timestamp: string; sender?: string }> = [];
   if (messages && messages.length > 1) {
     const userMessages = messages.filter((m) => m.role === "user");
     for (let i = 1; i < userMessages.length; i++) {
@@ -292,16 +295,18 @@ export function rebuildItemsFromConversation(
         followUpUserMessages.push({
           content: userMessages[i].content,
           timestamp: userMessages[i].timestamp!,
+          sender: userMessages[i].sender,
         });
       }
     }
   }
+  const firstSender = messages?.find((m) => m.role === "user")?.sender;
 
   // Track which follow-up messages have been inserted
   const insertedFollowUps = new Set<number>();
 
   // Start with the initial user message
-  const items: ChatItem[] = [{ role: "user", content: prompt }];
+  const items: ChatItem[] = [{ role: "user", content: prompt, ...(firstSender ? { sender: firstSender } : {}) }];
 
   // Each turn represents one assistant response cycle (possibly with tool calls)
   for (const turn of turns) {
@@ -315,7 +320,7 @@ export function rebuildItemsFromConversation(
           (item) => item.role === "user" && item.content === followUpUserMessages[i].content
         );
         if (!exists) {
-          items.push({ role: "user", content: followUpUserMessages[i].content });
+          items.push({ role: "user", content: followUpUserMessages[i].content, sender: followUpUserMessages[i].sender });
         }
         insertedFollowUps.add(i);
       }
@@ -354,7 +359,7 @@ export function rebuildItemsFromConversation(
       (item) => item.role === "user" && item.content === followUpUserMessages[i].content
     );
     if (!exists) {
-      items.push({ role: "user", content: followUpUserMessages[i].content });
+      items.push({ role: "user", content: followUpUserMessages[i].content, sender: followUpUserMessages[i].sender });
     }
   }
 
@@ -544,7 +549,7 @@ function FileAttachmentCard({ file }: { file: FileAttachment }) {
 function ReadOnlyComposerNotice() {
   return (
     <p className="mx-auto max-w-3xl rounded-xl border border-dashed border-border px-3 py-2.5 text-center text-xs text-muted-foreground">
-      View only. Only the person who created this task can message it, since it runs with their accounts.
+      View only. Only this task&apos;s creator or its assignee can message it. Each run uses the accounts of whoever sends the message.
     </p>
   );
 }
@@ -607,6 +612,12 @@ export default function ChatPanel({
   const { data: session } = useSession();
   const standalone = useStandalone();
   const [items, setItems] = useState<ChatItem[]>(initialItems || []);
+  // Shared-board tasks can have two people messaging (creator and assignee):
+  // label each message with its sender only when that's the case.
+  const multipleSenders = useMemo(
+    () => new Set(items.filter((item) => item.role === "user" && item.sender).map((item) => item.sender)).size > 1,
+    [items],
+  );
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const [input, setInput] = useState(initialPrompt || "");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -1589,6 +1600,9 @@ export default function ChatPanel({
                           ? "bg-card/60 border border-dashed border-border"
                           : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
                       )}>
+                        {multipleSenders && item.sender && (
+                          <div className="mb-1 text-[11px] font-medium text-muted-foreground">{item.sender}</div>
+                        )}
                         {editingQueuedIndex === i ? (
                           <div className="flex flex-col gap-1.5">
                             <textarea

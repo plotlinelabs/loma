@@ -101,11 +101,18 @@ class ConversationObserver:
                 "last_heartbeat": self.start_time,
             }}
             if prompt:
-                update["$push"] = {"messages": {
+                message = {
                     "role": "user",
                     "content": prompt,
                     "timestamp": self.start_time,
-                }}
+                }
+                # Shared-board tasks can be run by their creator or assignee:
+                # record who sent each dashboard message (and so whose
+                # accounts that run used).
+                sender = self.metadata.get("user_name")
+                if self.metadata.get("source") == "dashboard" and sender:
+                    message["sender"] = sender
+                update["$push"] = {"messages": message}
             await self.db.conversations.update_one(
                 {"conversation_id": self.conversation_id},
                 update,

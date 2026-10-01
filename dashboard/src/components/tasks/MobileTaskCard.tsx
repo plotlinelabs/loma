@@ -26,6 +26,7 @@ import type { BoardLane, Task, TaskPriority } from "@/lib/api";
 import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
+import { AssigneeBadge, useBoardExtras } from "./boardExtras";
 
 interface MobileTaskCardProps {
   task: Task;
@@ -62,6 +63,9 @@ export function MobileTaskCard({
     ? lanes.filter((lane) => lane.id !== task.task_lane)
     : task.column === "needs_input" || task.column === "done" ? lanes : [];
 
+  const { myEmail, onMoveToCard } = useBoardExtras();
+  const canMoveToCard = !!onMoveToCard && !task.task_card_id && (!task.owner || task.owner === myEmail);
+
   return (
     <div
       onClick={() => onOpen(task)}
@@ -78,6 +82,7 @@ export function MobileTaskCard({
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
           </div>
           <div className="mt-1 flex items-center gap-1 overflow-hidden">
+            {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
             <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
             <TaskDeadlineBadge task={task} />
           </div>
@@ -112,6 +117,9 @@ export function MobileTaskCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {canMoveToCard && (
+                <DropdownMenuItem onClick={() => onMoveToCard?.(task)}>Move to card...</DropdownMenuItem>
+              )}
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <span className="flex-1">Priority</span>

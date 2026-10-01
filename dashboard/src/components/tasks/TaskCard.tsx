@@ -16,6 +16,7 @@ import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestam
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
 import { TaskDeadlineBadge } from "./TaskDeadline";
+import { AssigneeBadge, useBoardExtras } from "./boardExtras";
 
 interface TaskCardProps {
   task: Task;
@@ -47,6 +48,7 @@ export function TaskCard({
   const isDraft = isDraftTask(task);
   const isParked = isStaged && !isDraft;
   const [menuOpen, setMenuOpen] = useState(false);
+  const { myEmail } = useBoardExtras();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: task.conversation_id, data: { task } });
 
@@ -83,6 +85,7 @@ export function TaskCard({
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
           </div>
           <div className="mt-1 flex items-center gap-1 overflow-hidden pr-12">
+            {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
             <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
             <TaskDeadlineBadge task={task} />
             {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag.name}</span>)}
