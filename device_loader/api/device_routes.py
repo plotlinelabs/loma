@@ -496,7 +496,7 @@ async def handle_internal_call(request):
             data = await service.visual_check(user_email, scope, body.get('device_id'), (body.get('args') or {}).get('expect'))
             return web.json_response(_encode_media(data))
     except DeviceError as exc:
-        return _error(str(exc), 409)
+        return web.json_response({'error': str(exc), **exc.to_dict()}, status=409)
     return _error('Unknown action')
 
 

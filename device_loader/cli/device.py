@@ -17,7 +17,9 @@ Commands:
                 [--extra KEY=VALUE ...] [--bool-extra KEY=true|false ...] [--activity .Main] [--console]
   device.py ... open-url --device-id ID --url URL
   device.py ... tap --device-id ID (--ref e3 | --x X --y Y)      (refs come from ui-tree)
-  device.py ... tap-text --device-id ID --match TEXT [--by any|text|id|label] [--exact] [--timeout S]
+                tap / tap-text / swipe / key / type / set-text / clear-text / open-url take [--settle [--settle-ms MS]]:
+                wait for the screen to settle and return what changed, with refs for the new screen
+  device.py ... tap-text --device-id ID --match TEXT [--by any|text|id|label] [--exact] [--timeout S] [--nth N]
   device.py ... wait-for --device-id ID --match TEXT [--by ...] [--exact] [--timeout S] [--gone]
   device.py ... scroll-until-visible --device-id ID --match TEXT [--direction down|up] [--max-swipes N]
   device.py ... set-text --device-id ID --text TEXT [--ref e3 | --match FIELD [--by ...]] [--no-clear]
@@ -30,7 +32,7 @@ Commands:
   device.py ... screenshot --device-id ID [--out PATH] [--preview]    (then Read the PNG / preview JPEG)
   device.py ... burst --device-id ID --count N [--interval-ms MS] [--app-id PKG [--extra K=V ...]] [--preview]
   device.py ... record --device-id ID --duration S [--app-id PKG [--extra K=V ...]]
-  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console]
+  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console] [--app-id PKG]
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
   device.py ... netcap --device-id ID --action start|stop|read [--filter /sdk/] [--limit N]   (Android)
   device.py ... plotline-check --device-id ID --product-id P --user-id U [--flow-id F] [--since S]
@@ -118,7 +120,26 @@ def _selector(args):
     return out
 
 
+SETTLE_COMMANDS = ('tap', 'tap-text', 'swipe', 'key', 'type', 'set-text', 'clear-text', 'open-url')
+NTH_COMMANDS = ('tap-text', 'set-text', 'clear-text')
+
+
 def build_body(args):
+    """The /internal/devices/call body, plus the options several commands share (settle, nth)."""
+    body = _build_body(args)
+    extra = {}
+    if getattr(args, 'settle', False) or getattr(args, 'settle_ms', None) is not None:
+        extra['settle'] = True
+        if args.settle_ms is not None:
+            extra['settle_ms'] = args.settle_ms
+    if getattr(args, 'nth', None) is not None:
+        extra['nth'] = args.nth
+    if extra:
+        body['args'] = {**body.get('args', {}), **extra}
+    return body
+
+
+def _build_body(args):
     """Translate CLI arguments into the /internal/devices/call body (pure; unit-tested)."""
     # Same lease scope as isolated runs (conv:<id>), so both runtimes agree.
     body = {'scope': args.scope if ':' in args.scope else f'conv:{args.scope}'}
@@ -230,6 +251,8 @@ def build_body(args):
             log_args['filter'] = args.filter
         if args.source:
             log_args['source'] = args.source
+        if args.app_id:
+            log_args['app_id'] = args.app_id
         return {**call, 'op': 'logs', 'args': log_args}
     if args.command == 'netcap':
         call_args = {'action': args.action, **({'filter': args.filter} if args.filter else {}),
@@ -395,9 +418,16 @@ def parser():
     s.add_argument('--filter')
     s.add_argument('--clear', action='store_true')
     s.add_argument('--source', choices=['auto', 'system', 'console'])
+    s.add_argument('--app-id', help="Only this app's lines (Android: its running process; iOS: its executable)")
     s = with_device('run-flow')
     s.add_argument('--flow-file', required=True)
     s.add_argument('--verbose', action='store_true', help='Full Maestro output and JUnit report')
+    for name in SETTLE_COMMANDS:
+        sub.choices[name].add_argument('--settle', action='store_true',
+                                       help='Wait for the screen to stop changing; returns what changed, with new refs')
+        sub.choices[name].add_argument('--settle-ms', type=int, metavar='MS', help='Settle budget (500-10000, default 3000)')
+    for name in NTH_COMMANDS:
+        sub.choices[name].add_argument('--nth', type=int, help='Pick the Nth of several equally good matches (1 = first)')
     return p
 
 

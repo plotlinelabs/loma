@@ -95,7 +95,7 @@ class DeviceTools:
             self.pending.pop(key, None)
             return cap_result(task.result())
         except DeviceError as exc:
-            return failure(str(exc))
+            return failure(str(exc), **exc.to_dict())
         except Exception:
             # Never let an infrastructure error (Mongo, network) abort the whole run.
             logger.exception('Device tool %s failed', tool)
