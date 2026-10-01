@@ -5,7 +5,22 @@ export const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 // headers before rewrites proxy requests to the Python backend.
 const API_BASE = basePath;
 
+export interface HumanTask {
+  kind: "approval" | "information";
+  details: string;
+  ticket_url: string;
+  source_conversation_id: string;
+  requested_by: string;
+  state: "pending" | "answered";
+  version: number;
+  decision: "approve" | "reject" | "provide_information" | null;
+  response: string | null;
+  responded_by: string | null;
+  resume_state: "waiting" | "queued" | "running" | "completed" | "needs_review";
+}
+
 export interface Conversation {
+  human_task?: HumanTask;
   _id: string;
   conversation_id: string;
   source: string;
@@ -1133,6 +1148,7 @@ export interface TaskTag {
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 
 export interface Task {
+  human_task?: HumanTask;
   tool_config?: ToolConfig | null;
   conversation_id: string;
   title: string | null;

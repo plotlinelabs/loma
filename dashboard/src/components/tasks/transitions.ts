@@ -16,6 +16,7 @@ import type { Task } from "@/lib/api";
  * | done         | yes (=park)      | no                 | yes (=reopen) | —           |
  */
 export function canMove(task: Task, from: string, to: string, laneIds: string[]): boolean {
+  if (task.human_task) return false;
   if (from === to) return true; // reorder within any column
   const fromStaged = laneIds.includes(from);
   const toStaged = laneIds.includes(to);

@@ -52,6 +52,8 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   const toggleTag = (id: string) => onSetTags(task,
     currentTags.includes(id) ? currentTags.filter((tagId) => tagId !== id) : [...currentTags, id]);
 
+  if (task.human_task) return null;
+
   return (
     <DropdownMenu open={open} onOpenChange={(nextOpen) => {
       onOpenChange(nextOpen);
