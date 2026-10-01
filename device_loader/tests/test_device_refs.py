@@ -1,5 +1,4 @@
 """Element refs (tap by e3), the Android animations switch, and the build-repo allowlist setting."""
-import sys
 
 import pytest
 import pytest_asyncio
