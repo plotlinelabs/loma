@@ -24,6 +24,7 @@ from draft_with_loma.blocks import (
     build_draft_review_blocks,
 )
 from draft_with_loma.auth import get_user_slack_token
+from customer_offboarding import actions as offboard_actions
 
 logger = logging.getLogger(__name__)
 
@@ -615,6 +616,33 @@ def register_handlers(app):
                 )
         except Exception as e:
             logger.exception("[DRAFT] Failed to dismiss draft %s: %s", draft_id, e)
+
+    # ─── Customer offboarding: approver-gated buttons ────────────────
+
+    async def _offboard_action(ack, body, client, prefix: str, handler):
+        await ack()
+        request_id = body["actions"][0]["action_id"].replace(prefix, "")
+        slack_user_id = body["user"]["id"]
+        email = await _resolve_user_email(client, slack_user_id)
+        container = body.get("container", {})
+        channel = container.get("channel_id") or body.get("channel", {}).get("id")
+        message_ts = container.get("message_ts") or body.get("message", {}).get("ts")
+        try:
+            await handler(get_db(), client, request_id, slack_user_id, email, channel, message_ts)
+        except Exception as e:
+            logger.exception("[OFFBOARD] %s failed for %s: %s", prefix, request_id, e)
+
+    @app.action(re_module.compile(r"^offboard_confirm_"))
+    async def handle_offboard_confirm(ack, body, client):
+        await _offboard_action(ack, body, client, "offboard_confirm_", offboard_actions.handle_confirm)
+
+    @app.action(re_module.compile(r"^offboard_cancel_"))
+    async def handle_offboard_cancel(ack, body, client):
+        await _offboard_action(ack, body, client, "offboard_cancel_", offboard_actions.handle_cancel)
+
+    @app.action(re_module.compile(r"^offboard_undo_"))
+    async def handle_offboard_undo(ack, body, client):
+        await _offboard_action(ack, body, client, "offboard_undo_", offboard_actions.handle_undo)
 
 
 async def _post_ephemeral_safe(
