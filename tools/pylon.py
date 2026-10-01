@@ -10,6 +10,14 @@ Provides CLI commands for the Loma agent:
   7. echo '<html>' | pylon.py note <id> [--thread T | --message M] [--attachment P ...] — Post internal note (with optional attachments)
   8. pylon.py update <id> --state <state>          — Update issue (e.g. close, waiting_on_customer)
   9. pylon.py create-thread <id> <name>            — Create a new thread
+ 10. pylon.py users                              — Resolve assignee IDs
+ 11. pylon.py download-attachment <id> <message_id> <index> <output_path>
+
+Search supports --account, --requester, --assignee and --query; --days 0 searches
+all time. Updates accept --team and --assignee (empty string unassigns).
+List commands support --max-pages and --cursor, returning complete/next_cursor.
+Partial results and errors exit nonzero; inspect JSON before taking further action.
+Attachment indexes are zero-based entries from a message's file_urls list.
 
 Requires PYLON_API_KEY environment variable.
 API docs: https://docs.usepylon.com/pylon-docs/developer/api/api-reference
@@ -27,6 +35,9 @@ import mimetypes
 import os
 import sys
 import logging
+import ipaddress
+from pathlib import Path
+from urllib.parse import urlencode, urlsplit, urljoin
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -75,7 +86,7 @@ async def _api_get(path: str) -> dict[str, Any]:
                     text = await resp.text()
                     return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
                 return await resp.json()
-    except aiohttp.ClientError as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
 
@@ -95,7 +106,7 @@ async def _api_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
                     text = await resp.text()
                     return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
                 return await resp.json()
-    except aiohttp.ClientError as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
 
@@ -115,7 +126,7 @@ async def _api_patch(path: str, body: dict[str, Any]) -> dict[str, Any]:
                     text = await resp.text()
                     return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
                 return await resp.json()
-    except aiohttp.ClientError as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
 
@@ -167,7 +178,7 @@ async def _api_post_multipart(
                     text = await resp.text()
                     return {"error": f"Pylon API error (HTTP {resp.status}): {text[:500]}"}
                 return await resp.json()
-    except aiohttp.ClientError as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         return {"error": f"Failed to connect to Pylon API: {e}"}
 
 
@@ -236,7 +247,7 @@ async def _upload_attachment(
                         f"Pylon attachment upload returned no URL: {json.dumps(result)[:500]}"
                     )
                 return attachment_url
-    except aiohttp.ClientError as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         raise RuntimeError(f"Failed to upload attachment to Pylon: {e}") from e
 
 
@@ -265,19 +276,68 @@ async def get_issue(issue_id: str) -> dict[str, Any]:
     return await _api_get(f"/issues/{issue_id}")
 
 
-async def get_messages(issue_id: str) -> dict[str, Any]:
-    """Fetch all messages for an issue."""
-    return await _api_get(f"/issues/{issue_id}/messages")
+async def _paginate(fetch_page, max_pages: int = 100, cursor: str | None = None) -> dict[str, Any]:
+    """Collect cursor pages without silently treating truncated results as complete."""
+    if max_pages < 1:
+        return {"error": "max_pages must be positive", "data": [], "complete": False}
+    rows, seen_ids, seen_cursors = [], set(), set()
+    for page_number in range(1, max_pages + 1):
+        result = await fetch_page(cursor)
+        if "error" in result:
+            return {**result, "data": rows, "complete": False, "next_cursor": cursor}
+        page = result.get("data")
+        if not isinstance(page, list) or any(not isinstance(row, dict) for row in page):
+            return {"error": "Invalid Pylon list response", "data": rows, "complete": False,
+                    "next_cursor": cursor}
+        for row in page:
+            row_id = row.get("id")
+            if not row_id or row_id not in seen_ids:
+                rows.append(row)
+                if row_id:
+                    seen_ids.add(row_id)
+        pagination = result.get("pagination") or {}
+        if not pagination.get("has_next_page"):
+            return {"data": rows, "complete": True, "pages": page_number, "next_cursor": None}
+        next_cursor = pagination.get("cursor")
+        if not next_cursor or next_cursor == cursor or next_cursor in seen_cursors:
+            return {"error": "Pylon pagination cursor missing or repeated", "data": rows,
+                    "complete": False, "next_cursor": next_cursor}
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    return {"data": rows, "complete": False, "pages": max_pages, "next_cursor": cursor,
+            "warning": "Page limit reached; resume with next_cursor"}
 
 
-async def get_threads(issue_id: str) -> dict[str, Any]:
-    """Fetch all threads for an issue."""
-    return await _api_get(f"/issues/{issue_id}/threads")
+async def _get_all(path: str, max_pages: int = 100, cursor: str | None = None,
+                   limit: int | None = None) -> dict[str, Any]:
+    async def fetch(current):
+        params = {}
+        if limit is not None:
+            params["limit"] = limit
+        if current:
+            params["cursor"] = current
+        return await _api_get(path + ("?" + urlencode(params) if params else ""))
+    return await _paginate(fetch, max_pages, cursor)
 
 
-async def get_teams() -> dict[str, Any]:
-    """Fetch all teams."""
-    return await _api_get("/teams")
+async def get_messages(issue_id: str, max_pages: int = 100,
+                       cursor: str | None = None) -> dict[str, Any]:
+    """Fetch messages, including attachments and authors, across all bounded pages."""
+    return await _get_all(f"/issues/{issue_id}/messages", max_pages, cursor, limit=100)
+
+
+async def get_threads(issue_id: str, max_pages: int = 100,
+                      cursor: str | None = None) -> dict[str, Any]:
+    return await _get_all(f"/issues/{issue_id}/threads", max_pages, cursor)
+
+
+async def get_teams(max_pages: int = 100, cursor: str | None = None) -> dict[str, Any]:
+    return await _get_all("/teams", max_pages, cursor)
+
+
+async def get_users(max_pages: int = 100, cursor: str | None = None) -> dict[str, Any]:
+    """List assignable users so callers do not guess owner IDs."""
+    return await _get_all("/users", max_pages, cursor)
 
 
 async def list_issues(
@@ -285,70 +345,125 @@ async def list_issues(
     state: str | None = None,
     team_id: str | None = None,
     limit: int = 100,
-    max_pages: int = 10,
+    max_pages: int = 100,
+    account_id: str | None = None,
+    requester_id: str | None = None,
+    assignee_id: str | None = None,
+    query: str | None = None,
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Search issues from the last N days with optional filters.
-
-    Uses POST /issues/search with created_at time_is_after filter.
-    Auto-paginates up to max_pages.
-    """
-    after_dt = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-    filters: list[dict[str, Any]] = [
-        {"field": "created_at", "operator": "time_is_after", "value": after_dt},
-    ]
-
+    """Search related tickets using documented Pylon filters. days=0 means all time."""
+    if days < 0 or not 1 <= limit < 1000:
+        return {"error": "days must be nonnegative and limit must be between 1 and 999"}
+    filters = []
+    if days:
+        after = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        filters.append({"field": "created_at", "operator": "time_is_after", "value": after})
     if state:
-        states = [s.strip() for s in state.split(",")]
-        filters.append({"field": "state", "operator": "in", "value": states})
+        filters.append({"field": "state", "operator": "in",
+                        "values": [s.strip() for s in state.split(",") if s.strip()]})
+    for field, value in (("team_id", team_id), ("account_id", account_id),
+                         ("requester_id", requester_id), ("assignee_id", assignee_id)):
+        if value:
+            filters.append({"field": field, "operator": "equals", "value": value})
+    body = {"limit": limit}
+    if filters:
+        body["filter"] = filters[0] if len(filters) == 1 else {
+            "operator": "and", "subfilters": filters}
+    if query:
+        body["search_text"] = query
 
-    if team_id:
-        filters.append({"field": "team_id", "operator": "equals", "value": team_id})
+    async def fetch(current):
+        return await _api_post("/issues/search", {**body, **({"cursor": current} if current else {})})
 
-    all_issues: list[dict[str, Any]] = []
-    cursor: str | None = None
+    result = await _paginate(fetch, max_pages, cursor)
+    issues = result.pop("data", [])
+    summaries = [{
+        "id": issue.get("id", ""), "title": issue.get("title", ""),
+        "state": issue.get("state", ""), "team_id": issue.get("team_id", ""),
+        "created_at": issue.get("created_at", ""),
+        "customer": (issue.get("account") or {}).get("name", ""),
+        "account_id": (issue.get("account") or {}).get("id"),
+        "requester": issue.get("requester"), "assignee": issue.get("assignee"),
+        "link": issue.get("link"),
+    } for issue in issues]
+    return {**result, "period": f"last {days} days" if days else "all time",
+            "count": len(summaries), "issues": summaries}
 
-    for _ in range(max_pages):
-        body: dict[str, Any] = {
-            "filter": {"op": "and", "value": filters} if len(filters) > 1 else filters[0],
-            "limit": limit,
-        }
-        if cursor:
-            body["cursor"] = cursor
 
-        result = await _api_post("/issues/search", body)
-        if "error" in result:
-            if all_issues:
-                break  # return what we have
-            return result
+class _PublicResolver(aiohttp.resolver.DefaultResolver):
+    """Reject private DNS results in the actual connection path (including redirects)."""
+    async def resolve(self, host, port=0, family=0):
+        records = await super().resolve(host, port, family)
+        if any(not ipaddress.ip_address(record["host"]).is_global for record in records):
+            raise ValueError("Attachment host must resolve to public addresses")
+        return records
 
-        page = result.get("data", [])
-        all_issues.extend(page)
 
-        pagination = result.get("pagination", {})
-        if not pagination.get("has_next_page"):
-            break
-        cursor = pagination.get("cursor")
-        if not cursor:
-            break
+def _validate_attachment_url(url: str) -> None:
+    parsed = urlsplit(url)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.port not in (None, 443)):
+        raise ValueError("Attachments require a public HTTPS URL on port 443")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        return  # DNS is validated by the connector's resolver.
+    if not address.is_global:
+        raise ValueError("Attachment host must be public")
 
-    # Return compact summaries
-    summaries = []
-    for issue in all_issues:
-        summaries.append({
-            "id": issue.get("id", ""),
-            "title": issue.get("title", ""),
-            "state": issue.get("state", ""),
-            "team_id": issue.get("team_id", ""),
-            "created_at": issue.get("created_at", ""),
-            "customer": (issue.get("account") or {}).get("name", ""),
-        })
 
-    return {
-        "period": f"last {days} days",
-        "count": len(summaries),
-        "issues": summaries,
-    }
+async def download_attachment(issue_id: str, message_id: str, index: int,
+                              output_path: str, max_bytes: int = 25 * 1024 * 1024) -> dict[str, Any]:
+    """Download a message's zero-based file index, never arbitrary caller-supplied URLs.
+
+    No API credentials are forwarded to file hosts. Existing files are never overwritten.
+    """
+    if index < 0 or max_bytes < 1:
+        return {"error": "index must be nonnegative and max_bytes must be positive"}
+    messages = await get_messages(issue_id)
+    if not messages.get("complete"):
+        return {"error": "Cannot resolve attachment from an incomplete message history"}
+    message = next((m for m in messages["data"] if m.get("id") == message_id), None)
+    urls = (message or {}).get("file_urls") or []
+    if index >= len(urls):
+        return {"error": "Message or attachment index not found on this issue"}
+    target, created = Path(output_path), False
+    try:
+        url = urls[index]
+        connector = aiohttp.TCPConnector(resolver=_PublicResolver())
+        async with aiohttp.ClientSession(connector=connector, trust_env=False) as session:
+            for _ in range(6):
+                _validate_attachment_url(url)
+                async with session.get(url, allow_redirects=False,
+                                       timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    if response.status in (301, 302, 303, 307, 308):
+                        location = response.headers.get("Location")
+                        if not location:
+                            raise ValueError("Attachment redirect has no location")
+                        url = urljoin(url, location)
+                        continue
+                    if response.status != 200:
+                        raise ValueError(f"Attachment download failed (HTTP {response.status})")
+                    if response.content_length is not None and response.content_length > max_bytes:
+                        raise ValueError("Attachment exceeds download size limit")
+                    size = 0
+                    with target.open("xb") as output:
+                        created = True
+                        async for chunk in response.content.iter_chunked(65536):
+                            size += len(chunk)
+                            if size > max_bytes:
+                                raise ValueError("Attachment exceeds download size limit")
+                            output.write(chunk)
+                    return {"path": str(target.resolve()), "bytes": size,
+                            "issue_id": issue_id, "message_id": message_id, "index": index}
+            raise ValueError("Too many attachment redirects")
+    except (ValueError, OSError, aiohttp.ClientError, asyncio.TimeoutError):
+        if created:
+            target.unlink(missing_ok=True)
+        # Signed URLs and credentials must not appear in error output.
+        return {"error": "Attachment download failed: check public HTTPS access, file size, "
+                         "and that the output path does not already exist"}
 
 
 async def reply(
@@ -408,7 +523,9 @@ async def post_note(
 
 
 async def update_issue(issue_id: str, **fields: Any) -> dict[str, Any]:
-    """Update issue fields (e.g. state)."""
+    """Update supplied fields only; empty owner/team strings explicitly unassign."""
+    if not fields:
+        return {"error": "At least one update field is required"}
     return await _api_patch(f"/issues/{issue_id}", fields)
 
 
@@ -424,6 +541,12 @@ async def create_thread(issue_id: str, name: str) -> dict[str, Any]:
 
 def _print_usage():
     print("Usage:")
+    print("  users: list assignable user IDs")
+    print("  messages/threads/teams/users: --max-pages N --cursor CURSOR")
+    print("  issues: --account ID --requester ID --assignee ID --query TEXT")
+    print("          --days 0 for all time; --max-pages N --cursor CURSOR")
+    print("  update <id>: --team ID --assignee ID (empty string explicitly unassigns)")
+    print("  download-attachment <issue_id> <message_id> <zero-based index> <output_path>")
     print("  python3 tools/pylon.py issue <id>")
     print("    Fetch issue details")
     print()
@@ -460,7 +583,7 @@ def _parse_flag(args: list[str], flag: str, nargs: int = 1) -> str | list[str] |
     if flag not in args:
         return None
     idx = args.index(flag)
-    if idx + nargs >= len(args):
+    if idx + nargs >= len(args) or args[idx + 1].startswith("--"):
         print(f"Error: {flag} requires {nargs} argument(s)")
         sys.exit(1)
     if nargs == 1:
@@ -502,26 +625,40 @@ if __name__ == "__main__":
         result = asyncio.run(get_issue(rest[0]))
 
     elif command == "messages":
+        max_pages = int(_parse_flag(rest, "--max-pages") or 100)
+        cursor = _parse_flag(rest, "--cursor")
         if not rest:
             print("Error: messages requires an issue ID")
             sys.exit(1)
-        result = asyncio.run(get_messages(rest[0]))
+        result = asyncio.run(get_messages(rest[0], max_pages=max_pages, cursor=cursor))
 
     elif command == "threads":
+        max_pages = int(_parse_flag(rest, "--max-pages") or 100)
+        cursor = _parse_flag(rest, "--cursor")
         if not rest:
             print("Error: threads requires an issue ID")
             sys.exit(1)
-        result = asyncio.run(get_threads(rest[0]))
+        result = asyncio.run(get_threads(rest[0], max_pages=max_pages, cursor=cursor))
 
-    elif command == "teams":
-        result = asyncio.run(get_teams())
+    elif command in ("teams", "users"):
+        max_pages = int(_parse_flag(rest, "--max-pages") or 100)
+        cursor = _parse_flag(rest, "--cursor")
+        result = asyncio.run((get_teams if command == "teams" else get_users)(max_pages, cursor))
 
     elif command == "issues":
         days_str = _parse_flag(rest, "--days")
         days = int(days_str) if days_str else 7
         state = _parse_flag(rest, "--state")
         team = _parse_flag(rest, "--team")
-        result = asyncio.run(list_issues(days=days, state=state, team_id=team))
+        account = _parse_flag(rest, "--account")
+        requester = _parse_flag(rest, "--requester")
+        assignee = _parse_flag(rest, "--assignee")
+        query = _parse_flag(rest, "--query")
+        cursor = _parse_flag(rest, "--cursor")
+        max_pages = int(_parse_flag(rest, "--max-pages") or 100)
+        result = asyncio.run(list_issues(days=days, state=state, team_id=team,
+            account_id=account, requester_id=requester, assignee_id=assignee,
+            query=query, cursor=cursor, max_pages=max_pages))
 
     elif command == "reply":
         to_emails = _collect_flag_list(rest, "--to")
@@ -563,11 +700,26 @@ if __name__ == "__main__":
         if not rest:
             print("Error: update requires an issue ID")
             sys.exit(1)
+        team_val = _parse_flag(rest, "--team")
+        assignee_val = _parse_flag(rest, "--assignee")
+        if len(rest) != 1:
+            print("Error: unexpected update arguments")
+            sys.exit(1)
         kwargs = {}
+        if team_val is not None:
+            kwargs["team_id"] = team_val
+        if assignee_val is not None:
+            kwargs["assignee_id"] = assignee_val
         if state_val:
             # Pylon API uses "state" field, not "status"
             kwargs["state"] = state_val
         result = asyncio.run(update_issue(rest[0], **kwargs))
+
+    elif command == "download-attachment":
+        if len(rest) != 4:
+            print("Error: download-attachment requires <issue_id> <message_id> <index> <output_path>")
+            sys.exit(1)
+        result = asyncio.run(download_attachment(rest[0], rest[1], int(rest[2]), rest[3]))
 
     elif command == "create-thread":
         if len(rest) < 2:
@@ -580,3 +732,5 @@ if __name__ == "__main__":
         _print_usage()
 
     print(json.dumps(result, indent=2))
+    if "error" in result or result.get("complete") is False:
+        sys.exit(1)
