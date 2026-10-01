@@ -41,9 +41,15 @@ cheapest test is the one with the fewest calls, so:
   Typing a URL into a settings screen is the slowest, least reliable step in any test.
 - **Read the tree small, act by ref.** `ui-tree --compact` prints one line per element with a
   ref (`e3 Button 'Save' @540,1800 *`); add `--filter` or `--clickable-only`. Then
-  `tap --ref e3` / `set-text --ref e2 --text ...`: never copy coordinates. Refs expire after
-  120 s or any op that may change the screen (tap, type, key, set-text, launch, swipe, open-url, ...);
-  read the tree again then.
+  `tap --ref e3` / `set-text --ref e2 --text ...`: never copy coordinates. Refs stay valid until
+  an op that may change the screen (tap, type, key, set-text, launch, swipe, open-url, ...).
+- **Act with `--settle` instead of re-reading the tree.** `tap --ref e3 --settle` waits until the
+  screen stops changing and returns `screen_after`: `added` / `removed` lines with refs for the new
+  screen (unchanged elements keep their refs). Act on those refs directly; read `ui-tree` only when
+  `settled` is false or you need the full screen. Needs runner 1.3.0+.
+- **Read failures by `code`.** `dispatched: no` means the input never reached the device (safe to
+  retry); `unknown` means check `ui-tree` first. `ambiguous` lists `details.candidates`: retry
+  with `--nth N` or a ref. `ui_not_idle`: turn animations off. `policy_denied`: do not retry.
   Use `screenshot --preview` and open the JPEG; keep the PNG for evidence.
 - **Animations off on Android emulators** (`animations --off`) at the start of a session:
   `ui-tree` stops stalling on "UI not idle" and taps don't land mid-transition. Turn them back
@@ -176,7 +182,7 @@ explicitly want that.
 | `"pending": true` | Still running on the device; repeat the same tool call on the same device to wait |
 | "Timed out on the runner" | The device did not finish in time; check `ui_tree`/`logs`, then retry once |
 | "Builds from this repository are not allowed" | An admin adds `owner/name` under Integrations → Devices → Build sources (or the `LOMA_DEVICE_BUILD_REPOS` env var) |
-| "Ref e3 is unknown or expired" | The screen changed or 120 s passed: `ui-tree --compact` again and use the new ref |
+| "Ref e3 is unknown or expired" (`ref_stale`) | The screen changed: `ui-tree --compact` again, or act with `--settle` to get the new refs |
 | "... took over this device" | A person is driving it from the dashboard; wait a minute and retry the same call |
 | "Runner too old for ..." | Runners from 1.2.0 update themselves; older ones need one manual `setup` by their owner |
 | "No device template matches" | The runner owner has not defined that template; `list` shows the available ones |
@@ -192,6 +198,7 @@ The steps above use `tools/device.py` spellings. In isolated runs use the `devic
 | `tap-text` / `set-text` / `clear-text` / `wait-for` / `scroll-until-visible` | `device.input action=tap_text|set_text|clear_text|wait_for|scroll_until_visible` |
 | `app --action launch --extra K=V` | `device.app action=launch extras={...} bool_extras={...}` |
 | `tap` / `type` / `swipe` / `key` | `device.input action=tap|type|swipe|key` (`tap ref=e3` works too) |
+| `--settle` / `--settle-ms MS` / `--nth N` | `settle=true` / `settle_ms=MS` / `nth=N` on the same `device.input` call |
 | `animations --off` | `device.input action=animations enabled=false` |
 | `ui-tree --compact` | `device.observe what=ui_tree compact=true` |
 | `screenshot` | `device.observe what=screenshot` |
