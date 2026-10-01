@@ -320,6 +320,22 @@ PROVIDER_CATALOG = {
         "webhook": None,
         "ingestion_module": None,
     },
+    "customer_admin": {
+        "display_name": "Customer Admin",
+        "description": "Offboard churned customers: complete campaigns, remove access, revoke SDK keys (approver-confirmed)",
+        "auth_type": "api_key",
+        "auth_label": "Offboarding API Secret",
+        "auth_help_url": None,
+        "extra_fields": [
+            {"key": "base_url", "label": "Base URL", "placeholder": "https://api.example.com", "required": True},
+            {"key": "approver_emails", "label": "Approver emails", "placeholder": "a@example.com, b@example.com", "required": True},
+            {"key": "approval_channel", "label": "Approval channel ID", "placeholder": "C0123456789", "required": True},
+        ],
+        "mcp_config_template": None,
+        "mcp_server_name": None,
+        "webhook": None,
+        "ingestion_module": None,
+    },
     "dataroom": {
         "display_name": "DataRoom",
         "description": "Create, share, and track secure data rooms",
