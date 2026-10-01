@@ -14,6 +14,9 @@ cd "$(dirname "$0")/.."
 SHA=$(git rev-parse --short HEAD)
 echo "Deploying $SHA"
 
+# Fail before touching the running stack if .env lost keys (see check_env.sh).
+bash scripts/check_env.sh
+
 # Build while the old stack keeps serving so the swap below is quick.
 docker compose build
 
@@ -86,7 +89,9 @@ ok=0
 for _ in $(seq 1 40); do
   d=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost/ || echo 000)
   b=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST http://localhost/webhooks/github || echo 000)
-  if [ "$d" != "000" ] && [ "$b" != "000" ]; then ok=1; break; fi
+  # nginx answers 502-504 itself when the backend is down or crash-looping.
+  case "$b" in 502|503|504) b_up=0 ;; *) b_up=1 ;; esac
+  if [ "$d" != "000" ] && [ "$b" != "000" ] && [ "$b_up" = 1 ]; then ok=1; break; fi
   sleep 3
 done
 
@@ -96,3 +101,4 @@ if [ "$ok" != 1 ]; then
   exit 1
 fi
 echo "healthy (dashboard=$d backend=$b via :80)"
+bash scripts/check_env.sh --record

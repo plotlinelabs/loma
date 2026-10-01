@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      LOMA_ENV_FILE: /etc/loma/.env
     # Loopback only — reached externally through the nginx proxy, not directly.
     # Host port is env-driven so multiple stacks can coexist on one box (preview
     # deployments); unset → 3000, identical to a normal single-stack deploy.
@@ -12,9 +14,12 @@ services:
     volumes:
       - loma-login-socket:/run/loma-login:ro
       - loma-skill-assets:/var/lib/loma/skill-assets
-      # Mount the real .env so the dashboard Environment admin (/api/env) can read & edit it.
+      # Mount the real .env so the backend and tools can load it from /app/.env.
       # env_file injects values into the process env, but does not place a file at /app/.env.
-      - ./.env:/app/.env
+      # Read-only because agents run with cwd /app: a stray `> .env` must fail, not
+      # replace prod config. The Environment admin (/api/env) writes via LOMA_ENV_FILE.
+      - ./.env:/app/.env:ro
+      - ./.env:/etc/loma/.env
       # Persist connected Claude Code accounts (CLAUDE_USERS_DIR) across container
       # recreation — otherwise `claude login` creds are lost on every rebuild/redeploy.
       - loma-claude-users:/opt/claude-users
