@@ -272,6 +272,22 @@ const hitArea = async (page, locator) => {
       return { navTop: Math.round(nav.top), accountBottom: Math.round(account.bottom), vh: innerHeight };
     });
     record('desktop sidebar keeps the nav at the top and the account row pinned', dSidebar.navTop < 120 && dSidebar.accountBottom <= dSidebar.vh, JSON.stringify(dSidebar));
+    // A long Recents list must scroll under the nav, not carry it away. Force
+    // the region to overflow with a filler so the check does not depend on data.
+    const dNavPinned = await dpage.evaluate(() => {
+      const nav = document.querySelector('aside.loma-sidebar nav');
+      const viewport = nav.closest('[data-slot="scroll-area-viewport"]');
+      const filler = document.createElement('div');
+      filler.style.height = '2000px';
+      nav.parentElement.appendChild(filler);
+      const before = Math.round(nav.getBoundingClientRect().top);
+      viewport.scrollTop = 600;
+      const out = { before, after: Math.round(nav.getBoundingClientRect().top), scrollTop: viewport.scrollTop };
+      viewport.scrollTop = 0;
+      filler.remove();
+      return out;
+    });
+    record('desktop sidebar nav stays pinned while the lists scroll', EXPECT_NEW ? (dNavPinned.scrollTop > 0 && dNavPinned.after === dNavPinned.before) : true, JSON.stringify(dNavPinned));
     await dpage.screenshot({ path: `${shots}/10-desktop-artifact.png` });
     await desktop.close();
 

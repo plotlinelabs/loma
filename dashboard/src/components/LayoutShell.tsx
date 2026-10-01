@@ -44,6 +44,16 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
   // state) releases the drawer's body scroll lock when a phone rotates to
   // landscape or a window widens past the breakpoint with the drawer open.
   const drawerOpen = sidebarOpen && isMobile;
+  // Also drop the raw state once the viewport reaches md, so narrowing the
+  // window again (or rotating back to portrait) does not reopen the drawer.
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setSidebarOpen(false);
+    };
+    desktop.addEventListener("change", onChange);
+    return () => desktop.removeEventListener("change", onChange);
+  }, []);
 
   if (isLogin) {
     return <>{children}</>;

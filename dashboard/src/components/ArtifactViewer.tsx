@@ -660,7 +660,9 @@ export default function ArtifactViewer({
                   </DropdownMenuItem>
                 </>
               )}
-              <DropdownMenuSeparator />
+              {/* Only separate when something is listed above (a single-version
+                  file artifact has neither a view toggle nor version items). */}
+              {((canPreview && !isFileArtifact) || versions.length > 1) && <DropdownMenuSeparator />}
               {!isFileArtifact && (
                 <DropdownMenuItem
                   onSelect={(e) => {

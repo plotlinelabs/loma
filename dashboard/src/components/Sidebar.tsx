@@ -435,8 +435,14 @@ export default function Sidebar({
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      // A dialog opened from the drawer (rename, pet settings) owns Escape.
-      if (e.key === "Escape" && !document.querySelector('[role="dialog"][data-state="open"]')) onClose();
+      // A dialog or menu opened from the drawer (rename, pet settings,
+      // conversation actions, account menu) owns Escape. Radix dismisses in
+      // the capture phase and calls preventDefault(); by the time this
+      // bubble-phase listener runs the layer is already `data-state=closed`,
+      // so a DOM query alone cannot tell. `defaultPrevented` can.
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"][data-state="open"], [role="menu"][data-state="open"]')) return;
+      onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -503,7 +509,7 @@ export default function Sidebar({
               account rows off-screen with nothing to scroll. */}
           <ScrollArea className="flex-1 min-h-0">
           {/* Navigation */}
-          <nav className="px-3 space-y-0.5 pb-1">
+          <nav className="loma-sidebar-nav px-3 space-y-0.5 pb-1">
             {visibleNav.map((item) => {
               const isActive = item.href === "/"
                 ? pathname === "/" || pathname === ""

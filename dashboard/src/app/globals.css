@@ -683,7 +683,9 @@
     /* Adjacent small controls (Edit/Delete, prev/next version) would otherwise
        overlap their grown hit areas, and the later sibling paints on top and
        steals taps aimed at the earlier one. Stop growth on the shared side so
-       each control keeps its own column. */
+       each control keeps its own column. Known limits: a `display: none`
+       sibling still counts (the visible one loses growth on that side), and
+       controls in different wrappers are not covered. */
     .touch-target:has(+ .touch-target)::after {
       right: 0;
     }
@@ -1022,6 +1024,19 @@
    pull-to-refresh, which reloads the app under the open drawer). */
 .loma-sidebar [data-slot="scroll-area-viewport"] {
   overscroll-behavior: contain;
+}
+
+/* Desktop: the nav shares the scroll region with projects/pinned/recents (so a
+   short phone drawer can scroll it), but it must stay pinned while a long
+   Recents list scrolls, as it was before. Only on windows tall enough to show
+   the whole nav; shorter ones keep it scrollable so no item becomes unreachable. */
+@media (min-width: 768px) and (min-height: 640px) {
+  .loma-sidebar .loma-sidebar-nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--sidebar);
+  }
 }
 
 ::selection { background: #DDF7A8; color: #061B20; }
