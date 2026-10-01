@@ -23,6 +23,13 @@ tags); its tasks carry `task_board_id`. Tasks without `task_board_id` stay on
 their creator's personal board, so existing data needs no migration.
 Agent runs always use the task creator's identity and connections: members
 of a shared board can see a task's chat, but only its creator can message it.
+
+Card boards: a shared board created with `card_mode` shows *cards* (a deal, a
+candidate, a project...) in its lanes instead of tasks. Cards live in the
+`task_cards` collection and carry values for the board's custom `fields`
+(defined per board under `task_board.fields`) plus free-form notes. Tasks on
+such a board belong to a card (`task_card_id`); the card's fields and notes
+are added to the context of every task inside it.
 """
 
 import asyncio
@@ -76,27 +83,65 @@ def merge_board_context(default_context: str, personal_prompt: str) -> str:
     return "\n".join(parts)
 
 
-async def build_board_context(db, owner: str, board_id: str | None = None) -> str:
+def render_card_context(card: dict, board_doc: dict | None) -> str:
+    """The card section of a task's context: its column, field values and notes."""
+    config = (board_doc or {}).get("task_board") or {}
+    lane_names = {lane.get("id"): lane.get("name") for lane in config.get("lanes") or []}
+    lines = [f"### Card: {card.get('title') or 'Untitled'}"]
+    board_name = (board_doc or {}).get("name")
+    stage = lane_names.get(card.get("lane"))
+    where = " and ".join(filter(None, [
+        f'on the "{board_name}" board' if board_name else "",
+        f'in the "{stage}" column' if stage else "",
+    ]))
+    lines.append(f"This task belongs to the card above{', ' + where if where else ''}.")
+    values = card.get("fields") or {}
+    for field in config.get("fields") or []:
+        value = values.get(field.get("id"))
+        if value is None or value == "" or value == []:
+            continue
+        if isinstance(value, bool):
+            value = "Yes" if value else "No"
+        elif isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        lines.append(f"- {field.get('name')}: {value}")
+    notes = (card.get("notes") or "").strip()
+    if notes:
+        lines.append(f"\nCard notes:\n{notes}")
+    return "\n".join(lines)
+
+
+async def build_board_context(db, owner: str, board_id: str | None = None,
+                              card_id: str | None = None) -> str:
     """The context block injected on every turn of a board task owned by `owner`.
 
     Tasks on a shared board use that board's context prompt instead of the
-    owner's personal one.
+    owner's personal one. Tasks inside a card also get that card's fields
+    and notes.
     """
     owner_doc = await db.users.find_one(
         {"email": owner}, {"task_board": 1, "name": 1, "email": 1})
     personal = ((owner_doc or {}).get("task_board") or {}).get("prompt", "")
+    shared = None
     if board_id and board_id != PERSONAL_BOARD_ID:
-        shared = await db.task_boards.find_one({"board_id": board_id}, {"task_board": 1})
+        shared = await db.task_boards.find_one(
+            {"board_id": board_id}, {"task_board": 1, "name": 1})
         personal = ((shared or {}).get("task_board") or {}).get("prompt", "")
     default_context = render_board_default_context(
         get_prompt_setting("task_board_default_context"), owner_doc, owner)
-    return merge_board_context(default_context, personal)
+    context = merge_board_context(default_context, personal)
+    if card_id and shared:
+        card = await db.task_cards.find_one({"card_id": card_id, "board_id": board_id})
+        if card:
+            context = "\n\n".join(filter(None, [
+                context or BOARD_CONTEXT_HEADING, render_card_context(card, shared)]))
+    return context
 
 
 async def _run_task_headless(db, conversation_id: str, prompt: str,
                              model: str, files: list, owner: str,
                              tool_config: dict | None = None, recall_session: dict | None = None,
-                             board_id: str | None = None):
+                             board_id: str | None = None, card_id: str | None = None):
     """Run a task's first agent turn in the background — no client stream.
 
     Powers quick-add: the task fires immediately and keeps running even if
@@ -109,7 +154,7 @@ async def _run_task_headless(db, conversation_id: str, prompt: str,
         from observability.observer import ConversationObserver
 
         # Same per-task context block handle_chat injects for board tasks.
-        conversation_context = await build_board_context(db, owner, board_id)
+        conversation_context = await build_board_context(db, owner, board_id, card_id)
 
         observer = ConversationObserver(
             db,
@@ -193,6 +238,134 @@ BOARD_MEMBER_ROLES = ("viewer", "editor")
 EDIT_ROLES = ("owner", "editor")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Card boards: custom fields are defined per board, values live on each card.
+FIELD_TYPES = ("text", "number", "date", "person", "select", "multi_select", "link", "checkbox")
+MAX_FIELDS = 20
+MAX_FIELD_NAME_LEN = 40
+MAX_FIELD_OPTIONS = 30
+MAX_FIELD_TEXT_LEN = 500
+MAX_LINK_LEN = 2000
+MAX_CARD_TITLE_LEN = 120
+MAX_CARD_NOTES_LEN = 10000
+MAX_CARDS_PER_BOARD = 1000
+
+
+def _field(name: str, type_: str, show: bool = False, options: list[str] | None = None) -> dict:
+    return {"name": name, "type": type_, "show_on_card": show, "options": options or []}
+
+
+# Starting presets for a card board. Nothing here is special afterwards:
+# every lane and field can be renamed, added or removed in board settings.
+BOARD_TEMPLATES = {
+    "blank": {"lanes": ["Todo", "In progress", "Done"], "fields": []},
+    "deals": {
+        "lanes": ["Prospecting", "Demo", "Proposal", "Negotiation", "Won", "Lost"],
+        "fields": [
+            _field("Value", "number", True), _field("Owner", "person", True),
+            _field("Close date", "date", True),
+            _field("Region", "select", False, ["India", "GCC", "US", "Other"]),
+            _field("Link", "link"),
+        ],
+    },
+    "hiring": {
+        "lanes": ["Screening", "Interview", "Offer", "Hired", "Rejected"],
+        "fields": [
+            _field("Role", "text", True),
+            _field("Source", "select", True, ["Referral", "Inbound", "Outbound", "Agency"]),
+            _field("Interview date", "date", True), _field("CTC", "text"),
+            _field("Resume", "link"),
+        ],
+    },
+    "projects": {
+        "lanes": ["Planned", "In progress", "Blocked", "Shipped"],
+        "fields": [
+            _field("Owner", "person", True), _field("Due date", "date", True),
+            _field("Status note", "text"),
+        ],
+    },
+}
+
+
+def _clean_fields(fields_in) -> tuple[list[dict] | None, str | None]:
+    """Validate a board's field definitions. Returns (fields, error)."""
+    if not isinstance(fields_in, list) or len(fields_in) > MAX_FIELDS:
+        return None, f"fields must be a list of at most {MAX_FIELDS} fields"
+    fields: list[dict] = []
+    seen_ids: set[str] = set()
+    seen_names: set[str] = set()
+    for field in fields_in:
+        if not isinstance(field, dict):
+            return None, "Invalid field"
+        name = (field.get("name") or "").strip() if isinstance(field.get("name"), str) else ""
+        if not name or len(name) > MAX_FIELD_NAME_LEN:
+            return None, f"Field names must be 1-{MAX_FIELD_NAME_LEN} characters"
+        if name.casefold() in seen_names:
+            return None, f"Two fields are named “{name}”"
+        seen_names.add(name.casefold())
+        type_ = field.get("type")
+        if type_ not in FIELD_TYPES:
+            return None, f"Unknown field type for “{name}”"
+        # Preserve existing ids (cards store values by field id).
+        field_id = field.get("id") or str(uuid.uuid4())[:8]
+        if not isinstance(field_id, str) or field_id in seen_ids or "." in field_id or field_id.startswith("$"):
+            return None, "Invalid field id"
+        seen_ids.add(field_id)
+        options: list[str] = []
+        if type_ in ("select", "multi_select"):
+            raw = field.get("options") or []
+            if not isinstance(raw, list) or len(raw) > MAX_FIELD_OPTIONS:
+                return None, f"“{name}” can have at most {MAX_FIELD_OPTIONS} options"
+            for option in raw:
+                option = option.strip() if isinstance(option, str) else ""
+                if option and len(option) <= MAX_FIELD_NAME_LEN and option not in options:
+                    options.append(option)
+            if not options:
+                return None, f"“{name}” needs at least one option"
+        fields.append({"id": field_id, "name": name, "type": type_, "options": options,
+                       "show_on_card": bool(field.get("show_on_card"))})
+    return fields, None
+
+
+def _clean_field_value(field: dict, value):
+    """Validate one card value against its field. Returns (value, error);
+    a None value clears the field."""
+    name, type_ = field["name"], field["type"]
+    if value is None or value == "" or value == []:
+        return None, None
+    if type_ == "checkbox":
+        return (value, None) if isinstance(value, bool) else (None, f"“{name}” must be true or false")
+    if type_ == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value \
+                or value in (float("inf"), float("-inf")):
+            return None, f"“{name}” must be a number"
+        return value, None
+    if type_ == "multi_select":
+        if not isinstance(value, list) or any(v not in field["options"] for v in value):
+            return None, f"“{name}” has an unknown option"
+        return list(dict.fromkeys(value)), None
+    if not isinstance(value, str):
+        return None, f"“{name}” must be text"
+    value = value.strip()
+    if not value:
+        return None, None
+    if type_ == "select":
+        return (value, None) if value in field["options"] else (None, f"“{name}” has an unknown option")
+    if type_ == "date":
+        try:
+            if not DEADLINE_RE.match(value):
+                raise ValueError
+            date.fromisoformat(value)
+        except ValueError:
+            return None, f"“{name}” must be a YYYY-MM-DD date"
+        return value, None
+    if type_ == "link":
+        if len(value) > MAX_LINK_LEN or not re.match(r"^https?://", value, re.IGNORECASE):
+            return None, f"“{name}” must be a link starting with http:// or https://"
+        return value, None
+    if len(value) > MAX_FIELD_TEXT_LEN:
+        return None, f"“{name}” is too long (max {MAX_FIELD_TEXT_LEN} characters)"
+    return value, None
+
 
 def _serialize(doc):
     """Make a MongoDB document JSON-serializable."""
@@ -225,6 +398,7 @@ def get_board_config(user_doc: dict | None) -> dict:
         lanes = [dict(lane) for lane in DEFAULT_BOARD["lanes"]]
     lanes = sorted(lanes, key=lambda lane: lane.get("order", 0))
     return {"prompt": board.get("prompt", ""), "lanes": lanes, "tags": board.get("tags") or [],
+            "fields": board.get("fields") or [],
             "show_agent_work": board.get("show_agent_work", True)}
 
 
@@ -248,13 +422,14 @@ def _board_summary(board_doc: dict | None, role: str | None, user_email: str) ->
     """Public shape of a board for the switcher and the board header."""
     if board_doc is None:
         return {"id": PERSONAL_BOARD_ID, "name": PERSONAL_BOARD_NAME, "owner": user_email,
-                "role": role, "shared": False, "members": []}
+                "role": role, "shared": False, "card_mode": False, "members": []}
     return {
         "id": board_doc["board_id"],
         "name": board_doc.get("name") or "Untitled board",
         "owner": board_doc.get("owner"),
         "role": role,
         "shared": True,
+        "card_mode": bool(board_doc.get("card_mode")),
         "members": [
             {"email": m.get("email"), "role": m.get("role") or "viewer"}
             for m in board_doc.get("members") or []
@@ -274,7 +449,7 @@ async def _load_board(db, user_email: str, board_id: str | None,
         owner = personal_owner or user_email
         role = "owner" if owner == user_email else None
         return {
-            "id": PERSONAL_BOARD_ID, "shared": False, "role": role, "owner": owner,
+            "id": PERSONAL_BOARD_ID, "shared": False, "card_mode": False, "role": role, "owner": owner,
             "summary": _board_summary(None, role, owner),
             "config": await _get_board_config_for(db, owner),
             "task_filter": {"metadata.user_name": owner, "task_board_id": None},
@@ -285,7 +460,8 @@ async def _load_board(db, user_email: str, board_id: str | None,
         return None
     role = _board_role(board_doc, user_email)
     return {
-        "id": board_id, "shared": True, "role": role, "owner": board_doc.get("owner"),
+        "id": board_id, "shared": True, "card_mode": bool(board_doc.get("card_mode")),
+        "role": role, "owner": board_doc.get("owner"), "name": board_doc.get("name"),
         "summary": _board_summary(board_doc, role, user_email),
         "config": get_board_config(board_doc),
         "task_filter": {"task_board_id": board_id},
@@ -394,6 +570,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "task_deadline": task.get("task_deadline") or None,
         "forked_from_conversation_id": task.get("forked_from_conversation_id") or None,
         "task_board_id": task.get("task_board_id") or None,
+        "task_card_id": task.get("task_card_id") or None,
         # The creator: only they can message the task (runs use their identity).
         "owner": (task.get("metadata") or {}).get("user_name") or None,
     }
@@ -410,6 +587,7 @@ _TASK_PROJECTION = {
     "task_deadline": 1,
     "forked_from_conversation_id": 1,
     "task_board_id": 1,
+    "task_card_id": 1,
     "metadata.user_name": 1,
 }
 
@@ -481,6 +659,16 @@ async def handle_create_task(request: web.Request) -> web.Response:
     if lane not in lane_ids:
         return web.json_response({"error": "Unknown lane"}, status=400)
 
+    # On a card board every task lives inside a card.
+    card_id = body.get("card") or None
+    if board["card_mode"]:
+        if not isinstance(card_id, str):
+            return web.json_response({"error": "Pick a card for this task"}, status=400)
+        if not await db.task_cards.find_one({"card_id": card_id, "board_id": board["id"]}, {"_id": 1}):
+            return web.json_response({"error": "Card not found"}, status=404)
+    elif card_id:
+        return web.json_response({"error": "This board has no cards"}, status=400)
+
     # start=true (quick-add): the task fires immediately in the background
     # instead of waiting as a staged draft. Starting needs actual details.
     start = bool(body.get("start"))
@@ -531,6 +719,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
         "task_deadline": None,
         **({"tool_config": tool_config} if tool_config else {}),
         **({"task_board_id": board["id"]} if board["shared"] else {}),
+        **({"task_card_id": card_id} if card_id else {}),
     }
     await db.conversations.insert_one(doc)
 
@@ -547,6 +736,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
             tool_config=tool_config,
             recall_session=recall_session,
             board_id=board["id"] if board["shared"] else None,
+            card_id=card_id,
         ))
 
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)
@@ -594,6 +784,9 @@ async def handle_fork_task(request: web.Request) -> web.Response:
     lane = body.get("lane") or (default_lane if default_lane in lane_ids else lane_ids[0])
     if lane not in lane_ids:
         return web.json_response({"error": "Unknown lane"}, status=400)
+    fork_card_id = source.get("task_card_id") if same_board else None
+    if board["card_mode"] and not fork_card_id:
+        return web.json_response({"error": "Pick a card for this task"}, status=400)
 
     source_title = source.get("title") or None
     title = (body.get("title") or "").strip() if "title" in body else (
@@ -634,6 +827,7 @@ async def handle_fork_task(request: web.Request) -> web.Response:
         "task_tag_ids": copy.deepcopy(source.get("task_tag_ids") or [])
         if same_board else [],
         **({"task_board_id": board["id"]} if board["shared"] else {}),
+        **({"task_card_id": fork_card_id} if fork_card_id else {}),
         "task_priority": source.get("task_priority"),
         "task_deadline": source.get("task_deadline"),
         "forked_from_conversation_id": cid,
@@ -709,14 +903,27 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
     for view in ordered:
         counts[view["column"]] = counts.get(view["column"], 0) + 1
 
-    return web.json_response({
+    payload = {
         "board": board["summary"],
         "lanes": board["config"]["lanes"],
         "show_agent_work": show_agent_work,
         "tags": board["config"]["tags"],
         "tasks": ordered,
         "counts": counts,
-    })
+    }
+    if board["card_mode"]:
+        card_docs = await db.task_cards.find({"board_id": board["id"]}).to_list(MAX_CARDS_PER_BOARD)
+        cards = [_card_view(doc, lane_ids, ordered) for doc in card_docs]
+        if search:
+            # Keep cards whose title matches or that hold a matching task.
+            needle = search.casefold()
+            cards = [c for c in cards if needle in c["title"].casefold() or c["task_total"]]
+        cards.sort(key=lambda card: card["rank"])
+        payload["fields"] = board["config"]["fields"]
+        payload["cards"] = cards
+        payload["counts"] = {lane_id: sum(1 for c in cards if c["lane"] == lane_id)
+                             for lane_id in lane_ids}
+    return web.json_response(payload)
 
 
 async def handle_needs_input_count(request: web.Request) -> web.Response:
@@ -798,7 +1005,7 @@ async def handle_update_task(request: web.Request) -> web.Response:
                 "task_status": "", "task_lane": "", "task_rank": "",
                 "task_created_at": "", "task_staged_at": "",
                 "task_started_at": "", "task_done_at": "",
-                "task_board_id": "",
+                "task_board_id": "", "task_card_id": "",
             }},
         )
         return web.json_response({"task": None})
@@ -824,6 +1031,10 @@ async def handle_update_task(request: web.Request) -> web.Response:
                 return web.json_response(
                     {"error": "You have view-only access to that board"}, status=403)
         if target["id"] != board["id"]:
+            if target["card_mode"]:
+                return web.json_response(
+                    {"error": "Add tasks to that board from inside one of its cards"}, status=400)
+            unsets["task_card_id"] = ""
             if target["shared"]:
                 updates["task_board_id"] = target["id"]
             else:
@@ -852,7 +1063,8 @@ async def handle_update_task(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "Start the task by sending its prompt, not by PATCH"}, status=400)
         started = current in ("active", "done") or (current == "todo" and has_run)
-        if target == "done" and not started:
+        # Inside a card, tasks double as a checklist: tick off without a run.
+        if target == "done" and not started and not conversation.get("task_card_id"):
             return web.json_response(
                 {"error": "Only started tasks can be marked done"}, status=400)
         updates["task_status"] = target
@@ -996,7 +1208,7 @@ async def handle_get_board_settings(request: web.Request) -> web.Response:
         # Lanes, tags and context come from the shared board; "show agent
         # work" stays the caller's own preference.
         board = {**shared["config"], "show_agent_work": board["show_agent_work"],
-                 "board": shared["summary"]}
+                 "board": shared["summary"], "card_mode": shared["card_mode"]}
     # Resolved global default (Admin > Settings) so the drawer can show what
     # is already applied ahead of the personal context.
     board["default_context"] = render_board_default_context(
@@ -1076,6 +1288,17 @@ async def handle_put_board_settings(request: web.Request) -> web.Response:
     first_lane_id = lanes[0]["id"]
 
     updates = {"task_board.prompt": prompt, "task_board.lanes": lanes}
+    fields = previous["fields"]
+    removed_field_ids: list[str] = []
+    if "fields" in body:
+        if not target["card_mode"]:
+            return web.json_response({"error": "Only card boards have fields"}, status=400)
+        fields, field_error = _clean_fields(body["fields"])
+        if field_error:
+            return web.json_response({"error": field_error}, status=400)
+        kept = {field["id"] for field in fields}
+        removed_field_ids = [f["id"] for f in previous["fields"] if f["id"] not in kept]
+        updates["task_board.fields"] = fields
     show_agent_work = previous["show_agent_work"]
     if target["shared"]:
         show_agent_work = (await _get_board_config_for(db, user_email))["show_agent_work"]
@@ -1102,9 +1325,21 @@ async def handle_put_board_settings(request: web.Request) -> web.Response:
             {"$set": {"task_lane": first_lane_id}},
         )
         migrated = result.modified_count
+        if target["card_mode"]:
+            # Cards in a deleted column move to the first remaining one.
+            result = await db.task_cards.update_many(
+                {"board_id": target["id"], "lane": {"$in": removed_ids}},
+                {"$set": {"lane": first_lane_id}},
+            )
+            migrated = result.modified_count
+    if removed_field_ids:
+        await db.task_cards.update_many(
+            {"board_id": target["id"]},
+            {"$unset": {f"fields.{field_id}": "" for field_id in removed_field_ids}},
+        )
 
     return web.json_response({"prompt": prompt, "lanes": lanes, "migrated": migrated,
-                              "show_agent_work": show_agent_work})
+                              "fields": fields, "show_agent_work": show_agent_work})
 
 
 async def handle_create_tag(request: web.Request) -> web.Response:
@@ -1167,7 +1402,7 @@ async def handle_list_boards(request: web.Request) -> web.Response:
 
     docs = await db.task_boards.find(
         {"$or": [{"owner": user_email}, {"members.email": user_email}]},
-        {"board_id": 1, "name": 1, "owner": 1, "members": 1, "created_at": 1},
+        {"board_id": 1, "name": 1, "owner": 1, "members": 1, "created_at": 1, "card_mode": 1},
     ).sort("created_at", 1).to_list(200)
     boards = [_board_summary(None, "owner", user_email)]
     boards += [_board_summary(doc, _board_role(doc, user_email), user_email) for doc in docs]
@@ -1200,17 +1435,32 @@ async def handle_create_board(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": f"You can own at most {MAX_OWNED_BOARDS} boards"}, status=400)
 
+    # card_mode: the board's lanes hold cards, and tasks live inside cards.
+    card_mode = bool(body.get("card_mode"))
+    lanes = copy.deepcopy(DEFAULT_BOARD["lanes"])
+    fields: list[dict] = []
+    if card_mode:
+        template = BOARD_TEMPLATES.get(body.get("template") or "blank")
+        if template is None:
+            return web.json_response({"error": "Unknown template"}, status=400)
+        lanes = [{"id": str(uuid.uuid4())[:8], "name": lane_name, "order": order}
+                 for order, lane_name in enumerate(template["lanes"])]
+        fields = [{"id": str(uuid.uuid4())[:8], **copy.deepcopy(field)}
+                  for field in template["fields"]]
+
     now = datetime.now(timezone.utc)
     doc = {
         "board_id": uuid.uuid4().hex[:12],
         "name": name,
         "owner": user_email,
         "members": [],
+        "card_mode": card_mode,
         # Same config shape as users.task_board so get_board_config works on both.
         "task_board": {
             "prompt": "",
-            "lanes": copy.deepcopy(DEFAULT_BOARD["lanes"]),
+            "lanes": lanes,
             "tags": [],
+            "fields": fields,
         },
         "created_at": now,
         "updated_at": now,
@@ -1314,9 +1564,196 @@ async def handle_delete_board(request: web.Request) -> web.Response:
         return error
     result = await db.conversations.update_many(
         {"task_board_id": doc["board_id"]},
-        {"$unset": {"task_board_id": ""}, "$set": {"task_lane": None, "task_tag_ids": []}},
+        {"$unset": {"task_board_id": "", "task_card_id": ""},
+         "$set": {"task_lane": None, "task_tag_ids": []}},
     )
+    await db.task_cards.delete_many({"board_id": doc["board_id"]})
     await db.task_boards.delete_one({"board_id": doc["board_id"]})
+    return web.json_response({"deleted": True, "moved": result.modified_count})
+
+
+# ── Cards (card boards only) ─────────────────────────────────────────────────
+
+def _card_view(card: dict, lane_ids: list[str], task_views: list[dict] | None = None) -> dict:
+    """Public shape of a card, with progress over the tasks inside it."""
+    lane = card.get("lane")
+    if lane not in lane_ids:
+        lane = lane_ids[0] if lane_ids else None
+    mine = [t for t in task_views or [] if t.get("task_card_id") == card.get("card_id")]
+    return {
+        "card_id": card.get("card_id"),
+        "board_id": card.get("board_id"),
+        "title": card.get("title") or "Untitled",
+        "lane": lane,
+        "rank": card.get("rank") or 0.0,
+        "fields": card.get("fields") or {},
+        "notes": card.get("notes") or "",
+        "created_by": card.get("created_by"),
+        "created_at": _serialize(card.get("created_at")),
+        "updated_at": _serialize(card.get("updated_at")),
+        "task_total": len(mine),
+        "task_done": sum(1 for t in mine if t["column"] == "done"),
+        "task_running": sum(1 for t in mine if t["column"] == "working"),
+        "task_needs_input": sum(1 for t in mine if t["column"] == "needs_input"),
+    }
+
+
+def _clean_card_title(title) -> str | None:
+    title = title.strip() if isinstance(title, str) else ""
+    return title if 0 < len(title) <= MAX_CARD_TITLE_LEN else None
+
+
+async def _card_request(request: web.Request, board_id: str | None = None, card_id: str | None = None):
+    """Shared preamble for card writes: (db, user_email, board, card, body, error)."""
+    db = get_db()
+    if db is None:
+        return None, None, None, None, None, web.json_response(
+            {"error": "Observability not configured"}, status=503)
+    user_email = get_user_email(request)
+    if not user_email:
+        return None, None, None, None, None, web.json_response(
+            {"error": "Authentication required"}, status=401)
+    body: dict = {}
+    if request.method != "DELETE":
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            return None, None, None, None, None, web.json_response({"error": "Invalid JSON"}, status=400)
+    card = None
+    if card_id:
+        card = await db.task_cards.find_one({"card_id": card_id})
+        if not card:
+            return None, None, None, None, None, web.json_response({"error": "Card not found"}, status=404)
+        board_id = card.get("board_id")
+    else:
+        board_id = body.get("board")
+    board = await resolve_board(db, user_email, board_id) if board_id else None
+    if board is None or not board["card_mode"]:
+        return None, None, None, None, None, web.json_response({"error": "Board not found"}, status=404)
+    if board["role"] not in EDIT_ROLES:
+        return None, None, None, None, None, web.json_response(
+            {"error": "You have view-only access to this board"}, status=403)
+    return db, user_email, board, card, body, None
+
+
+def _apply_card_fields(board: dict, values_in, current: dict) -> tuple[dict | None, str | None]:
+    """Merge a partial {field_id: value} update into a card's stored values."""
+    if not isinstance(values_in, dict):
+        return None, "fields must be an object"
+    by_id = {field["id"]: field for field in board["config"]["fields"]}
+    merged = {k: v for k, v in (current or {}).items() if k in by_id}
+    for field_id, value in values_in.items():
+        field = by_id.get(field_id)
+        if field is None:
+            return None, "Unknown field"
+        value, error = _clean_field_value(field, value)
+        if error:
+            return None, error
+        if value is None:
+            merged.pop(field_id, None)
+        else:
+            merged[field_id] = value
+    return merged, None
+
+
+async def handle_create_card(request: web.Request) -> web.Response:
+    """POST /api/tasks/cards — add a card to a card board."""
+    db, user_email, board, _, body, error = await _card_request(request)
+    if error:
+        return error
+    title = _clean_card_title(body.get("title"))
+    if not title:
+        return web.json_response(
+            {"error": f"Card titles must be 1-{MAX_CARD_TITLE_LEN} characters"}, status=400)
+    lane_ids = [lane["id"] for lane in board["config"]["lanes"]]
+    lane = body.get("lane") or lane_ids[0]
+    if lane not in lane_ids:
+        return web.json_response({"error": "Unknown lane"}, status=400)
+    if await db.task_cards.count_documents({"board_id": board["id"]}) >= MAX_CARDS_PER_BOARD:
+        return web.json_response(
+            {"error": f"A board can hold at most {MAX_CARDS_PER_BOARD} cards"}, status=400)
+    fields, field_error = _apply_card_fields(board, body.get("fields") or {}, {})
+    if field_error:
+        return web.json_response({"error": field_error}, status=400)
+
+    now = datetime.now(timezone.utc)
+    doc = {
+        "card_id": uuid.uuid4().hex[:12],
+        "board_id": board["id"],
+        "title": title,
+        "lane": lane,
+        # New cards land at the bottom of their column.
+        "rank": now.timestamp(),
+        "fields": fields,
+        "notes": "",
+        "created_by": user_email,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.task_cards.insert_one(doc)
+    return web.json_response({"card": _card_view(doc, lane_ids)}, status=201)
+
+
+async def handle_update_card(request: web.Request) -> web.Response:
+    """PATCH /api/tasks/cards/{card_id} — any of: title, lane, rank, fields
+    (partial {field_id: value}; null clears), notes."""
+    db, _, board, card, body, error = await _card_request(
+        request, card_id=request.match_info["card_id"])
+    if error:
+        return error
+    lane_ids = [lane["id"] for lane in board["config"]["lanes"]]
+    updates: dict = {}
+    if "title" in body:
+        title = _clean_card_title(body["title"])
+        if not title:
+            return web.json_response(
+                {"error": f"Card titles must be 1-{MAX_CARD_TITLE_LEN} characters"}, status=400)
+        updates["title"] = title
+    if "lane" in body:
+        if body["lane"] not in lane_ids:
+            return web.json_response({"error": "Unknown lane"}, status=400)
+        updates["lane"] = body["lane"]
+    if "rank" in body:
+        try:
+            updates["rank"] = float(body["rank"])
+        except (TypeError, ValueError):
+            return web.json_response({"error": "rank must be a number"}, status=400)
+    if "fields" in body:
+        fields, field_error = _apply_card_fields(board, body["fields"], card.get("fields") or {})
+        if field_error:
+            return web.json_response({"error": field_error}, status=400)
+        updates["fields"] = fields
+    if "notes" in body:
+        notes = body["notes"]
+        if not isinstance(notes, str) or len(notes) > MAX_CARD_NOTES_LEN:
+            return web.json_response(
+                {"error": f"notes must be text of at most {MAX_CARD_NOTES_LEN} characters"}, status=400)
+        updates["notes"] = notes
+    if not updates:
+        return web.json_response({"error": "Nothing to update"}, status=400)
+    updates["updated_at"] = datetime.now(timezone.utc)
+    await db.task_cards.update_one({"card_id": card["card_id"]}, {"$set": updates})
+    return web.json_response({"card": _card_view({**card, **updates}, lane_ids)})
+
+
+async def handle_delete_card(request: web.Request) -> web.Response:
+    """DELETE /api/tasks/cards/{card_id} — delete a card.
+
+    Its tasks are not lost: like deleting a board, each goes back to the
+    board of the person who created it.
+    """
+    db, _, _, card, _, error = await _card_request(
+        request, card_id=request.match_info["card_id"])
+    if error:
+        return error
+    result = await db.conversations.update_many(
+        {"task_card_id": card["card_id"]},
+        {"$unset": {"task_board_id": "", "task_card_id": ""},
+         "$set": {"task_lane": None, "task_tag_ids": []}},
+    )
+    await db.task_cards.delete_one({"card_id": card["card_id"]})
     return web.json_response({"deleted": True, "moved": result.modified_count})
 
 
@@ -1327,6 +1764,9 @@ def setup_task_routes(app: web.Application):
     app.router.add_post("/api/tasks/boards", handle_create_board)
     app.router.add_patch("/api/tasks/boards/{board_id}", handle_update_board)
     app.router.add_delete("/api/tasks/boards/{board_id}", handle_delete_board)
+    app.router.add_post("/api/tasks/cards", handle_create_card)
+    app.router.add_patch("/api/tasks/cards/{card_id}", handle_update_card)
+    app.router.add_delete("/api/tasks/cards/{card_id}", handle_delete_card)
     app.router.add_get("/api/tasks/board-settings", handle_get_board_settings)
     app.router.add_put("/api/tasks/board-settings", handle_put_board_settings)
     app.router.add_get("/api/tasks/needs-input-count", handle_needs_input_count)

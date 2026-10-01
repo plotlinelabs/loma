@@ -1158,6 +1158,8 @@ export interface Task {
   forked_from_conversation_id: string | null;
   /** Shared board the task sits on; null = its creator's own board. */
   task_board_id?: string | null;
+  /** Card the task lives in (card boards only). */
+  task_card_id?: string | null;
   /** Creator's email. Only the creator can message the task (runs use their accounts). */
   owner?: string | null;
 }
@@ -1176,8 +1178,42 @@ export interface TaskBoardSummary {
   owner: string;
   role: TaskBoardRole;
   shared: boolean;
+  /** Card board: columns hold cards, and tasks live inside cards. */
+  card_mode?: boolean;
   members: TaskBoardMember[];
 }
+
+export type BoardFieldType =
+  | "text" | "number" | "date" | "person" | "select" | "multi_select" | "link" | "checkbox";
+
+/** A custom field defined on a card board; cards store values by field id. */
+export interface BoardField {
+  id: string;
+  name: string;
+  type: BoardFieldType;
+  options: string[];
+  show_on_card: boolean;
+}
+
+export type CardFieldValue = string | number | boolean | string[] | null;
+
+export interface TaskCardItem {
+  card_id: string;
+  board_id: string;
+  title: string;
+  lane: string;
+  rank: number;
+  fields: Record<string, CardFieldValue>;
+  /** Notes for Loma: added to the context of every task inside the card. */
+  notes: string;
+  created_by?: string | null;
+  task_total: number;
+  task_done: number;
+  task_running: number;
+  task_needs_input: number;
+}
+
+export type BoardTemplate = "blank" | "deals" | "hiring" | "projects";
 
 export const PERSONAL_BOARD_ID = "personal";
 
@@ -1193,6 +1229,9 @@ export interface TasksBoardResponse {
   tags: TaskTag[];
   tasks: Task[];
   counts: Record<string, number>;
+  /** Card boards only. */
+  fields?: BoardField[];
+  cards?: TaskCardItem[];
 }
 
 export interface BoardSettings {
@@ -1203,6 +1242,8 @@ export interface BoardSettings {
   default_context?: string;
   /** Present for shared boards. */
   board?: TaskBoardSummary;
+  card_mode?: boolean;
+  fields?: BoardField[];
 }
 
 export class BoardNotFoundError extends Error {}
@@ -1234,8 +1275,50 @@ export function fetchTaskBoards(): Promise<{ boards: TaskBoardSummary[] }> {
   return boardRequest("", { method: "GET" }, "Failed to fetch boards");
 }
 
-export function createTaskBoard(name: string): Promise<{ board: TaskBoardSummary }> {
-  return boardRequest("", { method: "POST", body: JSON.stringify({ name }) }, "Failed to create board");
+export function createTaskBoard(
+  name: string,
+  options: { card_mode?: boolean; template?: BoardTemplate } = {},
+): Promise<{ board: TaskBoardSummary }> {
+  return boardRequest("", { method: "POST", body: JSON.stringify({ name, ...options }) }, "Failed to create board");
+}
+
+async function cardRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/tasks/cards${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Card request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function createTaskCard(params: {
+  board: string;
+  title: string;
+  lane?: string;
+}): Promise<{ card: TaskCardItem }> {
+  return cardRequest("", "POST", params);
+}
+
+export function updateTaskCard(
+  cardId: string,
+  updates: {
+    title?: string;
+    lane?: string;
+    rank?: number;
+    /** Partial: only the given field ids change; null clears a value. */
+    fields?: Record<string, CardFieldValue>;
+    notes?: string;
+  },
+): Promise<{ card: TaskCardItem }> {
+  return cardRequest(`/${encodeURIComponent(cardId)}`, "PATCH", updates);
+}
+
+export function deleteTaskCard(cardId: string): Promise<{ deleted: boolean; moved: number }> {
+  return cardRequest(`/${encodeURIComponent(cardId)}`, "DELETE");
 }
 
 export function updateTaskBoard(
@@ -1270,6 +1353,8 @@ export async function createTask(params: {
   tool_config?: ToolConfig;
   /** Shared board id; omitted = the caller's own board */
   board?: string;
+  /** Card the task goes into (required on card boards) */
+  card?: string;
 }): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: "POST",
@@ -1349,6 +1434,8 @@ export async function saveBoardSettings(settings: {
   prompt?: string;
   lanes?: Array<{ id?: string; name: string }>;
   show_agent_work?: boolean;
+  /** Card boards only: the full list of custom fields. */
+  fields?: Array<Omit<BoardField, "id"> & { id?: string }>;
 }, boardId?: string): Promise<BoardSettings & { migrated: number }> {
   const res = await fetch(`${API_BASE}/api/tasks/board-settings${boardQuery(boardId)}`, {
     method: "PUT",

@@ -1062,7 +1062,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                 existing = await db.conversations.find_one(
                     {"conversation_id": existing_conversation_id},
                     {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1,
-                     "task_board_id": 1},
+                     "task_board_id": 1, "task_card_id": 1},
                 )
                 if existing and not _check_conversation_access(
                     existing, user_email, get_system_role(request)
@@ -1150,7 +1150,8 @@ async def handle_chat(request: web.Request) -> web.Response:
                 from api.task_routes import build_board_context
 
                 owner = (existing.get("metadata") or {}).get("user_name") or user_email
-                context_block = await build_board_context(db, owner, existing.get("task_board_id"))
+                context_block = await build_board_context(
+                    db, owner, existing.get("task_board_id"), existing.get("task_card_id"))
                 if context_block:
                     conversation_context = (
                         f"{context_block}\n\n{conversation_context}"

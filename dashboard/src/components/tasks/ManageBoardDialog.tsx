@@ -14,7 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
+  type BoardTemplate,
   createTaskBoard,
   deleteTaskBoard,
   updateTaskBoard,
@@ -32,6 +34,13 @@ interface ManageBoardDialogProps {
   onSaved: (board: TaskBoardSummary) => void;
   onDeleted?: () => void;
 }
+
+const TEMPLATES: Array<{ id: BoardTemplate; label: string; hint: string }> = [
+  { id: "blank", label: "Blank", hint: "No fields yet" },
+  { id: "deals", label: "Deals", hint: "Value, Owner, Close date" },
+  { id: "hiring", label: "Hiring", hint: "Role, Source, Interview date" },
+  { id: "projects", label: "Projects", hint: "Owner, Due date" },
+];
 
 function RoleSelect({ value, onChange }: { value: MemberRole; onChange: (role: MemberRole) => void }) {
   return (
@@ -55,9 +64,14 @@ export function ManageBoardDialog({ open, onOpenChange, board, onSaved, onDelete
   const [newRole, setNewRole] = useState<MemberRole>("editor");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // New boards only: cards that hold tasks, started from a template.
+  const [cardMode, setCardMode] = useState(false);
+  const [template, setTemplate] = useState<BoardTemplate>("blank");
 
   useEffect(() => {
     if (!open) return;
+    setCardMode(false);
+    setTemplate("blank");
     setName(board?.name ?? "");
     setMembers(board?.members ?? []);
     setNewEmail("");
@@ -96,7 +110,9 @@ export function ManageBoardDialog({ open, onOpenChange, board, onSaved, onDelete
     setError(null);
     try {
       let saved = board;
-      if (!saved) saved = (await createTaskBoard(trimmed)).board;
+      if (!saved) {
+        saved = (await createTaskBoard(trimmed, cardMode ? { card_mode: true, template } : {})).board;
+      }
       const changes: { name?: string; members?: TaskBoardMember[] } = {};
       if (board && trimmed !== board.name) changes.name = trimmed;
       if (nextMembers.length > 0 || (board?.members.length ?? 0) > 0) changes.members = nextMembers;
@@ -147,6 +163,35 @@ export function ManageBoardDialog({ open, onOpenChange, board, onSaved, onDelete
               autoFocus={!board}
             />
           </div>
+          {!board && (
+            <div className="space-y-2 rounded-lg border border-border p-3">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="board-card-mode">Cards hold tasks inside them</Label>
+                  <p className="text-xs text-muted-foreground">
+                    For tracking things like deals or candidates: each card has its own fields, notes and tasks.
+                    Off = every card is just a task. This can&apos;t be changed later.
+                  </p>
+                </div>
+                <Switch id="board-card-mode" checked={cardMode} onCheckedChange={setCardMode} />
+              </div>
+              {cardMode && (
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="board-template" className="shrink-0 text-xs text-muted-foreground">Start from</Label>
+                  <Select value={template} onValueChange={(v) => setTemplate(v as BoardTemplate)}>
+                    <SelectTrigger id="board-template" size="sm" className="flex-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TEMPLATES.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.label} <span className="text-muted-foreground">· {t.hint}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="board-member-email">People with access</Label>
             <p className="text-xs text-muted-foreground">
