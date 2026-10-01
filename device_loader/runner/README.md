@@ -37,7 +37,7 @@ Then boot an emulator or simulator; it shows up in Loma within about 15 seconds.
 
 | Task | Command |
 |---|---|
-| Upgrade / restart (download the new file first) | `python3 loma_device_runner.py setup` |
+| Upgrade / restart (download the new file first) | `python3 loma_device_runner.py setup` (only needed once to reach 1.2.0; see below) |
 | Check tooling and devices | `~/.loma-device-runner/venv/bin/python3 ~/.loma-device-runner/loma_device_runner.py doctor` |
 | Remove from this machine | `python3 ~/.loma-device-runner/loma_device_runner.py uninstall` |
 | Logs | macOS: `~/.loma-device-runner/runner.log`, Linux: `journalctl --user -u loma-device-runner -f` |
@@ -50,6 +50,14 @@ Device tooling (install what you need):
 - **Flows (optional):** Maestro, which needs Java 17:
   `brew install openjdk@17 && curl -fsSL "https://get.maestro.mobile.dev" | bash`, then re-run `setup`.
 
+**Automatic updates (1.2.0+).** When the runner runs as the login service, Loma offers it the
+newer runner it serves. The runner downloads it over its authenticated connection, checks it
+against the SHA-256 the server announced, checks it parses and declares that version, waits for
+running operations to finish (up to 10 minutes) and exits so launchd/systemd restart it on the
+new version. The checksum protects against a truncated or altered download on the way; it comes
+from the same Loma server, so it is not a code signature. Set `"auto_update": false` in the policy
+to update by hand. Runners older than 1.2.0 need one manual `setup` with the new file.
+
 The service keeps the `PATH` of the shell you ran `setup` from, plus the Android SDK,
 Maestro, Homebrew and the runner's own `idb`. On Linux, run `loginctl enable-linger $USER` if the
 runner should stay up while you are logged out.
@@ -60,8 +68,14 @@ runner should stay up while you are logged out.
 |---|---|
 | install (build fetched by Loma, checksum-verified), uninstall, launch, stop, reset_app | Run shell commands on your machine |
 | open_url (deep links), tap, swipe, type, key | Read or write files on your machine |
-| screenshot, ui_tree, logs | See physical devices (unless you opt in) |
+| screenshot, ui_tree, logs, record, burst | See physical devices (unless you opt in) |
 | run_flow (Maestro YAML, screened) | Run Maestro JavaScript (unless you opt in) |
+| configure: per-app locale, time zone and clock offset (Android), location, dark mode, font scale, permissions | Change settings of apps outside `allowed_app_ids` |
+
+`configure` remembers the original value of each setting it changes and restores them when the
+agent releases the device (or on `configure reset=true`). Permissions and Android location are not
+restored. Clock and time zone changes need Android 11+, per-app locale needs Android 13+; iOS
+simulators follow the Mac's clock and time zone, so those two are reported as unsupported there.
 
 ## Policy (`~/.loma-device-runner/config.json`)
 
@@ -69,13 +83,67 @@ runner should stay up while you are logged out.
 "policy": {
   "allow_physical_devices": false,
   "allowed_app_ids": ["com.example.demo"],
-  "allow_maestro_scripts": false
+  "allow_maestro_scripts": false,
+  "auto_update": true
 }
 ```
 
 - `allow_physical_devices`: expose USB/Wi-Fi phones, not just emulators/simulators. Keep `false` on a personal laptop.
 - `allowed_app_ids`: if non-empty, only these app ids can be installed/launched/stopped/reset/uninstalled, and Maestro flows may only target them. `install` then needs an `app_id`, and the package that actually got installed is checked too.
 - `allow_maestro_scripts`: permit Maestro commands outside the built-in allowlist (`runScript`, `evalScript`, `runFlow`, `addMedia`, `file:` sub-flows, ...), `${...}` and extra flow config keys. Maestro JavaScript can make HTTP requests from your machine and sub-flows can read files on it, so this is off by default.
+
+- `auto_update`: install newer runner versions offered by Loma automatically (default `true`).
+
+## Device templates (boot on demand, clean state)
+
+Add `templates` at the top level of `config.json` so the agent can boot devices itself instead of
+needing one already running. The agent only picks a template by name; it can never pass an AVD
+name, emulator flags or a simulator of its choice.
+
+```json
+"templates": [
+  {"name": "pixel-34", "platform": "android", "avd": "Pixel_7_API_34", "snapshot": "clean", "headless": true},
+  {"name": "iphone-15", "platform": "ios", "simulator": "Loma iPhone 15"}
+]
+```
+
+- Android: `avd` from `emulator -list-avds`. `snapshot` is a snapshot you saved in that AVD
+  (Extended controls > Snapshots) with the state every test should start from, e.g. the SDK
+  demo app installed and logged out. A clean boot loads it `-read-only` and never saves, so
+  nothing a session does persists and several clean devices can run at once.
+- iOS: `simulator` is the name or UDID of a simulator you set up once and keep shut down. A clean
+  boot clones it and deletes the clone at shutdown; a normal boot starts it as is.
+- `headless` (Android): no emulator window. `idle_shutdown_s` (default 1800): a device the runner
+  booted is shut down after this long without calls, in case a session never released it.
+
+Devices booted for a session shut down when it releases them. Run `setup` again after editing.
+
+## Network capture (Android, optional)
+
+With `mitmdump` installed (`brew install mitmproxy`, then re-run `setup`), the agent can route an
+Android device through a capture proxy (`device.configure capture_network=true`) and read the
+HTTP calls it made, with SDK calls (`/sdk/init`, `/sdk/campaign/trigger`, ...) grouped per
+endpoint. The proxy listens on this machine's loopback only (emulators reach it as `10.0.2.2`,
+physical devices through `adb reverse`). Authorization, cookie and API-key headers are redacted
+and bodies are cut to 4 KB before anything leaves the machine.
+
+- HTTPS content is only readable for **debug builds that trust user CAs**
+  (`<debug-overrides><trust-anchors><certificates src="user"/>` in the network security config)
+  with the mitmproxy CA (`~/.mitmproxy/mitmproxy-ca-cert.cer`) installed on the device. Install it
+  once in the AVD and save that state into the template's clean snapshot.
+- Release builds and pinned hosts reject the proxy; they are reported as `tls_failures`, and the
+  app may show network errors while the capture runs.
+- The capture stops, and the device proxy is cleared, on `capture_network=false`, on release and
+  when a crashed runner comes back.
+
+## Backend settings for verification
+
+| Setting | Purpose |
+|---|---|
+| `LOMA_DEVICE_SDK_HOSTS` | Comma-separated host substrings whose traffic counts as SDK calls in the network summary (paths under `/sdk/` always count). |
+| `LOMA_DEVICE_ANALYTICS_PRODUCTS` | Comma-separated analytics product IDs the agent may query with `device.observe what=sdk_events`. Keep it to test products. Unset = the check is off. |
+| ClickHouse integration, or `LOMA_DEVICE_CLICKHOUSE_URL` / `_USER` / `_PASSWORD` / `_DATABASE` | Where the SDK analytics check reads events, triggers and flow actions (read-only GET queries with typed parameters). |
+| `ANTHROPIC_API_KEY` (or another Anthropic credential on the backend), `LOMA_DEVICE_VISION_MODEL` | The `visual` check (default model `claude-opus-5-5`). The screenshot goes to the Anthropic API. |
 
 Run `setup` again after editing the policy to restart the runner.
 

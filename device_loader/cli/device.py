@@ -8,7 +8,7 @@ users are always isolated); isolated workers bind the scope server-side.
 
 Commands:
   device.py --user-email E --auth-token T --scope CONVERSATION_ID list
-  device.py ... lease [--platform android|ios] [--device-id ID]
+  device.py ... lease [--platform android|ios] [--device-id ID | --template NAME [--clean]] [--wait-online SECONDS]
   device.py ... release --device-id ID
   device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N]
                 [--wait SECONDS] [--dispatch-workflow FILE.yml] | --file PATH) [--app-id PKG]
@@ -17,7 +17,9 @@ Commands:
                 [--extra KEY=VALUE ...] [--bool-extra KEY=true|false ...] [--activity .Main] [--console]
   device.py ... open-url --device-id ID --url URL
   device.py ... tap --device-id ID (--ref e3 | --x X --y Y)      (refs come from ui-tree)
-  device.py ... tap-text --device-id ID --match TEXT [--by any|text|id|label] [--exact] [--timeout S]
+                tap / tap-text / swipe / key / type / set-text / clear-text / open-url take [--settle [--settle-ms MS]]:
+                wait for the screen to settle and return what changed, with refs for the new screen
+  device.py ... tap-text --device-id ID --match TEXT [--by any|text|id|label] [--exact] [--timeout S] [--nth N]
   device.py ... wait-for --device-id ID --match TEXT [--by ...] [--exact] [--timeout S] [--gone]
   device.py ... scroll-until-visible --device-id ID --match TEXT [--direction down|up] [--max-swipes N]
   device.py ... set-text --device-id ID --text TEXT [--ref e3 | --match FIELD [--by ...]] [--no-clear]
@@ -30,8 +32,14 @@ Commands:
   device.py ... screenshot --device-id ID [--out PATH] [--preview]    (then Read the PNG / preview JPEG)
   device.py ... burst --device-id ID --count N [--interval-ms MS] [--app-id PKG [--extra K=V ...]] [--preview]
   device.py ... record --device-id ID --duration S [--app-id PKG [--extra K=V ...]]
-  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console]
+  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console] [--app-id PKG]
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
+  device.py ... netcap --device-id ID --action start|stop|read [--filter /sdk/] [--limit N]   (Android)
+  device.py ... sdk-events-check --device-id ID --product-id P --user-id U [--flow-id F] [--since S]
+  device.py ... visual-check --device-id ID --expect "bottom sheet with a Claim button, nothing clipped"
+  device.py ... configure --device-id ID [--locale ar-SA --app-id PKG] [--timezone Asia/Dubai]
+                [--clock-offset SECONDS] [--location LAT,LON] [--dark-mode on|off] [--font-scale 1.3]
+                [--grant PERM ... --revoke PERM ... --app-id PKG] | --reset
 
 Files (screenshots, burst frames, recordings, flow screenshots) are written to
 $LOMA_CONVERSATION_DIR/device/ when that is set, else to a per-conversation dir
@@ -112,14 +120,35 @@ def _selector(args):
     return out
 
 
+SETTLE_COMMANDS = ('tap', 'tap-text', 'swipe', 'key', 'type', 'set-text', 'clear-text', 'open-url')
+NTH_COMMANDS = ('tap-text', 'set-text', 'clear-text')
+
+
 def build_body(args):
+    """The /internal/devices/call body, plus the options several commands share (settle, nth)."""
+    body = _build_body(args)
+    extra = {}
+    if getattr(args, 'settle', False) or getattr(args, 'settle_ms', None) is not None:
+        extra['settle'] = True
+        if args.settle_ms is not None:
+            extra['settle_ms'] = args.settle_ms
+    if getattr(args, 'nth', None) is not None:
+        extra['nth'] = args.nth
+    if extra:
+        body['args'] = {**body.get('args', {}), **extra}
+    return body
+
+
+def _build_body(args):
     """Translate CLI arguments into the /internal/devices/call body (pure; unit-tested)."""
     # Same lease scope as isolated runs (conv:<id>), so both runtimes agree.
     body = {'scope': args.scope if ':' in args.scope else f'conv:{args.scope}'}
     if args.command == 'list':
         return {**body, 'action': 'list'}
     if args.command == 'lease':
-        return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform}
+        return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform,
+                **({'wait_online_s': args.wait_online} if args.wait_online else {}),
+                **({'template': args.template} if args.template else {}), **({'clean': True} if args.clean else {})}
     if args.command == 'release':
         return {**body, 'action': 'release', 'device_id': args.device_id}
     call = {**body, 'action': 'call', 'device_id': args.device_id}
@@ -222,7 +251,35 @@ def build_body(args):
             log_args['filter'] = args.filter
         if args.source:
             log_args['source'] = args.source
+        if args.app_id:
+            log_args['app_id'] = args.app_id
         return {**call, 'op': 'logs', 'args': log_args}
+    if args.command == 'netcap':
+        call_args = {'action': args.action, **({'filter': args.filter} if args.filter else {}),
+                     **({'limit': args.limit} if args.limit else {})}
+        return {**call, 'op': 'netcap', 'args': call_args}
+    if args.command == 'sdk-events-check':
+        call_args = {'product_id': args.product_id, 'user_id': args.user_id,
+                     **({'flow_id': args.flow_id} if args.flow_id else {}), **({'since_s': args.since} if args.since else {})}
+        return {**call, 'action': 'sdk_events_check', 'args': call_args}
+    if args.command == 'visual-check':
+        return {**call, 'action': 'visual_check', 'args': {'expect': args.expect}}
+    if args.command == 'configure':
+        if args.reset:
+            return {**call, 'op': 'configure', 'args': {'reset': True}}
+        call_args = {key: value for key, value in (
+            ('app_id', args.app_id), ('locale', args.locale), ('timezone', args.timezone),
+            ('clock_offset_s', args.clock_offset), ('font_scale', args.font_scale),
+            ('grant', args.grant), ('revoke', args.revoke)) if value is not None}
+        if args.dark_mode:
+            call_args['dark_mode'] = args.dark_mode == 'on'
+        if args.location:
+            try:
+                lat, lon = (float(part) for part in args.location.split(','))
+            except ValueError:
+                raise SystemExit('--location must be LAT,LON (e.g. 25.2048,55.2708)') from None
+            call_args['location'] = {'lat': lat, 'lon': lon}
+        return {**call, 'op': 'configure', 'args': call_args}
     if args.command == 'run-flow':
         with open(args.flow_file) as handle:
             flow_args = {'flow': handle.read()}
@@ -243,6 +300,10 @@ def parser():
     s = sub.add_parser('lease')
     s.add_argument('--platform', choices=['android', 'ios'])
     s.add_argument('--device-id')
+    s.add_argument('--wait-online', type=int, default=0, metavar='SECONDS',
+                   help='Wait up to SECONDS (max 600) for a device to come online; the runner owner is notified')
+    s.add_argument('--template', help='Boot a new device from this runner template (see list)')
+    s.add_argument('--clean', action='store_true', help='Boot from the template\'s clean snapshot / a fresh clone')
 
     def with_device(name):
         cmd = sub.add_parser(name)
@@ -286,6 +347,27 @@ def parser():
     s.add_argument('--ref', help='Element ref from the latest ui-tree (e.g. e3)')
     s.add_argument('--x', type=int)
     s.add_argument('--y', type=int)
+    s = with_device('netcap')
+    s.add_argument('--action', required=True, choices=['start', 'stop', 'read'])
+    s.add_argument('--filter', help='URL substring, e.g. /sdk/')
+    s.add_argument('--limit', type=int)
+    s = with_device('sdk-events-check')
+    s.add_argument('--product-id', required=True)
+    s.add_argument('--user-id', required=True)
+    s.add_argument('--flow-id')
+    s.add_argument('--since', type=int, metavar='SECONDS', help='Look back this far (default 900)')
+    with_device('visual-check').add_argument('--expect', required=True)
+    s = with_device('configure')
+    s.add_argument('--app-id', help='Needed for --locale (per-app language) and --grant/--revoke')
+    s.add_argument('--locale', help='e.g. ar-SA (RTL), hi-IN')
+    s.add_argument('--timezone', help='IANA name, e.g. Asia/Dubai (Android)')
+    s.add_argument('--clock-offset', type=int, metavar='SECONDS', help='Move the clock, e.g. 86400 (Android)')
+    s.add_argument('--location', metavar='LAT,LON')
+    s.add_argument('--dark-mode', choices=['on', 'off'])
+    s.add_argument('--font-scale', type=float)
+    s.add_argument('--grant', action='append', metavar='PERMISSION')
+    s.add_argument('--revoke', action='append', metavar='PERMISSION')
+    s.add_argument('--reset', action='store_true', help='Restore everything configure changed')
     s = with_device('animations')
     toggle = s.add_mutually_exclusive_group(required=True)
     toggle.add_argument('--off', dest='on', action='store_false', help='Faster, steadier ui-tree / taps')
@@ -336,9 +418,16 @@ def parser():
     s.add_argument('--filter')
     s.add_argument('--clear', action='store_true')
     s.add_argument('--source', choices=['auto', 'system', 'console'])
+    s.add_argument('--app-id', help="Only this app's lines (Android: its running process; iOS: its executable)")
     s = with_device('run-flow')
     s.add_argument('--flow-file', required=True)
     s.add_argument('--verbose', action='store_true', help='Full Maestro output and JUnit report')
+    for name in SETTLE_COMMANDS:
+        sub.choices[name].add_argument('--settle', action='store_true',
+                                       help='Wait for the screen to stop changing; returns what changed, with new refs')
+        sub.choices[name].add_argument('--settle-ms', type=int, metavar='MS', help='Settle budget (500-10000, default 3000)')
+    for name in NTH_COMMANDS:
+        sub.choices[name].add_argument('--nth', type=int, help='Pick the Nth of several equally good matches (1 = first)')
     return p
 
 

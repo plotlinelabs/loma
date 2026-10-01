@@ -1,5 +1,4 @@
 """Element refs (tap by e3), the Android animations switch, and the build-repo allowlist setting."""
-import sys
 
 import pytest
 import pytest_asyncio
@@ -48,10 +47,10 @@ async def setup():
     return DeviceService(db, hub=hub, blobs=BlobStore()), hub, store.device_id(runner['runner_id'], 'emulator-5554')
 
 
-def test_compact_tree_numbers_elements_after_filtering():
+def test_compact_tree_refs_cover_the_whole_screen_and_survive_filters():
     out = compact_tree(TREE, compact=True, clickable_only=True)
-    assert out['tree'].splitlines() == ["e1 EditText #endpoint @540,600 *", "e2 Button 'Save' @540,1800 *"]
-    assert out['_refs'] == {'e1': [540, 600], 'e2': [540, 1800]}
+    assert out['tree'].splitlines() == ["e2 EditText #endpoint @540,600 *", "e3 Button 'Save' @540,1800 *"]
+    assert out['_refs'] == {'e2': [540, 600], 'e3': [540, 1800]}
     assert compact_tree(TREE)['elements'][2]['ref'] == 'e3'
 
 
@@ -73,11 +72,13 @@ async def test_tap_by_ref_resolves_on_the_backend(setup):
     assert '_refs' not in reply and reply['tree'].startswith('e1 TextView')
     await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e3'})
     assert hub.calls[-1] == ('tap', {'x': 540, 'y': 1800})  # the runner only ever sees coordinates
-    await service.call(OWNER, 'conv-1', device, 'ui_tree', {'compact': True})  # the tap reset the refs
-    with pytest.raises(DeviceError, match='No element e9'):
-        await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e9'})
+    reply = await service.call(OWNER, 'conv-1', device, 'ui_tree', {'compact': True})  # the tap reset the refs
+    assert reply['tree'].startswith('e4 TextView')  # new numbers: e1-e3 are never reused for another element
+    with pytest.raises(DeviceError, match='No element e2') as caught:
+        await service.call(OWNER, 'conv-1', device, 'tap', {'ref': 'e2'})
+    assert caught.value.code == 'ref_stale'
     # set_text by ref: focus the field, then edit what is focused (no match sent to the runner).
-    await service.call(OWNER, 'conv-1', device, 'set_text', {'ref': 'e2', 'text': 'https://x.test'})
+    await service.call(OWNER, 'conv-1', device, 'set_text', {'ref': 'e5', 'text': 'https://x.test'})
     assert hub.calls[-2:] == [('tap', {'x': 540, 'y': 600}), ('set_text', {'text': 'https://x.test'})]
 
 

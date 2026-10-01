@@ -30,6 +30,22 @@ from tools._auth_token import verify_user_auth_token
 logger = logging.getLogger(__name__)
 
 RUNNER_SCRIPT = Path(__file__).resolve().parent.parent / 'runner' / 'loma_device_runner.py'
+_RUNNER_RELEASE = {}
+
+
+def runner_release():
+    """(version, sha256) of the runner script this backend serves; read once per process."""
+    if not _RUNNER_RELEASE:
+        data = RUNNER_SCRIPT.read_bytes()
+        found = re.search(rb"^VERSION = '(\d+\.\d+\.\d+)'", data, re.M)
+        _RUNNER_RELEASE.update(version=found.group(1).decode() if found else '',
+                               sha256=hashlib.sha256(data).hexdigest())
+    return _RUNNER_RELEASE['version'], _RUNNER_RELEASE['sha256']
+
+
+def _older(version, latest):
+    parse = lambda text: tuple(int(p) for p in re.findall(r'\d+', text or '')[:3])  # noqa: E731
+    return bool(latest) and parse(version) < parse(latest)
 MAX_RUNNER_FRAME = 24 * 1024 * 1024
 HELLO_TIMEOUT = 10
 EMAIL = re.compile(r'[^@\s]{1,64}@[^@\s]{1,190}\Z')
@@ -79,6 +95,17 @@ def _clean_devices(devices):
     return [d for d in (_clean_device(x) for x in (devices or [])[:50]) if d is not None]
 
 
+TEMPLATE_NAME = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
+
+
+def _clean_templates(templates):
+    if not isinstance(templates, list):
+        return []
+    return [{'name': t['name'], 'platform': t['platform'], 'clean': t.get('clean') is True}
+            for t in templates[:10] if isinstance(t, dict) and isinstance(t.get('name'), str)
+            and TEMPLATE_NAME.fullmatch(t['name']) and t.get('platform') in ('android', 'ios')]
+
+
 # ── Runner endpoints ──────────────────────────────────────────────────────
 
 
@@ -115,17 +142,22 @@ async def handle_runner_ws(request):
     devices = _clean_devices(hello.get('devices'))
     capabilities = hello.get('capabilities') if isinstance(hello.get('capabilities'), list) else []
     version = str(hello.get('version') or '')[:40]
-    conn = await hub.attach(runner_id, ws, devices, version)
+    templates = _clean_templates(hello.get('templates'))
+    conn = await hub.attach(runner_id, ws, devices, version, templates)
     try:
         if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
             await hub.revoke(runner_id)  # revoked while we waited for hello
             return ws
         await db.device_runners.update_one({'runner_id': runner_id}, {'$set': {
             'devices': devices, 'last_seen': store.now(), 'connected_at': store.now(),
-            'version': version, 'hostname': str(hello.get('hostname') or '')[:120],
+            'version': version, 'templates': templates, 'hostname': str(hello.get('hostname') or '')[:120],
             'os': str(hello.get('os') or '')[:120],
             'capabilities': [str(c)[:20] for c in capabilities[:10]]}})
         logger.info('Device runner %s connected with %d device(s)', runner_id, len(devices))
+        latest, digest = runner_release()
+        if 'self_update' in capabilities and _older(version, latest):
+            logger.info('Offering runner %s an update %s -> %s', runner_id, version, latest)
+            await conn.send({'type': 'update', 'version': latest, 'sha256': digest})
         last_persist = asyncio.get_running_loop().time()
         async for message in ws:
             if message.type != web.WSMsgType.TEXT:
@@ -176,11 +208,15 @@ async def handle_runner_download(request):
 def _runner_view(runner, user_email):
     conn = hub.get(runner['runner_id'])
     last_seen = store.aware(runner.get('last_seen'))
+    latest, _ = runner_release()
     return {
+        'latest_version': latest, 'update_available': _older(runner.get('version'), latest),
+        'self_update': 'self_update' in (runner.get('capabilities') or []),
         'runner_id': runner['runner_id'], 'name': runner.get('name'), 'owner': runner.get('owner_email'),
         'is_owner': runner.get('owner_email') == user_email, 'hostname': runner.get('hostname'),
         'os': runner.get('os'), 'version': runner.get('version'),
         'capabilities': runner.get('capabilities') or [], 'shared_with': runner.get('shared_with') or [],
+        'templates': runner.get('templates') or [],
         'online': conn is not None, 'last_seen': last_seen.isoformat() if last_seen else None,
         'created_at': store.aware(runner['created_at']).isoformat() if runner.get('created_at') else None}
 
@@ -273,6 +309,80 @@ async def handle_force_release(request):
         return web.json_response(await DeviceService(db).force_release(user_email, body.get('device_id')))
     except DeviceError as exc:
         return _error(str(exc), 403)
+
+
+async def handle_screen(request):
+    """Live view: one PNG frame of a device the user can use."""
+    db = _db_or_503()
+    user_email = get_user_email(request)
+    if not user_email:
+        return _error('Authentication required', 401)
+    try:
+        png, held = await DeviceService(db).screen(user_email, request.query.get('device_id', ''))
+    except DeviceError as exc:
+        status = (429 if 'slow down' in str(exc) else 404 if 'not found' in str(exc).lower()
+                  else 403 if exc.code == 'device_busy' else 409)
+        return _error(str(exc), status)
+    # X-Device-Held lets the page show the real hold state (after a reload, or once a hold lapses).
+    return web.Response(body=png, content_type='image/png',
+                        headers={'Cache-Control': 'no-store', 'X-Device-Held': held or 'none'})
+
+
+async def handle_takeover(request):
+    db = _db_or_503()
+    user_email = get_user_email(request)
+    if not user_email:
+        return _error('Authentication required', 401)
+    body = await _json_object(request)
+    if body is None or body.get('action') not in ('start', 'end', 'input'):
+        return _error('action must be start, end or input')
+    service = DeviceService(db)
+    try:
+        if body['action'] == 'start':
+            return web.json_response(await service.start_takeover(user_email, body.get('device_id')))
+        if body['action'] == 'end':
+            return web.json_response(await service.end_takeover(user_email, body.get('device_id')))
+        data = await service.takeover_input(user_email, body.get('device_id'), body.get('op'), body.get('args') or {})
+        return web.json_response(_encode_media(data))
+    except DeviceError as exc:
+        return _error(str(exc), 409)
+
+
+MAX_ACTIVITY = 300
+
+
+async def handle_activity(request):
+    """Session timeline for one device, from device_audit: sessions (by lease scope) and their steps."""
+    db = _db_or_503()
+    user_email = get_user_email(request)
+    if not user_email:
+        return _error('Authentication required', 401)
+    device_id = request.query.get('device_id', '')
+    try:
+        runner, _ = await DeviceService(db)._resolve(user_email, device_id)
+    except DeviceError as exc:
+        return _error(str(exc), 404)
+    query = {'device_id': device_id}
+    if runner['owner_email'] != user_email:  # people the runner is shared with see only their own sessions
+        query['actor'] = user_email
+    scope = request.query.get('scope')
+    if scope:
+        query['scope'] = scope[:200]
+    rows = await db.device_audit.find(query, {'_id': 0}).sort('at', -1).to_list(length=MAX_ACTIVITY)
+    sessions = {}
+    for row in rows:
+        at = store.aware(row['at'])
+        row['at'] = at.isoformat()
+        session = sessions.setdefault(row.get('scope'), {
+            'scope': row.get('scope'), 'actor': row.get('actor'), 'started_at': row['at'], 'ended_at': row['at'],
+            'ops': 0, 'failures': 0})
+        session['started_at'] = row['at']  # rows are newest first
+        session['ops'] += 1
+        session['failures'] += 0 if row.get('ok') else 1
+        conversation = (row.get('scope') or '')[5:] if str(row.get('scope')).startswith('conv:') else None
+        if conversation:
+            session['conversation_id'] = conversation
+    return web.json_response({'device_id': device_id, 'sessions': list(sessions.values()), 'events': rows})
 
 
 MAX_BUILD_SOURCES = 50
@@ -373,16 +483,25 @@ async def handle_internal_call(request):
     action = body.get('action')
     try:
         if action == 'list':
-            return web.json_response({'devices': await service.list_devices(user_email)})
+            return web.json_response({'devices': await service.list_devices(user_email),
+                                      'templates': await service.templates_for(user_email)})
         if action == 'lease':
-            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform')))
+            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform'),
+                                                         body.get('wait_online_s', 0), body.get('template'),
+                                                         body.get('clean', False)))
         if action == 'release':
             return web.json_response(await service.release(user_email, scope, body.get('device_id')))
         if action == 'call':
             data = await service.call(user_email, scope, body.get('device_id'), body.get('op'), body.get('args') or {})
             return web.json_response(_encode_media(data))
+        if action == 'sdk_events_check':
+            return web.json_response(await service.sdk_events_check(user_email, scope, body.get('device_id'),
+                                                                  body.get('args') or {}))
+        if action == 'visual_check':
+            data = await service.visual_check(user_email, scope, body.get('device_id'), (body.get('args') or {}).get('expect'))
+            return web.json_response(_encode_media(data))
     except DeviceError as exc:
-        return _error(str(exc), 409)
+        return web.json_response({'error': str(exc), **exc.to_dict()}, status=409)
     return _error('Unknown action')
 
 
@@ -426,6 +545,9 @@ def setup_device_routes(app):
     app.router.add_patch('/api/devices/runners/{runner_id}', handle_update_runner)
     app.router.add_delete('/api/devices/runners/{runner_id}', handle_revoke_runner)
     app.router.add_post('/api/devices/release', handle_force_release)
+    app.router.add_get('/api/devices/activity', handle_activity)
+    app.router.add_get('/api/devices/screen', handle_screen)
+    app.router.add_post('/api/devices/takeover', handle_takeover)
     app.router.add_get('/api/devices/build-settings', handle_get_build_settings)
     app.router.add_put('/api/devices/build-settings', handle_put_build_settings)
     app.router.add_post('/internal/devices/call', handle_internal_call)

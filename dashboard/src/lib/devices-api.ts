@@ -18,6 +18,10 @@ export interface DeviceRunner {
   online: boolean;
   last_seen: string | null;
   created_at: string | null;
+  templates?: { name: string; platform: "android" | "ios"; clean: boolean }[];
+  latest_version?: string;
+  update_available?: boolean;
+  self_update?: boolean;
 }
 
 export interface DeviceRecord {
@@ -88,4 +92,74 @@ export function fetchBuildSettings(): Promise<BuildSettings> {
 
 export function saveBuildSettings(update: { repos: string[]; workflows: string[] }): Promise<BuildSettings> {
   return request("/api/devices/build-settings", { method: "PUT", body: JSON.stringify(update) });
+}
+
+export interface DeviceActivityEvent {
+  at: string;
+  device_id: string;
+  actor: string;
+  scope: string;
+  op: string;
+  ok: boolean;
+  error?: string;
+  duration_ms?: number;
+  detail?: Record<string, unknown>;
+}
+
+export interface DeviceSession {
+  scope: string;
+  actor: string;
+  started_at: string;
+  ended_at: string;
+  ops: number;
+  failures: number;
+  conversation_id?: string;
+}
+
+export function fetchDeviceActivity(
+  deviceId: string,
+): Promise<{ device_id: string; sessions: DeviceSession[]; events: DeviceActivityEvent[] }> {
+  return request(`/api/devices/activity?device_id=${encodeURIComponent(deviceId)}`);
+}
+
+/** One live-view frame as an object URL (revoke it when replaced). */
+/** One live-view frame, plus who holds the device ("you", "other" or "none") per the server. */
+export async function fetchDeviceScreen(
+  deviceId: string,
+  signal?: AbortSignal,
+): Promise<{ url: string; held: "you" | "other" | "none" }> {
+  const res = await fetch(`${basePath}/api/devices/screen?device_id=${encodeURIComponent(deviceId)}`, { signal });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(data.error || `Request failed: ${res.status}`), { status: res.status });
+  }
+  const held = res.headers.get("X-Device-Held");
+  return {
+    url: URL.createObjectURL(await res.blob()),
+    held: held === "you" || held === "other" ? held : "none",
+  };
+}
+
+/** Hand the device back while the page is closing: keepalive lets the request outlive the page. */
+export function handBackOnUnload(deviceId: string): void {
+  fetch(`${basePath}/api/devices/takeover`, {
+    method: "POST",
+    keepalive: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_id: deviceId, action: "end" }),
+  }).catch(() => undefined);
+}
+
+export function takeover(
+  deviceId: string,
+  action: "start" | "end",
+): Promise<{ held: boolean; until?: string; paused_session?: string | null }> {
+  return request("/api/devices/takeover", { method: "POST", body: JSON.stringify({ device_id: deviceId, action }) });
+}
+
+export function takeoverInput(deviceId: string, op: string, args: Record<string, unknown>): Promise<unknown> {
+  return request("/api/devices/takeover", {
+    method: "POST",
+    body: JSON.stringify({ device_id: deviceId, action: "input", op, args }),
+  });
 }
