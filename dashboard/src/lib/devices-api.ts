@@ -123,13 +123,31 @@ export function fetchDeviceActivity(
 }
 
 /** One live-view frame as an object URL (revoke it when replaced). */
-export async function fetchDeviceScreen(deviceId: string, signal?: AbortSignal): Promise<string> {
+/** One live-view frame, plus who holds the device ("you", "other" or "none") per the server. */
+export async function fetchDeviceScreen(
+  deviceId: string,
+  signal?: AbortSignal,
+): Promise<{ url: string; held: "you" | "other" | "none" }> {
   const res = await fetch(`${basePath}/api/devices/screen?device_id=${encodeURIComponent(deviceId)}`, { signal });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw Object.assign(new Error(data.error || `Request failed: ${res.status}`), { status: res.status });
   }
-  return URL.createObjectURL(await res.blob());
+  const held = res.headers.get("X-Device-Held");
+  return {
+    url: URL.createObjectURL(await res.blob()),
+    held: held === "you" || held === "other" ? held : "none",
+  };
+}
+
+/** Hand the device back while the page is closing: keepalive lets the request outlive the page. */
+export function handBackOnUnload(deviceId: string): void {
+  fetch(`${basePath}/api/devices/takeover`, {
+    method: "POST",
+    keepalive: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_id: deviceId, action: "end" }),
+  }).catch(() => undefined);
 }
 
 export function takeover(

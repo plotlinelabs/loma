@@ -318,11 +318,14 @@ async def handle_screen(request):
     if not user_email:
         return _error('Authentication required', 401)
     try:
-        png = await DeviceService(db).screen(user_email, request.query.get('device_id', ''))
+        png, held = await DeviceService(db).screen(user_email, request.query.get('device_id', ''))
     except DeviceError as exc:
-        status = 429 if 'slow down' in str(exc) else 404 if 'not found' in str(exc).lower() else 409
+        status = (429 if 'slow down' in str(exc) else 404 if 'not found' in str(exc).lower()
+                  else 403 if exc.code == 'device_busy' else 409)
         return _error(str(exc), status)
-    return web.Response(body=png, content_type='image/png', headers={'Cache-Control': 'no-store'})
+    # X-Device-Held lets the page show the real hold state (after a reload, or once a hold lapses).
+    return web.Response(body=png, content_type='image/png',
+                        headers={'Cache-Control': 'no-store', 'X-Device-Held': held or 'none'})
 
 
 async def handle_takeover(request):
@@ -356,10 +359,12 @@ async def handle_activity(request):
         return _error('Authentication required', 401)
     device_id = request.query.get('device_id', '')
     try:
-        await DeviceService(db)._resolve(user_email, device_id)
+        runner, _ = await DeviceService(db)._resolve(user_email, device_id)
     except DeviceError as exc:
         return _error(str(exc), 404)
     query = {'device_id': device_id}
+    if runner['owner_email'] != user_email:  # people the runner is shared with see only their own sessions
+        query['actor'] = user_email
     scope = request.query.get('scope')
     if scope:
         query['scope'] = scope[:200]

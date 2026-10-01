@@ -42,7 +42,9 @@ cheapest test is the one with the fewest calls, so:
 - **Read the tree small, act by ref.** `ui-tree --compact` prints one line per element with a
   ref (`e3 Button 'Save' @540,1800 *`); add `--filter` or `--clickable-only`. Then
   `tap --ref e3` / `set-text --ref e2 --text ...`: never copy coordinates. Refs stay valid until
-  an op that may change the screen (tap, type, key, set-text, launch, swipe, open-url, ...).
+  an op that may change the screen (tap, type, key, set-text, launch, swipe, open-url, wait-for,
+  configure, ...). A ref number is never reused for a different element, so numbers can skip
+  (e14, e27) and an element still on screen keeps its ref across `ui-tree` reads.
 - **Act with `--settle` instead of re-reading the tree.** `tap --ref e3 --settle` waits until the
   screen stops changing and returns `screen_after`: `added` / `removed` lines with refs for the new
   screen (unchanged elements keep their refs). Act on those refs directly; read `ui-tree` only when
@@ -117,8 +119,10 @@ cheapest test is the one with the fewest calls, so:
 
 The device owner (or whoever holds the session) can open **Live** on the device in
 Integrations → Devices and **Take over** to get past a login/OTP or show you something. While they
-hold it, your calls fail with "... took over this device". Wait about a minute and retry the same
-call; do not switch devices mid-test. Your refs are stale afterwards: read `ui_tree` again.
+hold it, your calls fail with code `device_held` ("... took over this device"). Wait 30-60 s and
+retry the same call, a few times if needed: the device comes back when they hand it back, or 3
+minutes after their last action or after they close the live view (`details.held_until` says when
+at the latest). Do not switch devices mid-test. Your refs are stale afterwards: read `ui_tree` again.
 
 ## Reproducing a reported SDK bug
 
@@ -183,7 +187,7 @@ explicitly want that.
 | "Timed out on the runner" | The device did not finish in time; check `ui_tree`/`logs`, then retry once |
 | "Builds from this repository are not allowed" | An admin adds `owner/name` under Integrations → Devices → Build sources (or the `LOMA_DEVICE_BUILD_REPOS` env var) |
 | "Ref e3 is unknown or expired" (`ref_stale`) | The screen changed: `ui-tree --compact` again, or act with `--settle` to get the new refs |
-| "... took over this device" | A person is driving it from the dashboard; wait a minute and retry the same call |
+| "... took over this device" (`device_held`) | A person is driving it from the dashboard; wait 30-60 s and retry the same call (at most 3 minutes after their last action) |
 | "Runner too old for ..." | Runners from 1.2.0 update themselves; older ones need one manual `setup` by their owner |
 | "No device template matches" | The runner owner has not defined that template; `list` shows the available ones |
 | "product_id is not allowed" | Only test products in `LOMA_DEVICE_ANALYTICS_PRODUCTS` can be checked; use one of those |

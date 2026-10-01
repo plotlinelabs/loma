@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RiArrowGoBackLine, RiHome4Line, RiHandHeartLine, RiSendPlaneLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fetchDeviceScreen, takeover, takeoverInput } from "@/lib/devices-api";
+import { fetchDeviceScreen, handBackOnUnload, takeover, takeoverInput } from "@/lib/devices-api";
 
 const FRAME_MS = 1000;
 
@@ -20,6 +20,7 @@ export default function DeviceLiveView({ deviceId, platform }: { deviceId: strin
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState("");
   const drag = useRef<{ fx: number; fy: number } | null>(null);
+  const pendingHold = useRef(false); // a start/end request is in flight: don't let a frame flip the state
   const frameRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -29,7 +30,7 @@ export default function DeviceLiveView({ deviceId, platform }: { deviceId: strin
       while (live) {
         if (!document.hidden) {
           try {
-            const url = await fetchDeviceScreen(deviceId, controller.signal);
+            const { url, held: holder } = await fetchDeviceScreen(deviceId, controller.signal);
             if (!live) {
               URL.revokeObjectURL(url);
               break;
@@ -37,6 +38,9 @@ export default function DeviceLiveView({ deviceId, platform }: { deviceId: strin
             if (frameRef.current) URL.revokeObjectURL(frameRef.current);
             frameRef.current = url;
             setFrame(url);
+            // The server is the source of truth: after a reload you may still hold the device, and a
+            // hold can lapse (3 minutes without input or frames, e.g. a hidden tab).
+            if (!pendingHold.current) setHeld(holder === "you");
             setError(null);
           } catch (e) {
             const status = (e as { status?: number }).status;
@@ -60,12 +64,17 @@ export default function DeviceLiveView({ deviceId, platform }: { deviceId: strin
   // Hand the device back if the view closes while holding it.
   const heldRef = useRef(false);
   heldRef.current = held;
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Closing or reloading the tab never unmounts React, so also hand back on pagehide.
+    const onPageHide = () => {
+      if (heldRef.current) handBackOnUnload(deviceId);
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
       if (heldRef.current) takeover(deviceId, "end").catch(() => undefined);
-    },
-    [deviceId],
-  );
+    };
+  }, [deviceId]);
 
   const act = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -81,8 +90,13 @@ export default function DeviceLiveView({ deviceId, platform }: { deviceId: strin
 
   const toggleHold = () =>
     act(async () => {
-      const result = await takeover(deviceId, held ? "end" : "start");
-      setHeld(result.held);
+      pendingHold.current = true;
+      try {
+        const result = await takeover(deviceId, held ? "end" : "start");
+        setHeld(result.held);
+      } finally {
+        pendingHold.current = false;
+      }
     });
 
   const fraction = (event: React.MouseEvent<HTMLImageElement>) => {
@@ -150,7 +164,7 @@ export default function DeviceLiveView({ deviceId, platform }: { deviceId: strin
       </div>
       <div className="text-[11px] text-muted-foreground">
         {held
-          ? "You have the device: the agent's calls on it wait until you hand it back. Click to tap, drag to swipe."
+          ? "You have the device: the agent's calls on it wait until you hand it back (or 3 minutes after you leave this view). Click to tap, drag to swipe."
           : "Live view (about one frame per second). Take over to tap and type; the agent pauses meanwhile."}
       </div>
       {error && <div className="text-xs text-red-500">{error}</div>}

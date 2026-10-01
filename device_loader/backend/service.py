@@ -22,7 +22,9 @@ from device_loader.backend.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError,
 from device_loader.backend.verify import sdk_events_activity, summarize_network, visual_check as judge_screenshot
 
 LEASE_TTL = timedelta(minutes=15)
-HOLD_TTL = timedelta(minutes=10)  # a dashboard take-over lapses this long after the person's last input
+# A dashboard take-over lapses this long after the person's last input or live-view frame, so closing the
+# tab (where no hand-back request may get out) frees the device within minutes, not ten.
+HOLD_TTL = timedelta(minutes=3)
 TAKEOVER = 'takeover:'
 TAKEOVER_OPS = {'tap', 'swipe', 'key', 'type', 'open_url'}
 SCREEN_MIN_INTERVAL = 0.7  # seconds between live-view frames per (user, device)
@@ -100,22 +102,28 @@ ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'sou
          'action': {'start', 'stop', 'read'}}
 STRS = {'url': 2000, 'text': 500, 'filter': 200, 'flow': 64 * 1024, 'key': 32, 'app_id': 255, 'upload_id': 64,
         'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8, 'locale': 35, 'timezone': 64}
-REF = re.compile(r'e[1-9][0-9]{0,3}\Z')
+REF = re.compile(r'e[1-9][0-9]{0,5}\Z')
 # Element refs (e1, e2, ...) from the latest ui_tree, per (user, scope, device). Module level:
 # the HTTP routes build a new DeviceService per request. The model taps by ref instead of copying
 # coordinates (fewer tokens, no mis-typed coordinates); the backend resolves the ref to the centre.
 # Refs belong to one screen generation: any op that may change the screen ends it (REF_RESET_OPS),
 # and an op with settle=true starts the next one. REF_TTL only bounds memory for idle sessions; it is
 # the lease length, so a slow model turn no longer expires refs that are still valid.
+# Ref numbers are never reused within a session: an element that is still on screen keeps its ref
+# (ui_tree and settle both match against the current refs), anything new gets the next number. So a
+# stale ref fails with ref_stale instead of silently pointing at a different element.
 REF_TTL = 900
 MAX_DIFF_LINES = 40
 _GENERATIONS = itertools.count(1)
 REF_KEYS_MAX = 500
+REF_MAX = 999999  # ref numbers wrap after this (6 digits, see REF)
 _REFS = {}
 # Ops after which the screen may be different, so earlier refs must not be reused. Cleared before
 # the op is sent, so a failed or timed-out attempt (e.g. a half-done install) also invalidates them.
 REF_RESET_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'tap', 'tap_text', 'swipe',
-                 'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst'}
+                 'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst',
+                 # these wait for, or cause, a different screen (dark mode, font scale and locale re-layout)
+                 'wait_for', 'configure', 'animations', 'netcap', 'boot', 'shutdown'}
 
 # Runner features newer than 1.0.0: an older runner rejects the op or silently ignores the argument,
 # so the backend refuses them up front with an upgrade hint (the runner reports VERSION in its hello).
@@ -297,29 +305,55 @@ def _validate_extras(name, extras):
             raise DeviceError('extras values must be strings (max 1000 chars)')
 
 
-def compact_tree(data, compact=False, clickable_only=False, needle=None):
-    """Shrink a ui_tree result: filter elements, number them (e1, e2, ...), optionally one line each.
+def assign_refs(elements, previous=None):
+    """Give every element a ref. Elements that match one of the current refs (same element_key) keep it;
+    the rest get fresh numbers after previous['next'], so a ref is never reused for another element.
 
-    Refs are numbered after filtering, so every ref the model sees is one it can tap. The
-    returned '_refs' map (ref -> centre) is stripped by DeviceService.call before replying.
+    Returns (refs in element order, {ref: centre}, {ref: key}, next number, previous refs not matched).
+    """
+    unused = {}
+    for ref, key in sorted(((previous or {}).get('keys') or {}).items(), key=lambda item: int(item[0][1:])):
+        unused.setdefault(key, []).append(ref)
+    next_ref = (previous or {}).get('next') or 1
+    if next_ref + len(elements) > REF_MAX:  # wrap; only after about a million refs in one session
+        unused, next_ref = {}, 1
+    names, refs, keys = [], {}, {}
+    for e in elements:
+        key = element_key(e)
+        if unused.get(key):
+            ref = unused[key].pop(0)
+        else:
+            ref, next_ref = f'e{next_ref}', next_ref + 1
+        names.append(ref)
+        keys[ref] = key
+        if isinstance(e.get('center'), list) and len(e['center']) == 2:
+            refs[ref] = e['center']
+    return names, refs, keys, next_ref, unused
+
+
+def compact_tree(data, compact=False, clickable_only=False, needle=None, previous=None):
+    """Shrink a ui_tree result: give elements refs, filter them, optionally one line each.
+
+    Refs cover the whole screen (filters only change what is shown) and are stable against the
+    previous refs, so a ref from a settle diff still means the same element after a ui_tree. The
+    returned '_refs' / '_keys' / '_next' are stripped by DeviceService.call before replying.
     """
     elements = data.get('elements') or []
+    names, refs, keys, next_ref, _ = assign_refs(elements, previous)
+    elements = [{'ref': ref, **e} for ref, e in zip(names, elements)]
     if clickable_only:
         elements = [e for e in elements if e.get('clickable')]
     if needle:
         low = needle.lower()
         elements = [e for e in elements if any(low in str(e.get(k) or '').lower() for k in ('text', 'label', 'id'))]
-    elements = [{'ref': f'e{i}', **e} for i, e in enumerate(elements, 1)]
-    refs = {e['ref']: e['center'] for e in elements if isinstance(e.get('center'), list) and len(e['center']) == 2}
-    keys = {e['ref']: element_key(e) for e in elements}
     result = {k: v for k, v in data.items() if k != 'elements'}
     if result.get('truncated'):
         result['note'] = (f"Only the first {len(data.get('elements') or [])} of {result.get('total')} elements are "
                           'listed; narrow with filter, or scroll')
     if not compact:
-        return {**result, 'elements': elements, '_refs': refs, '_keys': keys}
+        return {**result, 'elements': elements, '_refs': refs, '_keys': keys, '_next': next_ref}
     lines = [element_line(e['ref'], e) for e in elements]
-    return {**result, 'count': len(lines), 'tree': '\n'.join(lines), '_refs': refs, '_keys': keys,
+    return {**result, 'count': len(lines), 'tree': '\n'.join(lines), '_refs': refs, '_keys': keys, '_next': next_ref,
             'legend': 'ref type text [label=] [#id] @center_x,center_y (* = clickable) [states]. Tap with '
                       'tap ref=e3. Refs stay valid until an action that may change the screen; an action with '
                       'settle=true returns the new refs'}
@@ -363,25 +397,11 @@ def settle_diff(previous, after):
     if tree is None:
         result['note'] = 'Could not read the screen after the action; read ui_tree'
         return result, None
-    old_keys = previous['keys'] if previous else {}
-    unused = {}
-    for ref, key in sorted(old_keys.items(), key=lambda item: int(item[0][1:])):
-        unused.setdefault(key, []).append(ref)
-    next_ref = previous['next'] if previous else 1
-    if next_ref + len(tree.get('elements') or []) > 9999:  # ref numbers are at most 4 digits
-        unused, next_ref, previous = {}, 1, None
-    refs, keys, added = {}, {}, []
-    for e in tree.get('elements') or []:
-        key = element_key(e)
-        if unused.get(key):
-            ref = unused[key].pop(0)
-        else:
-            ref, next_ref = f'e{next_ref}', next_ref + 1
-            added.append(element_line(ref, e))
-        keys[ref] = key
-        if isinstance(e.get('center'), list) and len(e['center']) == 2:
-            refs[ref] = e['center']
-    if previous is None:
+    elements = tree.get('elements') or []
+    names, refs, keys, next_ref, unused = assign_refs(elements, previous)
+    old = set(((previous or {}).get('keys') or {}))
+    added = [element_line(ref, e) for ref, e in zip(names, elements) if ref not in old]
+    if not old:  # first look at this screen (or the refs were already reset): list it
         result['screen'] = added[:MAX_DIFF_LINES]
         if len(added) > MAX_DIFF_LINES:
             result['screen_truncated'] = len(added) - MAX_DIFF_LINES
@@ -398,6 +418,9 @@ def settle_diff(previous, after):
             result['note'] = 'Nothing on screen changed'
     if tree.get('truncated'):
         result['tree_truncated'] = True
+    if after.get('settled') is False:
+        result['note'] = ('The screen was still changing when settle gave up; positions may move. Read ui_tree '
+                          'before tapping if the next step depends on it')
     return result, {'refs': refs, 'keys': keys, 'next': next_ref}
 
 
@@ -405,22 +428,39 @@ def _ref_key(user_email, scope, device_id):
     return (user_email, scope, device_id)
 
 
+def _store_refs(key, entry):
+    if key not in _REFS and len(_REFS) >= REF_KEYS_MAX:
+        for old in sorted(_REFS, key=lambda k: _REFS[k]['at'])[:len(_REFS) // 2]:
+            _REFS.pop(old, None)
+    _REFS[key] = entry
+
+
 def remember_refs(user_email, scope, device_id, refs, keys=None, next_ref=None):
     """Start a new screen generation for these refs; returns its number."""
-    if len(_REFS) >= REF_KEYS_MAX:
-        for key in sorted(_REFS, key=lambda k: _REFS[k]['at'])[:len(_REFS) // 2]:
-            _REFS.pop(key, None)
     generation = next(_GENERATIONS)
     numbers = [int(ref[1:]) for ref in refs] or [0]
-    _REFS[_ref_key(user_email, scope, device_id)] = {
+    known = _REFS.get(_ref_key(user_email, scope, device_id)) or {}
+    _store_refs(_ref_key(user_email, scope, device_id), {
         'at': time.monotonic(), 'generation': generation, 'refs': refs, 'keys': keys or {},
-        'next': next_ref or max(numbers) + 1}
+        'next': max(next_ref or 0, max(numbers) + 1, known.get('next') or 0)})
     return generation
 
 
-def current_refs(user_email, scope, device_id):
+def invalidate_refs(user_email, scope, device_id):
+    """The screen may have changed: drop the refs but keep the ref counter, so numbers are not reused."""
+    key = _ref_key(user_email, scope, device_id)
+    entry = _REFS.get(key)
+    if entry is not None:
+        _store_refs(key, {'at': time.monotonic(), 'generation': None, 'refs': {}, 'keys': {},
+                          'next': entry.get('next') or 1})
+
+
+def current_refs(user_email, scope, device_id, include_stale=False):
+    """The live refs, or None. include_stale also returns an invalidated entry (for its ref counter)."""
     entry = _REFS.get(_ref_key(user_email, scope, device_id))
     if entry is None or time.monotonic() - entry['at'] > REF_TTL:
+        return None
+    if entry['generation'] is None and not include_stale:
         return None
     return entry
 
@@ -807,10 +847,10 @@ class DeviceService:
                               'device_busy', 'no')
         started = time.monotonic()
         detail = audit_detail(op, {**args, **({'ref': ref} if ref else {})})
-        previous, tapped_first = current_refs(user_email, scope, device_id), False
+        previous, tapped_first = current_refs(user_email, scope, device_id, include_stale=True), False
         try:
             if op in REF_RESET_OPS:
-                _REFS.pop(_ref_key(user_email, scope, device_id), None)
+                invalidate_refs(user_email, scope, device_id)
             build_meta = None
             if op == 'install':
                 args, build_meta = await self._prepare_install(user_email, runner['runner_id'], args, local)
@@ -829,11 +869,12 @@ class DeviceService:
                 data = {**data, 'ref': ref}
             if build_meta:
                 data['build'] = build_meta
-            data = self._shape(op, data, local)
+            data = self._shape(op, data, local, previous)
             refs = data.pop('_refs', None) if isinstance(data, dict) else None
             keys = data.pop('_keys', None) if isinstance(data, dict) else None
+            next_ref = data.pop('_next', None) if isinstance(data, dict) else None
             if refs is not None:
-                data['refs_generation'] = remember_refs(user_email, scope, device_id, refs, keys)
+                data['refs_generation'] = remember_refs(user_email, scope, device_id, refs, keys, next_ref)
             if isinstance(data, dict) and isinstance(data.get('screen_after'), dict):
                 diff, state = settle_diff(previous, data['screen_after'])
                 if state is not None:
@@ -853,7 +894,7 @@ class DeviceService:
         return data
 
     @staticmethod
-    def _shape(op, data, local):
+    def _shape(op, data, local, previous=None):
         """Decode media to bytes (callers decide delivery) and trim results for the model."""
         if op == 'screenshot':
             if 'png_base64' not in data:
@@ -866,7 +907,7 @@ class DeviceService:
             data['mp4'] = _decode(data.pop('mp4_base64', None), 'recording')
         elif op == 'ui_tree':
             data = compact_tree(data, local.get('compact', False), local.get('clickable_only', False),
-                                local.get('filter'))
+                                local.get('filter'), previous)
         elif op == 'netcap' and 'flows' in data:
             data = summarize_network(data)
         elif op == 'run_flow':
@@ -883,13 +924,28 @@ class DeviceService:
         lease = await self.db.device_leases.find_one({'_id': device_id}, {'hold': 1})
         hold = (lease or {}).get('hold')
         if hold and store.aware(hold['until']) > store.now() and scope != TAKEOVER + hold['by']:
-            raise DeviceError(f"{hold['by']} took over this device from the Loma dashboard. Wait for them to hand "
-                              'it back (about a minute), then retry; do not switch to another device mid-test.',
-                              'device_busy', 'no')
+            raise DeviceError(f"{hold['by']} took over this device from the Loma dashboard. It comes back when they "
+                              'hand it back, or 3 minutes after their last action; retry the same call, do not '
+                              'switch to another device mid-test.', 'device_held', 'no',
+                              {'held_until': store.aware(hold['until']).isoformat()})
 
     async def screen(self, user_email, device_id):
-        """One live-view frame (PNG bytes). Read-only: no lease needed, rate-limited per viewer."""
+        """One live-view frame: (PNG bytes, 'you' | 'other' | None for who holds the device).
+
+        Only the runner owner, or whoever's session currently has the device, may watch: frames can show
+        OTPs and typed passwords. A frame from the person holding the device keeps the hold alive.
+        """
         runner, serial = await self._resolve(user_email, device_id)
+        at = store.now()
+        lease = await self.db.device_leases.find_one({'_id': device_id})
+        active = lease is not None and store.aware(lease['expires_at']) > at
+        hold = (lease or {}).get('hold') if active else None
+        if hold and store.aware(hold['until']) <= at:
+            hold = None
+        if (active and runner['owner_email'] != user_email and lease['owner_email'] != user_email
+                and (hold or {}).get('by') != user_email):
+            raise DeviceError("This device is in another person's session; only they or the runner owner can "
+                              'watch it', 'device_busy', 'no')
         key = (user_email, device_id)
         now = time.monotonic()
         if now - _LAST_FRAME.get(key, 0) < SCREEN_MIN_INTERVAL:
@@ -900,7 +956,11 @@ class DeviceService:
         data = await self.hub.call(runner['runner_id'], 'screenshot', serial, {})
         png = _decode(data.get('png_base64'), 'screenshot')
         _SCREENS.setdefault(device_id, {})['pixels'] = (data.get('width'), data.get('height'))
-        return png
+        if hold and hold['by'] == user_email:  # still watching: keep the hold
+            await self.db.device_leases.update_one(
+                {'_id': device_id, 'hold.by': user_email},
+                {'$set': {'hold.until': at + HOLD_TTL}, '$max': {'expires_at': at + HOLD_TTL}})
+        return png, ('you' if hold['by'] == user_email else 'other') if hold else None
 
     async def start_takeover(self, user_email, device_id):
         """Hold the device for a person: agent calls on it fail with a clear message until hand-back."""
@@ -925,7 +985,8 @@ class DeviceService:
         runner, _ = await self._resolve(user_email, device_id)
         who = [user_email] if runner['owner_email'] != user_email else None
         query = {'_id': device_id, **({'hold.by': {'$in': who}} if who else {'hold': {'$exists': True}})}
-        await self.db.device_leases.delete_one({**query, 'scope': TAKEOVER + user_email})
+        # The lease a take-over created (scope takeover:<person>) goes too, whoever ends it.
+        await self.db.device_leases.delete_one({**query, 'scope': {'$regex': '^' + re.escape(TAKEOVER)}})
         result = await self.db.device_leases.update_one(query, {'$unset': {'hold': ''}})
         await self._audit(user_email, TAKEOVER + user_email, device_id, 'hand_back', True)
         return {'held': False, 'resumed_session': bool(result.modified_count)}
@@ -951,7 +1012,7 @@ class DeviceService:
         except DeviceError as exc:
             await self._audit(user_email, scope, device_id, op, False, str(exc), started, audit_detail(op, args))
             raise
-        _REFS.pop(_ref_key(lease['owner_email'], lease['scope'], device_id), None)  # the agent's refs are stale now
+        invalidate_refs(lease['owner_email'], lease['scope'], device_id)  # the agent's refs are stale now
         await self._audit(user_email, scope, device_id, op, True, None, started, audit_detail(op, args))
         return data
 

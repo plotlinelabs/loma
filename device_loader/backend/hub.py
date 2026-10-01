@@ -23,8 +23,8 @@ MAX_PENDING = 32
 # Stable failure codes. The first group comes from runners (>= 1.3.0), the rest from the backend.
 RUNNER_CODES = {'invalid_args', 'unsupported', 'policy_denied', 'not_found', 'ambiguous', 'ui_not_idle', 'timeout',
                 'tool_missing', 'device_error'}
-CODES = RUNNER_CODES | {'runner_offline', 'device_busy', 'ref_stale', 'runner_too_old'}
-RETRIABLE = {'ui_not_idle', 'timeout', 'runner_offline', 'device_busy', 'not_found'}
+CODES = RUNNER_CODES | {'runner_offline', 'device_busy', 'device_held', 'ref_stale', 'runner_too_old'}
+RETRIABLE = {'ui_not_idle', 'timeout', 'runner_offline', 'device_busy', 'device_held', 'not_found'}
 HINTS = {
     'ui_not_idle': 'The screen kept animating; retry, or turn animations off (device.input animations enabled=false).',
     'timeout': 'Check whether the action happened (ui_tree) before retrying; dispatched=unknown means it may have.',
@@ -32,7 +32,9 @@ HINTS = {
     'ambiguous': 'Pick one of details.candidates with nth, narrow the match (by, exact), or tap a ref from ui_tree.',
     'ref_stale': 'Read ui_tree again (or use the refs returned by an action with settle=true).',
     'runner_offline': 'The runner machine is asleep or the runner stopped; retry later or lease another device.',
-    'device_busy': 'Another session or a person holds the device; wait, or lease another device.',
+    'device_busy': 'Another session holds the device; wait, or lease another device.',
+    'device_held': ('A person is using this device from the dashboard. Wait 30-60 s and retry the same call; '
+                    'keep the device (your app state is on it) instead of leasing another one.'),
     'runner_too_old': 'The runner owner must update the Loma Device Runner.',
     'policy_denied': 'The runner owner does not allow this; do not retry.',
 }

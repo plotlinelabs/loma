@@ -110,7 +110,7 @@ async def test_screen_is_rate_limited_per_viewer(env, monkeypatch):
     service, _ = make()
     monkeypatch.setattr(service_module, 'SCREEN_MIN_INTERVAL', 60)
     service_module._LAST_FRAME.clear()
-    assert (await service.screen(OWNER, device))[:4] == b'\x89PNG'
+    assert (await service.screen(OWNER, device))[0][:4] == b'\x89PNG'
     with pytest.raises(DeviceError, match='slow down'):
         await service.screen(OWNER, device)
     with pytest.raises(DeviceError, match='not shared'):

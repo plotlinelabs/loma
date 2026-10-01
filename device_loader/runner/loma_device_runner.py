@@ -436,24 +436,33 @@ def _contains(outer, inner):
     return bool(a and b) and a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
 
 
+def _area(element):
+    x1, y1, x2, y2 = element['bounds']
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
 def pick_element(ranked, nth=None, what='match'):
     """The element to act on. Refuses (code ambiguous) when the best-ranked matches are separate
-    elements, instead of silently tapping the first; a wrapper and its own child count as one."""
+    elements, instead of silently tapping the first. Matches nested inside each other (a card and the
+    button in it, or the iOS Application node and a title with the same label) count as one, and the
+    innermost is used: tapping the outer element's centre can miss the control entirely."""
     if not ranked:
         return None
     if nth is not None:
         if nth > len(ranked):
-            raise OpError(f'nth={nth} but only {len(ranked)} element(s) match {what!r}', 'not_found',
+            raise OpError(f'nth={nth} but only {len(ranked)} element(s) match {what!r}', 'invalid_args',
                           candidates=describe(ranked))
         return ranked[nth - 1][1]
     best = ranked[0][0]
     tier = [element for rank, element in ranked if rank == best]
-    chain = all(_contains(a, b) or _contains(b, a) for a, b in zip(tier, tier[1:]))
-    if len(tier) > 1 and not chain:
+    if len(tier) == 1:
+        return tier[0]
+    nested = all(_contains(a, b) or _contains(b, a) for i, a in enumerate(tier) for b in tier[i + 1:])
+    if not nested:
         raise OpError(f'{len(tier)} elements match {what!r} equally well; pass nth (1 = first candidate), '
                       'a more specific match, by, exact, or tap a ref from ui_tree', 'ambiguous',
                       candidates=describe(ranked))
-    return ranked[0][1]
+    return min(tier, key=_area)  # min keeps the first on ties, so equal bounds act like before
 
 
 def describe(ranked):
@@ -1464,8 +1473,14 @@ class IOS:
         return out.decode('utf-8', 'replace').splitlines()[-lines:]
 
 
+# Top-level entries the simulator owns: the metadata plist links the container to the app (deleting it
+# orphans the folder, so the next launch gets a new container), and is not app data anyway.
+CONTAINER_KEEP = re.compile(r'\.com\.apple\.mobile_container_manager\.metadata\.plist\Z')
+
+
 def empty_app_container(path, serial):
-    """Delete everything inside a simulator app data container, keeping its top-level folders.
+    """Delete everything inside a simulator app data container, keeping its top-level folders and the
+    container metadata plist.
 
     Refuses any path that is not a data container of this simulator, and never follows symlinks.
     """
@@ -1476,6 +1491,8 @@ def empty_app_container(path, serial):
         raise OpError('Refusing to clear an unexpected app container path', 'device_error')
     removed = 0
     for top in path.iterdir():
+        if CONTAINER_KEEP.fullmatch(top.name):
+            continue
         if top.is_symlink() or not top.is_dir():
             top.unlink()
             removed += 1
