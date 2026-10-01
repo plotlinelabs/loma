@@ -541,6 +541,14 @@ function FileAttachmentCard({ file }: { file: FileAttachment }) {
   );
 }
 
+function ReadOnlyComposerNotice() {
+  return (
+    <p className="mx-auto max-w-3xl rounded-xl border border-dashed border-border px-3 py-2.5 text-center text-xs text-muted-foreground">
+      View only. Only the person who created this task can message it, since it runs with their accounts.
+    </p>
+  );
+}
+
 export default function ChatPanel({
   initialItems,
   initialArtifacts,
@@ -560,6 +568,7 @@ export default function ChatPanel({
   artifacts: externalArtifacts,
   onConversationCreated,
   onStreamComplete,
+  readOnly = false,
 }: {
   initialItems?: ChatItem[];
   /** Artifacts restored from history (persisted in MongoDB) */
@@ -592,6 +601,8 @@ export default function ChatPanel({
   onConversationCreated?: (conversationId: string) => void;
   /** Called when the agent stream finishes (for post-stream title refresh) */
   onStreamComplete?: (conversationId: string) => void;
+  /** Show the transcript without a composer (e.g. a teammate's task on a shared board). */
+  readOnly?: boolean;
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
@@ -1406,12 +1417,12 @@ export default function ChatPanel({
           <div className="mb-8 flex flex-col items-center gap-4 text-center">
             <PetCompanion size={56} />
             <h2 className="editorial-heading text-[26px] md:text-[34px] text-foreground">
-              What do you need to get done?
+              {readOnly ? "This task hasn't started yet" : "What do you need to get done?"}
             </h2>
           </div>
 
           <div className="w-full max-w-full md:max-w-[720px]">
-            <form
+            {readOnly ? <ReadOnlyComposerNotice /> : <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSend();
@@ -1471,7 +1482,7 @@ export default function ChatPanel({
                   </div>
                 </div>
               </div>
-            </form>
+            </form>}
           </div>
         </div>
       ) : (
@@ -1734,7 +1745,7 @@ export default function ChatPanel({
 
           {/* Input — the bottom nav below it owns the home-indicator safe area */}
           <div className="sticky bottom-0 bg-background px-3 pt-2.5 pb-2.5 shrink-0">
-            <form
+            {readOnly ? <ReadOnlyComposerNotice /> : <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSend();
@@ -1808,7 +1819,7 @@ export default function ChatPanel({
                   </div>
                 </div>
               </div>
-            </form>
+            </form>}
           </div>
         </>
       )}

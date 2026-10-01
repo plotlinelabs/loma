@@ -5,7 +5,7 @@ import PetCompanion from "@/components/PetCompanion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line, RiUserAddLine } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -15,12 +15,16 @@ import {
   type PushState,
 } from "@/lib/push";
 import {
+  BoardNotFoundError,
+  PERSONAL_BOARD_ID,
   basePath,
   createTask,
   saveBoardSettings,
+  fetchTaskBoards,
   fetchTasksBoard,
   updateTask,
   type Task,
+  type TaskBoardSummary,
   type TasksBoardResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -45,15 +49,25 @@ import { TaskChatDrawer } from "@/components/tasks/TaskChatDrawer";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { AgentAttention } from "@/components/tasks/AgentAttention";
+import { BoardSwitcher } from "@/components/tasks/BoardSwitcher";
+import { ManageBoardDialog } from "@/components/tasks/ManageBoardDialog";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 const POLL_INTERVAL_MS = 5000;
+// Last board opened on this device, so the page reopens where you left off.
+const BOARD_STORAGE_KEY = "loma-task-board";
 
 export default function TasksPage() {
-  const { status: sessionStatus } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const router = useRouter();
   const isMobile = useIsMobile();
   const [board, setBoard] = useState<TasksBoardResponse | null>(null);
+  const [boardId, setBoardId] = useState<string>(() =>
+    (typeof window !== "undefined" && window.localStorage.getItem(BOARD_STORAGE_KEY)) || PERSONAL_BOARD_ID,
+  );
+  const [boards, setBoards] = useState<TaskBoardSummary[]>([]);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [managingBoard, setManagingBoard] = useState<TaskBoardSummary | null>(null);
   const previousColumns = useRef<Map<string, string> | null>(null);
   const [petCompleted, setPetCompleted] = useState(false);
   useEffect(() => {
@@ -104,13 +118,36 @@ export default function TasksPage() {
 
   const hasBoardRef = useRef(false);
   const refreshVersion = useRef(0);
+
+  const loadBoards = useCallback(async () => {
+    try {
+      setBoards((await fetchTaskBoards()).boards);
+    } catch {
+      // The switcher keeps its last list; the board itself still loads.
+    }
+  }, []);
+
+  const selectBoard = useCallback((nextId: string) => {
+    window.localStorage.setItem(BOARD_STORAGE_KEY, nextId);
+    if (nextId === boardId) return;
+    // Fresh board: drop the old one's cards, filters and open drawer.
+    ++refreshVersion.current;
+    hasBoardRef.current = false;
+    setBoard(null);
+    setIncludedTagIds([]);
+    setExcludedTagIds([]);
+    setChatDrawerOpen(false);
+    setChatTask(null);
+    setBoardId(nextId);
+  }, [boardId]);
+
   const refresh = useCallback(async () => {
     // Pause polling when the tab is hidden — but always allow the initial
     // load (a background/occluded tab would otherwise show skeletons forever).
     if (busyRef.current || (document.hidden && hasBoardRef.current)) return;
     const version = ++refreshVersion.current;
     try {
-      const data = await fetchTasksBoard(searchQuery);
+      const data = await fetchTasksBoard(searchQuery, boardId);
       hasBoardRef.current = true;
       if (busyRef.current || version !== refreshVersion.current) return;
       setBoard(data);
@@ -126,10 +163,19 @@ export default function TasksPage() {
           ? next
           : current;
       });
-    } catch {
+    } catch (e) {
+      // Deleted, or access removed: fall back to your own board.
+      if (e instanceof BoardNotFoundError && boardId !== PERSONAL_BOARD_ID) {
+        selectBoard(PERSONAL_BOARD_ID);
+        void loadBoards();
+      }
       // Transient poll failures are fine — keep showing the last board.
     }
-  }, [searchQuery]);
+  }, [searchQuery, boardId, selectBoard, loadBoards]);
+
+  useEffect(() => {
+    if (sessionStatus === "authenticated") void loadBoards();
+  }, [sessionStatus, loadBoards]);
 
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
@@ -184,6 +230,7 @@ export default function TasksPage() {
           lane: values.lane,
           model: values.model || undefined,
           tool_config: values.tool_config,
+          board: boardId,
         });
         conversationId = task.conversation_id;
       }
@@ -191,7 +238,7 @@ export default function TasksPage() {
         router.push(`${basePath}/chat?continue=${conversationId}&start=1`);
         return;
       }
-      const data = await fetchTasksBoard(searchQuery);
+      const data = await fetchTasksBoard(searchQuery, boardId);
       setBoard(data);
     } finally {
       busyRef.current = false;
@@ -211,6 +258,7 @@ export default function TasksPage() {
       const { task } = await createTask({
         prompt: "",
         lane: todoLane?.id || "todo",
+        board: boardId,
       });
       setBoard({ ...board, tasks: [task, ...board.tasks] });
       setChatTask(task);
@@ -227,12 +275,34 @@ export default function TasksPage() {
     for (const lane of board.lanes) laneCounts[lane.id] = board.counts[lane.id] ?? 0;
   }
   const activeTagFilterCount = includedTagIds.length + excludedTagIds.length;
+  const currentBoard = board?.board ?? boards.find((b) => b.id === boardId);
+  // View-only members see the board but can't add, move or edit cards.
+  const readOnly = currentBoard?.role === "viewer";
+  const canShare = !!currentBoard?.shared && currentBoard.role === "owner";
+  const myEmail = session?.user?.email ?? null;
+  // A teammate's task runs with their accounts, so its chat is read-only for you.
+  const chatReadOnly = !!chatTask?.owner && !!myEmail && chatTask.owner !== myEmail;
+  const openManageBoard = (target: TaskBoardSummary | null) => {
+    setManagingBoard(target);
+    setManageOpen(true);
+  };
 
   return (
     <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
-      <div className="pwa-header-offset flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-semibold">Tasks</h1>
+      <div className="pwa-header-offset flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="min-w-0">
+            <BoardSwitcher
+              boards={boards}
+              current={currentBoard}
+              onSelect={selectBoard}
+              onCreate={() => openManageBoard(null)}
+              onManage={() => currentBoard && openManageBoard(currentBoard)}
+            />
+          </h1>
+          {readOnly && (
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">View only</span>
+          )}
           <PetCompanion state={board?.tasks.some((task) => task.column === "needs_input") ? "attention" : petCompleted ? "completed" : board?.tasks.some((task) => task.column === "working") ? "working" : "idle"} />
         </div>
         <div className="flex items-center gap-1">
@@ -278,21 +348,39 @@ export default function TasksPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button size="sm" onClick={() => void openNewTaskDrawer()}>
-            <RiAddLine className="h-4 w-4" />
-            New task
-          </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"
-                onClick={() => setAddChatOpen(true)}
-              >
-                <RiChatHistoryLine className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Add existing chat</TooltipContent>
-          </Tooltip>
+          {!readOnly && (
+            <Button size="sm" onClick={() => void openNewTaskDrawer()}>
+              <RiAddLine className="h-4 w-4" />
+              New task
+            </Button>
+          )}
+          {canShare && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"
+                  onClick={() => currentBoard && openManageBoard(currentBoard)}
+                  aria-label="Share board"
+                >
+                  <RiUserAddLine className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Share board</TooltipContent>
+            </Tooltip>
+          )}
+          {!readOnly && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"
+                  onClick={() => setAddChatOpen(true)}
+                >
+                  <RiChatHistoryLine className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Add existing chat</TooltipContent>
+            </Tooltip>
+          )}
           {pushState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -315,18 +403,20 @@ export default function TasksPage() {
               </TooltipContent>
             </Tooltip>
           )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"
-                onClick={() => setSettingsOpen(true)}
-                aria-label="Board settings"
-              >
-                <RiSettings3Line className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Board settings</TooltipContent>
-          </Tooltip>
+          {!readOnly && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"
+                  onClick={() => setSettingsOpen(true)}
+                  aria-label="Board settings"
+                >
+                  <RiSettings3Line className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Board settings</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
 
@@ -373,6 +463,7 @@ export default function TasksPage() {
             onError={setError}
             includedTagIds={includedTagIds}
             excludedTagIds={excludedTagIds}
+            readOnly={readOnly}
           />
         ) : (
           <>
@@ -386,11 +477,12 @@ export default function TasksPage() {
               onError={setError}
               includedTagIds={includedTagIds}
               excludedTagIds={excludedTagIds}
+              readOnly={readOnly}
             />
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task
                 immediately (start: true); it lands in Working on refresh. */}
-            <QuickAddTask onAdded={refresh} />
+            {!readOnly && <QuickAddTask onAdded={refresh} boardId={boardId} />}
           </>
         )
       ) : (
@@ -417,15 +509,35 @@ export default function TasksPage() {
         open={addChatOpen}
         onOpenChange={setAddChatOpen}
         onAdded={refresh}
+        boardId={boardId}
       />
       <BoardSettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         laneCounts={laneCounts}
         onSaved={refresh}
+        boardId={boardId}
+        boardName={currentBoard?.shared ? currentBoard.name : undefined}
+        shared={!!currentBoard?.shared}
+      />
+      <ManageBoardDialog
+        open={manageOpen}
+        onOpenChange={setManageOpen}
+        board={managingBoard}
+        onSaved={(saved) => {
+          void loadBoards();
+          if (!managingBoard) selectBoard(saved.id);
+          else void refresh();
+        }}
+        onDeleted={() => {
+          selectBoard(PERSONAL_BOARD_ID);
+          void loadBoards();
+        }}
       />
       <TaskChatDrawer
         task={chatTask}
+        readOnly={chatReadOnly}
+        canRename={!readOnly}
         open={chatDrawerOpen}
         onOpenChange={(open) => {
           setChatDrawerOpen(open);

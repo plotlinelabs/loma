@@ -22,6 +22,8 @@ interface TaskCardProps {
   lanes: BoardLane[];
   tags: TaskTag[];
   models: AgentModel[];
+  /** Hide card actions (view-only shared board). */
+  readOnly?: boolean;
   onOpen: (task: Task) => void;
   onStart: (task: Task) => void;
   onMarkDone: (task: Task) => void;
@@ -38,7 +40,7 @@ interface TaskCardProps {
 }
 
 export function TaskCard({
-  task, lanes, tags, models, onOpen, onStart, onMarkDone, onReopen,
+  task, lanes, tags, models, readOnly = false, onOpen, onStart, onMarkDone, onReopen,
   onMoveToLane, onRemoveFromBoard, onDeleteDraft, onFork, onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag,
 }: TaskCardProps) {
   const isStaged = isStagedTask(task);
@@ -60,6 +62,7 @@ export function TaskCard({
       {...listeners}
       onClick={() => onOpen(task)}
       onContextMenu={(event) => {
+        if (readOnly) return;
         event.preventDefault();
         setMenuOpen(true);
       }}
@@ -86,7 +89,7 @@ export function TaskCard({
             {assignedTags.length > 2 && <span className="text-[10px] text-muted-foreground">+{assignedTags.length - 2}</span>}
           </div>
         </div>
-        <div
+        {!readOnly && <div
           // Hover-revealed on pointer devices; always visible on touch
           // (hover never fires there) and while focused via keyboard.
           className="absolute bottom-2 right-2 flex shrink-0 items-center gap-0.5 rounded bg-card opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
@@ -121,7 +124,7 @@ export function TaskCard({
                 <RiMoreLine className="h-3.5 w-3.5" />
               </Button>
           </TaskCardMenu>
-        </div>
+        </div>}
       </div>
     </div>
   );

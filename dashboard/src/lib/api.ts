@@ -1156,9 +1156,38 @@ export interface Task {
   /** Optional deadline as a date-only "YYYY-MM-DD" string. */
   task_deadline: string | null;
   forked_from_conversation_id: string | null;
+  /** Shared board the task sits on; null = its creator's own board. */
+  task_board_id?: string | null;
+  /** Creator's email. Only the creator can message the task (runs use their accounts). */
+  owner?: string | null;
+}
+
+export type TaskBoardRole = "owner" | "editor" | "viewer";
+
+export interface TaskBoardMember {
+  email: string;
+  role: "editor" | "viewer";
+}
+
+export interface TaskBoardSummary {
+  /** "personal" for the caller's own board. */
+  id: string;
+  name: string;
+  owner: string;
+  role: TaskBoardRole;
+  shared: boolean;
+  members: TaskBoardMember[];
+}
+
+export const PERSONAL_BOARD_ID = "personal";
+
+/** `?board=` suffix for board-scoped task endpoints (omitted for the personal board). */
+function boardQuery(boardId?: string, prefix = "?"): string {
+  return boardId && boardId !== PERSONAL_BOARD_ID ? `${prefix}board=${encodeURIComponent(boardId)}` : "";
 }
 
 export interface TasksBoardResponse {
+  board?: TaskBoardSummary;
   show_agent_work?: boolean;
   lanes: BoardLane[];
   tags: TaskTag[];
@@ -1172,13 +1201,54 @@ export interface BoardSettings {
   lanes: BoardLane[];
   /** Global default context (Admin > Settings), resolved for the caller. Read-only. */
   default_context?: string;
+  /** Present for shared boards. */
+  board?: TaskBoardSummary;
 }
 
-export async function fetchTasksBoard(query = ""): Promise<TasksBoardResponse> {
-  const params = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
-  const res = await fetch(`${API_BASE}/api/tasks${params}`);
+export class BoardNotFoundError extends Error {}
+
+export async function fetchTasksBoard(query = "", boardId?: string): Promise<TasksBoardResponse> {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set("q", query.trim());
+  if (boardId && boardId !== PERSONAL_BOARD_ID) params.set("board", boardId);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/api/tasks${qs ? `?${qs}` : ""}`);
+  if (res.status === 404) throw new BoardNotFoundError("Board not found");
   if (!res.ok) throw new Error(`Failed to fetch tasks: ${res.status}`);
   return res.json();
+}
+
+async function boardRequest<T>(path: string, init: RequestInit, fallback: string): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/tasks/boards${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `${fallback}: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function fetchTaskBoards(): Promise<{ boards: TaskBoardSummary[] }> {
+  return boardRequest("", { method: "GET" }, "Failed to fetch boards");
+}
+
+export function createTaskBoard(name: string): Promise<{ board: TaskBoardSummary }> {
+  return boardRequest("", { method: "POST", body: JSON.stringify({ name }) }, "Failed to create board");
+}
+
+export function updateTaskBoard(
+  boardId: string,
+  updates: { name?: string; members?: TaskBoardMember[] },
+): Promise<{ board: TaskBoardSummary }> {
+  return boardRequest(`/${encodeURIComponent(boardId)}`, {
+    method: "PATCH", body: JSON.stringify(updates),
+  }, "Failed to update board");
+}
+
+export function deleteTaskBoard(boardId: string): Promise<{ deleted: boolean; moved: number }> {
+  return boardRequest(`/${encodeURIComponent(boardId)}`, { method: "DELETE" }, "Failed to delete board");
 }
 
 export async function fetchNeedsInputCount(): Promise<number> {
@@ -1198,6 +1268,8 @@ export async function createTask(params: {
   /** Fire immediately: the agent starts running in the background */
   start?: boolean;
   tool_config?: ToolConfig;
+  /** Shared board id; omitted = the caller's own board */
+  board?: string;
 }): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: "POST",
@@ -1224,6 +1296,8 @@ export async function updateTask(
     task_tag_ids?: string[];
     task_priority?: TaskPriority | null;
     task_deadline?: string | null;
+    /** Move to another board ("personal" = the creator's own board). */
+    task_board_id?: string | null;
   },
 ): Promise<{ task: Task | null }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}`, {
@@ -1240,7 +1314,7 @@ export async function updateTask(
 
 export async function forkTask(
   conversationId: string,
-  options: { lane?: string; title?: string } = {},
+  options: { lane?: string; title?: string; board?: string } = {},
 ): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}/fork`, {
     method: "POST",
@@ -1254,8 +1328,8 @@ export async function forkTask(
   return res.json();
 }
 
-export async function createTaskTag(name: string): Promise<{ tag: TaskTag }> {
-  const res = await fetch(`${API_BASE}/api/tasks/tags`, {
+export async function createTaskTag(name: string, boardId?: string): Promise<{ tag: TaskTag }> {
+  const res = await fetch(`${API_BASE}/api/tasks/tags${boardQuery(boardId)}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
   });
   if (!res.ok) {
@@ -1265,8 +1339,8 @@ export async function createTaskTag(name: string): Promise<{ tag: TaskTag }> {
   return res.json();
 }
 
-export async function fetchBoardSettings(): Promise<BoardSettings> {
-  const res = await fetch(`${API_BASE}/api/tasks/board-settings`);
+export async function fetchBoardSettings(boardId?: string): Promise<BoardSettings> {
+  const res = await fetch(`${API_BASE}/api/tasks/board-settings${boardQuery(boardId)}`);
   if (!res.ok) throw new Error(`Failed to fetch board settings: ${res.status}`);
   return res.json();
 }
@@ -1275,8 +1349,8 @@ export async function saveBoardSettings(settings: {
   prompt?: string;
   lanes?: Array<{ id?: string; name: string }>;
   show_agent_work?: boolean;
-}): Promise<BoardSettings & { migrated: number }> {
-  const res = await fetch(`${API_BASE}/api/tasks/board-settings`, {
+}, boardId?: string): Promise<BoardSettings & { migrated: number }> {
+  const res = await fetch(`${API_BASE}/api/tasks/board-settings${boardQuery(boardId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),

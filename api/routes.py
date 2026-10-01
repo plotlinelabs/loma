@@ -603,8 +603,14 @@ async def handle_get_conversation(request: web.Request) -> web.Response:
 
     user_email = get_user_email(request)
     system_role = get_system_role(request)
-    if not user_email or not _check_conversation_access(conversation, user_email, system_role):
+    if not user_email:
         return web.json_response({"error": "Not found"}, status=404)
+    if not _check_conversation_access(conversation, user_email, system_role):
+        # Members of a shared task board can read (not message) its tasks.
+        from api.task_routes import task_access
+        can_view, _, _ = await task_access(db, conversation, user_email, system_role)
+        if not can_view:
+            return web.json_response({"error": "Not found"}, status=404)
 
     turns = await db.turns.find({"conversation_id": cid}) \
         .sort("turn_number", 1) \
@@ -1055,7 +1061,8 @@ async def handle_chat(request: web.Request) -> web.Response:
                 # Check if conversation already exists (resume) or is client-generated (start)
                 existing = await db.conversations.find_one(
                     {"conversation_id": existing_conversation_id},
-                    {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1},
+                    {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1,
+                     "task_board_id": 1},
                 )
                 if existing and not _check_conversation_access(
                     existing, user_email, get_system_role(request)
@@ -1143,7 +1150,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                 from api.task_routes import build_board_context
 
                 owner = (existing.get("metadata") or {}).get("user_name") or user_email
-                context_block = await build_board_context(db, owner)
+                context_block = await build_board_context(db, owner, existing.get("task_board_id"))
                 if context_block:
                     conversation_context = (
                         f"{context_block}\n\n{conversation_context}"

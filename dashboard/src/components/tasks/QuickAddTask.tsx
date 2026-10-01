@@ -17,6 +17,8 @@ import { cn } from "@/lib/utils";
 
 interface QuickAddTaskProps {
   onAdded: () => void;
+  /** Board the task is added to; omitted = the caller's own board. */
+  boardId?: string;
 }
 
 /** Bottom-pinned capture box on the tasks board (mobile and desktop) — the
@@ -24,7 +26,7 @@ interface QuickAddTaskProps {
  * fires the task immediately: the agent starts running in the background
  * (survives closing the app) and the backend titles the task from the prompt
  * with an LLM. */
-export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
+export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -62,6 +64,7 @@ export function QuickAddTask({ onAdded }: QuickAddTaskProps) {
         files: files.length > 0 ? files : undefined,
         start: true,
         tool_config: toolConfig,
+        board: boardId,
       });
       setValue("");
       setFiles([]);

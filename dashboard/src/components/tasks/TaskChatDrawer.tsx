@@ -17,9 +17,11 @@ import { basePath, fetchConversation, updateTask, type ChatFile, type Task } fro
 function DrawerConversation({
   conversationId,
   onStreamComplete,
+  readOnly = false,
 }: {
   conversationId: string;
   onStreamComplete?: (conversationId: string) => void;
+  readOnly?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +106,7 @@ function DrawerConversation({
         initialStatus={initialStatus}
         draftStorageKey={`loma-task-draft-${conversationId}`}
         onStreamComplete={onStreamComplete}
+        readOnly={readOnly}
       />
     </div>
   );
@@ -117,11 +120,17 @@ export function TaskChatDrawer({
   open,
   onOpenChange,
   onTaskChange,
+  readOnly = false,
+  canRename = true,
 }: {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onTaskChange?: (task: Task) => void;
+  /** A teammate's task on a shared board: transcript only, no composer. */
+  readOnly?: boolean;
+  /** False for view-only board members. */
+  canRename?: boolean;
 }) {
   // Refs so the delayed title fetch below reads the latest task/callback, not
   // the ones captured when the stream started.
@@ -169,14 +178,22 @@ export function TaskChatDrawer({
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(1100px,92vw)]"
       >
         <div className="flex flex-shrink-0 items-center gap-1 border-b border-border py-2.5 pl-4 pr-12">
-          {task && (
+          {task && !canRename && (
+            <SheetTitle className="min-w-0 flex-1 truncate font-heading text-base font-semibold">
+              {task.title || task.prompt || "New task"}
+            </SheetTitle>
+          )}
+          {task && canRename && (
             <EditableTaskTitle
               key={`${task.conversation_id}:${task.title || task.prompt}`}
               task={task}
               onTaskChange={onTaskChange}
             />
           )}
-          {task && (
+          {task && readOnly && task.owner && (
+            <span className="shrink-0 truncate text-xs text-muted-foreground">by {task.owner}</span>
+          )}
+          {task && !readOnly && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground" asChild>
@@ -199,6 +216,7 @@ export function TaskChatDrawer({
             key={task.conversation_id}
             conversationId={task.conversation_id}
             onStreamComplete={handleStreamComplete}
+            readOnly={readOnly}
           />
         )}
       </SheetContent>

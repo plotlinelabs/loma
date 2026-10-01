@@ -154,7 +154,8 @@ export function useTaskBoardActions({
   const forkTask = async (task: Task) => {
     onError(null);
     try {
-      const { task: forked } = await forkTaskRequest(task.conversation_id);
+      // Forks stay on the board they were made from.
+      const { task: forked } = await forkTaskRequest(task.conversation_id, { board: board.board?.id });
       onBoardChange({ ...board, tasks: [forked, ...board.tasks] });
       onRefresh();
     } catch (e) {
@@ -189,7 +190,7 @@ export function useTaskBoardActions({
   const createAndAssignTag = async (task: Task, name: string) => {
     const snapshot = board;
     try {
-      const { tag } = await createTaskTag(name);
+      const { tag } = await createTaskTag(name, board.board?.id);
       const nextIds = [...(task.task_tag_ids || []), tag.id];
       onBoardChange({
         ...board, tags: [...board.tags, tag],

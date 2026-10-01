@@ -30,6 +30,8 @@ import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
 interface MobileTaskCardProps {
   task: Task;
   lanes: BoardLane[];
+  /** Hide card actions (view-only shared board). */
+  readOnly?: boolean;
   onOpen: (task: Task) => void;
   onStart: (task: Task) => void;
   onMarkDone: (task: Task) => void;
@@ -45,7 +47,7 @@ interface MobileTaskCardProps {
 /** Touch-first card for the mobile inbox: no drag, actions always visible,
  * larger tap targets. Menus replace drag for moves. */
 export function MobileTaskCard({
-  task, lanes, onOpen, onStart, onMarkDone, onReopen,
+  task, lanes, readOnly = false, onOpen, onStart, onMarkDone, onReopen,
   onMoveToLane, onRemoveFromBoard, onDeleteDraft, onFork, onSetPriority, onSetDeadline,
 }: MobileTaskCardProps) {
   const isStaged = isStagedTask(task);
@@ -80,7 +82,7 @@ export function MobileTaskCard({
             <TaskDeadlineBadge task={task} />
           </div>
         </div>
-        <div
+        {!readOnly && <div
           className="flex shrink-0 items-center"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
@@ -167,7 +169,7 @@ export function MobileTaskCard({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
+        </div>}
       </div>
     </div>
   );

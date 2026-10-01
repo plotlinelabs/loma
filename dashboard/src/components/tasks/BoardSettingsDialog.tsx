@@ -34,9 +34,15 @@ interface BoardSettingsDialogProps {
   /** Count of staged tasks per lane id — used for delete warnings. */
   laneCounts: Record<string, number>;
   onSaved: () => void;
+  /** Board being edited; omitted = the caller's own board. */
+  boardId?: string;
+  /** Shown in the header so it's clear which board is being changed. */
+  boardName?: string;
+  /** Shared board: lanes, tags and context apply to everyone on it. */
+  shared?: boolean;
 }
 
-export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }: BoardSettingsDialogProps) {
+export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved, boardId, boardName, shared = false }: BoardSettingsDialogProps) {
   const [showAgentWork, setShowAgentWork] = useState(true);
   const [loading, setLoading] = useState(true);
   const [prompt, setPrompt] = useState("");
@@ -53,7 +59,7 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
     setError(null);
     setRemovedWithTasks([]);
     setShowDefault(false);
-    fetchBoardSettings()
+    fetchBoardSettings(boardId)
       .then((settings) => {
         setShowAgentWork(settings.show_agent_work !== false);
         setLoading(false);
@@ -62,7 +68,7 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
         setLanes(settings.lanes.map(({ id, name }) => ({ id, name })));
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load settings"));
-  }, [open]);
+  }, [open, boardId]);
 
   const moveLane = (index: number, delta: number) => {
     const next = [...lanes];
@@ -89,7 +95,7 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
     setBusy(true);
     setError(null);
     try {
-      await saveBoardSettings({ prompt, lanes, show_agent_work: showAgentWork });
+      await saveBoardSettings({ prompt, lanes, show_agent_work: showAgentWork }, boardId);
       onOpenChange(false);
       onSaved();
     } catch (e) {
@@ -106,8 +112,12 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl"
       >
         <SheetHeader className="flex-shrink-0 border-b border-border pr-12">
-          <SheetTitle>Board settings</SheetTitle>
-          <SheetDescription>Context and columns for your tasks board.</SheetDescription>
+          <SheetTitle>{boardName ? `${boardName} settings` : "Board settings"}</SheetTitle>
+          <SheetDescription>
+            {shared
+              ? "Context and columns for this shared board. Changes apply to everyone on it."
+              : "Context and columns for your tasks board."}
+          </SheetDescription>
         </SheetHeader>
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4">
           <div className="flex items-center justify-between gap-4">
@@ -141,9 +151,11 @@ export function BoardSettingsDialog({ open, onOpenChange, laneCounts, onSaved }:
             </div>
           )}
           <div className="space-y-1.5">
-            <Label htmlFor="board-prompt">{defaultContext ? "Personal context" : "Context"}</Label>
+            <Label htmlFor="board-prompt">{shared ? "Board context" : defaultContext ? "Personal context" : "Context"}</Label>
             <p className="text-xs text-muted-foreground">
-              Your role and working context — added to every task on this board.
+              {shared
+                ? "Shared working context — added to every task on this board."
+                : "Your role and working context — added to every task on this board."}
             </p>
             <Textarea
               id="board-prompt"

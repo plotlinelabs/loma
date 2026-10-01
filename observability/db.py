@@ -112,6 +112,12 @@ async def init_observability():
     await _db.conversations.create_index(
         [("metadata.user_name", 1), ("task_status", 1), ("status", 1)],
     )
+    # Shared task boards: board lookup, "boards I own / am a member of", and
+    # the tasks on a shared board.
+    await _db.task_boards.create_index("board_id", unique=True)
+    await _db.task_boards.create_index("owner")
+    await _db.task_boards.create_index("members.email")
+    await _db.conversations.create_index([("task_board_id", 1), ("task_status", 1)])
 
     # Web push subscriptions (tasks board attention) — one doc per browser
     await _db.push_subscriptions.create_index("subscription.endpoint", unique=True)
