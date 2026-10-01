@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import ClientTimestamp from "@/components/ClientTimestamp";
-import { fetchConversations, updateTask, type Conversation } from "@/lib/api";
+import { PERSONAL_BOARD_ID, fetchConversations, updateTask, type Conversation } from "@/lib/api";
 
 const statusDotStyles: Record<string, string> = {
   running: "bg-blue-500 animate-pulse",
@@ -25,10 +25,12 @@ interface AddChatDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAdded: () => void;
+  /** Board the chat is added to; omitted = the caller's own board. */
+  boardId?: string;
 }
 
 /** Pick one of your existing chats and track it on the board. */
-export function AddChatDialog({ open, onOpenChange, onAdded }: AddChatDialogProps) {
+export function AddChatDialog({ open, onOpenChange, onAdded, boardId }: AddChatDialogProps) {
   const { data: session } = useSession();
   const [search, setSearch] = useState("");
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
@@ -59,7 +61,10 @@ export function AddChatDialog({ open, onOpenChange, onAdded }: AddChatDialogProp
     setBusyId(conversation.conversation_id);
     setError(null);
     try {
-      await updateTask(conversation.conversation_id, { task_status: "active" });
+      await updateTask(conversation.conversation_id, {
+        task_status: "active",
+        ...(boardId && boardId !== PERSONAL_BOARD_ID ? { task_board_id: boardId } : {}),
+      });
       onOpenChange(false);
       onAdded();
     } catch (e) {

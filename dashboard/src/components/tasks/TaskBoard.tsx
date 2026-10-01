@@ -33,9 +33,11 @@ interface TaskBoardProps {
   onError: (message: string | null) => void;
   includedTagIds: string[];
   excludedTagIds: string[];
+  /** View-only member of a shared board: no drag, adds or card actions. */
+  readOnly?: boolean;
 }
 
-export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds }: TaskBoardProps) {
+export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds, readOnly = false }: TaskBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const { models } = useAgentModels();
 
@@ -106,7 +108,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
 
   return (
     <DndContext
-      sensors={sensors}
+      sensors={readOnly ? [] : sensors}
       collisionDetection={pointerWithin}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
@@ -124,7 +126,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 ? canMove(activeTask, activeTask.column, column.id, laneIds)
                 : undefined
             }
-            onAddTask={laneIds.includes(column.id) ? () => onAddTask(column.id) : undefined}
+            onAddTask={!readOnly && laneIds.includes(column.id) ? () => onAddTask(column.id) : undefined}
           >
             {(tasksByColumn[column.id] ?? []).map((task) => (
               <TaskCard
@@ -133,6 +135,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 lanes={board.lanes}
                 tags={board.tags}
                 models={models}
+                readOnly={readOnly}
                 onOpen={openTask}
                 onStart={startTask}
                 onMarkDone={markDone}

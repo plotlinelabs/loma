@@ -17,12 +17,15 @@ interface MobileTaskBoardProps {
   onError: (message: string | null) => void;
   includedTagIds: string[];
   excludedTagIds: string[];
+  /** View-only member of a shared board: no adds or card actions. */
+  readOnly?: boolean;
 }
 
 /** Inbox-style single-column board for phones: a chip scroller switches
  * columns, tap actions replace drag. Desktop keeps the kanban. */
 export function MobileTaskBoard({
   board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, includedTagIds, excludedTagIds,
+  readOnly = false,
 }: MobileTaskBoardProps) {
   const {
     laneIds, tasksByColumn,
@@ -112,6 +115,7 @@ export function MobileTaskBoard({
             key={task.conversation_id}
             task={task}
             lanes={board.lanes}
+            readOnly={readOnly}
             onOpen={openTask}
             onStart={startTask}
             onMarkDone={markDone}
@@ -127,7 +131,7 @@ export function MobileTaskBoard({
         {tasks.length === 0 && (
           <p className="py-6 text-center text-xs text-muted-foreground">Nothing here</p>
         )}
-        {isLane && (
+        {isLane && !readOnly && (
           <button
             onClick={() => onAddTask(selectedId)}
             className="flex items-center gap-1 rounded-md px-2 py-2 text-xs text-muted-foreground/70 active:bg-muted"
@@ -138,7 +142,7 @@ export function MobileTaskBoard({
         )}
       </div>
 
-      <QuickAddTask onAdded={handleQuickAdded} />
+      {!readOnly && <QuickAddTask onAdded={handleQuickAdded} boardId={board.board?.id} />}
     </div>
   );
 }

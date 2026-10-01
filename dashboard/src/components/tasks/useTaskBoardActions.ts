@@ -13,6 +13,7 @@ import {
   type TaskPriority,
   type TasksBoardResponse,
 } from "@/lib/api";
+import { useBoardExtras } from "./boardExtras";
 
 export const SYSTEM_COLUMNS = [
   { id: "working", name: "Working" },
@@ -56,10 +57,12 @@ export function useTaskBoardActions({
     [board.lanes],
   );
 
+  const { assignedToMe, myEmail } = useBoardExtras();
   const tasksByColumn = useMemo(() => {
     const map: Record<string, Task[]> = {};
     for (const column of columns) map[column.id] = [];
     for (const task of board.tasks) {
+      if (assignedToMe && task.assignee !== myEmail) continue;
       const taskTagIds = task.task_tag_ids || [];
       if (excludedTagIds.some((id) => taskTagIds.includes(id))) continue;
       if (includedTagIds.length > 0 && !includedTagIds.some((id) => taskTagIds.includes(id))) continue;
@@ -71,7 +74,7 @@ export function useTaskBoardActions({
       list.sort((a, b) => (a.task_rank ?? 0) - (b.task_rank ?? 0));
     }
     return map;
-  }, [board.tasks, columns, includedTagIds, excludedTagIds]);
+  }, [board.tasks, columns, includedTagIds, excludedTagIds, assignedToMe, myEmail]);
 
   const startTask = (task: Task) => {
     router.push(`${basePath}/chat?continue=${task.conversation_id}&start=1`);
@@ -154,7 +157,8 @@ export function useTaskBoardActions({
   const forkTask = async (task: Task) => {
     onError(null);
     try {
-      const { task: forked } = await forkTaskRequest(task.conversation_id);
+      // Forks stay on the board they were made from.
+      const { task: forked } = await forkTaskRequest(task.conversation_id, { board: board.board?.id });
       onBoardChange({ ...board, tasks: [forked, ...board.tasks] });
       onRefresh();
     } catch (e) {
@@ -189,7 +193,7 @@ export function useTaskBoardActions({
   const createAndAssignTag = async (task: Task, name: string) => {
     const snapshot = board;
     try {
-      const { tag } = await createTaskTag(name);
+      const { tag } = await createTaskTag(name, board.board?.id);
       const nextIds = [...(task.task_tag_ids || []), tag.id];
       onBoardChange({
         ...board, tags: [...board.tags, tag],

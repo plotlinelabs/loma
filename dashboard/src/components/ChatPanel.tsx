@@ -106,6 +106,8 @@ export interface ChatItem {
   elapsedSeconds?: number;
   /** True when this user message is queued to be sent after the current stream finishes */
   queued?: boolean;
+  /** Who sent this user message (shared-board tasks: the run used their accounts). */
+  sender?: string;
 }
 
 /** Pretty-print a tool name for display */
@@ -259,7 +261,7 @@ function extractClarifyBlock(text: string): {
  * Each turn may contain tool_calls, tool_results, and text_blocks.
  */
 export function rebuildItemsFromConversation(
-  messages: Array<{ role: string; content: string; timestamp?: string }> | undefined,
+  messages: Array<{ role: string; content: string; timestamp?: string; sender?: string }> | undefined,
   prompt: string,
   finalResponse: string,
   turns: Turn[],
@@ -272,6 +274,7 @@ export function rebuildItemsFromConversation(
         items: messages.map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
+          ...(m.role === "user" && m.sender ? { sender: m.sender } : {}),
         })),
         artifacts: [],
       };
@@ -284,7 +287,7 @@ export function rebuildItemsFromConversation(
   }
 
   // Collect follow-up user messages (skip the first one — it's the initial prompt)
-  const followUpUserMessages: Array<{ content: string; timestamp: string }> = [];
+  const followUpUserMessages: Array<{ content: string; timestamp: string; sender?: string }> = [];
   if (messages && messages.length > 1) {
     const userMessages = messages.filter((m) => m.role === "user");
     for (let i = 1; i < userMessages.length; i++) {
@@ -292,16 +295,18 @@ export function rebuildItemsFromConversation(
         followUpUserMessages.push({
           content: userMessages[i].content,
           timestamp: userMessages[i].timestamp!,
+          sender: userMessages[i].sender,
         });
       }
     }
   }
+  const firstSender = messages?.find((m) => m.role === "user")?.sender;
 
   // Track which follow-up messages have been inserted
   const insertedFollowUps = new Set<number>();
 
   // Start with the initial user message
-  const items: ChatItem[] = [{ role: "user", content: prompt }];
+  const items: ChatItem[] = [{ role: "user", content: prompt, ...(firstSender ? { sender: firstSender } : {}) }];
 
   // Each turn represents one assistant response cycle (possibly with tool calls)
   for (const turn of turns) {
@@ -315,7 +320,7 @@ export function rebuildItemsFromConversation(
           (item) => item.role === "user" && item.content === followUpUserMessages[i].content
         );
         if (!exists) {
-          items.push({ role: "user", content: followUpUserMessages[i].content });
+          items.push({ role: "user", content: followUpUserMessages[i].content, sender: followUpUserMessages[i].sender });
         }
         insertedFollowUps.add(i);
       }
@@ -354,7 +359,7 @@ export function rebuildItemsFromConversation(
       (item) => item.role === "user" && item.content === followUpUserMessages[i].content
     );
     if (!exists) {
-      items.push({ role: "user", content: followUpUserMessages[i].content });
+      items.push({ role: "user", content: followUpUserMessages[i].content, sender: followUpUserMessages[i].sender });
     }
   }
 
@@ -541,6 +546,14 @@ function FileAttachmentCard({ file }: { file: FileAttachment }) {
   );
 }
 
+function ReadOnlyComposerNotice() {
+  return (
+    <p className="mx-auto max-w-3xl rounded-xl border border-dashed border-border px-3 py-2.5 text-center text-xs text-muted-foreground">
+      View only. Only this task&apos;s creator or its assignee can message it. Each run uses the accounts of whoever sends the message.
+    </p>
+  );
+}
+
 export default function ChatPanel({
   initialItems,
   initialArtifacts,
@@ -560,6 +573,7 @@ export default function ChatPanel({
   artifacts: externalArtifacts,
   onConversationCreated,
   onStreamComplete,
+  readOnly = false,
 }: {
   initialItems?: ChatItem[];
   /** Artifacts restored from history (persisted in MongoDB) */
@@ -592,10 +606,18 @@ export default function ChatPanel({
   onConversationCreated?: (conversationId: string) => void;
   /** Called when the agent stream finishes (for post-stream title refresh) */
   onStreamComplete?: (conversationId: string) => void;
+  /** Show the transcript without a composer (e.g. a teammate's task on a shared board). */
+  readOnly?: boolean;
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
   const [items, setItems] = useState<ChatItem[]>(initialItems || []);
+  // Shared-board tasks can have two people messaging (creator and assignee):
+  // label each message with its sender only when that's the case.
+  const multipleSenders = useMemo(
+    () => new Set(items.filter((item) => item.role === "user" && item.sender).map((item) => item.sender)).size > 1,
+    [items],
+  );
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const [input, setInput] = useState(initialPrompt || "");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -1406,12 +1428,12 @@ export default function ChatPanel({
           <div className="mb-8 flex flex-col items-center gap-4 text-center">
             <PetCompanion size={56} />
             <h2 className="editorial-heading text-[26px] md:text-[34px] text-foreground">
-              What do you need to get done?
+              {readOnly ? "This task hasn't started yet" : "What do you need to get done?"}
             </h2>
           </div>
 
           <div className="w-full max-w-full md:max-w-[720px]">
-            <form
+            {readOnly ? <ReadOnlyComposerNotice /> : <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSend();
@@ -1471,7 +1493,7 @@ export default function ChatPanel({
                   </div>
                 </div>
               </div>
-            </form>
+            </form>}
           </div>
         </div>
       ) : (
@@ -1578,6 +1600,9 @@ export default function ChatPanel({
                           ? "bg-card/60 border border-dashed border-border"
                           : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
                       )}>
+                        {multipleSenders && item.sender && (
+                          <div className="mb-1 text-[11px] font-medium text-muted-foreground">{item.sender}</div>
+                        )}
                         {editingQueuedIndex === i ? (
                           <div className="flex flex-col gap-1.5">
                             <textarea
@@ -1734,7 +1759,7 @@ export default function ChatPanel({
 
           {/* Input — the bottom nav below it owns the home-indicator safe area */}
           <div className="sticky bottom-0 bg-background px-3 pt-2.5 pb-2.5 shrink-0">
-            <form
+            {readOnly ? <ReadOnlyComposerNotice /> : <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSend();
@@ -1808,7 +1833,7 @@ export default function ChatPanel({
                   </div>
                 </div>
               </div>
-            </form>
+            </form>}
           </div>
         </>
       )}

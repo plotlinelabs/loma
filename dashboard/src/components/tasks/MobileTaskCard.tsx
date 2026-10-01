@@ -26,10 +26,13 @@ import type { BoardLane, Task, TaskPriority } from "@/lib/api";
 import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
+import { AssigneeBadge, useBoardExtras } from "./boardExtras";
 
 interface MobileTaskCardProps {
   task: Task;
   lanes: BoardLane[];
+  /** Hide card actions (view-only shared board). */
+  readOnly?: boolean;
   onOpen: (task: Task) => void;
   onStart: (task: Task) => void;
   onMarkDone: (task: Task) => void;
@@ -45,7 +48,7 @@ interface MobileTaskCardProps {
 /** Touch-first card for the mobile inbox: no drag, actions always visible,
  * larger tap targets. Menus replace drag for moves. */
 export function MobileTaskCard({
-  task, lanes, onOpen, onStart, onMarkDone, onReopen,
+  task, lanes, readOnly = false, onOpen, onStart, onMarkDone, onReopen,
   onMoveToLane, onRemoveFromBoard, onDeleteDraft, onFork, onSetPriority, onSetDeadline,
 }: MobileTaskCardProps) {
   const isStaged = isStagedTask(task);
@@ -59,6 +62,9 @@ export function MobileTaskCard({
   const targetLanes = isStaged
     ? lanes.filter((lane) => lane.id !== task.task_lane)
     : task.column === "needs_input" || task.column === "done" ? lanes : [];
+
+  const { myEmail, onMoveToCard } = useBoardExtras();
+  const canMoveToCard = !!onMoveToCard && !task.task_card_id && (!task.owner || task.owner === myEmail);
 
   return (
     <div
@@ -76,11 +82,12 @@ export function MobileTaskCard({
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
           </div>
           <div className="mt-1 flex items-center gap-1 overflow-hidden">
+            {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
             <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
             <TaskDeadlineBadge task={task} />
           </div>
         </div>
-        <div
+        {!readOnly && <div
           className="flex shrink-0 items-center"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
@@ -110,6 +117,9 @@ export function MobileTaskCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {canMoveToCard && (
+                <DropdownMenuItem onClick={() => onMoveToCard?.(task)}>Move to card...</DropdownMenuItem>
+              )}
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <span className="flex-1">Priority</span>
@@ -167,7 +177,7 @@ export function MobileTaskCard({
               )}
             </DropdownMenuContent>
           </DropdownMenu>}
-        </div>
+        </div>}
       </div>
     </div>
   );

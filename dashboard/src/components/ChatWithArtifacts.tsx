@@ -86,6 +86,7 @@ export default function ChatWithArtifacts({
   onConversationCreated,
   onStreamComplete,
   draftStorageKey,
+  readOnly,
 }: {
   initialItems?: ChatItem[];
   initialArtifacts?: Artifact[];
@@ -102,6 +103,8 @@ export default function ChatWithArtifacts({
   onStreamComplete?: (conversationId: string) => void;
   /** localStorage key for persisting unsent composer text (see ChatPanel) */
   draftStorageKey?: string;
+  /** Transcript only, no composer (see ChatPanel) */
+  readOnly?: boolean;
 }) {
   // ── Artifact state ──────────────────────────────────────────────────────
   const [artifacts, setArtifacts] = useState<Artifact[]>(initialArtifacts || []);
@@ -178,6 +181,7 @@ export default function ChatWithArtifacts({
           artifacts={artifacts}
           onConversationCreated={onConversationCreated}
           onStreamComplete={onStreamComplete}
+          readOnly={readOnly}
         />
       </div>
 

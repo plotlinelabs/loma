@@ -41,7 +41,7 @@ async def test_legacy_save_preserves_dismissal(monkeypatch):
     users = SimpleNamespace(update_one=AsyncMock(), find_one=AsyncMock(return_value={'task_board': {'show_agent_work': False}}))
     monkeypatch.setattr(task_routes, 'get_db', lambda: SimpleNamespace(users=users))
     monkeypatch.setattr(task_routes, 'get_user_email', lambda _: 'owner@example.com')
-    response = await task_routes.handle_put_board_settings(SimpleNamespace(json=AsyncMock(return_value={'prompt': 'Context', 'lanes': [{'id': 'todo', 'name': 'Todo'}]})))
+    response = await task_routes.handle_put_board_settings(SimpleNamespace(query={}, json=AsyncMock(return_value={'prompt': 'Context', 'lanes': [{'id': 'todo', 'name': 'Todo'}]})))
     assert response.status == 200
     assert json.loads(response.text)['show_agent_work'] is False
     assert 'task_board.show_agent_work' not in users.update_one.await_args.args[1]['$set']
@@ -52,7 +52,7 @@ async def test_settings_restore(monkeypatch):
     users = SimpleNamespace(update_one=AsyncMock(), find_one=AsyncMock(return_value={'task_board': {'show_agent_work': False}}))
     monkeypatch.setattr(task_routes, 'get_db', lambda: SimpleNamespace(users=users))
     monkeypatch.setattr(task_routes, 'get_user_email', lambda _: 'owner@example.com')
-    response = await task_routes.handle_put_board_settings(SimpleNamespace(json=AsyncMock(return_value={'prompt': 'Context', 'lanes': [{'id': 'todo', 'name': 'Todo'}], 'show_agent_work': True})))
+    response = await task_routes.handle_put_board_settings(SimpleNamespace(query={}, json=AsyncMock(return_value={'prompt': 'Context', 'lanes': [{'id': 'todo', 'name': 'Todo'}], 'show_agent_work': True})))
     assert response.status == 200
     assert json.loads(response.text)['show_agent_work'] is True
     assert users.update_one.await_args.args[1]['$set']['task_board.show_agent_work'] is True
