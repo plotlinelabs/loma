@@ -1,10 +1,15 @@
 """Pick a Loma agent from a Slack message.
 
 A Slack message can name an agent up front, like the dashboard composer's
-agent picker:
+agent picker. Punctuation and brackets around the name are optional:
 
     @Loma AR Agent: can you check invoice INV-123?
+    @Loma - AR agent - can you check invoice INV-123?
+    @Loma [AR Agent] can you check invoice INV-123?
     @Loma ar-agent can you check invoice INV-123?
+
+Single-word agent names need a bracket or a ':' / ',' / '-' after them, so a
+sentence that merely starts with a word like "Finance" never switches agents.
 
 The agent is then pinned to the Slack thread (conversation metadata), so
 follow-ups in that thread keep talking to it until another agent is named.
@@ -25,17 +30,30 @@ def agent_handle(name: str) -> str:
     return "-".join(w for w in re.split(_SEPARATORS, (name or "").strip()) if w).lower()
 
 
+# Leading noise before the name: spaces, dashes, colons, slashes, Slack
+# formatting (* _ ~). Slack sends "<" and ">" in message text as &lt; / &gt;.
+_LEAD = r"^[\s\-\u2013\u2014:,;./\\*_~]*"
+_OPEN = r"(?:\[|\(|\{|&lt;|<)"
+_CLOSE = r"(?:\]|\)|\}|&gt;|>)"
+_FMT = r"[*_~]*"
+_TRAIL = r"[\s\-\u2013\u2014:,;.!?/\\]*"
+
+
 def _name_patterns(name: str) -> list[re.Pattern]:
     words = [re.escape(w) for w in re.split(_SEPARATORS, (name or "").strip()) if w]
     if not words:
         return []
-    # "AR Agent:" / "ar agent," / "@AR-Agent:" - the name followed by ':' or ','.
-    patterns = [re.compile(rf"^\s*@?{_SEPARATORS.join(words)}\s*[:,]\s*", re.IGNORECASE)]
-    # "ar-agent ..." - the hyphenated handle is deliberate enough to need no
-    # punctuation. Single-word names always need ':' or ',' so a sentence that
-    # merely starts with a word like "Finance" never switches agents.
+    body = rf"{_FMT}@?{_SEPARATORS.join(words)}{_FMT}"
+    patterns = [
+        # "[AR Agent]", "<ar agent>", "(Finance)" - bracketed, any length.
+        re.compile(rf"{_LEAD}{_OPEN}\s*{body}\s*{_CLOSE}{_TRAIL}", re.IGNORECASE),
+        # "AR Agent:", "- Finance -", "/finance/", "Finance," - name then punctuation.
+        re.compile(rf"{_LEAD}{body}\s*(?:[:,]|[/\-\u2013\u2014](?=\s|$)){_TRAIL}", re.IGNORECASE),
+    ]
+    # "AR agent what do we..." - a multi-word name is deliberate enough to
+    # need no punctuation at all.
     if len(words) > 1:
-        patterns.append(re.compile(rf"^\s*@?{'-'.join(words)}(?=\s|$)\s*", re.IGNORECASE))
+        patterns.append(re.compile(rf"{_LEAD}{body}(?![\w-]){_TRAIL}", re.IGNORECASE))
     return patterns
 
 
@@ -71,7 +89,7 @@ def format_agent_list(agents: list[dict]) -> str:
         desc = (agent.get("description") or "").strip()
         lines.append(f"- *{agent['name']}* (`{agent_handle(agent['name'])}`)" + (f": {desc}" if desc else ""))
     lines.append(
-        f"Start your message with the agent's name and a colon, e.g. `@Loma {agents[0]['name']}: your question`. "
-        "The thread then stays with that agent."
+        f"Start your message with the agent's name, e.g. `@Loma {agents[0]['name']}: your question` "
+        f"or `@Loma [{agents[0]['name']}] your question`. The thread then stays with that agent."
     )
     return "\n".join(lines)

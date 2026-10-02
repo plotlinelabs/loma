@@ -21,7 +21,7 @@ from slack_app.brevity import maybe_compress_slack_reply
 from slack_app.channels import get_channel_config
 from slack_app.utils import (
     strip_bot_mention, truncate_for_slack, get_thread_context,
-    get_dm_context, download_slack_files, BOT_MENTION_RE,
+    get_dm_context, download_slack_files, BOT_MENTION_RE, message_text,
 )
 from draft_with_loma.models import create_draft, get_draft, update_draft, delete_draft
 from draft_with_loma.blocks import (
@@ -825,7 +825,7 @@ async def _capture_loma_task(client, event: dict) -> None:
         for message in thread_messages:
             author = message.get("user") or message.get("bot_profile", {}).get("name") or "unknown"
             marker = " [selected]" if message.get("ts") == message_ts else ""
-            parts.append(f"[{author}]{marker}: {message.get('text', '')}")
+            parts.append(f"[{author}]{marker}: {message_text(message)}")
         prompt = (
             "Follow up on this Slack message. Use the thread as context and complete the action requested.\n\n"
             f"Slack link: {permalink}\n"
@@ -890,7 +890,7 @@ async def _read_thread_with_user_token(user_token: str, channel_id: str, thread_
     parts = []
     for msg in messages:
         user = msg.get("user", "unknown")
-        text = msg.get("text", "")
+        text = message_text(msg)
         if msg.get("bot_id"):
             parts.append(f"[bot]: {text}")
         else:
