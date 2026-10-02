@@ -208,7 +208,7 @@ export default function OnboardingRecordPage() {
   const hubspot = formatValue(record.fields.hubspot_url);
   const askPrompt =
     `Look at the Onboarding record "${record.name}" (record id ${record.record_id}, account ${record.account}). ` +
-    `Use tools/onboarding.py get to read it, check HubSpot, Plotline MongoDB/ClickHouse, billing and Grain as relevant, ` +
+    `Use tools/onboarding.py get to read it, check the CRM, product data, billing and call recordings as relevant, ` +
     `and tell me the current status, blockers and the next step.`;
 
   return (
