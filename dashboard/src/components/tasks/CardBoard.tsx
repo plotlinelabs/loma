@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -79,44 +79,50 @@ function CardTile({ card, fields, readOnly, onOpen, assignees = [], me = null }:
     >
       <div className="line-clamp-2 break-words text-[14px] font-medium leading-5">{card.title}</div>
       {shown.length > 0 && (
-        <dl className="mt-1.5 space-y-0.5 text-[12px] leading-4">
+        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12px] leading-4">
           {shown.map((field) => (
-            <div key={field.id} className="flex gap-1.5">
-              <dt className="shrink-0 text-muted-foreground">{field.name}</dt>
+            <Fragment key={field.id}>
+              <dt className="text-[11px] text-muted-foreground">{field.name}</dt>
               <dd className="min-w-0 truncate">{formatFieldValue(field, card.fields[field.id])}</dd>
-            </div>
+            </Fragment>
           ))}
         </dl>
       )}
-      <div className="mt-2 flex items-center gap-2 text-[11px] leading-4 text-muted-foreground">
+      <div className="mt-3 flex flex-col gap-2 text-[11px] leading-4 text-muted-foreground">
         {card.task_total > 0 ? (
-          <>
-            <div className="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted">
+          <div className="flex items-center gap-2">
+            <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
               <div className="h-full rounded-full bg-emerald-500" style={{ width: `${percent}%` }} />
             </div>
-            <span className="tabular-nums">{card.task_done}/{card.task_total} tasks</span>
-          </>
+            <span className="shrink-0 whitespace-nowrap tabular-nums">{card.task_done}/{card.task_total} tasks</span>
+          </div>
         ) : (
           <span>No tasks yet</span>
         )}
-        {card.task_running > 0 && (
-          <span className="flex items-center gap-1 text-blue-600">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-            {card.task_running} running
-          </span>
-        )}
-        {card.task_needs_input > 0 && (
-          <span className="flex items-center gap-1 text-amber-600">
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-            {card.task_needs_input} need input
-          </span>
-        )}
-        {assignees.length > 0 && (
-          <span className="ml-auto flex -space-x-1">
-            {assignees.slice(0, 3).map((email) => (
-              <AssigneeBadge key={email} email={email} me={me} className="ring-2 ring-card" />
-            ))}
-          </span>
+        {(card.task_running > 0 || card.task_needs_input > 0 || assignees.length > 0) && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              {card.task_running > 0 && (
+                <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-blue-500/10 px-2 py-0.5 text-blue-600">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+                  {card.task_running} running
+                </span>
+              )}
+              {card.task_needs_input > 0 && (
+                <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-600">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                  {card.task_needs_input} needs input
+                </span>
+              )}
+            </div>
+            {assignees.length > 0 && (
+              <span className="flex shrink-0 -space-x-1">
+                {assignees.slice(0, 3).map((email) => (
+                  <AssigneeBadge key={email} email={email} me={me} className="ring-2 ring-card" />
+                ))}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </div>
