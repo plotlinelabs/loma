@@ -854,6 +854,10 @@ export default function TasksPage() {
             board={board}
             onOpenTask={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
             onOpenCard={(card) => { setPanelCard(card); setCardPanelOpen(true); }}
+            onBoardChange={setBoard}
+            onRefresh={refresh}
+            onError={setError}
+            readOnly={readOnly}
             includedTagIds={includedTagIds}
             excludedTagIds={excludedTagIds}
           />

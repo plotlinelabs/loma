@@ -391,6 +391,22 @@ async def test_card_task_can_be_ticked_off_without_running(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_card_task_waiting_on_input_can_be_paused(monkeypatch):
+    # The card Pause action: needs input (active) -> todo, staying in its card.
+    task = {"conversation_id": "c1", "metadata": {"user_name": OWNER}, "task_board_id": "deals1",
+            "task_card_id": "card1", "task_status": "active", "status": "completed"}
+    db = _db(task_board=CARD_BOARD, conversation=task, card=CARD)
+    monkeypatch.setattr("api.routes._check_conversation_access", lambda conv, email, role: email == OWNER)
+    _as(monkeypatch, db, EDITOR)
+    response = await task_routes.handle_update_task(
+        FakeRequest({"task_status": "todo"}, match_info={"conversation_id": "c1"}))
+    assert response.status == 200
+    update = db.conversations.update_one.await_args.args[1]
+    assert update["$set"]["task_status"] == "todo"
+    assert "task_card_id" not in update.get("$unset", {})
+
+
+@pytest.mark.asyncio
 async def test_card_fields_and_notes_reach_the_agent_context(monkeypatch):
     db = _db(task_board=CARD_BOARD, card=CARD)
     monkeypatch.setattr(task_routes, "get_prompt_setting", lambda _key: "")
