@@ -358,6 +358,16 @@ async def resolve_agent_for_chat(db, agent_id: str, user_email: str) -> dict | N
     })
 
 
+async def list_agents_for_chat(db, user_email: str) -> list[dict]:
+    """Active agents the user can chat with (own + workspace-shared), by name."""
+    if not user_email:
+        return []
+    return await db.agent_identities.find(
+        {"status": {"$ne": "disabled"}, **_visible_query(user_email)},
+        {"agent_id": 1, "name": 1, "description": 1},
+    ).sort("name", 1).to_list(200)
+
+
 async def build_agent_context_block(db, agent: dict) -> str:
     """Render an agent identity as a conversation context block.
 
