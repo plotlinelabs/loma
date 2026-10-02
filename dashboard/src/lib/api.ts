@@ -1499,6 +1499,80 @@ export async function saveBoardSettings(settings: {
   return res.json();
 }
 
+// ---------- Card board views (saved filters) ----------
+
+export type CardFilterOp =
+  | "any_of" | "none_of"
+  | "eq" | "gt" | "lt" | "between"
+  | "before" | "after" | "on"
+  | "contains" | "not_contains"
+  | "checked" | "not_checked"
+  | "empty" | "not_empty";
+
+export type CardFilterValue = string | number | boolean | null | Array<string | number | null>;
+
+/** One condition on a card board: `field` is a board field id, or "__stage" / "__assignee". */
+export interface CardFilter {
+  id: string;
+  field: string;
+  op: CardFilterOp;
+  value: CardFilterValue;
+}
+
+export type CardFilterMatch = "all" | "any";
+
+/** The filter state a view saves. */
+export interface CardViewState {
+  filters: CardFilter[];
+  match: CardFilterMatch;
+  search: string;
+  assigned_to_me: boolean;
+}
+
+export interface BoardView extends CardViewState {
+  id: string;
+  board_id: string;
+  name: string;
+  owner: string;
+  /** Everyone on the board sees it (otherwise only its creator). */
+  shared: boolean;
+  mine: boolean;
+  can_edit: boolean;
+}
+
+async function viewRequest<T>(path: string, boardId: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/tasks/views${path}${boardQuery(boardId)}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `View request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function fetchBoardViews(boardId: string): Promise<{ views: BoardView[] }> {
+  return viewRequest("", boardId, "GET");
+}
+
+export function createBoardView(
+  boardId: string, view: CardViewState & { name: string; shared: boolean },
+): Promise<{ view: BoardView }> {
+  return viewRequest("", boardId, "POST", view);
+}
+
+export function updateBoardView(
+  boardId: string, viewId: string, updates: Partial<CardViewState & { name: string; shared: boolean }>,
+): Promise<{ view: BoardView }> {
+  return viewRequest(`/${encodeURIComponent(viewId)}`, boardId, "PATCH", updates);
+}
+
+export function deleteBoardView(boardId: string, viewId: string): Promise<{ deleted: boolean }> {
+  return viewRequest(`/${encodeURIComponent(viewId)}`, boardId, "DELETE");
+}
+
 // ---------- Dictation (speech-to-text) ----------
 
 export async function transcribeAudio(blob: Blob, filename: string): Promise<string> {

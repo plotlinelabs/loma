@@ -34,6 +34,7 @@ import {
 } from "@/lib/api";
 import { rankBetween } from "./transitions";
 import { columnTotal, formatFieldValue, isEmptyValue, summaryField } from "./cardDisplay";
+import { matchesFilters } from "./cardFilters";
 
 interface CardBoardProps {
   board: TasksBoardResponse;
@@ -205,7 +206,7 @@ export function CardBoard({ board, onBoardChange, onRefresh, onOpenCard, onError
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const { myEmail, assignedToMe } = useBoardExtras();
+  const { myEmail, assignedToMe, cardFilters, filterMatch } = useBoardExtras();
   // Assignees of each card's open tasks; "Assigned to me" keeps only cards
   // holding a task assigned to you.
   const assigneesByCard: Record<string, string[]> = {};
@@ -218,9 +219,11 @@ export function CardBoard({ board, onBoardChange, onRefresh, onOpenCard, onError
   for (const lane of board.lanes) cardsByLane[lane.id] = [];
   for (const card of cards) {
     if (assignedToMe && !board.tasks.some((t) => t.task_card_id === card.card_id && t.assignee === myEmail)) continue;
+    if (!matchesFilters(card, cardFilters, filterMatch, { fields, assigneesByCard })) continue;
     (cardsByLane[card.lane] ??= []).push(card);
   }
   for (const list of Object.values(cardsByLane)) list.sort((a, b) => a.rank - b.rank);
+  const filtering = assignedToMe || cardFilters.length > 0;
 
   const addCard = async (laneId: string, title: string) => {
     onError(null);
@@ -295,6 +298,9 @@ export function CardBoard({ board, onBoardChange, onRefresh, onOpenCard, onError
                 <CardTile key={card.card_id} card={card} fields={fields} readOnly={readOnly} onOpen={onOpenCard}
                   assignees={assigneesByCard[card.card_id]} me={myEmail} />
               ))}
+              {filtering && laneCards.length === 0 && (
+                <p className="px-2 py-3 text-center text-[12px] text-muted-foreground/70">No matching cards</p>
+              )}
             </CardColumn>
           );
         })}
