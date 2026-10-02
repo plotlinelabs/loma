@@ -43,9 +43,9 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft, onFork,
   onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
-  const { myEmail, onMoveToCard } = useBoardExtras();
-  // Only a task's creator can move it into a card (its chat becomes visible there).
-  const canMoveToCard = !!onMoveToCard && !task.task_card_id && (!task.owner || task.owner === myEmail);
+  const { myEmail, onMoveToBoard } = useBoardExtras();
+  // Only a task's creator can move it to another board (its chat becomes visible there).
+  const canMoveToBoard = !!onMoveToBoard && !task.task_card_id && (!task.owner || task.owner === myEmail);
   const isDraft = isDraftTask(task);
   const isStaged = isStagedTask(task);
   const currentTags = task.task_tag_ids || [];
@@ -132,9 +132,9 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
         <DropdownMenuItem onClick={() => onFork(task)}>
           <RiGitBranchLine className="h-3.5 w-3.5" /> Fork
         </DropdownMenuItem>
-        {canMoveToCard && (
-          <DropdownMenuItem onClick={() => onMoveToCard?.(task)}>
-            <RiInboxArchiveLine className="h-3.5 w-3.5" /> Move to card...
+        {canMoveToBoard && (
+          <DropdownMenuItem onClick={() => onMoveToBoard?.(task)}>
+            <RiInboxArchiveLine className="h-3.5 w-3.5" /> Move to board...
           </DropdownMenuItem>
         )}
         {!isDraft && (

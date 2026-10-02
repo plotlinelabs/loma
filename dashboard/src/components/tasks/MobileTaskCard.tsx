@@ -63,8 +63,8 @@ export function MobileTaskCard({
     ? lanes.filter((lane) => lane.id !== task.task_lane)
     : task.column === "needs_input" || task.column === "done" ? lanes : [];
 
-  const { myEmail, onMoveToCard } = useBoardExtras();
-  const canMoveToCard = !!onMoveToCard && !task.task_card_id && (!task.owner || task.owner === myEmail);
+  const { myEmail, onMoveToBoard } = useBoardExtras();
+  const canMoveToBoard = !!onMoveToBoard && !task.task_card_id && (!task.owner || task.owner === myEmail);
 
   return (
     <div
@@ -117,8 +117,8 @@ export function MobileTaskCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {canMoveToCard && (
-                <DropdownMenuItem onClick={() => onMoveToCard?.(task)}>Move to card...</DropdownMenuItem>
+              {canMoveToBoard && (
+                <DropdownMenuItem onClick={() => onMoveToBoard?.(task)}>Move to board...</DropdownMenuItem>
               )}
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>

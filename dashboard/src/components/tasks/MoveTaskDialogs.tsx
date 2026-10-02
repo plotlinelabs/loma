@@ -14,12 +14,13 @@ import {
   type Task, type TaskBoardSummary, type TaskCardItem,
 } from "@/lib/api";
 
+const RESET_NOTE = "Its column, tags and assignee are reset; the chat and status are kept.";
 const PRIVACY_NOTE =
   "Everyone with access to that board will be able to read this task's whole chat. "
   + "Its personal column and tags are cleared; the chat and status are kept.";
 
-/** Move one of your tasks into a card on a card board you can edit. */
-export function MoveToCardDialog({ task, open, onOpenChange, onMoved }: {
+/** Move one of your tasks to another board you can edit (into a card, on a card board). */
+export function MoveToBoardDialog({ task, open, onOpenChange, onMoved }: {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -32,29 +33,34 @@ export function MoveToCardDialog({ task, open, onOpenChange, onMoved }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const currentBoardId = task?.task_board_id || PERSONAL_BOARD_ID;
+  const target = boards?.find((b) => b.id === boardId);
+  const needsCard = !!target?.card_mode;
+
   useEffect(() => {
     if (!open) return;
     setBoardId(""); setCards(null); setCardId(""); setError(null); setBoards(null);
     fetchTaskBoards()
-      .then(({ boards: all }) => setBoards(all.filter((b) => b.card_mode && b.role !== "viewer"
-        && b.id !== task?.task_board_id)))
+      .then(({ boards: all }) => setBoards(all.filter((b) => b.role !== "viewer" && b.id !== currentBoardId)))
       .catch(() => setError("Could not load boards"));
-  }, [open, task?.task_board_id]);
+  }, [open, currentBoardId]);
 
   useEffect(() => {
-    if (!boardId) return;
     setCards(null); setCardId("");
+    if (!boardId || !needsCard) return;
     fetchTasksBoard("", boardId)
       .then((data) => setCards(data.cards ?? []))
       .catch(() => setError("Could not load cards"));
-  }, [boardId]);
+  }, [boardId, needsCard]);
 
   const move = async () => {
-    if (!task || !boardId || !cardId) return;
+    if (!task || !boardId || (needsCard && !cardId)) return;
     setBusy(true);
     setError(null);
     try {
-      await updateTask(task.conversation_id, { task_board_id: boardId, task_card_id: cardId });
+      await updateTask(task.conversation_id, needsCard
+        ? { task_board_id: boardId, task_card_id: cardId }
+        : { task_board_id: boardId });
       onOpenChange(false);
       onMoved();
     } catch (e) {
@@ -68,9 +74,10 @@ export function MoveToCardDialog({ task, open, onOpenChange, onMoved }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Move to card</DialogTitle>
+          <DialogTitle>Move to board</DialogTitle>
           <DialogDescription>
-            Move “{task?.title || task?.prompt || "this task"}” into a card. From its next run it also reads the card&apos;s fields and notes.
+            Move “{task?.title || task?.prompt || "this task"}” to another board.
+            {needsCard && " On a card board it goes into a card, and from its next run it also reads the card's fields and notes."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -78,14 +85,14 @@ export function MoveToCardDialog({ task, open, onOpenChange, onMoved }: {
             <Label htmlFor="move-board">Board</Label>
             <Select value={boardId} onValueChange={setBoardId} disabled={!boards?.length}>
               <SelectTrigger id="move-board" className="w-full">
-                <SelectValue placeholder={boards === null ? "Loading..." : boards.length ? "Pick a board" : "No card boards you can edit"} />
+                <SelectValue placeholder={boards === null ? "Loading..." : boards.length ? "Pick a board" : "No other boards you can edit"} />
               </SelectTrigger>
               <SelectContent>
                 {(boards ?? []).map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
-          {boardId && (
+          {needsCard && (
             <div className="space-y-1.5">
               <Label htmlFor="move-card">Card</Label>
               <Select value={cardId} onValueChange={setCardId} disabled={!cards?.length}>
@@ -98,12 +105,17 @@ export function MoveToCardDialog({ task, open, onOpenChange, onMoved }: {
               </Select>
             </div>
           )}
-          <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">{PRIVACY_NOTE}</p>
+          {target && (
+            <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+              {target.shared && "Everyone with access to that board will be able to read this task's whole chat. "}
+              {RESET_NOTE}
+            </p>
+          )}
           {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
-          <Button onClick={() => void move()} disabled={busy || !cardId}>Move task</Button>
+          <Button onClick={() => void move()} disabled={busy || !boardId || (needsCard && !cardId)}>Move task</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
