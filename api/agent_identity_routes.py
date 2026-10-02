@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 from observability.db import get_db
+from agent.agent_scope import config_hash
 from api.auth_helpers import (
     ROLE_HIERARCHY,
     get_system_role,
@@ -163,7 +164,49 @@ async def _validate_body(db, body: dict, *, partial: bool) -> tuple[dict, str | 
     if "avatar" in body:
         fields["avatar"] = _validate_avatar(body.get("avatar"))
 
+    if "enforce_scope" in body:
+        if not isinstance(body.get("enforce_scope"), bool):
+            return {}, "enforce_scope must be true or false"
+        fields["enforce_scope"] = body["enforce_scope"]
+
     return fields, None
+
+
+VERSIONED_FIELDS = ("name", "description", "identity_prompt", "skills", "tools", "enforce_scope")
+
+
+async def _save_version(db, agent: dict, version: int, user_email: str | None) -> None:
+    """Keep a snapshot of the agent config that produced a given version."""
+    await db.agent_identity_versions.update_one(
+        {"agent_id": agent["agent_id"], "version": version},
+        {"$setOnInsert": {
+            "agent_id": agent["agent_id"],
+            "version": version,
+            "config_hash": config_hash(agent),
+            **{k: agent.get(k) for k in VERSIONED_FIELDS},
+            "created_by": user_email,
+            "created_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+
+
+async def _bump_version(db, agent: dict, fields: dict, user_email: str | None) -> None:
+    """Set config_version/config_hash on `fields` when the behaviour changes."""
+    before = config_hash(agent)
+    after = config_hash({**agent, **fields})
+    current = int(agent.get("config_version") or 1)
+    if before == after:
+        if not agent.get("config_hash"):
+            fields["config_hash"] = before
+            fields["config_version"] = current
+        return
+    if not agent.get("config_hash"):
+        # Agents from before versioning: keep their old config as v1.
+        await _save_version(db, {**agent, "config_version": current}, current, None)
+    fields["config_version"] = current + 1
+    fields["config_hash"] = after
+    await _save_version(db, {**agent, **fields}, current + 1, user_email)
 
 
 async def handle_create_agent(request: web.Request) -> web.Response:
@@ -186,6 +229,11 @@ async def handle_create_agent(request: web.Request) -> web.Response:
         return web.json_response({"error": error}, status=400)
 
     visibility = fields.get("visibility", "private")
+    if fields.get("enforce_scope") is False and not _role_at_least(get_system_role(request), "admin"):
+        return web.json_response(
+            {"error": "Only admins can turn off blocking for an agent"}, status=403,
+        )
+
     if visibility == "workspace" and not _role_at_least(get_system_role(request), "operator"):
         return web.json_response(
             {"error": "Operator access required to share an agent with the whole workspace"},
@@ -204,13 +252,17 @@ async def handle_create_agent(request: web.Request) -> web.Response:
         "visibility": visibility,
         "default_model": fields.get("default_model"),
         "avatar": fields.get("avatar", _validate_avatar(None)),
+        "enforce_scope": fields.get("enforce_scope", True),
+        "config_version": 1,
         "status": "active",
         "created_by": user_email,
         "created_at": now,
         "updated_at": now,
         "deleted": False,
     }
+    agent["config_hash"] = config_hash(agent)
     await db.agent_identities.insert_one(agent)
+    await _save_version(db, agent, 1, user_email)
     return web.json_response({"agent": _serialize(agent)}, status=201)
 
 
@@ -300,6 +352,17 @@ async def handle_update_agent(request: web.Request) -> web.Response:
             status=403,
         )
 
+    # Blocking out-of-scope tools is on by default. Turning it off is an
+    # admin-only backstop for an allowlist that breaks a live workflow.
+    if (
+        fields.get("enforce_scope") is False
+        and agent.get("enforce_scope", True) is not False
+        and not _role_at_least(system_role, "admin")
+    ):
+        return web.json_response(
+            {"error": "Only admins can turn off blocking for an agent"}, status=403,
+        )
+
     # Owners and admins can disable a misbehaving agent without deleting it.
     if "status" in body:
         if body["status"] not in ("active", "disabled"):
@@ -309,6 +372,7 @@ async def handle_update_agent(request: web.Request) -> web.Response:
     if not fields:
         return web.json_response({"agent": _serialize(agent)})
 
+    await _bump_version(db, agent, fields, user_email)
     fields["updated_at"] = datetime.now(timezone.utc)
     await db.agent_identities.update_one(
         {"agent_id": agent["agent_id"]}, {"$set": fields},
@@ -407,14 +471,35 @@ async def build_agent_context_block(db, agent: dict) -> str:
         lines.append(
             "\nTool scope: this agent may use ONLY these tools/integrations "
             "(plus basic file and shell operations): " + ", ".join(tools) + ". "
-            "If a request needs a tool outside this list, say so instead of using it."
+            "If a request needs a tool outside this list, say so instead of using it. "
+            "Calls to tools or skills outside this agent's scope are blocked."
         )
 
     return "\n".join(lines)
 
 
+async def handle_list_agent_versions(request: web.Request) -> web.Response:
+    """GET /api/agent-identities/{agent_id}/versions — config history, newest first."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Observability not configured"}, status=503)
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    agent = await db.agent_identities.find_one({
+        "agent_id": request.match_info["agent_id"], **_visible_query(user_email),
+    })
+    if not agent:
+        return web.json_response({"error": "Not found"}, status=404)
+    versions = await db.agent_identity_versions.find(
+        {"agent_id": agent["agent_id"]},
+    ).sort("version", -1).to_list(100)
+    return web.json_response({"versions": _serialize(versions)})
+
+
 def setup_agent_identity_routes(app: web.Application):
     """Register agent identity routes on the aiohttp app."""
+    app.router.add_get("/api/agent-identities/{agent_id}/versions", handle_list_agent_versions)
     app.router.add_post("/api/agent-identities", handle_create_agent)
     app.router.add_get("/api/agent-identities", handle_list_agents)
     app.router.add_get("/api/agent-identities/{agent_id}", handle_get_agent)

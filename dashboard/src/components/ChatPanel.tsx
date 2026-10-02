@@ -28,6 +28,10 @@ import PetCompanion, { PetRunway } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import {
+  DEFAULT_AGENT_NAME, agentForTime, type AttributedMessage,
+} from "@/lib/agent-attribution";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -113,6 +117,12 @@ export interface ChatItem {
   selectedLabels?: string[];
   /** Artifact IDs referenced by this message (for inline artifact cards) */
   artifactIds?: string[];
+  /** Assistant items: the agent that wrote it (Loma when unset). */
+  agentName?: string;
+  agentId?: string | null;
+  /** User items sent from this tab: the agent that will answer. */
+  replyAgentName?: string;
+  replyAgentId?: string | null;
   /** File attachments delivered by the agent */
   fileAttachments?: FileAttachment[];
   /** Client-observed response duration for this assistant message */
@@ -277,7 +287,10 @@ function extractClarifyBlock(text: string): {
  * Each turn may contain tool_calls, tool_results, and text_blocks.
  */
 export function rebuildItemsFromConversation(
-  messages: Array<{ role: string; content: string; timestamp?: string; sender?: string }> | undefined,
+  messages: Array<{
+    role: string; content: string; timestamp?: string; sender?: string;
+    agent_id?: string | null; agent_name?: string;
+  }> | undefined,
   prompt: string,
   finalResponse: string,
   turns: Turn[],
@@ -291,6 +304,9 @@ export function rebuildItemsFromConversation(
           role: m.role as "user" | "assistant",
           content: m.content,
           ...(m.role === "user" && m.sender ? { sender: m.sender } : {}),
+          ...(m.role === "assistant"
+            ? { agentId: m.agent_id ?? null, agentName: m.agent_name || DEFAULT_AGENT_NAME }
+            : {}),
         })),
         artifacts: [],
       };
@@ -363,7 +379,10 @@ export function rebuildItemsFromConversation(
     const textBlocks = turn.text_blocks || [];
     const text = textBlocks.map((b) => b.text).join("\n\n").trim();
     if (text) {
-      items.push({ role: "assistant", content: text });
+      // Unknown while the run is still going: the panel then uses the agent
+      // the message was sent to.
+      const author = agentForTime(messages as AttributedMessage[] | undefined, turn.timestamp);
+      items.push({ role: "assistant", content: text, ...(author || {}) });
     }
   }
 
@@ -672,6 +691,32 @@ export default function ChatPanel({
     selectAgent,
     loadState: agentLoadState,
   } = useAgentIdentities(initialAgentId);
+  const agentsById = useMemo(
+    () => Object.fromEntries(agentIdentities.map((a) => [a.agent_id, a])),
+    [agentIdentities],
+  );
+  // Name replies only once an agent is involved, so plain Loma chats look as before.
+  const threadHasAgents = useMemo(
+    () => !!selectedAgentId || items.some((it) => !!it.agentId || !!it.replyAgentId),
+    [items, selectedAgentId],
+  );
+  /** Who wrote assistant item i: its saved agent, else the agent it was sent to. */
+  const replyAuthor = (index: number): { agentId: string | null; agentName: string } => {
+    const item = items[index];
+    if (item?.agentName) return { agentId: item.agentId ?? null, agentName: item.agentName };
+    for (let j = index - 1; j >= 0; j--) {
+      const prev = items[j];
+      if (prev.role === "user" && prev.replyAgentName) {
+        return { agentId: prev.replyAgentId ?? null, agentName: prev.replyAgentName };
+      }
+      if (prev.role === "assistant" && prev.agentName) {
+        return { agentId: prev.agentId ?? null, agentName: prev.agentName };
+      }
+    }
+    return selectedAgent
+      ? { agentId: selectedAgent.agent_id, agentName: selectedAgent.name }
+      : { agentId: null, agentName: DEFAULT_AGENT_NAME };
+  };
   const {
     tools: availableTools,
     skills: availableSkills,
@@ -978,7 +1023,12 @@ export default function ChatPanel({
       // Show message immediately
       setItems((prev) => [
         ...prev,
-        { role: "user", content: displayText, fileNames, files: filesToQueue, queued: !conversationId || hasFiles },
+        {
+          role: "user", content: displayText, fileNames, files: filesToQueue,
+          queued: !conversationId || hasFiles,
+          replyAgentName: selectedAgent?.name || DEFAULT_AGENT_NAME,
+          replyAgentId: selectedAgent?.agent_id ?? null,
+        },
       ]);
       if (!isOverride) {
         setInput("");
@@ -1041,7 +1091,11 @@ export default function ChatPanel({
       setPendingFiles([]);
     }
     if (!fromQueue) {
-      setItems((prev) => [...prev, { role: "user", content: displayMessage, fileNames, files: filesToSend }]);
+      setItems((prev) => [...prev, {
+        role: "user", content: displayMessage, fileNames, files: filesToSend,
+        replyAgentName: selectedAgent?.name || DEFAULT_AGENT_NAME,
+        replyAgentId: selectedAgent?.agent_id ?? null,
+      }]);
       // User sent a message — always snap down and resume following the stream.
       isAtBottomRef.current = true;
       scrollToBottom({ force: true });
@@ -1778,10 +1832,21 @@ export default function ChatPanel({
                 }
 
                 // Assistant message — editorial style, no bubble
+                const author = replyAuthor(i);
+                const authorAgent = author.agentId ? agentsById[author.agentId] : undefined;
                 return (
                   <div key={i} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
-                    <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
+                    {authorAgent ? (
+                      <AgentAvatar avatar={authorAgent.avatar} size={24} className="rounded-full shrink-0" />
+                    ) : (
+                      <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
+                    )}
                     <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
+                      {threadHasAgents && (
+                        <div className="not-prose mb-1 text-[11px] font-semibold text-muted-foreground" data-testid="reply-agent">
+                          {author.agentName}
+                        </div>
+                      )}
                       {item.content ? (
                         <MarkdownContent content={item.content} />
                       ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (

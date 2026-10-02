@@ -11,6 +11,7 @@ import { fetchUsers } from "../../lib/governance-api";
 import type { User } from "../../lib/governance-api";
 import ChatContextMenu from "../../components/ChatContextMenu";
 import ClientTimestamp from "../../components/ClientTimestamp";
+import { useAgentDirectory } from "../../hooks/useAgentDirectory";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -137,6 +138,9 @@ export default function ConversationsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [personFilter, setPersonFilter] = useState("");
   const [topicFilter, setTopicFilter] = useState("");
+  const [agentFilter, setAgentFilter] = useState("");
+  const [blockedOnly, setBlockedOnly] = useState(false);
+  const agents = useAgentDirectory();
   const [loading, setLoading] = useState(true);
   const [teamUsers, setTeamUsers] = useState<User[]>([]);
   const [personFilterReady, setPersonFilterReady] = useState(false);
@@ -166,7 +170,7 @@ export default function ConversationsPage() {
   useEffect(() => {
     if (!personFilterReady) return;
     loadData();
-  }, [page, sourceFilter, categoryFilter, debouncedSearch, personFilter, topicFilter, personFilterReady]);
+  }, [page, sourceFilter, categoryFilter, debouncedSearch, personFilter, topicFilter, agentFilter, blockedOnly, personFilterReady]);
 
   async function loadData() {
     setLoading(true);
@@ -179,6 +183,8 @@ export default function ConversationsPage() {
           search: debouncedSearch || undefined,
           person: personFilter || undefined,
           topic: topicFilter || undefined,
+          agent: agentFilter || undefined,
+          blocked: blockedOnly || undefined,
         }),
         page === 1 ? fetchStats() : Promise.resolve(null),
       ]);
@@ -192,7 +198,7 @@ export default function ConversationsPage() {
     }
   }
 
-  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || topicFilter || (canFilterUsers && personFilter !== session?.user?.email);
+  const hasActiveFilters = sourceFilter || categoryFilter || debouncedSearch || topicFilter || agentFilter || blockedOnly || (canFilterUsers && personFilter !== session?.user?.email);
 
   const clearFilters = useCallback(() => {
     setSourceFilter("");
@@ -200,6 +206,8 @@ export default function ConversationsPage() {
     setSearchQuery("");
     setDebouncedSearch("");
     setTopicFilter("");
+    setAgentFilter("");
+    setBlockedOnly(false);
     if (session?.user?.email) setPersonFilter(session.user.email);
     setPage(1);
   }, [session?.user?.email]);
@@ -305,6 +313,33 @@ export default function ConversationsPage() {
                 <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
+            <Select
+              value={agentFilter || "__all__"}
+              onValueChange={(val) => { setAgentFilter(val === "__all__" ? "" : val); setPage(1); }}
+            >
+              <SelectTrigger className="w-auto min-w-[110px] bg-card border-border text-[13px] text-foreground" aria-label="Filter by agent">
+                <SelectValue placeholder="All Agents" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Agents</SelectItem>
+                <SelectItem value="loma">Loma (default)</SelectItem>
+                {Object.values(agents)
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((a) => (
+                    <SelectItem key={a.agent_id} value={a.agent_id}>{a.name}</SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant={blockedOnly ? "secondary" : "outline"}
+              size="sm"
+              aria-pressed={blockedOnly}
+              onClick={() => { setBlockedOnly(!blockedOnly); setPage(1); }}
+              className={cn("h-9 text-[13px]", blockedOnly && "bg-amber-50 text-amber-800 border-amber-200")}
+              title="Only runs where an agent tried a tool or skill outside its scope"
+            >
+              Blocked calls
+            </Button>
             <div className="ml-auto flex items-center gap-0.5">
               {hasActiveFilters && (
                 <Tooltip>
@@ -403,6 +438,7 @@ export default function ConversationsPage() {
                       <div className="truncate font-medium text-foreground max-w-md" title={c.title || c.prompt?.slice(0, 80)}>
                         {c.title || (c.prompt ? c.prompt.slice(0, 60) + (c.prompt.length > 60 ? "..." : "") : "Untitled")}
                       </div>
+                      <RunAgentLine conversation={c} />
                       {c.claude_account && (
                         <div className="text-xs text-muted-foreground/60 truncate mt-0.5">{c.claude_account}</div>
                       )}
@@ -538,6 +574,7 @@ export default function ConversationsPage() {
                       <div className="text-[13px] font-medium text-foreground truncate">
                         {c.title || (c.prompt ? c.prompt.slice(0, 60) + (c.prompt.length > 60 ? "..." : "") : "Untitled")}
                       </div>
+                      <RunAgentLine conversation={c} />
                       <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground flex-wrap">
                         <span className={cn("inline-flex", sourceIconStyles[c.source] || "text-gray-400")}>
                           <SourceIcon source={c.source} size={12} />
@@ -604,5 +641,22 @@ export default function ConversationsPage() {
         )}
       </div>
     </TooltipProvider>
+  );
+}
+
+/** Agent name (when it isn't Loma) and a blocked-calls count under a run's title. */
+function RunAgentLine({ conversation }: { conversation: Conversation }) {
+  const agentName = conversation.metadata?.agent_id ? conversation.metadata?.agent_name || "Agent" : "";
+  const blocked = conversation.blocked_call_count || 0;
+  if (!agentName && !blocked) return null;
+  return (
+    <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
+      {agentName && <span className="truncate">{agentName}</span>}
+      {blocked > 0 && (
+        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-amber-50 text-amber-800">
+          {blocked} blocked
+        </Badge>
+      )}
+    </div>
   );
 }
