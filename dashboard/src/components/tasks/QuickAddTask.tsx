@@ -80,9 +80,66 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
     }
   };
 
+  const empty = !value.trim() && files.length === 0;
+  const textarea = (
+    <Textarea
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          void submit();
+        }
+      }}
+      onPaste={(e) => {
+        const pasted = filesFromClipboard(e.clipboardData);
+        if (pasted.length) {
+          e.preventDefault();
+          void addFiles(pasted);
+        }
+      }}
+      placeholder="What do you need done?"
+      rows={1}
+      className={cn(
+        "bg-transparent text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
+        // The one-row phone field grows with its text (field-sizing), up to maxHeight.
+        isMobile ? "min-w-0 flex-1 self-center px-1 py-2.5 overflow-y-auto dark:bg-transparent" : "w-full px-3 pt-3 pb-1.5 overflow-hidden",
+      )}
+      style={{ maxHeight: "120px" }}
+    />
+  );
+  const toolsPicker = (
+    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} />
+  );
+  const modelPicker = (
+    <ModelPicker
+      models={models}
+      selectedModel={selectedModel}
+      onSelect={selectModel}
+      loadState={loadState}
+    />
+  );
+  const sendButton = (
+    <Button
+      type="button"
+      size="icon-sm"
+      onClick={() => void submit()}
+      disabled={empty || busy}
+      aria-label="Add task"
+      className={cn(
+        "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-11 max-md:rounded-full",
+        empty && "max-md:hidden",
+      )}
+    >
+      {busy
+        ? <RiLoader4Line size={16} className="animate-spin" />
+        : <RiSendPlaneLine size={16} />}
+    </Button>
+  );
+
   return (
     <div
-      className="relative shrink-0 border-t border-border bg-background px-3 pt-2 pb-2"
+      className="relative shrink-0 border-t border-border bg-background px-3 pt-2 pb-2 max-md:px-0 max-md:pt-1.5 max-md:pb-0"
       {...dropHandlers}
     >
       {isDragOver && (
@@ -110,60 +167,36 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
       <div className="mx-auto w-full max-w-3xl">
       {error && <p className="mb-1 text-xs text-destructive">{error}</p>}
       <PendingFilesStrip files={files} onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))} />
-      <div className="flex flex-col bg-card border border-border rounded-xl focus-within:border-input transition-colors">
-        <Textarea
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-          onPaste={(e) => {
-            const pasted = filesFromClipboard(e.clipboardData);
-            if (pasted.length) {
-              e.preventDefault();
-              void addFiles(pasted);
-            }
-          }}
-          placeholder="What do you need done?"
-          rows={1}
-          className="w-full bg-transparent px-3 pt-3 pb-1.5 text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
-          style={{ maxHeight: "120px" }}
-        />
-        {/* Phones: the same one-row toolbar as the chat composer (attach,
-            model, settings sheet, mic/Send). The old wrapping toolbar stacked
-            Model, Tools/Skills and a 48px mic into three rows, which is what
-            pushed the composer down onto the bottom nav. */}
-        <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:gap-0">
-          <div className="flex min-w-0 items-center gap-1 max-md:flex-1 max-md:gap-0.5">
-            {isMobile && (
-              <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" className="size-11 shrink-0 rounded-full text-muted-foreground">
-                <RiAttachmentLine size={18} />
-              </Button>
-            )}
-            <div className="min-w-0 max-md:flex-1 max-md:[&_button]:h-11">
-              <ModelPicker
-                models={models}
-                selectedModel={selectedModel}
-                onSelect={selectModel}
-                loadState={loadState}
-              />
-            </div>
-            {isMobile ? (
-              <ComposerSettings title="Task settings" description="Choose the tools and skills for this task.">
-                <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} />
-              </ComposerSettings>
-            ) : (
-              <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} />
-            )}
+      {isMobile ? (
+        /* Phones: one row. Attach, model, tools and skills sit behind "+",
+           so the capture box costs the board one line instead of two. */
+        <div data-slot="task-composer" className="flex items-end gap-0.5 rounded-[26px] border border-border bg-card p-1 focus-within:border-input transition-colors">
+          <ComposerSettings trigger="plus" title="Task options" description="Attach files, or choose the model, tools and skills for this task." onAttach={() => fileInputRef.current?.click()}>
+            {modelPicker}
+            {toolsPicker}
+          </ComposerSettings>
+          {textarea}
+          <DictationButton
+            onText={(t) => setValue((prev) => appendDictation(prev, t))}
+            mobileProminent
+            hideIdleOnMobile={!empty}
+            compactMobile
+          />
+          {sendButton}
+        </div>
+      ) : (
+      <div data-slot="task-composer" className="flex flex-col bg-card border border-border rounded-xl focus-within:border-input transition-colors">
+        {textarea}
+        <div className="flex items-center justify-between gap-2 px-2 pb-2">
+          <div className="flex min-w-0 items-center gap-1">
+            <div className="min-w-0">{modelPicker}</div>
+            {toolsPicker}
           </div>
-          <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
+          <div className="ml-auto flex items-center gap-1 shrink-0">
             <DictationButton
               onText={(t) => setValue((prev) => appendDictation(prev, t))}
               mobileProminent
-              hideIdleOnMobile={!!value.trim() || files.length > 0}
+              hideIdleOnMobile={!empty}
               compactMobile
             />
             <Button
@@ -172,28 +205,15 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
               size="icon-sm"
               onClick={() => fileInputRef.current?.click()}
               title="Attach files"
-              className="text-muted-foreground hover:text-foreground max-md:hidden"
+              className="text-muted-foreground hover:text-foreground"
             >
               <RiAttachmentLine size={16} />
             </Button>
-            <Button
-              type="button"
-              size="icon-sm"
-              onClick={() => void submit()}
-              disabled={(!value.trim() && files.length === 0) || busy}
-              aria-label="Add task"
-              className={cn(
-                "bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground rounded-lg press-scale max-md:size-11 max-md:rounded-full",
-                !value.trim() && files.length === 0 && "max-md:hidden",
-              )}
-            >
-              {busy
-                ? <RiLoader4Line size={16} className="animate-spin" />
-                : <RiSendPlaneLine size={16} />}
-            </Button>
+            {sendButton}
           </div>
         </div>
       </div>
+      )}
       </div>
     </div>
   );

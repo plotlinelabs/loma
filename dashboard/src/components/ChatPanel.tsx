@@ -1415,6 +1415,17 @@ export default function ChatPanel({
     </>
   );
 
+  // Inside a conversation on a phone the composer is one row: attach, model,
+  // agent, tools and skills all sit behind "+" so the reading area gets the
+  // toolbar row back. The new-chat screen keeps its fuller composer.
+  const conversationPlus = (
+    <ComposerSettings trigger="plus" title="Chat options" description="Attach files, or choose the model, agent, tools and skills." onAttach={() => fileInputRef.current?.click()}>
+      <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
+      <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
+      <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+    </ComposerSettings>
+  );
+
   return (
     <div
       className="flex flex-col h-full"
@@ -1795,7 +1806,7 @@ export default function ChatPanel({
           </div>
 
           {/* Input — the bottom nav below it owns the home-indicator safe area */}
-          <div className="sticky bottom-0 bg-background px-3 pt-2.5 pb-2.5 shrink-0">
+          <div className="sticky bottom-0 bg-background px-3 pt-2.5 pb-2.5 max-md:px-2 max-md:pt-1.5 max-md:pb-1.5 shrink-0">
             {readOnly ? <ReadOnlyComposerNotice /> : <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1806,7 +1817,11 @@ export default function ChatPanel({
               {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
-              <div className="flex flex-col bg-card border border-border rounded-2xl composer-shadow focus-within:border-input transition-colors">
+              <div className={cn(
+                "flex bg-card border border-border composer-shadow focus-within:border-input transition-colors",
+                isMobile ? "items-end gap-0.5 rounded-[26px] p-1" : "flex-col rounded-2xl",
+              )}>
+                {isMobile && conversationPlus}
                 <Textarea
                   ref={inputRef}
                   value={input}
@@ -1818,15 +1833,18 @@ export default function ChatPanel({
                     // message in view above the composer.
                     if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : "Type a follow-up while agent is working...") : "Ask the agent something..."}
+                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : "Ask the agent something..."}
                   rows={1}
-                  className="w-full bg-transparent px-3 pt-3 pb-1.5 text-base md:text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className={cn(
+                    "bg-transparent text-base md:text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
+                    isMobile ? "min-w-0 flex-1 self-center px-1 py-2.5 dark:bg-transparent" : "w-full px-3 pt-3 pb-1.5",
+                  )}
                   style={{ maxHeight: "160px" }}
                 />
-                <div className="flex items-center justify-between gap-2 px-2 pb-2 max-md:gap-0 max-md:px-2 max-md:pb-2">
-                  <div className="flex min-w-0 items-center gap-0.5 max-md:flex-1">
+                <div className={cn(isMobile ? "contents" : "flex items-center justify-between gap-2 px-2 pb-2")}>
+                  {!isMobile && <div className="flex min-w-0 items-center gap-0.5">
                     {composerPickers}
-                  </div>
+                  </div>}
                   <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
                     <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}

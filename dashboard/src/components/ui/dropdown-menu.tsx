@@ -6,10 +6,44 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 import { RiCheckLine, RiArrowRightSLine } from "@remixicon/react"
 
+// Radix opens a dropdown on `pointerdown`. With a finger that is the first
+// contact of a scroll, so a scroll that starts on a trigger (a card's Priority
+// tag, its overflow button) opened the menu instead of scrolling. For touch
+// and pen we cancel that pointerdown and toggle on `click`, which the browser
+// only fires for a completed tap (a scroll ends in `pointercancel`, no click).
+// Mouse and keyboard keep Radix's own behaviour.
+const TouchToggleContext = React.createContext<(() => void) | null>(null)
+
 function DropdownMenu({
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false)
+  const open = openProp ?? uncontrolledOpen
+  const setOpen = React.useCallback(
+    (next: boolean) => {
+      setUncontrolledOpen(next)
+      onOpenChange?.(next)
+    },
+    [onOpenChange]
+  )
+  const openRef = React.useRef(open)
+  React.useEffect(() => {
+    openRef.current = open
+  }, [open])
+  const toggle = React.useCallback(() => setOpen(!openRef.current), [setOpen])
+  return (
+    <TouchToggleContext.Provider value={toggle}>
+      <DropdownMenuPrimitive.Root
+        data-slot="dropdown-menu"
+        open={open}
+        onOpenChange={setOpen}
+        {...props}
+      />
+    </TouchToggleContext.Provider>
+  )
 }
 
 function DropdownMenuPortal({
@@ -21,11 +55,29 @@ function DropdownMenuPortal({
 }
 
 function DropdownMenuTrigger({
+  onPointerDown,
+  onClick,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
+  const toggle = React.useContext(TouchToggleContext)
+  const touchPress = React.useRef(false)
   return (
     <DropdownMenuPrimitive.Trigger
       data-slot="dropdown-menu-trigger"
+      onPointerDown={(event) => {
+        onPointerDown?.(event)
+        touchPress.current = !!toggle && event.pointerType !== "mouse"
+        // Radix skips its open-on-pointerdown when the event is already
+        // prevented. This does not block scrolling or the click that follows.
+        if (touchPress.current) event.preventDefault()
+      }}
+      onClick={(event) => {
+        onClick?.(event)
+        const wasTouch = touchPress.current
+        touchPress.current = false
+        // `detail === 0` is a keyboard click; Radix already handled the key.
+        if (wasTouch && event.detail !== 0 && !props.disabled) toggle?.()
+      }}
       {...props}
     />
   )
