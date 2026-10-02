@@ -1,8 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
-  RiCheckLine, RiCloseLine, RiDeleteBinLine, RiExternalLinkLine, RiInboxArchiveLine, RiSparkling2Line,
+  DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  RiCheckLine, RiCloseLine, RiDeleteBinLine, RiDraggable, RiExternalLinkLine, RiInboxArchiveLine, RiSparkling2Line,
 } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -28,6 +35,7 @@ import {
 import { isDraft, isParked } from "./taskDisplay";
 import { AssigneeBadge } from "./boardExtras";
 import { AddExistingTaskDialog } from "./MoveTaskDialogs";
+import { rankBetween } from "./transitions";
 
 const shortName = (email: string) => email.split("@")[0];
 
@@ -140,6 +148,46 @@ function taskLabel(task: Task): { text: string; className: string } | null {
   return null;
 }
 
+/**
+ * Card checklist order. Tasks get `task_rank = -createdEpoch` on creation, so
+ * sorting by descending rank keeps the oldest-first default while letting a
+ * drag slot an explicit rank between two neighbours.
+ */
+const cardOrderKey = (task: Task) => -(task.task_rank ?? 0);
+
+function SortableTaskRow({ id, disabled, children }: {
+  id: string;
+  disabled: boolean;
+  children: ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
+    useSortable({ id, disabled });
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn(
+        "group relative flex items-center gap-2 rounded-lg px-1.5 py-1.5 hover:bg-muted/60",
+        isDragging && "z-10 bg-muted/80 opacity-80",
+      )}
+    >
+      {!disabled && (
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          aria-label="Drag to reorder"
+          className="-ml-1 shrink-0 cursor-grab touch-none text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
+        >
+          <RiDraggable className="h-3.5 w-3.5" />
+        </button>
+      )}
+      {children}
+    </li>
+  );
+}
+
 function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, onOpenTask, readOnly, myEmail }:
   Omit<CardPanelProps, "open" | "card"> & { card: TaskCardItem }) {
   const [notes, setNotes] = useState(card.notes);
@@ -154,10 +202,16 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
   const cards = board.cards ?? [];
   const tasks = board.tasks
     .filter((task) => task.task_card_id === card.card_id)
-    // Open items first, ticked-off ones at the bottom.
+    // Open items first, ticked-off ones at the bottom; manual order within each.
     .sort((a, b) => Number(a.column === "done") - Number(b.column === "done")
+      || cardOrderKey(a) - cardOrderKey(b)
       || (a.task_created_at ?? "").localeCompare(b.task_created_at ?? ""));
   const done = tasks.filter((task) => task.column === "done").length;
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const run = async (optimistic: TasksBoardResponse | null, request: () => Promise<unknown>, fallback: string) => {
     setError(null);
@@ -197,6 +251,23 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
       void run(patchTask(task.conversation_id, { task_status: "done", column: "done" }),
         () => updateTask(task.conversation_id, { task_status: "done" }), "Could not update task");
     }
+  };
+
+  const reorderTask = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return;
+    const task = tasks.find((t) => t.conversation_id === active.id);
+    const target = tasks.find((t) => t.conversation_id === over.id);
+    // Done items stay pinned below open ones, so only reorder within a group.
+    if (!task || !target || (task.column === "done") !== (target.column === "done")) return;
+    const group = tasks.filter((t) => (t.column === "done") === (task.column === "done"));
+    const to = group.indexOf(target);
+    // Dropping on a row moves the dragged task into that row's slot.
+    const moved = arrayMove(group, group.indexOf(task), to);
+    const before = to > 0 ? cardOrderKey(moved[to - 1]) : null;
+    const after = to < moved.length - 1 ? cardOrderKey(moved[to + 1]) : null;
+    const rank = -rankBetween(before, after);
+    void run(patchTask(task.conversation_id, { task_rank: rank }),
+      () => updateTask(task.conversation_id, { task_rank: rank }), "Could not reorder task");
   };
 
   const removeTask = (task: Task) =>
@@ -293,13 +364,15 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
               No tasks yet. Add a to-do to tick off yourself, or ask Loma to do it.
             </p>
           )}
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderTask}>
+          <SortableContext items={tasks.map((t) => t.conversation_id)} strategy={verticalListSortingStrategy}>
           <ul className="space-y-1">
             {tasks.map((task) => {
               const isDone = task.column === "done";
               const label = taskLabel(task);
               const mine = !!myEmail && task.owner === myEmail;
               return (
-                <li key={task.conversation_id} className="group flex items-center gap-2 rounded-lg px-1.5 py-1.5 hover:bg-muted/60">
+                <SortableTaskRow key={task.conversation_id} id={task.conversation_id} disabled={!!readOnly}>
                   <button
                     type="button"
                     disabled={readOnly}
@@ -340,10 +413,12 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
                       <RiCloseLine className="h-4 w-4" />
                     </button>
                   )}
-                </li>
+                </SortableTaskRow>
               );
             })}
           </ul>
+          </SortableContext>
+          </DndContext>
           {!readOnly && (
             <div className="space-y-1.5 rounded-lg border border-border p-2">
               <Input
