@@ -344,8 +344,11 @@ export default function TasksPage() {
   // the list to 0 and pushes the pinned composer down over the bottom nav.
   const topBar = (
     <div className="flex flex-col gap-2">
-      <div className="pwa-header-offset flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+      {/* Phones: a shared board's name plus the action buttons do not fit on
+          one 390px row, so the actions wrap below the title instead of
+          squeezing it to nothing. */}
+      <div className="pwa-header-offset flex items-center justify-between gap-2 max-md:flex-wrap">
+        <div className="flex min-w-0 items-center gap-2 max-md:max-w-full">
           <h1 className="min-w-0">
             <BoardSwitcher
               boards={boards}
