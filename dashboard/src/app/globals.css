@@ -1026,19 +1026,6 @@
   overscroll-behavior: contain;
 }
 
-/* Desktop: the nav shares the scroll region with projects/pinned/recents (so a
-   short phone drawer can scroll it), but it must stay pinned while a long
-   Recents list scrolls, as it was before. Only on windows tall enough to show
-   the whole nav; shorter ones keep it scrollable so no item becomes unreachable. */
-@media (min-width: 768px) and (min-height: 640px) {
-  .loma-sidebar .loma-sidebar-nav {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: var(--sidebar);
-  }
-}
-
 ::selection { background: #DDF7A8; color: #061B20; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

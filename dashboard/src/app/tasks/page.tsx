@@ -26,14 +26,12 @@ import {
   fetchBoardViews,
   saveBoardSettings,
   updateBoardView,
-  fetchTaskBoards,
   fetchTasksBoard,
   updateTask,
   type BoardView,
   type CardFilter,
   type CardFilterMatch,
   type CardViewState,
-  type NeedsYouTask,
   type Task,
   type TaskBoardSummary,
   type TaskCardItem,
@@ -62,8 +60,6 @@ import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { AgentAttention } from "@/components/tasks/AgentAttention";
 import { BoardSwitcher } from "@/components/tasks/BoardSwitcher";
-import { BoardSidebar } from "@/components/tasks/BoardSidebar";
-import { BoardCommand } from "@/components/tasks/BoardCommand";
 import { ManageBoardDialog } from "@/components/tasks/ManageBoardDialog";
 import { CardBoard } from "@/components/tasks/CardBoard";
 import { CardTasksView } from "@/components/tasks/CardTasksView";
@@ -77,12 +73,9 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { MobileTopBarActions, MobileTopBarTitle } from "@/components/mobile/MobileChrome";
 import { MobileBoardActions } from "@/components/mobile/MobileBoardActions";
 import { cn } from "@/lib/utils";
+import { BOARD_STORAGE_KEY, useBoards } from "@/lib/BoardsContext";
 
 const POLL_INTERVAL_MS = 5000;
-// Last board opened on this device, so the page reopens where you left off.
-const BOARD_STORAGE_KEY = "loma-task-board";
-// Desktop board list: remembered as collapsed or open on this device.
-const BOARDS_SIDEBAR_STORAGE_KEY = "loma-boards-sidebar-collapsed";
 // Card boards: last view (cards or tasks) used on each board.
 const CARD_VIEW_STORAGE_PREFIX = "loma-card-board-view:";
 type CardBoardView = "cards" | "tasks";
@@ -117,16 +110,9 @@ export default function TasksPage() {
   const [boardId, setBoardId] = useState<string>(() =>
     urlParam("board") || (typeof window !== "undefined" && window.localStorage.getItem(BOARD_STORAGE_KEY)) || PERSONAL_BOARD_ID,
   );
-  const [boards, setBoards] = useState<TaskBoardSummary[]>([]);
-  // Restored after mount: the sidebar is server-rendered open.
-  const [boardsCollapsed, setBoardsCollapsed] = useState(false);
-  useEffect(() => {
-    setBoardsCollapsed(window.localStorage.getItem(BOARDS_SIDEBAR_STORAGE_KEY) === "1");
-  }, []);
-  const toggleBoardsCollapsed = () => setBoardsCollapsed((collapsed) => {
-    window.localStorage.setItem(BOARDS_SIDEBAR_STORAGE_KEY, collapsed ? "0" : "1");
-    return !collapsed;
-  });
+  // The board list (and its needs-you counts) is shared with the nav.
+  const { boards, reload: loadBoards, request, consumeRequest, setCurrentBoardId } = useBoards();
+  useEffect(() => { setCurrentBoardId(boardId); }, [boardId, setCurrentBoardId]);
   const [manageOpen, setManageOpen] = useState(false);
   const [managingBoard, setManagingBoard] = useState<TaskBoardSummary | null>(null);
   const previousColumns = useRef<Map<string, string> | null>(null);
@@ -208,14 +194,6 @@ export default function TasksPage() {
   const hasBoardRef = useRef(false);
   const refreshVersion = useRef(0);
 
-  const loadBoards = useCallback(async () => {
-    try {
-      setBoards((await fetchTaskBoards()).boards);
-    } catch {
-      // The switcher keeps its last list; the board itself still loads.
-    }
-  }, []);
-
   const selectBoard = useCallback((nextId: string) => {
     window.localStorage.setItem(BOARD_STORAGE_KEY, nextId);
     if (nextId === boardId) return;
@@ -240,19 +218,19 @@ export default function TasksPage() {
     setBoardId(nextId);
   }, [boardId]);
 
-  // Quick switcher (Cmd/Ctrl+K) and the board jump keys.
-  const [commandOpen, setCommandOpen] = useState(false);
-  // Set after mount: shortcut labels follow the platform.
-  const [mac, setMac] = useState(false);
-  useEffect(() => { setMac(/Mac|iPhone|iPad/.test(navigator.platform)); }, []);
-  // A waiting task picked on another board: opened once that board loads.
+  // Requests from the nav or the quick switcher: open a board (and maybe one
+  // of its tasks, once that board loads), or create a board.
   const pendingTaskId = useRef<string | null>(null);
-  const openWaitingTask = (task: NeedsYouTask) => {
-    pendingTaskId.current = task.conversation_id;
-    if (task.board_id !== boardId) return selectBoard(task.board_id);
+  useEffect(() => {
+    if (!request) return;
+    consumeRequest();
+    if (request.kind === "create") return openManageBoard(null);
+    pendingTaskId.current = request.taskId ?? null;
+    if (request.boardId !== boardId) selectBoard(request.boardId);
     // Same board: nudge the effect below.
-    setBoard((current) => (current ? { ...current } : current));
-  };
+    else if (request.taskId) setBoard((current) => (current ? { ...current } : current));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request]);
   useEffect(() => {
     if (!board || !pendingTaskId.current) return;
     const task = board.tasks.find((t) => t.conversation_id === pendingTaskId.current);
@@ -261,31 +239,6 @@ export default function TasksPage() {
     setChatTask(task);
     setChatDrawerOpen(true);
   }, [board]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const mod = event.metaKey || event.ctrlKey;
-      if (mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setCommandOpen((open) => !open);
-        return;
-      }
-      // Boards 1-9: Alt/Option+number. Cmd/Ctrl+number also works where the
-      // browser passes it on (the installed app); in a tab it switches tabs.
-      const digit = /^Digit([1-9])$/.exec(event.code);
-      if (!digit || event.shiftKey || mod === event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      // Option+number types a character on a Mac, so leave text fields alone.
-      if (event.altKey && target?.closest("input, textarea, [contenteditable='true']")) return;
-      const next = boards[Number(digit[1]) - 1];
-      if (!next) return;
-      event.preventDefault();
-      setCommandOpen(false);
-      selectBoard(next.id);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [boards, selectBoard]);
 
   const refresh = useCallback(async () => {
     // Pause polling when the tab is hidden — but always allow the initial
@@ -326,22 +279,17 @@ export default function TasksPage() {
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
     refresh();
-    // The board list rides the same poll so its "needs you" counts stay live.
-    const interval = setInterval(() => {
-      refresh();
-      if (!document.hidden) void loadBoards();
-    }, POLL_INTERVAL_MS);
+    // The board list polls on its own (BoardsContext).
+    const interval = setInterval(refresh, POLL_INTERVAL_MS);
     const onVisible = () => {
-      if (document.hidden) return;
-      refresh();
-      void loadBoards();
+      if (!document.hidden) refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [sessionStatus, refresh, loadBoards]);
+  }, [sessionStatus, refresh]);
 
   const dismissAgentWork = async () => {
     ++refreshVersion.current;
@@ -444,6 +392,8 @@ export default function TasksPage() {
   }
   const activeTagFilterCount = includedTagIds.length + excludedTagIds.length;
   const currentBoard = board?.board ?? boards.find((b) => b.id === boardId);
+  // The board list carries the emoji (Personal's is per person).
+  const boardEmoji = boards.find((b) => b.id === boardId)?.emoji;
   // View-only members see the board but can't add, move or edit cards.
   const readOnly = currentBoard?.role === "viewer";
   // Card board: columns hold cards (deals, candidates...) with tasks inside.
@@ -714,11 +664,12 @@ export default function TasksPage() {
           paint, before useIsMobile has resolved. */}
       {!isMobile && <div className="pwa-header-offset flex items-center justify-between gap-2 max-md:hidden">
         <div className="flex min-w-0 items-center gap-2">
-          {/* Desktop switches boards from the sidebar, so the title is plain. */}
+          {/* Desktop switches boards from the nav, so the title is plain. */}
           <h1 className="min-w-0">
-            <span className="flex min-w-0 items-center gap-1 text-lg font-semibold">
-              {currentBoard?.shared && <RiTeamLine className="h-4 w-4 shrink-0 text-muted-foreground" />}
+            <span className="flex min-w-0 items-center gap-1.5 text-lg font-semibold">
+              {boardEmoji && <span aria-hidden className="shrink-0 text-[18px] leading-none">{boardEmoji}</span>}
               <span className="truncate">{currentBoard?.shared ? currentBoard.name : "Tasks"}</span>
+              {currentBoard?.shared && <RiTeamLine aria-label="Shared board" className="h-4 w-4 shrink-0 text-muted-foreground" />}
             </span>
           </h1>
           {viewOnlyBadge}
@@ -893,20 +844,7 @@ export default function TasksPage() {
 
   return (
     <BoardExtrasContext.Provider value={boardExtras}>
-    <div className="flex h-full min-h-0 md:gap-4 md:p-4 lg:p-6">
-      {!isMobile && (
-        <BoardSidebar
-          boards={boards}
-          currentId={boardId}
-          collapsed={boardsCollapsed}
-          mac={mac}
-          onToggleCollapsed={toggleBoardsCollapsed}
-          onSelect={selectBoard}
-          onCreate={() => openManageBoard(null)}
-          onSearch={() => setCommandOpen(true)}
-        />
-      )}
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col space-y-2">
+    <div className="flex h-full min-h-0 flex-col space-y-2 md:p-4 lg:p-6">
       {mobileTopBar}
       {!boardOwnsTopBar && topBar}
 
@@ -1065,25 +1003,12 @@ export default function TasksPage() {
           : viewSummary(viewDialog?.mode === "duplicate" && viewDialog.view ? viewDialog.view : viewState) || undefined}
         onSubmit={submitViewDialog}
       />
-      <BoardCommand
-        open={commandOpen}
-        onOpenChange={setCommandOpen}
-        boards={boards}
-        currentId={boardId}
-        mac={mac}
-        sidebarCollapsed={boardsCollapsed}
-        onSelectBoard={selectBoard}
-        onOpenTask={openWaitingTask}
-        onCreateBoard={() => openManageBoard(null)}
-        onToggleSidebar={toggleBoardsCollapsed}
-      />
       <MoveToBoardDialog
         task={movingTask}
         open={!!movingTask}
         onOpenChange={(open) => { if (!open) setMovingTask(null); }}
         onMoved={refresh}
       />
-    </div>
     </div>
     </BoardExtrasContext.Provider>
   );

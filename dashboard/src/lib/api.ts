@@ -1210,6 +1210,8 @@ export interface TaskBoardSummary {
   members: TaskBoardMember[];
   /** Board list only: the caller's tasks on this board that are waiting on them. */
   needs_you?: number;
+  /** Shown in the nav. Owners set it on shared boards; Personal is per person. */
+  emoji?: string;
 }
 
 export type BoardFieldType =
@@ -1371,11 +1373,24 @@ export function deleteTaskCard(cardId: string): Promise<{ deleted: boolean; move
 
 export function updateTaskBoard(
   boardId: string,
-  updates: { name?: string; members?: TaskBoardMember[] },
+  updates: { name?: string; members?: TaskBoardMember[]; emoji?: string },
 ): Promise<{ board: TaskBoardSummary }> {
   return boardRequest(`/${encodeURIComponent(boardId)}`, {
     method: "PATCH", body: JSON.stringify(updates),
   }, "Failed to update board");
+}
+
+/** The caller's own board list settings: drag order and Personal's emoji. */
+export async function updateBoardPrefs(prefs: { order?: string[]; personal_emoji?: string }): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/tasks/boards-prefs`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to save board settings: ${res.status}`);
+  }
 }
 
 export function deleteTaskBoard(boardId: string): Promise<{ deleted: boolean; moved: number }> {

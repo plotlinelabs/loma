@@ -39,7 +39,10 @@ class FakeRequest:
 
 
 def _db(task_board=SHARED, conversation=None, users_find=None, card=None):
+    boards_cursor = MagicMock()
+    boards_cursor.to_list = AsyncMock(return_value=[])
     task_boards = SimpleNamespace(
+        find=MagicMock(return_value=boards_cursor),
         find_one=AsyncMock(return_value=task_board),
         insert_one=AsyncMock(),
         update_one=AsyncMock(),
@@ -469,3 +472,95 @@ async def test_needs_you_lists_waiting_tasks_across_boards(monkeypatch):
     query = db.conversations.find.call_args.args[0]
     assert query["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
     assert query["task_status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_list_boards_follows_callers_order_and_emoji(monkeypatch):
+    db = _db()
+    other = {**SHARED, "board_id": "hire22", "name": "Hiring", "emoji": "🧑‍💼"}
+    newer = {**SHARED, "board_id": "new333", "name": "New"}
+    boards_cursor = MagicMock()
+    boards_cursor.sort.return_value.to_list = AsyncMock(return_value=[SHARED, other, newer])
+    db.task_boards.find = MagicMock(return_value=boards_cursor)
+    waiting_cursor = MagicMock()
+    waiting_cursor.to_list = AsyncMock(return_value=[])
+    db.conversations.aggregate = MagicMock(return_value=waiting_cursor)
+    db.users.find_one = AsyncMock(return_value={
+        "board_prefs": {"order": ["hire22", "personal", "gone", "deals1"], "personal_emoji": "🐶"}})
+    _as(monkeypatch, db, OWNER)
+
+    boards = json.loads((await task_routes.handle_list_boards(FakeRequest())).body)["boards"]
+
+    # Ordered boards first, unknown ids skipped, unordered (new) boards last.
+    assert [b["id"] for b in boards] == ["hire22", "personal", "deals1", "new333"]
+    emojis = {b["id"]: b["emoji"] for b in boards}
+    assert emojis["hire22"] == "🧑‍💼" and emojis["personal"] == "🐶"
+    assert emojis["deals1"] in task_routes.DEFAULT_BOARD_EMOJIS
+
+
+@pytest.mark.asyncio
+async def test_board_prefs_saves_order_and_personal_emoji(monkeypatch):
+    db = _db()
+    _as(monkeypatch, db, VIEWER)
+
+    response = await task_routes.handle_put_board_prefs(
+        FakeRequest({"order": ["deals1", "personal", "deals1"], "personal_emoji": "🐶"}))
+
+    assert response.status == 200
+    assert db.users.update_one.await_args.args == (
+        {"email": VIEWER},
+        {"$set": {"board_prefs.order": ["deals1", "personal"], "board_prefs.personal_emoji": "🐶"}},
+    )
+    for bad in ({"order": "deals1"}, {"order": [1]}, {"personal_emoji": "ab"}, {"personal_emoji": "🐶 🐱"}, {}):
+        assert (await task_routes.handle_put_board_prefs(FakeRequest(bad))).status == 400
+
+
+@pytest.mark.asyncio
+async def test_only_owners_set_a_shared_boards_emoji(monkeypatch):
+    db = _db()
+    _as(monkeypatch, db, EDITOR)
+    request = FakeRequest({"emoji": "📣"}, match_info={"board_id": "deals1"})
+    assert (await task_routes.handle_update_board(request)).status == 403
+
+    _as(monkeypatch, db, OWNER)
+    response = await task_routes.handle_update_board(request)
+    assert response.status == 200
+    assert db.task_boards.update_one.await_args.args[1]["$set"]["emoji"] == "📣"
+    assert json.loads(response.body)["board"]["emoji"] == "📣"
+    bad = FakeRequest({"emoji": "x"}, match_info={"board_id": "deals1"})
+    assert (await task_routes.handle_update_board(bad)).status == 400
+
+
+@pytest.mark.asyncio
+async def test_new_board_gets_an_emoji(monkeypatch):
+    db = _db()
+    _as(monkeypatch, db, OWNER)
+    picked = json.loads((await task_routes.handle_create_board(FakeRequest({"name": "Ops", "emoji": "🛠️"}))).body)
+    assert picked["board"]["emoji"] == "🛠️"
+    default = json.loads((await task_routes.handle_create_board(FakeRequest({"name": "Ops"}))).body)
+    assert default["board"]["emoji"] in task_routes.DEFAULT_BOARD_EMOJIS
+
+
+def test_default_emojis_skip_ones_in_use():
+    first = task_routes._default_board_emoji("abc")
+    assert task_routes._default_board_emoji("abc") == first
+    assert task_routes._default_board_emoji("abc", {first}) != first
+    every = set(task_routes.DEFAULT_BOARD_EMOJIS)
+    assert task_routes._default_board_emoji("abc", every) in every
+
+
+@pytest.mark.asyncio
+async def test_list_boards_gives_older_boards_distinct_emojis(monkeypatch):
+    db = _db()
+    old = [{**SHARED, "board_id": f"b{i}", "name": f"B{i}"} for i in range(5)]
+    boards_cursor = MagicMock()
+    boards_cursor.sort.return_value.to_list = AsyncMock(return_value=old)
+    db.task_boards.find = MagicMock(return_value=boards_cursor)
+    waiting_cursor = MagicMock()
+    waiting_cursor.to_list = AsyncMock(return_value=[])
+    db.conversations.aggregate = MagicMock(return_value=waiting_cursor)
+    _as(monkeypatch, db, OWNER)
+
+    boards = json.loads((await task_routes.handle_list_boards(FakeRequest())).body)["boards"]
+    emojis = [b["emoji"] for b in boards]
+    assert len(set(emojis)) == len(emojis)
