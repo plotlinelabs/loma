@@ -3,7 +3,7 @@
 import { createContext, useContext } from "react";
 import { cn } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { Task, TaskBoardRole, TaskBoardSummary } from "@/lib/api";
+import type { CardFilter, CardFilterMatch, Task, TaskBoardRole, TaskBoardSummary } from "@/lib/api";
 
 /** Board-wide state the task components read without prop drilling. */
 export interface BoardExtras {
@@ -14,12 +14,15 @@ export interface BoardExtras {
   assignable: string[];
   /** "Assigned to me" filter is on. */
   assignedToMe: boolean;
+  /** Card boards: field filters (from the Filter menu or a saved view). */
+  cardFilters: CardFilter[];
+  filterMatch: CardFilterMatch;
   /** Opens the "Move to board" picker for one of your tasks. */
   onMoveToBoard?: (task: Task) => void;
 }
 
 export const BoardExtrasContext = createContext<BoardExtras>({
-  myEmail: null, role: null, assignable: [], assignedToMe: false,
+  myEmail: null, role: null, assignable: [], assignedToMe: false, cardFilters: [], filterMatch: "all",
 });
 
 export const useBoardExtras = () => useContext(BoardExtrasContext);

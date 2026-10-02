@@ -20,11 +20,19 @@ import {
   basePath,
   canRunTask,
   createTask,
+  createBoardView,
   createTaskCard,
+  deleteBoardView,
+  fetchBoardViews,
   saveBoardSettings,
+  updateBoardView,
   fetchTaskBoards,
   fetchTasksBoard,
   updateTask,
+  type BoardView,
+  type CardFilter,
+  type CardFilterMatch,
+  type CardViewState,
   type Task,
   type TaskBoardSummary,
   type TaskCardItem,
@@ -59,6 +67,9 @@ import { CardTasksView } from "@/components/tasks/CardTasksView";
 import { CardPanel } from "@/components/tasks/CardPanel";
 import { MoveToBoardDialog } from "@/components/tasks/MoveTaskDialogs";
 import { BoardExtrasContext, assignablePeople, type BoardExtras } from "@/components/tasks/boardExtras";
+import { CardFilterMenu } from "@/components/tasks/CardFilterMenu";
+import { BoardViewMenu, SaveViewDialog } from "@/components/tasks/BoardViewMenu";
+import { EMPTY_VIEW_STATE, liveFilters, sameViewState } from "@/components/tasks/cardFilters";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { MobileTopBarActions, MobileTopBarTitle } from "@/components/mobile/MobileChrome";
 import { MobileBoardActions } from "@/components/mobile/MobileBoardActions";
@@ -74,6 +85,24 @@ const readCardView = (id: string): CardBoardView =>
   typeof window !== "undefined" && window.localStorage.getItem(CARD_VIEW_STORAGE_PREFIX + id) === "tasks"
     ? "tasks"
     : "cards";
+// Card boards: the open view and its (possibly unsaved) filters, per board.
+const VIEW_STORAGE_PREFIX = "loma-board-view:";
+
+interface StoredViewState { viewId: string | null; filters: CardFilter[]; match: CardFilterMatch }
+
+function readStoredView(boardId: string): StoredViewState | null {
+  try {
+    const raw = window.localStorage.getItem(VIEW_STORAGE_PREFIX + boardId);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && Array.isArray(parsed.filters) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `?board=` / `?view=` from a copied view link. */
+const urlParam = (name: string) =>
+  typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get(name);
 
 export default function TasksPage() {
   const { data: session, status: sessionStatus } = useSession();
@@ -81,7 +110,7 @@ export default function TasksPage() {
   const isMobile = useIsMobile();
   const [board, setBoard] = useState<TasksBoardResponse | null>(null);
   const [boardId, setBoardId] = useState<string>(() =>
-    (typeof window !== "undefined" && window.localStorage.getItem(BOARD_STORAGE_KEY)) || PERSONAL_BOARD_ID,
+    urlParam("board") || (typeof window !== "undefined" && window.localStorage.getItem(BOARD_STORAGE_KEY)) || PERSONAL_BOARD_ID,
   );
   const [boards, setBoards] = useState<TaskBoardSummary[]>([]);
   const [manageOpen, setManageOpen] = useState(false);
@@ -130,6 +159,14 @@ export default function TasksPage() {
   };
   // Shared boards: only show tasks (or cards holding tasks) assigned to me.
   const [assignedToMe, setAssignedToMe] = useState(false);
+  // Card boards: field filters and saved views (named sets of filters).
+  const [cardFilters, setCardFilters] = useState<CardFilter[]>([]);
+  const [filterMatch, setFilterMatch] = useState<CardFilterMatch>("all");
+  const [views, setViews] = useState<BoardView[]>([]);
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  // Board whose stored view/filters were restored (so saving starts after).
+  const [viewsReadyFor, setViewsReadyFor] = useState<string | null>(null);
+  const [viewDialog, setViewDialog] = useState<{ mode: "create" | "rename" | "duplicate"; view?: BoardView } | null>(null);
   // Personal task being moved into a card.
   const [movingTask, setMovingTask] = useState<Task | null>(null);
   // null = push unavailable (unsupported browser, insecure context, or no VAPID keys)
@@ -174,11 +211,18 @@ export default function TasksPage() {
     setBoard(null);
     setIncludedTagIds([]);
     setExcludedTagIds([]);
+    setCardFilters([]);
+    setFilterMatch("all");
+    setViews([]);
+    setActiveViewId(null);
+    setViewsReadyFor(null);
     setChatDrawerOpen(false);
     setChatTask(null);
     setCardPanelOpen(false);
     setPanelCard(null);
     returnToCard.current = false;
+    // A copied view link belongs to the board it was opened on.
+    if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
     setBoardId(nextId);
   }, [boardId]);
 
@@ -345,15 +389,165 @@ export default function TasksPage() {
   const chatReadOnly = !!chatTask?.owner && !!myEmail && !canRunTask(chatTask, myEmail, currentBoard?.role);
   const assignable = assignablePeople(currentBoard);
   const assignedFilterOn = assignedToMe && !!currentBoard?.shared;
+
+  // ── Card board filters and saved views ──
+  // Filters on a field that was since deleted are dropped.
+  const activeFilters = useMemo(
+    () => (board?.fields ? liveFilters(cardFilters, board.fields) : cardFilters),
+    [board?.fields, cardFilters],
+  );
+  const activeView = views.find((v) => v.id === activeViewId) ?? null;
+  const viewState: CardViewState = {
+    filters: activeFilters, match: filterMatch, search: searchQuery, assigned_to_me: assignedFilterOn,
+  };
+  const viewDirty = !sameViewState(viewState, activeView ?? EMPTY_VIEW_STATE);
+  const canSaveView = !sameViewState(viewState, EMPTY_VIEW_STATE);
+
+  const applyView = useCallback((view: BoardView | null) => {
+    setActiveViewId(view?.id ?? null);
+    setCardFilters(view?.filters ?? []);
+    setFilterMatch(view?.match ?? "all");
+    setSearchQuery(view?.search ?? "");
+    setAssignedToMe(view?.assigned_to_me ?? false);
+  }, []);
+
+  // Load the board's views, then reopen the linked view, or the view and
+  // filters you last had on this board.
+  useEffect(() => {
+    if (!cardMode || sessionStatus !== "authenticated") return;
+    let cancelled = false;
+    fetchBoardViews(boardId).then(({ views: loaded }) => {
+      if (cancelled) return;
+      setViews(loaded);
+      const linked = urlParam("board") === boardId ? urlParam("view") : null;
+      const stored = readStoredView(boardId);
+      const target = loaded.find((v) => v.id === (linked ?? stored?.viewId));
+      if (linked && target) {
+        applyView(target);
+      } else if (stored) {
+        setActiveViewId(target?.id ?? null);
+        setCardFilters(stored.filters);
+        setFilterMatch(stored.match === "any" ? "any" : "all");
+        if (target) {
+          setSearchQuery(target.search);
+          setAssignedToMe(target.assigned_to_me);
+        }
+      }
+      setViewsReadyFor(boardId);
+    }).catch(() => setViewsReadyFor(boardId));
+    return () => { cancelled = true; };
+  }, [boardId, cardMode, sessionStatus, applyView]);
+
+  // Remember the open view and any unsaved filter changes on this device.
+  useEffect(() => {
+    if (!cardMode || viewsReadyFor !== boardId) return;
+    const stored: StoredViewState = { viewId: activeViewId, filters: cardFilters, match: filterMatch };
+    window.localStorage.setItem(VIEW_STORAGE_PREFIX + boardId, JSON.stringify(stored));
+  }, [cardMode, viewsReadyFor, boardId, activeViewId, cardFilters, filterMatch]);
+
+  const viewLink = (view: BoardView) =>
+    `${window.location.origin}${basePath}/tasks?board=${encodeURIComponent(boardId)}&view=${encodeURIComponent(view.id)}`;
+
+  const selectView = (view: BoardView | null) => {
+    applyView(view);
+    const url = view ? viewLink(view) : window.location.pathname;
+    window.history.replaceState(null, "", url);
+  };
+
+  const updateActiveView = async () => {
+    if (!activeView) return;
+    setError(null);
+    try {
+      const { view } = await updateBoardView(boardId, activeView.id, viewState);
+      setViews((list) => list.map((v) => (v.id === view.id ? view : v)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update view");
+    }
+  };
+
+  const submitViewDialog = async (name: string, shared: boolean) => {
+    if (!viewDialog) return;
+    if (viewDialog.mode === "rename" && viewDialog.view) {
+      const { view } = await updateBoardView(boardId, viewDialog.view.id, { name, shared });
+      setViews((list) => list.map((v) => (v.id === view.id ? view : v)));
+      return;
+    }
+    // New view from the current filters, or a copy of an existing view.
+    const source = viewDialog.mode === "duplicate" && viewDialog.view ? viewDialog.view : viewState;
+    const { view } = await createBoardView(boardId, {
+      name, shared,
+      filters: source.filters, match: source.match, search: source.search, assigned_to_me: source.assigned_to_me,
+    });
+    setViews((list) => [...list, view]);
+    selectView(view);
+  };
+
+  const deleteView = async (view: BoardView) => {
+    if (!window.confirm(`Delete the "${view.name}" view? The cards stay as they are.`)) return;
+    setError(null);
+    try {
+      await deleteBoardView(boardId, view.id);
+      setViews((list) => list.filter((v) => v.id !== view.id));
+      if (view.id === activeViewId) selectView(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not delete view");
+    }
+  };
+
+  const viewSummary = (state: CardViewState) => [
+    state.filters.length ? `${state.filters.length} filter${state.filters.length === 1 ? "" : "s"}` : "",
+    state.search.trim() ? `search “${state.search.trim()}”` : "",
+    state.assigned_to_me ? "Assigned to me" : "",
+  ].filter(Boolean).join(" · ");
+
+  const canEditBoard = currentBoard?.role === "owner" || currentBoard?.role === "editor";
+  const viewControls = (compact: boolean) => board && cardMode && (
+    <>
+      <BoardViewMenu
+        views={views}
+        active={activeView}
+        dirty={viewDirty}
+        canSave={canSaveView}
+        compact={compact}
+        onSelect={selectView}
+        onSaveNew={() => setViewDialog({ mode: "create" })}
+        onRename={(view) => setViewDialog({ mode: "rename", view })}
+        onDuplicate={(view) => setViewDialog({ mode: "duplicate", view })}
+        onCopyLink={(view) => void navigator.clipboard.writeText(viewLink(view)).catch(() => {})}
+        onDelete={(view) => void deleteView(view)}
+      />
+      <CardFilterMenu
+        board={board}
+        people={assignable}
+        filters={activeFilters}
+        match={filterMatch}
+        compact={compact}
+        onChange={(filters, match) => { setCardFilters(filters); setFilterMatch(match); }}
+        footer={viewDirty && (
+          <>
+            {activeView?.can_edit && (
+              <Button variant="outline" size="sm" onClick={() => void updateActiveView()}>Update view</Button>
+            )}
+            {canSaveView && (
+              <Button size="sm" onClick={() => setViewDialog({ mode: "create" })}>Save as new view</Button>
+            )}
+          </>
+        )}
+      />
+    </>
+  );
+
   const boardExtras = useMemo<BoardExtras>(() => ({
     myEmail,
     role: currentBoard?.role ?? null,
     assignable,
     assignedToMe: assignedFilterOn,
+    cardFilters: cardMode ? activeFilters : [],
+    filterMatch,
     // Your own tasks can move to another board you can edit.
     onMoveToBoard: cardMode ? undefined : (task: Task) => setMovingTask(task),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [myEmail, currentBoard?.role, assignable.join(","), assignedFilterOn, cardMode]);
+  }), [myEmail, currentBoard?.role, assignable.join(","), assignedFilterOn, cardMode, activeFilters, filterMatch]);
   const openManageBoard = (target: TaskBoardSummary | null) => {
     setManagingBoard(target);
     setManageOpen(true);
@@ -411,6 +605,7 @@ export default function TasksPage() {
         <PetCompanion size={24} state={petState} />
       </MobileTopBarTitle>
       <MobileTopBarActions>
+        {viewControls(true)}
         <MobileBoardActions
           searchOpen={searchVisibleOnPhone}
           onToggleSearch={toggleMobileSearch}
@@ -586,6 +781,7 @@ export default function TasksPage() {
         <AgentAttention onDismiss={dismissAgentWork} dismissing={dismissingAgentWork} />
       )}
 
+      <div className="flex items-center gap-1">
       <div className={cn("relative w-full sm:max-w-sm", !searchVisibleOnPhone && "max-md:hidden")}>
         <RiSearchLine className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -609,6 +805,9 @@ export default function TasksPage() {
             <RiCloseLine className="h-4 w-4" />
           </Button>
         )}
+      </div>
+      {/* Card boards: views and filters sit right of search, in the same row. */}
+      {!isMobile && <div className="flex shrink-0 items-center gap-1 max-md:hidden">{viewControls(false)}</div>}
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
@@ -767,6 +966,18 @@ export default function TasksPage() {
             ),
           } : current);
         }}
+      />
+      <SaveViewDialog
+        open={!!viewDialog}
+        onOpenChange={(open) => { if (!open) setViewDialog(null); }}
+        title={viewDialog?.mode === "rename" ? "Rename view" : viewDialog?.mode === "duplicate" ? "Duplicate view" : "Save as view"}
+        initialName={viewDialog?.mode === "rename" ? viewDialog.view?.name ?? ""
+          : viewDialog?.mode === "duplicate" ? `${viewDialog.view?.name ?? "View"} copy` : ""}
+        initialShared={viewDialog?.mode === "rename" ? !!viewDialog.view?.shared : false}
+        canShare={canEditBoard}
+        summary={viewDialog?.mode === "rename" ? undefined
+          : viewSummary(viewDialog?.mode === "duplicate" && viewDialog.view ? viewDialog.view : viewState) || undefined}
+        onSubmit={submitViewDialog}
       />
       <MoveToBoardDialog
         task={movingTask}

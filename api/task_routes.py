@@ -1711,6 +1711,7 @@ async def handle_delete_board(request: web.Request) -> web.Response:
          "$set": {"task_lane": None, "task_tag_ids": []}},
     )
     await db.task_cards.delete_many({"board_id": doc["board_id"]})
+    await db.task_board_views.delete_many({"board_id": doc["board_id"]})
     await db.task_boards.delete_one({"board_id": doc["board_id"]})
     return web.json_response({"deleted": True, "moved": result.modified_count})
 
@@ -2070,6 +2071,8 @@ async def card_tool_run(db, user_email: str, conversation_id: str, command: str,
 def setup_task_routes(app: web.Application):
     """Register tasks-board routes on the aiohttp app."""
     # Static paths must be registered before the {conversation_id} route.
+    from api.task_views import setup_view_routes
+    setup_view_routes(app)
     app.router.add_get("/api/tasks/boards", handle_list_boards)
     app.router.add_post("/api/tasks/boards", handle_create_board)
     app.router.add_patch("/api/tasks/boards/{board_id}", handle_update_board)

@@ -7,6 +7,7 @@ import type { Task, TaskCardItem, TasksBoardResponse } from "@/lib/api";
 import { priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
 import { TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
+import { matchesFilters } from "./cardFilters";
 
 /** Status groups of the Tasks view, in board order. */
 export const TASK_GROUPS = [
@@ -90,12 +91,27 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, me }: {
 /** Card boards, inverted: every task from every card, grouped by status
  * (Pending, In progress, Needs input, Done). Each task links back to its card. */
 export function CardTasksView({ board, onOpenTask, onOpenCard, includedTagIds = [], excludedTagIds = [] }: CardTasksViewProps) {
-  const { myEmail, assignedToMe } = useBoardExtras();
+  const { myEmail, assignedToMe, cardFilters, filterMatch } = useBoardExtras();
   const cardsById = new Map((board.cards ?? []).map((card) => [card.card_id, card]));
+  // Card field filters (and saved views) hide the tasks of cards they filter out.
+  const fields = board.fields ?? [];
+  const assigneesByCard: Record<string, string[]> = {};
+  for (const task of board.tasks) {
+    if (!task.task_card_id || !task.assignee || task.column === "done") continue;
+    const list = (assigneesByCard[task.task_card_id] ??= []);
+    if (!list.includes(task.assignee)) list.push(task.assignee);
+  }
+  const hiddenCards = new Set<string>();
+  if (cardFilters.length > 0) {
+    for (const card of cardsById.values()) {
+      if (!matchesFilters(card, cardFilters, filterMatch, { fields, assigneesByCard })) hiddenCards.add(card.card_id);
+    }
+  }
 
   const groups: Record<TaskGroupId, Task[]> = { pending: [], in_progress: [], needs_input: [], done: [] };
   for (const task of board.tasks) {
     if (assignedToMe && task.assignee !== myEmail) continue;
+    if (task.task_card_id && hiddenCards.has(task.task_card_id)) continue;
     const tagIds = task.task_tag_ids || [];
     if (includedTagIds.length && !includedTagIds.some((id) => tagIds.includes(id))) continue;
     if (excludedTagIds.some((id) => tagIds.includes(id))) continue;
