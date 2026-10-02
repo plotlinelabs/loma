@@ -1,6 +1,11 @@
 "use client";
 
-import { RiPauseLine, RiStackLine } from "@remixicon/react";
+import { useState } from "react";
+import {
+  DndContext, DragOverlay, PointerSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors,
+  type DragEndEvent, type DragStartEvent,
+} from "@dnd-kit/core";
+import { RiStackLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { Task, TaskCardItem, TasksBoardResponse } from "@/lib/api";
@@ -8,6 +13,8 @@ import { priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
 import { TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
 import { matchesFilters } from "./cardFilters";
+import { canMove } from "./transitions";
+import { useTaskBoardActions } from "./useTaskBoardActions";
 
 /** Status groups of the Tasks view, in board order. */
 export const TASK_GROUPS = [
@@ -28,28 +35,59 @@ export function taskGroup(task: Task): TaskGroupId {
   return "pending";
 }
 
+/** Board column a drop on `group` lands the task in. Pending means the task's
+ * own staging lane (or the first one). In progress is never a drop target:
+ * a task starts by sending its prompt from the chat. */
+function targetColumn(task: Task, group: TaskGroupId, laneIds: string[]): string | null {
+  if (group === "pending") {
+    return task.task_lane && laneIds.includes(task.task_lane) ? task.task_lane : (laneIds[0] ?? null);
+  }
+  if (group === "in_progress") return null;
+  return group;
+}
+
+/** Whether a task can be dropped on a group. Same rules as the classic board
+ * (see transitions.ts), plus the two card-board specifics the backend allows:
+ * a card task can be ticked done without a run, and only a task that has run
+ * can go back to Needs input. */
+export function canDropOnGroup(task: Task, group: TaskGroupId, laneIds: string[]): boolean {
+  if (task.human_task || taskGroup(task) === group) return false;
+  const to = targetColumn(task, group, laneIds);
+  if (!to) return false;
+  if (to === "done" && task.task_card_id) return true;
+  if (to === "needs_input" && !task.status) return false;
+  return canMove(task, task.column, to, laneIds);
+}
+
 interface CardTasksViewProps {
   board: TasksBoardResponse;
   onOpenTask: (task: Task) => void;
   onOpenCard: (card: TaskCardItem) => void;
-  /** Park a Needs input task in Pending. Omitted when the board is read-only. */
-  onPauseTask?: (task: Task) => void;
+  /** Optimistically replace board state; server truth reconciles via polling. */
+  onBoardChange: (board: TasksBoardResponse) => void;
+  onRefresh: () => void;
+  onError: (message: string | null) => void;
+  /** View-only member of a shared board: no drag. */
+  readOnly?: boolean;
   includedTagIds?: string[];
   excludedTagIds?: string[];
 }
 
-function TaskRow({ task, card, onOpenTask, onOpenCard, onPauseTask, me }: {
+function TaskRow({ task, card, onOpenTask, onOpenCard, me, draggable }: {
   task: Task;
   card: TaskCardItem | undefined;
   onOpenTask: (task: Task) => void;
   onOpenCard: (card: TaskCardItem) => void;
-  onPauseTask?: (task: Task) => void;
   me: string | null;
+  draggable: boolean;
 }) {
   const dot = taskDot(task);
   const priority = priorityDisplay(task.task_priority);
+  const { setNodeRef, listeners, isDragging } = useDraggable({ id: task.conversation_id, disabled: !draggable });
   return (
     <div
+      ref={setNodeRef}
+      {...listeners}
       role="button"
       tabIndex={0}
       onClick={() => onOpenTask(task)}
@@ -58,7 +96,10 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, onPauseTask, me }: {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenTask(task); }
       }}
       data-task-id={task.conversation_id}
-      className="group rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-input transition-colors"
+      className={cn(
+        "rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-input transition-colors touch-none",
+        isDragging && "opacity-40",
+      )}
     >
       <div className="flex items-start gap-2">
         {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
@@ -86,17 +127,6 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, onPauseTask, me }: {
             {task.assignee && <AssigneeBadge email={task.assignee} me={me} className="ml-auto" />}
           </div>
         </div>
-        {onPauseTask && task.column === "needs_input" && (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onPauseTask(task); }}
-            aria-label="Pause task"
-            title="Pause: move to Pending and pick it up later"
-            className="shrink-0 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-          >
-            <RiPauseLine className="h-4 w-4" />
-          </button>
-        )}
       </div>
     </div>
   );
@@ -104,7 +134,29 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, onPauseTask, me }: {
 
 /** Card boards, inverted: every task from every card, grouped by status
  * (Pending, In progress, Needs input, Done). Each task links back to its card. */
-export function CardTasksView({ board, onOpenTask, onOpenCard, onPauseTask, includedTagIds = [], excludedTagIds = [] }: CardTasksViewProps) {
+export function CardTasksView({
+  board, onOpenTask, onOpenCard, onBoardChange, onRefresh, onError, readOnly = false,
+  includedTagIds = [], excludedTagIds = [],
+}: CardTasksViewProps) {
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const { laneIds, markDone, reopen, moveToLane } = useTaskBoardActions({
+    board, onBoardChange, onRefresh, onError, onEditDraft: () => {}, onOpenChat: onOpenTask,
+  });
+
+  // Dragging a task between groups changes its status, e.g. Needs input ->
+  // Pending parks it (it stops counting as needing input until someone replies).
+  const handleDragEnd = ({ over }: DragEndEvent) => {
+    const task = activeTask;
+    setActiveTask(null);
+    if (!task || !over) return;
+    const group = String(over.id) as TaskGroupId;
+    if (!canDropOnGroup(task, group, laneIds)) return;
+    if (group === "done") void markDone(task);
+    else if (group === "needs_input") void reopen(task);
+    else if (group === "pending") void moveToLane(task, targetColumn(task, group, laneIds)!);
+  };
+
   const { myEmail, assignedToMe, cardFilters, filterMatch } = useBoardExtras();
   const cardsById = new Map((board.cards ?? []).map((card) => [card.card_id, card]));
   // Card field filters (and saved views) hide the tasks of cards they filter out.
@@ -133,34 +185,76 @@ export function CardTasksView({ board, onOpenTask, onOpenCard, onPauseTask, incl
   }
 
   return (
-    <div className="flex flex-1 gap-4 overflow-x-auto pb-4" data-view="tasks">
-      {TASK_GROUPS.map((group) => {
-        const tasks = groups[group.id];
-        return (
-          <div key={group.id} className="flex min-w-[220px] flex-1 basis-0 flex-col" data-group={group.name}>
-            <div className="mb-2.5 flex items-baseline gap-2 px-2">
-              <span className="text-[13px] font-semibold text-foreground">{group.name}</span>
-              <span className="text-[11px] tabular-nums text-muted-foreground/80">{tasks.length}</span>
-            </div>
-            <div className="flex min-h-24 flex-1 flex-col gap-2 rounded-xl p-1.5 bg-foreground/[0.025]">
-              {tasks.map((task) => (
-                <TaskRow
-                  key={task.conversation_id}
-                  task={task}
-                  card={task.task_card_id ? cardsById.get(task.task_card_id) : undefined}
-                  onOpenTask={onOpenTask}
-                  onOpenCard={onOpenCard}
-                  onPauseTask={onPauseTask}
-                  me={myEmail}
-                />
-              ))}
-              {tasks.length === 0 && (
-                <p className="px-2 py-3 text-center text-[12px] text-muted-foreground/70">No tasks</p>
-              )}
-            </div>
+    <DndContext
+      sensors={readOnly ? [] : sensors}
+      collisionDetection={pointerWithin}
+      onDragStart={({ active }: DragStartEvent) =>
+        setActiveTask(board.tasks.find((t) => t.conversation_id === active.id) ?? null)}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setActiveTask(null)}
+    >
+      <div className="flex flex-1 gap-4 overflow-x-auto pb-4" data-view="tasks">
+        {TASK_GROUPS.map((group) => (
+          <TaskGroupColumn
+            key={group.id}
+            id={group.id}
+            name={group.name}
+            count={groups[group.id].length}
+            droppable={activeTask ? canDropOnGroup(activeTask, group.id, laneIds) : undefined}
+          >
+            {groups[group.id].map((task) => (
+              <TaskRow
+                key={task.conversation_id}
+                task={task}
+                card={task.task_card_id ? cardsById.get(task.task_card_id) : undefined}
+                onOpenTask={onOpenTask}
+                onOpenCard={onOpenCard}
+                me={myEmail}
+                draggable={!readOnly && !task.human_task}
+              />
+            ))}
+          </TaskGroupColumn>
+        ))}
+      </div>
+      <DragOverlay>
+        {activeTask && (
+          <div className="rounded-xl border bg-card px-3.5 py-3 text-[14px] font-medium shadow-md">
+            <div className="line-clamp-2 break-words">{activeTask.title || activeTask.prompt || "New task"}</div>
           </div>
-        );
-      })}
+        )}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+function TaskGroupColumn({ id, name, count, droppable, children }: {
+  id: TaskGroupId;
+  name: string;
+  count: number;
+  /** Whether the current drag can drop here (undefined = no drag active). */
+  droppable?: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id, disabled: droppable === false });
+  return (
+    <div className="flex min-w-[220px] flex-1 basis-0 flex-col" data-group={name}>
+      <div className="mb-2.5 flex items-baseline gap-2 px-2">
+        <span className="text-[13px] font-semibold text-foreground">{name}</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground/80">{count}</span>
+      </div>
+      <div
+        ref={setNodeRef}
+        className={cn(
+          "flex min-h-24 flex-1 flex-col gap-2 rounded-xl p-1.5 bg-foreground/[0.025] transition-colors",
+          droppable === false && "opacity-50",
+          droppable && isOver && "bg-primary/10 ring-1 ring-primary/40",
+        )}
+      >
+        {children}
+        {count === 0 && (
+          <p className="px-2 py-3 text-center text-[12px] text-muted-foreground/70">No tasks</p>
+        )}
+      </div>
     </div>
   );
 }
