@@ -63,7 +63,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         {"key": "pilot_end", "label": "Pilot End", "type": "date"},
         {"key": "client_blocked_days", "label": "Client-Blocked Days", "type": "number"},
         {"key": "blocker_owner", "label": "Blocker Owner", "type": "select",
-         "options": ["None", "Client eng", "Client business", "Plotline eng", "Plotline SA",
+         "options": ["None", "Client eng", "Client business", "Internal eng", "Internal SA",
                      "Infosec-Legal"]},
         {"key": "next_step", "label": "Next Step", "type": "text"},
         {"key": "next_step_due", "label": "Next Step Due", "type": "date"},
