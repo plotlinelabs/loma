@@ -1026,6 +1026,14 @@
   overscroll-behavior: contain;
 }
 
+/* Radix wraps the scroll content in a display:table box that grows to the
+   longest chat title, pushing right-aligned controls (folder counts, the
+   new-folder button) past the sidebar edge. Keep it at the sidebar's width so
+   long titles truncate instead. */
+.loma-sidebar [data-slot="scroll-area-viewport"] > div {
+  display: block !important;
+}
+
 /* Desktop: the nav shares the scroll region with projects/pinned/recents (so a
    short phone drawer can scroll it), but it must stay pinned while a long
    Recents list scrolls, as it was before. Only on windows tall enough to show

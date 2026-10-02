@@ -754,11 +754,44 @@ export interface Project {
   description: string | null;
   color: string | null;
   icon: string | null;
+  /** Parent folder; null/absent = top level. Folders nest to any depth. */
+  parent_id?: string | null;
+  /** "shared" = anyone signed in with the link can read this folder and its sub-folders. */
+  visibility?: "private" | "shared";
   created_by: string;
   created_at: string;
   updated_at: string;
   deleted: boolean;
   conversation_count?: number;
+}
+
+export type ProjectTreeNode = Project & { depth: number; children: ProjectTreeNode[] };
+
+/** Build the folder tree from the flat list; folders whose parent is missing surface at the top level. */
+export function buildProjectTree(projects: Project[]): ProjectTreeNode[] {
+  const nodes = new Map<string, ProjectTreeNode>(
+    projects.map((p) => [p.project_id, { ...p, depth: 0, children: [] }]),
+  );
+  const roots: ProjectTreeNode[] = [];
+  for (const node of nodes.values()) {
+    const parent = node.parent_id ? nodes.get(node.parent_id) : undefined;
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+  }
+  const setDepth = (list: ProjectTreeNode[], depth: number) => {
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    for (const n of list) {
+      n.depth = depth;
+      setDepth(n.children, depth + 1);
+    }
+  };
+  setDepth(roots, 0);
+  return roots;
+}
+
+/** Depth-first flattening of the tree, for indented pickers. */
+export function flattenProjectTree(nodes: ProjectTreeNode[]): ProjectTreeNode[] {
+  return nodes.flatMap((n) => [n, ...flattenProjectTree(n.children)]);
 }
 
 export async function fetchProjects(): Promise<{ projects: Project[] }> {
@@ -768,6 +801,7 @@ export async function fetchProjects(): Promise<{ projects: Project[] }> {
 }
 
 export async function createProject(data: {
+  parent_id?: string | null;
   name: string;
   description?: string;
   color?: string;
@@ -787,14 +821,33 @@ export async function createProject(data: {
 
 export async function updateProject(
   id: string,
-  updates: Partial<Pick<Project, "name" | "description" | "color" | "icon">>,
+  updates: Partial<Pick<Project, "name" | "description" | "color" | "icon" | "parent_id">>,
 ): Promise<{ project: Project }> {
   const res = await fetch(`${API_BASE}/api/projects/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
-  if (!res.ok) throw new Error(`Failed to update project: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to update project: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function setProjectShared(
+  id: string,
+  shared: boolean,
+): Promise<{ shared: boolean; project_id: string }> {
+  const res = await fetch(`${API_BASE}/api/projects/${id}/share`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shared }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to update sharing: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -806,7 +859,12 @@ export async function deleteProject(id: string): Promise<{ deleted: boolean }> {
 
 export async function fetchProject(id: string): Promise<{
   project: Project;
+  /** Ancestors, top-most first. Viewers of a shared folder only get the shared part of the path. */
+  breadcrumbs: Project[];
+  subfolders: Project[];
   conversations: Conversation[];
+  can_manage: boolean;
+  shared: boolean;
 }> {
   const res = await fetch(`${API_BASE}/api/projects/${id}`);
   if (!res.ok) throw new Error(`Failed to fetch project: ${res.status}`);
@@ -1057,6 +1115,7 @@ export async function* streamChat(
   selectedModel?: string,
   agentId?: string,
   toolConfig?: ToolConfig,
+  projectId?: string,
 ): AsyncGenerator<ChatEvent, void, unknown> {
   const body: Record<string, unknown> = { message };
   if (conversationHistory?.length) body.conversation_history = conversationHistory;
@@ -1066,6 +1125,7 @@ export async function* streamChat(
   if (selectedModel) body.model = selectedModel;
   if (agentId) body.agent_id = agentId;
   if (toolConfig) body.tool_config = toolConfig;
+  if (projectId) body.project_id = projectId;
 
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",

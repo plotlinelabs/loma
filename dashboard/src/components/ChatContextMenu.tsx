@@ -36,7 +36,8 @@ import {
   RiShareLine,
   RiFileCopyLine,
 } from "@remixicon/react";
-import { basePath, setConversationShared, updateTask } from "@/lib/api";
+import { basePath, buildProjectTree, flattenProjectTree, setConversationShared, updateTask } from "@/lib/api";
+import type { Project } from "@/lib/api";
 
 interface ChatContextMenuProps {
   conversationId: string;
@@ -45,7 +46,7 @@ interface ChatContextMenuProps {
   projectId?: string | null;
   /** Board membership — pass conversation.task_status to enable add/remove */
   taskStatus?: "todo" | "active" | "done" | null;
-  projects: Array<{ project_id: string; name: string }>;
+  projects: Project[];
   onRename: (conversationId: string, newTitle: string) => Promise<void>;
   onDelete: (conversationId: string) => Promise<void>;
   onTogglePin: (conversationId: string) => Promise<void>;
@@ -290,9 +291,9 @@ export default function ChatContextMenu({
               onClick={(e) => e.stopPropagation()}
             >
               <RiFolderLine size={16} className="text-muted-foreground" />
-              {projectId ? "Move to project" : "Add to project"}
+              {projectId ? "Move to folder" : "Add to folder"}
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-48">
+            <DropdownMenuSubContent className="w-56 max-h-80 overflow-y-auto">
               {projectId && (
                 <DropdownMenuItem
                   variant="destructive"
@@ -303,10 +304,10 @@ export default function ChatContextMenu({
                   }}
                 >
                   <RiCloseLine size={16} />
-                  Remove from project
+                  Remove from folder
                 </DropdownMenuItem>
               )}
-              {projects.map((p) => (
+              {flattenProjectTree(buildProjectTree(projects)).map((p) => (
                 <DropdownMenuItem
                   key={p.project_id}
                   onClick={(e) => {
@@ -316,7 +317,12 @@ export default function ChatContextMenu({
                   }}
                   className={p.project_id === projectId ? "text-brand-600 font-medium" : ""}
                 >
-                  <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" />
+                  {/* Indent by nesting depth so the picker mirrors the folder tree */}
+                  <RiFolderLine
+                    size={14}
+                    className="text-muted-foreground flex-shrink-0"
+                    style={{ marginLeft: Math.min(p.depth, 6) * 10 }}
+                  />
                   <span className="truncate">{p.name}</span>
                   {p.project_id === projectId && (
                     <RiCheckLine size={14} className="text-brand-600 ml-auto flex-shrink-0" />
@@ -340,7 +346,7 @@ export default function ChatContextMenu({
                     maxLength={100}
                     disabled={loading}
                     className="h-7 text-xs"
-                    placeholder="Project name..."
+                    placeholder="Folder name..."
                     onClick={(e) => e.stopPropagation()}
                   />
                 </div>
@@ -353,7 +359,7 @@ export default function ChatContextMenu({
                   className="text-brand-600"
                 >
                   <RiAddLine size={16} />
-                  New project
+                  New folder
                 </DropdownMenuItem>
               )}
             </DropdownMenuSubContent>
