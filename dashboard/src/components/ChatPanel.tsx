@@ -10,6 +10,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useAgentIdentities } from "@/hooks/useAgentIdentities";
 import { AgentPicker } from "@/components/composer/AgentPicker";
+import { AgentScope } from "@/components/composer/AgentScope";
+import { AGENT_TOOL_CONFIG } from "@/hooks/agent-scope";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
@@ -665,6 +667,7 @@ export default function ChatPanel({
   } = useAgentModels(initialModel);
   const {
     agents: agentIdentities,
+    selectedAgent,
     selectedAgentId,
     selectAgent,
     loadState: agentLoadState,
@@ -1070,7 +1073,7 @@ export default function ChatPanel({
         abortController.signal,
         selectedModel || undefined,
         selectedAgentId || undefined,
-        toolConfig,
+        selectedAgentId ? AGENT_TOOL_CONFIG : toolConfig,
       )) {
         if (event.type === "account_info") {
           setAccountInfo(event);
@@ -1429,6 +1432,14 @@ export default function ChatPanel({
 
   const isEmptyState = items.length === 0 && !isStreaming;
 
+  // A selected agent brings its own tools and skills, so the pickers give way
+  // to a read-only summary of that scope.
+  const scopePicker = selectedAgent ? (
+    <AgentScope agent={selectedAgent} skills={availableSkills} onOpen={loadToolsCatalog} onUseDefault={() => selectAgent(null)} disabled={isStreaming} />
+  ) : (
+    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+  );
+
   // Shared by the empty-state and in-conversation composers.
   const composerPickers = (
     <>
@@ -1442,9 +1453,9 @@ export default function ChatPanel({
       {isMobile ? (
         <ComposerSettings>
           <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-          <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+          {scopePicker}
         </ComposerSettings>
-      ) : <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />}
+      ) : scopePicker}
     </>
   );
 
@@ -1455,7 +1466,7 @@ export default function ChatPanel({
     <ComposerSettings trigger="plus" title="Chat options" description="Attach files, or choose the model, agent, tools and skills." onAttach={() => fileInputRef.current?.click()}>
       <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
       <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-      <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+      {scopePicker}
     </ComposerSettings>
   );
 
