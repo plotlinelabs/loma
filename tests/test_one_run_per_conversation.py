@@ -457,19 +457,27 @@ async def test_slack_followup_with_files_waits_for_its_own_run():
 
 
 @pytest.mark.asyncio
-async def test_slack_queued_followup_bails_if_drain_started_while_waiting():
-    from api.drain import DRAIN_MESSAGE
+async def test_slack_queued_followup_is_saved_if_drain_started_while_waiting():
+    from api.pending_runs import QUEUED_MESSAGE
 
     files = [{"name": "a.txt", "mimetype": "text/plain", "type": "text", "data": "x"}]
-    _, slack, agent = await _slack_followup_while_busy(files, draining_after_wait=True)
+    enqueue = AsyncMock()
+    with patch("api.pending_runs.enqueue", enqueue):
+        _, slack, agent = await _slack_followup_while_busy(files, draining_after_wait=True)
     agent.assert_not_called()
-    assert slack.chat_postMessage.await_args.kwargs["text"] == DRAIN_MESSAGE
+    assert slack.chat_postMessage.await_args.kwargs["text"] == QUEUED_MESSAGE
+    kind = enqueue.await_args.args[1]
+    fields = enqueue.await_args.kwargs
+    assert kind == "slack"
+    assert (fields["channel"], fields["thread_ts"], fields["event_ts"]) == ("C1", "1.0", "2.0")
+    assert fields["prompt"] == "look at this"
+    assert fields["files"] == files
 
 
 @pytest.mark.asyncio
-async def test_stream_agent_waiter_bails_if_drain_started_while_waiting():
+async def test_stream_agent_waiter_is_queued_if_drain_started_while_waiting():
     from agent import client as agent_client
-    from api.drain import DRAIN_MESSAGE
+    from api.pending_runs import QUEUED_MESSAGE
 
     release_first = asyncio.Event()
     started = []
@@ -480,8 +488,11 @@ async def test_stream_agent_waiter_bails_if_drain_started_while_waiting():
             await release_first.wait()
         yield f"done:{prompt}"
 
+    db = MagicMock()
+    db.conversations.update_one = AsyncMock()
+
     def observer():
-        return SimpleNamespace(conversation_id="c-drain", resume=AsyncMock())
+        return SimpleNamespace(conversation_id="c-drain", resume=AsyncMock(), db=db)
 
     async def consume(prompt, obs):
         return [e async for e in agent_client.stream_agent(prompt, observer=obs)]
@@ -493,12 +504,18 @@ async def test_stream_agent_waiter_bails_if_drain_started_while_waiting():
         await asyncio.sleep(0.05)
         second = asyncio.create_task(consume("second", second_obs))
         await asyncio.sleep(0.05)
-        with patch("api.drain.is_draining", return_value=True):
+        enqueue = AsyncMock()
+        with patch("api.drain.is_draining", return_value=True), \
+                patch("api.pending_runs.enqueue", enqueue):
             release_first.set()
             _, second_events = await asyncio.wait_for(asyncio.gather(first, second), timeout=10)
 
     assert started == ["first"]
-    assert second_events == [DRAIN_MESSAGE]
+    assert second_events == [QUEUED_MESSAGE]
+    assert enqueue.await_args.args[1] == "headless"
+    assert enqueue.await_args.kwargs["conversation_id"] == "c-drain"
+    assert enqueue.await_args.kwargs["prompt"] == "second"
+    db.conversations.update_one.assert_awaited_once()
     second_obs.resume.assert_not_awaited()
     assert "c-drain" not in active_streams._claims
 

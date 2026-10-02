@@ -126,14 +126,15 @@ async def _handle_agent_request(
     """
     if message_has_files is None:
         message_has_files = bool(files)
-    # A deploy is waiting for in-flight runs to finish; tell the user to retry
-    # rather than start a run that the restart would cut short.
+    queue_args = dict(
+        channel=channel, thread_ts=thread_ts, event_ts=event_ts, prompt=prompt,
+        context=context, files=files, source=source, user_id=user_id,
+        flow_id=flow_id, message_has_files=message_has_files,
+    )
+    # A deploy is waiting for in-flight runs to finish: queue this for the
+    # next server rather than start a run that the restart would cut short.
     if is_draining():
-        logger.info("[SLACK] Draining for a deploy; refusing new run in %s/%s", channel, thread_ts)
-        try:
-            await client.chat_postMessage(channel=channel, text=DRAIN_MESSAGE, thread_ts=thread_ts)
-        except Exception as e:
-            logger.warning("[SLACK] Failed to post drain notice: %s", e)
+        await _queue_for_deploy(client, **queue_args)
         return
 
     # Add hourglass reaction as acknowledgement
@@ -213,19 +214,13 @@ async def _handle_agent_request(
                         await active_streams.wait_for_release(claimed_conversation_id)
                     # A deploy may have started draining while this waited.
                     if is_draining():
-                        logger.info(
-                            "[SLACK] Draining for a deploy; dropping queued run in %s/%s",
-                            channel, thread_ts,
-                        )
                         try:
                             await client.reactions_remove(
                                 name=THINKING_EMOJI, channel=channel, timestamp=event_ts,
                             )
                         except Exception:
                             pass
-                        await client.chat_postMessage(
-                            channel=channel, text=DRAIN_MESSAGE, thread_ts=thread_ts,
-                        )
+                        await _queue_for_deploy(client, **queue_args)
                         return
                 observer = ConversationObserver(
                     db, metadata=metadata,
@@ -290,6 +285,33 @@ async def _handle_agent_request(
     finally:
         if run_id:
             await active_streams.release_claim(claimed_conversation_id, run_id)
+
+
+async def _queue_for_deploy(client, *, channel, thread_ts, event_ts, **fields):
+    """Save a Slack run for the server that boots after the deploy.
+
+    Falls back to the old "try again" notice when there is no database or
+    the attachments are too large to store.
+    """
+    from api import pending_runs
+
+    db = get_db()
+    text = DRAIN_MESSAGE
+    if db is not None and pending_runs.files_fit(fields.get("files")):
+        try:
+            await pending_runs.enqueue(
+                db, "slack", channel=channel, thread_ts=thread_ts, event_ts=event_ts,
+                **{**fields, "files": fields.get("files") or []},
+            )
+            text = pending_runs.QUEUED_MESSAGE
+        except Exception:
+            logger.exception("[SLACK] Failed to queue run for after the deploy")
+    logger.info("[SLACK] Draining for a deploy; %s run in %s/%s",
+                "queued" if text != DRAIN_MESSAGE else "refused", channel, thread_ts)
+    try:
+        await client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
+    except Exception as e:
+        logger.warning("[SLACK] Failed to post drain notice: %s", e)
 
 
 async def _inject_into_active_run(conversation_id, prompt, db, user_email) -> bool:

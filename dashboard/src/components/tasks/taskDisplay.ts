@@ -9,6 +9,8 @@ export const columnDotStyles: Record<string, string> = {
 };
 
 export const isStaged = (task: Task) => task.task_status === "todo";
+/** Shown while a task's run waits for a deploy to finish (status "queued"). */
+export const DEPLOY_QUEUED_LABEL = "Queued, Loma is updating";
 export const isDraft = (task: Task) => isStaged(task) && !task.status;
 export const isParked = (task: Task) => isStaged(task) && !!task.status;
 

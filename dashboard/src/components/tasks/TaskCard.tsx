@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
-import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
+import { DEPLOY_QUEUED_LABEL, isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
 import { TaskDeadlineBadge } from "./TaskDeadline";
@@ -83,6 +83,7 @@ export function TaskCard({
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
             <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
+            {task.status === "queued" && <span>{DEPLOY_QUEUED_LABEL}</span>}
           </div>
           <div className="mt-1 flex items-center gap-1 overflow-hidden pr-12">
             {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}

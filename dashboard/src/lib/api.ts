@@ -1047,6 +1047,27 @@ export class ConversationBusyError extends Error {
   }
 }
 
+/** 202 from /api/chat: a deploy is in progress, so the server saved the
+ * message and will run it once the new version is up. */
+export class ConversationQueuedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationQueuedError";
+  }
+}
+
+/** /api/chat refused the request before any run started (e.g. 4xx/5xx).
+ * Nothing was saved, so the client should give the text back to the user. */
+export class ChatRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ChatRequestError";
+    this.status = status;
+  }
+}
+
 export async function* streamChat(
   message: string,
   conversationHistory?: ChatMessage[],
@@ -1074,6 +1095,10 @@ export async function* streamChat(
     signal,
   });
 
+  if (res.status === 202) {
+    const body = await res.json().catch(() => ({}));
+    throw new ConversationQueuedError(body.message || "Queued. Loma is updating.");
+  }
   if (!res.ok) {
     // Surface the backend's message (e.g. "restarting for a deploy") instead
     // of a bare status code.
@@ -1081,7 +1106,7 @@ export async function* streamChat(
     if (res.status === 409 && body.busy) {
       throw new ConversationBusyError(body.error || "Agent is busy", !!body.injected, !!body.duplicate);
     }
-    throw new Error(body.error || `Chat request failed: ${res.status}`);
+    throw new ChatRequestError(body.error || `Chat request failed: ${res.status}`, res.status);
   }
   if (!res.body) throw new Error("No response body");
 

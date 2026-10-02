@@ -188,6 +188,10 @@ async def main():
         await handler.connect_async()
     else:
         logger.info("Slack Socket Mode not started; keeping HTTP server alive")
+
+    # Start runs queued while the previous server drained for this deploy.
+    from api.pending_runs import start_dispatcher
+    start_dispatcher(slack_client=app.client if handler else None)
     await stop.wait()
 
     logger.info("Shutting down...")

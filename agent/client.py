@@ -1834,6 +1834,38 @@ def conversation_work_dir(conversation_id: str) -> str | None:
     return str(path)
 
 
+async def _queue_for_deploy(observer, prompt, conversation_context, files, source,
+                            user_email, selected_model, tool_config) -> str | None:
+    """Save a run that waited behind a busy conversation while a deploy
+    started draining. Returns the notice to show, or None if it couldn't be
+    queued. The caller's prompt is already recorded on the conversation."""
+    from api import pending_runs
+    db = getattr(observer, "db", None)
+    if db is None or not pending_runs.files_fit(files):
+        return None
+    try:
+        await pending_runs.enqueue(
+            db, "headless",
+            conversation_id=observer.conversation_id,
+            user_email=user_email,
+            source=source,
+            prompt=prompt,
+            files=files or [],
+            model=selected_model or "",
+            tool_config=tool_config,
+            conversation_context=conversation_context,
+        )
+        await db.conversations.update_one(
+            {"conversation_id": observer.conversation_id},
+            {"$set": {"status": pending_runs.CONVERSATION_QUEUED}},
+        )
+    except Exception:
+        logger.exception("Failed to queue run of %s for after the deploy", observer.conversation_id)
+        return None
+    logger.info("Draining for a deploy; queued run of %s", observer.conversation_id)
+    return pending_runs.QUEUED_MESSAGE
+
+
 async def stream_agent(prompt: str, conversation_context: str = "", files=None,
         observer=None, include_steps=False, source="slack", user_email=None,
         selected_model=None, raise_on_opencode_error=False, tool_config=None,
@@ -1858,11 +1890,14 @@ async def stream_agent(prompt: str, conversation_context: str = "", files=None,
             )
             while not await try_claim(conversation_id, run_id):
                 await wait_for_release(conversation_id)
-            # A deploy may have started draining while this waited.
+            # A deploy may have started draining while this waited: save the
+            # run for the next server instead of dropping it.
             from api.drain import DRAIN_MESSAGE, is_draining
             if is_draining():
-                logger.info("Draining for a deploy; dropping queued run of %s", conversation_id)
-                yield DRAIN_MESSAGE
+                yield await _queue_for_deploy(
+                    observer, prompt, conversation_context, files, source,
+                    user_email, selected_model, tool_config,
+                ) or DRAIN_MESSAGE
                 return
             # The finished run marked the conversation completed; flip it back.
             await observer.resume(record_prompt=False)

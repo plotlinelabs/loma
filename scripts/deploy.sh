@@ -6,7 +6,7 @@
 # Deploys drain first (see api/drain.py): the running backend stops accepting
 # new agent runs and we wait, bounded, for in-flight ones to finish, so the
 # container swap doesn't kill someone's task or chat halfway through.
-#   DRAIN_MAX_WAIT    seconds to wait for running=0 (default 600; 0 skips drain)
+#   DRAIN_MAX_WAIT    seconds to wait for running=0 (default 300; 0 skips drain)
 #   DRAIN_ON_TIMEOUT  "proceed" (default) or "fail" if runs are still active
 set -euo pipefail
 
@@ -17,7 +17,7 @@ echo "Deploying $SHA"
 # Build while the old stack keeps serving so the swap below is quick.
 docker compose build
 
-DRAIN_MAX_WAIT="${DRAIN_MAX_WAIT:-600}"
+DRAIN_MAX_WAIT="${DRAIN_MAX_WAIT:-300}"
 DRAIN_ON_TIMEOUT="${DRAIN_ON_TIMEOUT:-proceed}"
 
 # Talk to the running backend from inside its container: the drain toggles are
@@ -30,6 +30,15 @@ drain_api() {
 running_count() {
   printf '%s' "$1" | grep -o '"running": *[0-9]*' | grep -o '[0-9]*$' || true
 }
+
+# Work sent during the drain is queued (api/pending_runs.py) and started by the
+# next backend. If this deploy dies before the backend is replaced, clear the
+# drain so the old backend runs the queue instead of holding it forever.
+clear_drain_on_failure() {
+  rc=$?
+  if [ "$rc" -ne 0 ]; then drain_api DELETE >/dev/null 2>&1 || true; fi
+}
+trap clear_drain_on_failure EXIT
 
 running=""
 if [ "$DRAIN_MAX_WAIT" -gt 0 ] && drain_api POST -d "{\"reason\":\"deploy $SHA\"}" >/dev/null 2>&1; then
@@ -65,6 +74,10 @@ else
 fi
 
 docker compose up -d
+# `up -d` leaves the backend alone when its image and config didn't change, and
+# that container would stay in drain mode. Clearing it is a no-op on a freshly
+# started backend (and may simply fail while it boots, which is fine).
+drain_api DELETE >/dev/null 2>&1 || true
 
 # The nginx reverse-proxy config is bind-mounted. In TLS mode the nginx image
 # renders /etc/nginx/templates/*.template into /etc/nginx/conf.d/ at container
