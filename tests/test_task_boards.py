@@ -71,8 +71,9 @@ def _db(task_board=SHARED, conversation=None, users_find=None, card=None):
         delete_many=AsyncMock(),
         count_documents=AsyncMock(return_value=0),
     )
+    task_board_views = SimpleNamespace(delete_many=AsyncMock())
     return SimpleNamespace(task_boards=task_boards, conversations=conversations, users=users,
-                           task_cards=task_cards)
+                           task_cards=task_cards, task_board_views=task_board_views)
 
 
 def _as(monkeypatch, db, email):
@@ -212,6 +213,7 @@ async def test_delete_board_returns_tasks_to_creators(monkeypatch):
     assert query == {"task_board_id": "deals1"}
     assert update["$unset"] == {"task_board_id": "", "task_card_id": ""}
     db.task_cards.delete_many.assert_awaited_once_with({"board_id": "deals1"})
+    db.task_board_views.delete_many.assert_awaited_once_with({"board_id": "deals1"})
     db.task_boards.delete_one.assert_awaited_once()
 
 
