@@ -317,14 +317,18 @@ class ConversationObserver:
         self._usage_seq += 1
         try:
             conv = await self.db.conversations.find_one(
-                conv_filter, {"metadata.user_name": 1, "source": 1, "model": 1},
+                conv_filter,
+                {"metadata.user_name": 1, "metadata.flow_id": 1, "metadata.flow_name": 1,
+                 "source": 1, "model": 1},
             ) or {}
+            conv_meta = conv.get("metadata") or {}
             await record_usage_event(self.db, build_usage_event(
                 event_id=f"{self.conversation_id}:{self.run_id}:{self._usage_seq}",
                 conversation_id=self.conversation_id,
                 at=datetime.now(timezone.utc),
-                user_email=((conv.get("metadata") or {}).get("user_name")
-                            or self.metadata.get("user_name", "")),
+                user_email=conv_meta.get("user_name") or self.metadata.get("user_name", ""),
+                flow_id=conv_meta.get("flow_id") or self.metadata.get("flow_id"),
+                flow_name=conv_meta.get("flow_name") or self.metadata.get("flow_name"),
                 source=conv.get("source") or self.metadata.get("source", "unknown"),
                 model=model or conv.get("model") or self.metadata.get("model", ""),
                 runtime=runtime or "",

@@ -70,7 +70,8 @@ def _usage_sums() -> dict:
         "unpriced_runs": {"$sum": {"$cond": [{"$eq": ["$cost_known", False]}, 1, 0]}},
         "unpriced_tokens": {"$sum": {"$cond": [
             {"$eq": ["$cost_known", False]},
-            {"$add": [{"$ifNull": ["$input_tokens", 0]}, {"$ifNull": ["$output_tokens", 0]}]},
+            {"$add": [{"$ifNull": [f"${f}", 0]} for f in (
+                "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")]},
             0,
         ]}},
     }

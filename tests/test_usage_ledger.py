@@ -260,3 +260,44 @@ async def test_chat_runs_are_scoped_to_the_caller(db):
     runs = json.loads(response.body)["runs"]
     assert [(r["model"], r["cost_known"], r["runtime"]) for r in runs] == [
         ("codex/z", False, "codex"), ("anthropic/claude-x", True, "claude")]
+
+
+async def _call(handler, db, path):
+    from api import routes
+    request = make_mocked_request("GET", path)
+    with patch.object(routes, "get_db", return_value=db):
+        response = await handler(request)
+    assert response.status == 200
+    return json.loads(response.body)
+
+
+@pytest.mark.asyncio
+async def test_org_analytics_count_spend_on_the_day_used(db):
+    from api import routes
+    now = datetime.now(timezone.utc)
+    # Chat started 40 days ago (outside a 30d window) but used today.
+    await _seed_conversation(db, cid="old", started_at=now - timedelta(days=40),
+                             savings={"estimated_human_cost_usd": 10, "savings_usd": 8,
+                                      "estimated_human_duration_minutes": 30})
+    await _event(db, "o1", "old", 4.0, at=now - timedelta(days=40))
+    await _event(db, "o2", "old", 1.5, at=now)
+    await record_usage_event(db, build_usage_event(
+        event_id="f1", conversation_id="flowrun", at=now, user_email="", source="flow",
+        model="m", input_tokens=5, output_tokens=5, cost_usd=0.5,
+        flow_id="fl1", flow_name="Daily digest"))
+
+    stats = await _call(routes.handle_cost_stats, db, "/api/cost-stats?days=30")
+    assert stats["total_cost_usd"] == pytest.approx(2.0)
+    assert stats["total_conversations"] == 2
+    # Savings belong to the chat's start day, which is outside the window.
+    assert stats["total_savings_usd"] == 0
+
+    usage = await _call(routes.handle_token_usage, db, "/api/token-usage?days=30")
+    rows = {r["name"]: r for r in usage["rows"]}
+    assert rows[USER]["total_tokens"] == 11 and rows[USER]["conversations"] == 1
+    assert rows[USER]["total_cost_usd"] == pytest.approx(1.5)
+    assert rows["Daily digest"]["type"] == "flow" and rows["Daily digest"]["flow_id"] == "fl1"
+
+    # Name filter is a literal match, not a raw regex.
+    usage = await _call(routes.handle_token_usage, db, "/api/token-usage?days=30&type=user&name=me@")
+    assert [r["name"] for r in usage["rows"]] == [USER]

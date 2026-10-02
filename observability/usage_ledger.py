@@ -41,6 +41,7 @@ async def ensure_usage_indexes(db) -> None:
     await coll.create_index("event_id", unique=True)
     await coll.create_index([("user_email", 1), ("at", -1)])
     await coll.create_index([("conversation_id", 1), ("at", -1)])
+    await coll.create_index([("at", -1)])  # org-wide analytics windows
 
 
 def build_usage_event(
@@ -58,6 +59,8 @@ def build_usage_event(
     cost_usd: float = 0.0,
     cost_known: bool = True,
     runtime: str = "",
+    flow_id: str | None = None,
+    flow_name: str | None = None,
     approx: bool = False,
 ) -> dict:
     return {
@@ -69,6 +72,9 @@ def build_usage_event(
         "model": model or "",
         # claude | opencode | codex; "" on rows written before this field.
         "runtime": runtime or "",
+        # Set for flow/webhook runs so org analytics can group by flow.
+        "flow_id": flow_id or None,
+        "flow_name": flow_name or None,
         "input_tokens": int(input_tokens or 0),
         "output_tokens": int(output_tokens or 0),
         "cache_read_tokens": int(cache_read_tokens or 0),
@@ -116,7 +122,8 @@ async def backfill_usage_events(db) -> int:
     cursor = db.conversations.find(
         {"cost": {"$type": "object"}, BACKFILL_MARKER: {"$ne": True}},
         {"conversation_id": 1, "cost": 1, "started_at": 1, "source": 1,
-         "model": 1, "metadata.user_name": 1},
+         "model": 1, "metadata.user_name": 1, "metadata.flow_id": 1,
+         "metadata.flow_name": 1},
     )
     async for conv in cursor:
         scanned += 1
@@ -146,6 +153,8 @@ async def backfill_usage_events(db) -> int:
                     conversation_id=conversation_id,
                     at=started_at,
                     user_email=(conv.get("metadata") or {}).get("user_name", ""),
+                    flow_id=(conv.get("metadata") or {}).get("flow_id"),
+                    flow_name=(conv.get("metadata") or {}).get("flow_name"),
                     source=conv.get("source", "unknown"),
                     model=conv.get("model", ""),
                     # Pre-ledger Codex runs were stored as $0 with tokens.

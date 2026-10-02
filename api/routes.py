@@ -656,40 +656,84 @@ async def handle_get_stats(request: web.Request) -> web.Response:
     })
 
 
+def _analytics_days(request: web.Request) -> int:
+    try:
+        return min(max(int(request.query.get("days", 30)), 1), 365)
+    except ValueError:
+        return 30
+
+
 async def handle_cost_stats(request: web.Request) -> web.Response:
-    """GET /api/cost-stats — daily cost aggregations with savings analytics."""
+    """GET /api/cost-stats — daily cost aggregations with savings analytics.
+
+    Cost, tokens and chat counts come from the per-run usage ledger, bucketed
+    on the day each run was used. Savings stay per chat (an estimate made once
+    per conversation) and are bucketed on the chat's start day, as before;
+    savings % only uses the savings fields, so mixing the two bases doesn't
+    skew it.
+    """
+    from observability.usage_ledger import COLLECTION as USAGE_EVENTS
+
     db = get_db()
     if db is None:
         return web.json_response({"error": "Observability not configured"}, status=503)
 
-    days = int(request.query.get("days", 30))
+    days = _analytics_days(request)
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    pipeline = [
-        {"$match": {
-            "started_at": {"$gte": since},
-            "cost": {"$ne": None},
+    cost_pipeline = [
+        {"$match": {"at": {"$gte": since}}},
+        {"$group": {
+            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$at"}},
+            "total_cost_usd": {"$sum": {"$ifNull": ["$cost_usd", 0]}},
+            "input_tokens": {"$sum": {"$ifNull": ["$input_tokens", 0]}},
+            "output_tokens": {"$sum": {"$ifNull": ["$output_tokens", 0]}},
+            "runs": {"$sum": 1},
+            "conversation_ids": {"$addToSet": "$conversation_id"},
         }},
+    ]
+    savings_pipeline = [
+        {"$match": {"started_at": {"$gte": since}, "savings": {"$ne": None}}},
         {"$group": {
             "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$started_at"}},
-            "total_cost_usd": {"$sum": {"$ifNull": ["$cost.total_cost_usd", 0]}},
-            "agent_cost_usd": {"$sum": {"$ifNull": ["$cost.agent_cost_usd", 0]}},
-            "confidence_cost_usd": {"$sum": {"$ifNull": ["$cost.confidence_cost_usd", 0]}},
-            "input_tokens": {"$sum": {"$ifNull": ["$cost.input_tokens", 0]}},
-            "output_tokens": {"$sum": {"$ifNull": ["$cost.output_tokens", 0]}},
-            "conversations": {"$sum": 1},
-            # Savings aggregations
             "estimated_human_cost_usd": {"$sum": {"$ifNull": ["$savings.estimated_human_cost_usd", 0]}},
             "savings_usd": {"$sum": {"$ifNull": ["$savings.savings_usd", 0]}},
             "estimated_human_duration_minutes": {"$sum": {"$ifNull": ["$savings.estimated_human_duration_minutes", 0]}},
         }},
-        {"$sort": {"_id": 1}},
     ]
+    window_chats_pipeline = [
+        {"$match": {"at": {"$gte": since}}},
+        {"$group": {"_id": "$conversation_id"}},
+        {"$count": "n"},
+    ]
+    cost_rows, savings_rows, window_chats = await asyncio.gather(
+        db[USAGE_EVENTS].aggregate(cost_pipeline).to_list(days + 2),
+        db.conversations.aggregate(savings_pipeline).to_list(days + 2),
+        db[USAGE_EVENTS].aggregate(window_chats_pipeline).to_list(1),
+    )
 
-    daily = await db.conversations.aggregate(pipeline).to_list(days + 1)
+    empty = {
+        "total_cost_usd": 0, "agent_cost_usd": 0, "confidence_cost_usd": 0,
+        "input_tokens": 0, "output_tokens": 0, "conversations": 0, "runs": 0,
+        "estimated_human_cost_usd": 0, "savings_usd": 0, "estimated_human_duration_minutes": 0,
+    }
+    by_day: dict[str, dict] = {}
+    for r in cost_rows:
+        d = by_day.setdefault(r["_id"], {"date": r["_id"], **empty})
+        d["total_cost_usd"] = d["agent_cost_usd"] = r.get("total_cost_usd", 0)
+        d["input_tokens"] = r.get("input_tokens", 0)
+        d["output_tokens"] = r.get("output_tokens", 0)
+        d["runs"] = r.get("runs", 0)
+        d["conversations"] = len(r.get("conversation_ids") or [])
+    for r in savings_rows:
+        d = by_day.setdefault(r["_id"], {"date": r["_id"], **empty})
+        for k in ("estimated_human_cost_usd", "savings_usd", "estimated_human_duration_minutes"):
+            d[k] = r.get(k, 0)
+    daily = [by_day[k] for k in sorted(by_day)]
 
     total_cost = sum(d["total_cost_usd"] for d in daily)
-    total_conversations = sum(d["conversations"] for d in daily)
+    # Distinct chats used in the window (a chat used on 3 days counts once).
+    total_conversations = (window_chats[0]["n"] if window_chats else 0)
     total_input = sum(d["input_tokens"] for d in daily)
     total_output = sum(d["output_tokens"] for d in daily)
     avg_cost = round(total_cost / total_conversations, 6) if total_conversations > 0 else 0
@@ -700,11 +744,9 @@ async def handle_cost_stats(request: web.Request) -> web.Response:
     total_human_minutes = sum(d["estimated_human_duration_minutes"] for d in daily)
     savings_percentage = round((total_savings / total_human_cost) * 100, 1) if total_human_cost > 0 else 0
 
-    for d in daily:
-        d["date"] = d.pop("_id")
-
     return web.json_response({
         "daily": daily,
+        "basis": "run_recorded_at",
         "total_cost_usd": round(total_cost, 4),
         "total_conversations": total_conversations,
         "avg_cost_per_conversation": round(avg_cost, 4),
@@ -719,60 +761,65 @@ async def handle_cost_stats(request: web.Request) -> web.Response:
 
 
 async def handle_token_usage(request: web.Request) -> web.Response:
-    """GET /api/token-usage — token usage breakdown by user and flow."""
+    """GET /api/token-usage — token usage breakdown by user and flow.
+
+    Reads the per-run usage ledger, so a window holds the tokens actually
+    used in it (not everything a chat ever used, keyed to its start day).
+    """
+    from observability.usage_ledger import COLLECTION as USAGE_EVENTS
+
     db = get_db()
     if db is None:
         return web.json_response({"error": "Observability not configured"}, status=503)
 
-    days = int(request.query.get("days", 30))
+    days = _analytics_days(request)
     type_filter = request.query.get("type", "")
     name_filter = request.query.get("name", "")
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    name_regex = {"$regex": re.escape(name_filter), "$options": "i"} if name_filter else None
 
-    base_match = {"started_at": {"$gte": since}, "cost": {"$ne": None}}
+    sums = {
+        "input_tokens": {"$sum": {"$ifNull": ["$input_tokens", 0]}},
+        "output_tokens": {"$sum": {"$ifNull": ["$output_tokens", 0]}},
+        "total_cost_usd": {"$sum": {"$ifNull": ["$cost_usd", 0]}},
+        "conversation_ids": {"$addToSet": "$conversation_id"},
+    }
+
+    def _finish(r: dict) -> dict:
+        r["conversations"] = len(r.pop("conversation_ids", None) or [])
+        r["total_tokens"] = r["input_tokens"] + r["output_tokens"]
+        return r
 
     async def _user_pipeline():
-        match = {**base_match, "source": {"$nin": ["flow", "webhook"]}, "metadata.user_name": {"$ne": None}}
-        if name_filter:
-            match["metadata.user_name"] = {"$regex": name_filter, "$options": "i"}
+        match = {"at": {"$gte": since}, "source": {"$nin": ["flow", "webhook"]},
+                 "user_email": name_regex or {"$nin": [None, ""]}}
         pipeline = [
             {"$match": match},
-            {"$group": {
-                "_id": "$metadata.user_name",
-                "input_tokens": {"$sum": {"$ifNull": ["$cost.input_tokens", 0]}},
-                "output_tokens": {"$sum": {"$ifNull": ["$cost.output_tokens", 0]}},
-                "conversations": {"$sum": 1},
-            }},
+            {"$group": {"_id": "$user_email", **sums}},
             {"$sort": {"input_tokens": -1}},
         ]
-        rows = await db.conversations.aggregate(pipeline).to_list(500)
+        rows = await db[USAGE_EVENTS].aggregate(pipeline).to_list(500)
         for r in rows:
             r["type"] = "user"
             r["name"] = r.pop("_id") or "(unknown)"
-            r["total_tokens"] = r["input_tokens"] + r["output_tokens"]
+            _finish(r)
         return rows
 
     async def _flow_pipeline():
-        match = {**base_match, "source": {"$in": ["flow", "webhook"]}, "metadata.flow_name": {"$ne": None}}
-        if name_filter:
-            match["metadata.flow_name"] = {"$regex": name_filter, "$options": "i"}
+        match = {"at": {"$gte": since}, "source": {"$in": ["flow", "webhook"]},
+                 "flow_name": name_regex or {"$ne": None}}
         pipeline = [
             {"$match": match},
-            {"$group": {
-                "_id": {"flow_id": "$metadata.flow_id", "flow_name": "$metadata.flow_name"},
-                "input_tokens": {"$sum": {"$ifNull": ["$cost.input_tokens", 0]}},
-                "output_tokens": {"$sum": {"$ifNull": ["$cost.output_tokens", 0]}},
-                "conversations": {"$sum": 1},
-            }},
+            {"$group": {"_id": {"flow_id": "$flow_id", "flow_name": "$flow_name"}, **sums}},
             {"$sort": {"input_tokens": -1}},
         ]
-        rows = await db.conversations.aggregate(pipeline).to_list(500)
+        rows = await db[USAGE_EVENTS].aggregate(pipeline).to_list(500)
         for r in rows:
             r["type"] = "flow"
             r["name"] = r["_id"].get("flow_name") or r["_id"].get("flow_id") or "(unknown)"
             r["flow_id"] = r["_id"].get("flow_id")
             del r["_id"]
-            r["total_tokens"] = r["input_tokens"] + r["output_tokens"]
+            _finish(r)
         return rows
 
     if type_filter == "user":
@@ -789,6 +836,7 @@ async def handle_token_usage(request: web.Request) -> web.Response:
         "input_tokens": sum(r["input_tokens"] for r in rows),
         "output_tokens": sum(r["output_tokens"] for r in rows),
         "total_tokens": sum(r["total_tokens"] for r in rows),
+        "total_cost_usd": sum(r["total_cost_usd"] for r in rows),
         "conversations": sum(r["conversations"] for r in rows),
     }
 
