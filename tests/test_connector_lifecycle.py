@@ -28,7 +28,8 @@ def running(pid):
     try:
         # Killed grandchildren may remain zombies until the host reaps them.
         return Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1][0] != 'Z'
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # The process can be reaped between open and read, which raises ESRCH.
         return False
 
 

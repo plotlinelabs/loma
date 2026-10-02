@@ -1732,7 +1732,10 @@ async def _run_opencode_agent(
 
     if observer:
         usage_payload = total_usage if total_usage["input_tokens"] or total_usage["output_tokens"] else None
-        await observer.record_usage(usage_payload, total_cost if total_cost else None)
+        await observer.record_usage(
+            usage_payload, total_cost if total_cost else None,
+            model=selected_model, runtime="opencode",
+        )
         if stopped_by_user:
             from agent.active_streams import STOPPED_BY_USER_REASON
             await observer.mark_interrupted(STOPPED_BY_USER_REASON)

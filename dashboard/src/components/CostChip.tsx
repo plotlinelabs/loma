@@ -23,7 +23,9 @@ function formatTokens(n: number): string {
 
 /** Live spend counter for one chat. Polls the lightweight cost endpoint
  * (turn costs land when turns finish, so 12s is plenty); tap/click opens
- * the token breakdown with a link to the full usage page. */
+ * the token breakdown with a link to the full usage page. The figure is the
+ * chat's all-time total, which is why it won't match "Today" on My usage
+ * for a chat that also ran on earlier days. */
 export function CostChip({ conversationId, className }: {
   conversationId: string;
   className?: string;
@@ -54,7 +56,7 @@ export function CostChip({ conversationId, className }: {
       <PopoverTrigger asChild>
         <button
           type="button"
-          title="Chat cost so far"
+          title="Chat cost so far (all time)"
           className={cn(
             "h-9 px-3 flex items-center rounded-full border border-border bg-background/80 backdrop-blur",
             "text-xs font-medium tabular-nums text-muted-foreground press-scale",
@@ -65,7 +67,8 @@ export function CostChip({ conversationId, className }: {
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-56 p-3 text-[13px]">
-        <div className="mb-2 font-medium">Spent on this chat</div>
+        <div className="font-medium">Spent on this chat</div>
+        <div className="mb-2 text-xs text-muted-foreground">All time, across every run</div>
         <dl className="space-y-1 text-muted-foreground">
           <div className="flex justify-between">
             <dt>Total</dt>

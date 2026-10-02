@@ -1512,39 +1512,63 @@ export async function transcribeAudio(blob: Blob, filename: string): Promise<str
 
 // ---------- Personal AI usage ----------
 
-export interface MyUsageDay {
-  date: string;
+/** Sums shared by totals, days, models and chats on /api/usage/me. */
+export interface MyUsageSums {
   total_cost_usd: number;
   input_tokens: number;
   output_tokens: number;
+  /** 0 on runs recorded before cache capture */
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  runs: number;
+  /** Runs whose runtime reports no price (e.g. Codex on a ChatGPT plan) */
+  unpriced_runs: number;
+  unpriced_tokens: number;
+}
+
+export interface MyUsageDay extends MyUsageSums {
+  date: string;
   conversations: number;
 }
 
-export interface MyUsageTopChat {
+export interface MyUsageModel extends MyUsageSums {
+  /** provider/model id, or "unknown" */
+  model: string;
+  conversations: number;
+}
+
+export interface MyUsageChat extends MyUsageSums {
   conversation_id: string;
   title?: string | null;
   prompt: string;
-  started_at?: string;
-  status?: string;
-  total_cost_usd: number;
-  input_tokens: number;
-  output_tokens: number;
+  started_at?: string | null;
+  last_used_at?: string | null;
+  status?: string | null;
+  deleted?: boolean;
+  models: string[];
+  /** Includes spend recorded before per-run tracking */
+  approx?: boolean;
 }
+
+/** @deprecated use MyUsageChat */
+export type MyUsageTopChat = MyUsageChat;
+
+export type MyUsageSort = "cost_desc" | "cost_asc" | "recent";
 
 export interface MyUsageResponse {
   days: number | null;
   since: string;
-  totals: {
-    total_cost_usd: number;
-    input_tokens: number;
-    output_tokens: number;
-    /** 0 on conversations recorded before cache capture */
-    cache_read_tokens: number;
-    cache_creation_tokens: number;
-    conversations: number;
-  };
+  basis?: string;
+  includes_approximate?: boolean;
+  totals: MyUsageSums & { conversations: number };
   daily: MyUsageDay[];
-  top_chats: MyUsageTopChat[];
+  by_model: MyUsageModel[];
+  chats: MyUsageChat[];
+  chats_total: number;
+  chats_sort: MyUsageSort;
+  chats_limit: number;
+  chats_offset: number;
+  top_chats: MyUsageChat[];
 }
 
 export async function fetchMyUsage(opts: {
@@ -1554,13 +1578,44 @@ export async function fetchMyUsage(opts: {
   since?: string;
   /** IANA timezone so daily buckets match the user's local days */
   tz?: string;
+  sort?: MyUsageSort;
+  limit?: number;
+  offset?: number;
 }): Promise<MyUsageResponse> {
   const params = new URLSearchParams();
   if (opts.since) params.set("since", opts.since);
   else if (opts.days) params.set("days", String(opts.days));
   if (opts.tz) params.set("tz", opts.tz);
+  if (opts.sort) params.set("sort", opts.sort);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
   const res = await fetch(`${API_BASE}/api/usage/me?${params}`);
   if (!res.ok) throw new Error(`Failed to fetch usage: ${res.status}`);
+  return res.json();
+}
+
+export interface MyUsageRun {
+  at: string;
+  model: string;
+  runtime: string | null;
+  source?: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd: number;
+  cost_known: boolean;
+  approx: boolean;
+}
+
+export async function fetchMyChatRuns(
+  conversationId: string, since: string,
+): Promise<{ runs: MyUsageRun[]; truncated: boolean }> {
+  const params = new URLSearchParams({ since });
+  const res = await fetch(
+    `${API_BASE}/api/usage/me/chats/${encodeURIComponent(conversationId)}/runs?${params}`,
+  );
+  if (!res.ok) throw new Error(`Failed to fetch runs: ${res.status}`);
   return res.json();
 }
 
