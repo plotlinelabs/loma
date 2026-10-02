@@ -4,6 +4,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+from observability.usage_ledger import build_usage_event, record_usage_event
+
 logger = logging.getLogger(__name__)
 
 MAX_CONTENT_LEN = 10_000
@@ -45,6 +47,10 @@ class ConversationObserver:
         self._turns_data: list[dict] = []  # in-memory copy for confidence assessment
         self._agent_cost_data: dict | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        # One observer per run: run_id + sequence make each usage-ledger
+        # event id unique per record_usage call and stable across retries.
+        self.run_id = uuid.uuid4().hex
+        self._usage_seq = 0
 
     async def start(self):
         """Insert initial conversation document with status='running'."""
@@ -272,9 +278,14 @@ class ConversationObserver:
             })
 
     async def record_usage(self, usage: dict | None, total_cost_usd: float | None):
-        """Record agent SDK usage and cost data on the conversation document.
+        """Record this run's usage: a timestamped ledger row plus the
+        conversation's running total.
 
-        When resuming, accumulates tokens and cost on top of existing values.
+        The ledger row (observability/usage_ledger.py) is what per-day usage
+        is computed from; it is written first so the conversation total is
+        never ahead of the ledger. The running total always accumulates —
+        deciding $set vs $inc on turn_offset used to wipe earlier spend when
+        a resumed chat had total_turns == 0.
         """
         if usage is None and total_cost_usd is None:
             return
@@ -286,47 +297,60 @@ class ConversationObserver:
         cache_read_tokens = usage.get("cache_read_input_tokens", 0) if usage else 0
         cache_creation_tokens = usage.get("cache_creation_input_tokens", 0) if usage else 0
         agent_cost = round(total_cost_usd, 6) if total_cost_usd is not None else 0
+        conv_filter = {"conversation_id": self.conversation_id}
 
-        if self.turn_offset > 0:
-            # Resuming — accumulate on top of existing cost
-            try:
-                await self.db.conversations.update_one(
-                    {"conversation_id": self.conversation_id},
-                    {"$inc": {
-                        "cost.input_tokens": input_tokens,
-                        "cost.output_tokens": output_tokens,
-                        "cost.cache_read_tokens": cache_read_tokens,
-                        "cost.cache_creation_tokens": cache_creation_tokens,
-                        "cost.agent_cost_usd": agent_cost,
-                        "cost.total_cost_usd": agent_cost,
-                    }},
+        # 1. Ledger row. Owner/source come from the conversation document —
+        #    resumed runs don't always carry the original metadata.
+        self._usage_seq += 1
+        try:
+            conv = await self.db.conversations.find_one(
+                conv_filter, {"metadata.user_name": 1, "source": 1, "model": 1},
+            ) or {}
+            await record_usage_event(self.db, build_usage_event(
+                event_id=f"{self.conversation_id}:{self.run_id}:{self._usage_seq}",
+                conversation_id=self.conversation_id,
+                at=datetime.now(timezone.utc),
+                user_email=((conv.get("metadata") or {}).get("user_name")
+                            or self.metadata.get("user_name", "")),
+                source=conv.get("source") or self.metadata.get("source", "unknown"),
+                model=conv.get("model") or self.metadata.get("model", ""),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_creation_tokens=cache_creation_tokens,
+                cost_usd=agent_cost,
+            ))
+        except Exception as e:
+            logger.warning("Observability: failed to record usage event: %s", e)
+
+        # 2. Conversation running total (the cost chip reads this).
+        increments = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cache_creation_tokens": cache_creation_tokens,
+            "agent_cost_usd": agent_cost,
+            "total_cost_usd": agent_cost,
+        }
+        inc = {"$inc": {f"cost.{k}": v for k, v in increments.items()}}
+        try:
+            result = await self.db.conversations.update_one(
+                {**conv_filter, "cost": {"$type": "object"}}, inc,
+            )
+            if result.matched_count == 0:
+                # No cost yet (null/missing) — $inc can't create under null.
+                result = await self.db.conversations.update_one(
+                    {**conv_filter, "cost": {"$not": {"$type": "object"}}},
+                    {"$set": {"cost": {**increments, "confidence_cost_usd": 0}}},
                 )
-                # Refresh in-memory data for confidence cost merge
-                existing = await self.db.conversations.find_one(
-                    {"conversation_id": self.conversation_id},
-                    {"cost": 1},
-                )
-                self._agent_cost_data = existing.get("cost") if existing else None
-            except Exception as e:
-                logger.warning("Observability: failed to record usage (resume): %s", e)
-        else:
-            cost_data = {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_read_tokens": cache_read_tokens,
-                "cache_creation_tokens": cache_creation_tokens,
-                "agent_cost_usd": agent_cost,
-                "confidence_cost_usd": 0,
-                "total_cost_usd": agent_cost,
-            }
-            self._agent_cost_data = cost_data
-            try:
-                await self.db.conversations.update_one(
-                    {"conversation_id": self.conversation_id},
-                    {"$set": {"cost": cost_data}},
-                )
-            except Exception as e:
-                logger.warning("Observability: failed to record usage: %s", e)
+                if result.matched_count == 0:
+                    # Lost a race with a concurrent first write — accumulate.
+                    await self.db.conversations.update_one(conv_filter, inc)
+            # Refresh in-memory data for the savings estimate
+            existing = await self.db.conversations.find_one(conv_filter, {"cost": 1})
+            self._agent_cost_data = existing.get("cost") if existing else None
+        except Exception as e:
+            logger.warning("Observability: failed to record usage: %s", e)
 
     async def finish(self, final_response: str = ""):
         """Mark conversation as completed and trigger confidence assessment."""

@@ -2,10 +2,16 @@
 
 Unlike /api/cost-stats and /api/token-usage (org-wide, analytics), these
 answer "what am *I* spending?" and need no special role. Ownership is
-matched on metadata.user_name, which holds the user's email for dashboard
-chats (board-task runs fired headlessly included); flow/webhook runs are
-nobody's personal usage and are excluded, mirroring token-usage.
+matched on the conversation's metadata.user_name (copied onto each usage
+event), which holds the user's email for dashboard chats (board-task runs
+fired headlessly included); flow/webhook runs are nobody's personal usage
+and are excluded, mirroring token-usage.
+
+Windows and daily buckets are computed on `usage_events.at` — when each
+run's usage was recorded — not on the conversation's `started_at`, so a chat
+started yesterday and used today counts toward today.
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -13,6 +19,11 @@ from aiohttp import web
 
 from api.auth_helpers import ROLE_HIERARCHY, get_system_role, get_user_email
 from observability.db import get_db
+from observability.usage_ledger import (
+    COLLECTION as USAGE_EVENTS,
+    backfill_usage_events,
+    ensure_usage_indexes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +43,25 @@ def _parse_timezone(request: web.Request) -> str | None:
         return None
 
 
+def _usage_sums() -> dict:
+    return {
+        "total_cost_usd": {"$sum": {"$ifNull": ["$cost_usd", 0]}},
+        "input_tokens": {"$sum": {"$ifNull": ["$input_tokens", 0]}},
+        "output_tokens": {"$sum": {"$ifNull": ["$output_tokens", 0]}},
+        "cache_read_tokens": {"$sum": {"$ifNull": ["$cache_read_tokens", 0]}},
+        "cache_creation_tokens": {"$sum": {"$ifNull": ["$cache_creation_tokens", 0]}},
+    }
+
+
+def _iso(value):
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
 async def handle_my_usage(request: web.Request) -> web.Response:
     """GET /api/usage/me?days=30 — the caller's spend, tokens, and top chats.
 
-    ?since=<ISO> overrides days for exact windows (e.g. "today" starting at
-    the user's local midnight); ?tz=<IANA> aligns the daily buckets.
+    ?since=<ISO> overrides days for exact windows (the dashboard sends the
+    user's local midnight); ?tz=<IANA> aligns the daily buckets.
     """
     user_email = get_user_email(request)
     if not user_email:
@@ -45,7 +70,10 @@ async def handle_my_usage(request: web.Request) -> web.Response:
     if db is None:
         return web.json_response({"error": "Observability not configured"}, status=503)
 
-    days: int | None = min(max(int(request.query.get("days", 30)), 1), 365)
+    try:
+        days: int | None = min(max(int(request.query.get("days", 30)), 1), 365)
+    except ValueError:
+        return web.json_response({"error": "Invalid days"}, status=400)
     since = datetime.now(timezone.utc) - timedelta(days=days)
     since_param = request.query.get("since", "").strip()
     if since_param:
@@ -60,11 +88,10 @@ async def handle_my_usage(request: web.Request) -> web.Response:
         except ValueError:
             return web.json_response({"error": "Invalid since timestamp"}, status=400)
     tz_name = _parse_timezone(request)
-    # Deleted chats still cost money — no deleted filter, the number is honest.
+    # Deleted chats still cost money — events outlive the chat, the number is honest.
     match = {
-        "started_at": {"$gte": since},
-        "cost": {"$ne": None},
-        "metadata.user_name": user_email,
+        "user_email": user_email,
+        "at": {"$gte": since},
         "source": {"$nin": ["flow", "webhook"]},
     }
 
@@ -74,72 +101,89 @@ async def handle_my_usage(request: web.Request) -> web.Response:
             "totals": [
                 {"$group": {
                     "_id": None,
-                    "total_cost_usd": {"$sum": {"$ifNull": ["$cost.total_cost_usd", 0]}},
-                    "input_tokens": {"$sum": {"$ifNull": ["$cost.input_tokens", 0]}},
-                    "output_tokens": {"$sum": {"$ifNull": ["$cost.output_tokens", 0]}},
-                    # Absent on conversations recorded before cache capture.
-                    "cache_read_tokens": {"$sum": {"$ifNull": ["$cost.cache_read_tokens", 0]}},
-                    "cache_creation_tokens": {"$sum": {"$ifNull": ["$cost.cache_creation_tokens", 0]}},
-                    "conversations": {"$sum": 1},
+                    **_usage_sums(),
+                    "conversation_ids": {"$addToSet": "$conversation_id"},
+                    "approx": {"$max": {"$cond": [{"$eq": ["$approx", True]}, 1, 0]}},
                 }},
             ],
             "daily": [
                 {"$group": {
                     "_id": {"$dateToString": {
                         "format": "%Y-%m-%d",
-                        "date": "$started_at",
+                        "date": "$at",
                         **({"timezone": tz_name} if tz_name else {}),
                     }},
-                    "total_cost_usd": {"$sum": {"$ifNull": ["$cost.total_cost_usd", 0]}},
-                    "input_tokens": {"$sum": {"$ifNull": ["$cost.input_tokens", 0]}},
-                    "output_tokens": {"$sum": {"$ifNull": ["$cost.output_tokens", 0]}},
-                    "conversations": {"$sum": 1},
+                    **_usage_sums(),
+                    "conversation_ids": {"$addToSet": "$conversation_id"},
                 }},
                 {"$sort": {"_id": 1}},
             ],
             "top_chats": [
-                {"$sort": {"cost.total_cost_usd": -1}},
-                {"$limit": 5},
-                {"$project": {
-                    "_id": 0,
-                    "conversation_id": 1,
-                    "title": 1,
-                    "prompt": {"$substrCP": [{"$ifNull": ["$prompt", ""]}, 0, 100]},
-                    "started_at": 1,
-                    "status": 1,
-                    "total_cost_usd": {"$ifNull": ["$cost.total_cost_usd", 0]},
-                    "input_tokens": {"$ifNull": ["$cost.input_tokens", 0]},
-                    "output_tokens": {"$ifNull": ["$cost.output_tokens", 0]},
+                {"$group": {
+                    "_id": "$conversation_id",
+                    **_usage_sums(),
+                    "last_used_at": {"$max": "$at"},
                 }},
+                {"$sort": {"total_cost_usd": -1}},
+                {"$limit": 5},
             ],
         }},
     ]
 
-    result = await db.conversations.aggregate(pipeline).to_list(1)
+    result = await db[USAGE_EVENTS].aggregate(pipeline).to_list(1)
     facets = result[0] if result else {}
-    totals = (facets.get("totals") or [{}])[0] if facets.get("totals") else {}
-    totals.pop("_id", None)
+    totals = (facets.get("totals") or [{}])[0]
     daily = [
-        {"date": d.pop("_id"), **d}
+        {
+            "date": d["_id"],
+            "total_cost_usd": d.get("total_cost_usd", 0),
+            "input_tokens": d.get("input_tokens", 0),
+            "output_tokens": d.get("output_tokens", 0),
+            "conversations": len(d.get("conversation_ids") or []),
+        }
         for d in facets.get("daily") or []
     ]
+
+    top_rows = facets.get("top_chats") or []
+    details: dict[str, dict] = {}
+    if top_rows:
+        cursor = db.conversations.find(
+            {"conversation_id": {"$in": [r["_id"] for r in top_rows]}},
+            {"_id": 0, "conversation_id": 1, "title": 1, "prompt": 1,
+             "started_at": 1, "status": 1},
+        )
+        async for doc in cursor:
+            details[doc["conversation_id"]] = doc
     top_chats = []
-    for chat in facets.get("top_chats") or []:
-        started = chat.get("started_at")
-        if isinstance(started, datetime):
-            chat["started_at"] = started.isoformat()
-        top_chats.append(chat)
+    for row in top_rows:
+        doc = details.get(row["_id"], {})
+        top_chats.append({
+            "conversation_id": row["_id"],
+            "title": doc.get("title"),
+            "prompt": (doc.get("prompt") or "")[:100],
+            "started_at": _iso(doc.get("started_at")),
+            "last_used_at": _iso(row.get("last_used_at")),
+            "status": doc.get("status"),
+            "total_cost_usd": row.get("total_cost_usd", 0),
+            "input_tokens": row.get("input_tokens", 0),
+            "output_tokens": row.get("output_tokens", 0),
+        })
 
     return web.json_response({
         "days": days,
         "since": since.isoformat(),
+        # Spend is attributed to when each run's usage was recorded.
+        "basis": "run_recorded_at",
+        # True when the window holds pre-ledger history, which is attributed
+        # to the chat's start day (the old behaviour) rather than per run.
+        "includes_approximate": bool(totals.get("approx")),
         "totals": {
             "total_cost_usd": totals.get("total_cost_usd", 0),
             "input_tokens": totals.get("input_tokens", 0),
             "output_tokens": totals.get("output_tokens", 0),
             "cache_read_tokens": totals.get("cache_read_tokens", 0),
             "cache_creation_tokens": totals.get("cache_creation_tokens", 0),
-            "conversations": totals.get("conversations", 0),
+            "conversations": len(totals.get("conversation_ids") or []),
         },
         "daily": daily,
         "top_chats": top_chats,
@@ -186,7 +230,28 @@ async def handle_conversation_cost(request: web.Request) -> web.Response:
     })
 
 
+async def _init_usage_ledger(app: web.Application):
+    """Create ledger indexes and backfill pre-ledger spend in the background."""
+    db = get_db()
+    if db is None:
+        return
+    try:
+        await ensure_usage_indexes(db)
+    except Exception as e:
+        logger.warning("Usage ledger: index creation failed: %s", e)
+
+    async def _backfill():
+        try:
+            await backfill_usage_events(db)
+        except Exception as e:
+            logger.warning("Usage ledger: backfill failed: %s", e)
+
+    # Keep a reference so the task isn't garbage-collected mid-run.
+    app["usage_ledger_backfill_task"] = asyncio.create_task(_backfill())
+
+
 def setup_my_usage_routes(app: web.Application):
     """Register personal usage routes."""
     app.router.add_get("/api/usage/me", handle_my_usage)
     app.router.add_get("/api/conversations/{conversation_id}/cost", handle_conversation_cost)
+    app.on_startup.append(_init_usage_ledger)

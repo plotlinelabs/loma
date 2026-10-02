@@ -16,7 +16,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import { formatUsd } from "@/components/CostChip";
-import { fetchMyUsage, type MyUsageResponse } from "@/lib/api";
+import {
+  fetchMyUsage, type MyUsageDay, type MyUsageResponse, type MyUsageTopChat,
+} from "@/lib/api";
+
+/** Fields added by the usage-ledger backend; optional so an older server
+ * still renders. */
+type UsageData = Omit<MyUsageResponse, "top_chats"> & {
+  includes_approximate?: boolean;
+  top_chats: (MyUsageTopChat & { last_used_at?: string | null })[];
+};
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -46,32 +55,87 @@ function StatCard({ icon, label, value, sub }: {
 
 type Range = "today" | "7" | "30" | "90";
 
+/** Local-midnight start of the window: "today" is since midnight, "7" is
+ * today plus the 6 previous calendar days, and so on — so the window lines
+ * up exactly with the daily bars. */
+function windowStart(range: Range, now: Date = new Date()): Date {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  if (range !== "today") start.setDate(start.getDate() - (Number(range) - 1));
+  return start;
+}
+
+function localDateKey(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/** One bar per calendar day in the window — days without spend show as 0
+ * instead of silently disappearing from the chart. */
+function fillDays(daily: MyUsageDay[], start: Date, end: Date = new Date()): MyUsageDay[] {
+  const byDate = new Map(daily.map((d) => [d.date, d]));
+  const out: MyUsageDay[] = [];
+  const cursor = new Date(start);
+  const last = localDateKey(end);
+  for (let i = 0; i < 400; i++) {
+    const key = localDateKey(cursor);
+    out.push(byDate.get(key) ?? {
+      date: key, total_cost_usd: 0, input_tokens: 0, output_tokens: 0, conversations: 0,
+    });
+    if (key === last) break;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
 /** "My usage" — the signed-in user's own AI spend. Org-wide numbers live on
  * Analytics (and Claude-subscription limits on /usage); this page is
  * deliberately me-only so it needs no special role. */
 export default function MyUsagePage() {
   const [range, setRange] = useState<Range>("today");
-  const [data, setData] = useState<MyUsageResponse | null>(null);
+  const [data, setData] = useState<{ usage: UsageData; start: Date } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped when the tab regains focus and at local midnight, so a page left
+  // open (the mobile PWA stays alive for days) never shows a stale window.
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const bump = () => { if (!document.hidden) setRefreshKey((k) => k + 1); };
+    document.addEventListener("visibilitychange", bump);
+    window.addEventListener("focus", bump);
+    return () => {
+      document.removeEventListener("visibilitychange", bump);
+      window.removeEventListener("focus", bump);
+    };
+  }, []);
+
+  useEffect(() => {
+    const next = new Date();
+    next.setHours(24, 0, 1, 0);
+    const timer = setTimeout(() => setRefreshKey((k) => k + 1), next.getTime() - Date.now());
+    return () => clearTimeout(timer);
+  }, [refreshKey]);
 
   // Stale data stays visible while a new range loads — no skeleton flash.
   useEffect(() => {
     let cancelled = false;
-    // Daily buckets (and "today") follow the browser's timezone.
+    // Daily buckets follow the browser's timezone; the window start is
+    // recomputed on every fetch.
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    let opts: Parameters<typeof fetchMyUsage>[0];
-    if (range === "today") {
-      const midnight = new Date();
-      midnight.setHours(0, 0, 0, 0);
-      opts = { since: midnight.toISOString(), tz };
-    } else {
-      opts = { days: Number(range), tz };
-    }
-    fetchMyUsage(opts)
-      .then((d) => { if (!cancelled) setData(d); })
+    const start = windowStart(range);
+    fetchMyUsage({ since: start.toISOString(), tz })
+      .then((d) => {
+        if (cancelled) return;
+        setError(null);
+        setData({ usage: d as UsageData, start });
+      })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load"); });
     return () => { cancelled = true; };
-  }, [range]);
+  }, [range, refreshKey]);
+
+  const usage = data?.usage;
+  const days = data && range !== "today" ? fillDays(data.usage.daily, data.start) : [];
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
@@ -92,51 +156,58 @@ export default function MyUsagePage() {
 
       {error && <p className="mt-4 text-[13px] text-destructive">{error}</p>}
 
-      {!data && !error && (
+      {!usage && !error && (
         <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[74px] rounded-xl" />)}
         </div>
       )}
 
-      {data && (
+      {usage && (
         <>
           <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
             <StatCard
               icon={<RiMoneyDollarCircleLine size={14} />}
               label="Spent"
-              value={formatUsd(data.totals.total_cost_usd)}
+              value={formatUsd(usage.totals.total_cost_usd)}
             />
             <StatCard
               icon={<RiChat1Line size={14} />}
-              label="Chats"
-              value={String(data.totals.conversations)}
+              label="Chats used"
+              value={String(usage.totals.conversations)}
             />
             <StatCard
               icon={<RiUploadLine size={14} />}
               label="Tokens in"
-              value={formatTokens(data.totals.input_tokens)}
+              value={formatTokens(usage.totals.input_tokens)}
               // Cache reads/writes are billed too — the $ figure doesn't add
               // up from fresh tokens alone on long agentic runs.
               sub={
-                data.totals.cache_read_tokens + data.totals.cache_creation_tokens > 0
-                  ? `+${formatTokens(data.totals.cache_read_tokens + data.totals.cache_creation_tokens)} cached`
+                usage.totals.cache_read_tokens + usage.totals.cache_creation_tokens > 0
+                  ? `+${formatTokens(usage.totals.cache_read_tokens + usage.totals.cache_creation_tokens)} cached`
                   : undefined
               }
             />
             <StatCard
               icon={<RiDownloadLine size={14} />}
               label="Tokens out"
-              value={formatTokens(data.totals.output_tokens)}
+              value={formatTokens(usage.totals.output_tokens)}
             />
           </div>
 
+          {usage.includes_approximate && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Includes older chats recorded before per-day tracking; their spend is
+              counted on the day each chat started.
+            </p>
+          )}
+
           {/* A one-bar chart says nothing — Today skips it */}
-          {data.daily.length > 1 && (
+          {days.length > 1 && (
             <Card className="mt-3 p-3">
               <div className="mb-2 text-xs text-muted-foreground">Daily spend</div>
               <div className="h-40">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={data.daily} margin={{ top: 4, right: 4, bottom: 0, left: -18 }}>
+                  <BarChart data={days} margin={{ top: 4, right: 4, bottom: 0, left: -18 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                     <XAxis
                       dataKey="date"
@@ -161,30 +232,33 @@ export default function MyUsagePage() {
           )}
 
           <Card className="mt-3 mb-4 p-0 overflow-hidden">
-            <div className="px-3 pt-3 pb-2 text-xs text-muted-foreground">Costliest chats</div>
-            {data.top_chats.length === 0 ? (
+            <div className="px-3 pt-3 pb-2 text-xs text-muted-foreground">Costliest chats in this window</div>
+            {usage.top_chats.length === 0 ? (
               <p className="px-3 pb-3 text-[13px] text-muted-foreground">Nothing yet in this window.</p>
             ) : (
               <ul className="divide-y divide-border">
-                {data.top_chats.map((chat) => (
-                  <li key={chat.conversation_id}>
-                    <Link
-                      href={`/chat?continue=${chat.conversation_id}`}
-                      className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px]">{chat.title || chat.prompt || "Untitled"}</div>
-                        <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                          {chat.started_at && <ClientTimestamp iso={chat.started_at} variant="short" placeholder="—" />}
-                          <span>{formatTokens(chat.input_tokens)} in · {formatTokens(chat.output_tokens)} out</span>
+                {usage.top_chats.map((chat) => {
+                  const when = chat.last_used_at || chat.started_at;
+                  return (
+                    <li key={chat.conversation_id}>
+                      <Link
+                        href={`/chat?continue=${chat.conversation_id}`}
+                        className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px]">{chat.title || chat.prompt || "Untitled"}</div>
+                          <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                            {when && <ClientTimestamp iso={when} variant="short" placeholder="—" />}
+                            <span>{formatTokens(chat.input_tokens)} in · {formatTokens(chat.output_tokens)} out</span>
+                          </div>
                         </div>
-                      </div>
-                      <span className="shrink-0 text-[13px] font-medium tabular-nums">
-                        {formatUsd(chat.total_cost_usd)}
-                      </span>
-                    </Link>
-                  </li>
-                ))}
+                        <span className="shrink-0 text-[13px] font-medium tabular-nums">
+                          {formatUsd(chat.total_cost_usd)}
+                        </span>
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </Card>
