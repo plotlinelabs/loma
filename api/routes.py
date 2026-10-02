@@ -2443,6 +2443,10 @@ def setup_api_routes(app: web.Application):
     from api.human_task_routes import setup_human_task_routes
     setup_human_task_routes(app)
 
+    # Onboarding tracker (customer accounts and their apps by stage)
+    from api.onboarding_routes import setup_onboarding_routes
+    setup_onboarding_routes(app)
+
     # Web push subscription routes (tasks-board notifications)
     from api.push_routes import setup_push_routes
     setup_push_routes(app)
