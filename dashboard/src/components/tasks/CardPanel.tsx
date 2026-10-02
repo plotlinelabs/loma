@@ -9,7 +9,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  RiCheckLine, RiCloseLine, RiDeleteBinLine, RiDraggable, RiExternalLinkLine, RiInboxArchiveLine, RiSparkling2Line,
+  RiCheckLine, RiCloseLine, RiDeleteBinLine, RiDraggable, RiExternalLinkLine, RiInboxArchiveLine, RiPauseLine, RiSparkling2Line,
 } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -254,6 +254,12 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
     }
   };
 
+  // Park a task waiting on input: it moves to Pending, stops counting as
+  // needing input, and resumes when someone replies in its chat.
+  const pauseTask = (task: Task) =>
+    void run(patchTask(task.conversation_id, { task_status: "todo", column: task.task_lane || board.lanes[0]?.id || "" }),
+      () => updateTask(task.conversation_id, { task_status: "todo" }), "Could not pause task");
+
   const reorderTask = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
     const task = tasks.find((t) => t.conversation_id === active.id);
@@ -399,6 +405,17 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
                       {task.column === "working" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />}
                       {label.text}
                     </span>
+                  )}
+                  {!readOnly && task.column === "needs_input" && (
+                    <button
+                      type="button"
+                      onClick={() => pauseTask(task)}
+                      aria-label="Pause task"
+                      title="Pause: move to Pending and pick it up later"
+                      className="shrink-0 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+                    >
+                      <RiPauseLine className="h-4 w-4" />
+                    </button>
                   )}
                   {!mine && task.owner && !task.assignee && (
                     <span className="shrink-0 text-[11px] text-muted-foreground">{shortName(task.owner)}</span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { RiStackLine } from "@remixicon/react";
+import { RiPauseLine, RiStackLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { Task, TaskCardItem, TasksBoardResponse } from "@/lib/api";
@@ -32,15 +32,18 @@ interface CardTasksViewProps {
   board: TasksBoardResponse;
   onOpenTask: (task: Task) => void;
   onOpenCard: (card: TaskCardItem) => void;
+  /** Park a Needs input task in Pending. Omitted when the board is read-only. */
+  onPauseTask?: (task: Task) => void;
   includedTagIds?: string[];
   excludedTagIds?: string[];
 }
 
-function TaskRow({ task, card, onOpenTask, onOpenCard, me }: {
+function TaskRow({ task, card, onOpenTask, onOpenCard, onPauseTask, me }: {
   task: Task;
   card: TaskCardItem | undefined;
   onOpenTask: (task: Task) => void;
   onOpenCard: (card: TaskCardItem) => void;
+  onPauseTask?: (task: Task) => void;
   me: string | null;
 }) {
   const dot = taskDot(task);
@@ -55,7 +58,7 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, me }: {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenTask(task); }
       }}
       data-task-id={task.conversation_id}
-      className="rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-input transition-colors"
+      className="group rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-input transition-colors"
     >
       <div className="flex items-start gap-2">
         {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
@@ -83,6 +86,17 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, me }: {
             {task.assignee && <AssigneeBadge email={task.assignee} me={me} className="ml-auto" />}
           </div>
         </div>
+        {onPauseTask && task.column === "needs_input" && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onPauseTask(task); }}
+            aria-label="Pause task"
+            title="Pause: move to Pending and pick it up later"
+            className="shrink-0 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+          >
+            <RiPauseLine className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -90,7 +104,7 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, me }: {
 
 /** Card boards, inverted: every task from every card, grouped by status
  * (Pending, In progress, Needs input, Done). Each task links back to its card. */
-export function CardTasksView({ board, onOpenTask, onOpenCard, includedTagIds = [], excludedTagIds = [] }: CardTasksViewProps) {
+export function CardTasksView({ board, onOpenTask, onOpenCard, onPauseTask, includedTagIds = [], excludedTagIds = [] }: CardTasksViewProps) {
   const { myEmail, assignedToMe, cardFilters, filterMatch } = useBoardExtras();
   const cardsById = new Map((board.cards ?? []).map((card) => [card.card_id, card]));
   // Card field filters (and saved views) hide the tasks of cards they filter out.
@@ -136,6 +150,7 @@ export function CardTasksView({ board, onOpenTask, onOpenCard, includedTagIds = 
                   card={task.task_card_id ? cardsById.get(task.task_card_id) : undefined}
                   onOpenTask={onOpenTask}
                   onOpenCard={onOpenCard}
+                  onPauseTask={onPauseTask}
                   me={myEmail}
                 />
               ))}

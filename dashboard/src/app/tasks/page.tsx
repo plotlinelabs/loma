@@ -854,6 +854,14 @@ export default function TasksPage() {
             board={board}
             onOpenTask={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
             onOpenCard={(card) => { setPanelCard(card); setCardPanelOpen(true); }}
+            onPauseTask={readOnly ? undefined : (task) => {
+              // Park it in Pending: it stops counting as needing input until someone replies.
+              setBoard({ ...board, tasks: board.tasks.map((t) => t.conversation_id === task.conversation_id
+                ? { ...t, task_status: "todo", column: t.task_lane || board.lanes[0]?.id || "" } : t) });
+              updateTask(task.conversation_id, { task_status: "todo" })
+                .catch((e) => setError(e instanceof Error ? e.message : "Could not pause task"))
+                .finally(() => void refresh());
+            }}
             includedTagIds={includedTagIds}
             excludedTagIds={excludedTagIds}
           />
