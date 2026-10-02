@@ -39,14 +39,14 @@ test("switch dividers land between the messages around them", () => {
   ];
   const events = [{
     type: "agent_switch", from_agent_id: null, from_agent_name: "Loma", to_agent_id: "h",
-    to_agent_name: "Harry", switched_by: "shubham@plotline.so", timestamp: "2026-10-02T23:20:10Z",
+    to_agent_name: "Harry", switched_by: "sam@example.com", timestamp: "2026-10-02T23:20:10Z",
   }];
   const timeline = buildTimeline(messages, events);
   assert.deepEqual(
     plain(timeline.map((i) => (i.kind === "switch" ? "switch" : i.message.content))),
     ["a", "b", "switch", "c", "d"],
   );
-  assert.equal(switchLabel(events[0]), "Switched to Harry by shubham@");
+  assert.equal(switchLabel(events[0]), "Switched to Harry by sam@");
   assert.deepEqual(plain(buildTimeline(messages, []).map((i) => i.kind)), ["message", "message", "message", "message"]);
 });
 

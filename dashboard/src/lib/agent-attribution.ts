@@ -64,7 +64,7 @@ export function runAgentLabel(metadata?: Record<string, unknown> | null): string
   return `${name}${metadata?.agent_id ? versionLabel(version) : ""}`;
 }
 
-/** "shubham@plotline.so" -> "shubham@". Keeps the divider short. */
+/** "sam@example.com" -> "sam@". Keeps the divider short. */
 export function shortUser(user?: string | null): string {
   if (!user) return "someone";
   const at = user.indexOf("@");
