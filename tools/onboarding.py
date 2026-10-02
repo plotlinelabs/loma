@@ -1,7 +1,7 @@
 """Onboarding tracker tool - read and update the Loma Onboarding section.
 
 Use this to keep customer integration records current from any source the
-agent can already reach (HubSpot, Plotline MongoDB/ClickHouse, MonetizeNow,
+agent can already reach (HubSpot, product databases, billing tools,
 Zoho, Grain). Pass --source with the connector name so the dashboard shows
 where each value came from. Automated sources never overwrite a value a
 human typed unless --force is given.
