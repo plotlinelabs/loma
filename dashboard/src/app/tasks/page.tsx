@@ -338,11 +338,17 @@ export default function TasksPage() {
     setManageOpen(true);
   };
 
-  return (
-    <BoardExtrasContext.Provider value={boardExtras}>
-    <div className="flex h-full flex-col space-y-2 p-4 lg:p-6">
-      <div className="pwa-header-offset flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+  // Everything above the board. On phones this is handed to MobileTaskBoard
+  // so it scrolls with the list: the page column is fixed-height and these
+  // rows cannot shrink, so leaving them outside the scroll region collapses
+  // the list to 0 and pushes the pinned composer down over the bottom nav.
+  const topBar = (
+    <div className="flex flex-col gap-2">
+      {/* Phones: a shared board's name plus the action buttons do not fit on
+          one 390px row, so the actions wrap below the title instead of
+          squeezing it to nothing. */}
+      <div className="pwa-header-offset flex items-center justify-between gap-2 max-md:flex-wrap">
+        <div className="flex min-w-0 items-center gap-2 max-md:max-w-full">
           <h1 className="min-w-0">
             <BoardSwitcher
               boards={boards}
@@ -509,6 +515,17 @@ export default function TasksPage() {
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+
+  // Only the phone task list renders the top bar itself. Card boards use
+  // CardBoard on every screen size, so they keep the page-level top bar.
+  const boardOwnsTopBar = !!board && isMobile && !cardMode;
+
+  return (
+    <BoardExtrasContext.Provider value={boardExtras}>
+    <div className="flex h-full min-h-0 flex-col space-y-2 p-4 lg:p-6">
+      {!boardOwnsTopBar && topBar}
 
       {board ? (
         cardMode ? (
@@ -531,6 +548,7 @@ export default function TasksPage() {
             includedTagIds={includedTagIds}
             excludedTagIds={excludedTagIds}
             readOnly={readOnly}
+            header={topBar}
           />
         ) : (
           <>

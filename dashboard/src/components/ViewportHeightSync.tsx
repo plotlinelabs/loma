@@ -11,13 +11,20 @@ import { useEffect } from "react";
  * the app shell sized to `--app-h`, sticky-bottom elements sit exactly on
  * top of the keyboard — the native-app feel.
  *
- * Mounted only in the installed PWA (standalone) where there's no browser
- * chrome to interact with.
+ * Mounted for every session (browser tab and installed PWA) but only active
+ * on touch-primary devices (`pointer: coarse`), which is where the on-screen
+ * keyboard lives. In a browser tab `visualViewport.height` already excludes
+ * the URL bar, so `--app-h` matches `100dvh` until the keyboard opens; only
+ * the keyboard case differs from dvh, which is exactly the case we want to
+ * fix. On desktop `--app-h` is left unset (the shell falls back to `100dvh`)
+ * so pinch-zoom never shrinks the layout. The window-scroll pin below is
+ * gated on a focused editable so it never fights page scrolling.
  */
 export default function ViewportHeightSync() {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    const touch = window.matchMedia("(pointer: coarse)");
 
     // Only pin the window scroll while the on-screen keyboard is plausibly
     // open (an editable element is focused). Pinning unconditionally fights
@@ -35,6 +42,13 @@ export default function ViewportHeightSync() {
     };
 
     const sync = () => {
+      // Desktop, or a pinch-zoomed phone tab: visualViewport.height shrinks
+      // with zoom, which is not a keyboard. Fall back to 100dvh so the shell
+      // never collapses under a zoomed-in user (same guard as useKeyboardVisible).
+      if (!touch.matches || Math.abs(vv.scale - 1) > 0.05) {
+        document.documentElement.style.removeProperty("--app-h");
+        return;
+      }
       document.documentElement.style.setProperty("--app-h", `${vv.height}px`);
       // Counteract iOS scrolling the page when the keyboard appears.
       if (keyboardLikelyOpen() && (vv.offsetTop > 0 || window.scrollY > 0)) {
@@ -45,9 +59,11 @@ export default function ViewportHeightSync() {
     sync();
     vv.addEventListener("resize", sync);
     vv.addEventListener("scroll", sync);
+    touch.addEventListener("change", sync);
     return () => {
       vv.removeEventListener("resize", sync);
       vv.removeEventListener("scroll", sync);
+      touch.removeEventListener("change", sync);
       document.documentElement.style.removeProperty("--app-h");
     };
   }, []);

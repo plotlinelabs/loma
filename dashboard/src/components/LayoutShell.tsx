@@ -8,7 +8,7 @@ import BottomNav from "./BottomNav";
 import CrosscutIcon from "./CrosscutIcon";
 import ViewportHeightSync from "./ViewportHeightSync";
 import { useUser } from "../lib/UserContext";
-import { useStandalone } from "@/hooks/useStandalone";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { RiMenuLine } from "@remixicon/react";
@@ -16,7 +16,7 @@ import { RiMenuLine } from "@remixicon/react";
 export default function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isLogin = pathname === "/login";
-  const standalone = useStandalone();
+  const isMobile = useIsMobile();
   const { user, loading } = useUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -36,6 +36,24 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
   const toggleSidebar = useCallback(() => setSidebarOpen((prev) => !prev), []);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
   const toggleCollapse = useCallback(() => setSidebarCollapsed((prev) => !prev), []);
+  // The phone drawer is always expanded: the collapsed 56px rail hides every
+  // section behind `!collapsed` and its expand button is desktop-only, so a
+  // sidebar collapsed on desktop would open as an empty strip on a phone.
+  const collapsed = sidebarCollapsed && !isMobile;
+  // The drawer only exists below md. Deriving this (instead of trusting the raw
+  // state) releases the drawer's body scroll lock when a phone rotates to
+  // landscape or a window widens past the breakpoint with the drawer open.
+  const drawerOpen = sidebarOpen && isMobile;
+  // Also drop the raw state once the viewport reaches md, so narrowing the
+  // window again (or rotating back to portrait) does not reopen the drawer.
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setSidebarOpen(false);
+    };
+    desktop.addEventListener("change", onChange);
+    return () => desktop.removeEventListener("change", onChange);
+  }, []);
 
   if (isLogin) {
     return <>{children}</>;
@@ -70,16 +88,16 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
     <>
       <Suspense>
         <Sidebar
-          isOpen={sidebarOpen}
+          isOpen={drawerOpen}
           onClose={closeSidebar}
-          collapsed={sidebarCollapsed}
+          collapsed={collapsed}
           onToggleCollapse={toggleCollapse}
         />
       </Suspense>
 
       {/* Mobile: reserve a short menu row so every route, including pages
           without a pwa-header-offset, clears the floating menu button. */}
-      {standalone && <ViewportHeightSync />}
+      <ViewportHeightSync />
       <Button
         variant="ghost"
         size="icon"
@@ -91,11 +109,13 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
       </Button>
 
       <main className={cn(
-        // dvh (not vh) so the iOS Safari URL bar doesn't cause overflow; in
-        // the installed PWA, --app-h tracks the visual viewport so the layout
-        // shrinks above the on-screen keyboard (dvh ignores it on iOS).
-        "loma-dashboard ml-0 min-w-0 flex flex-col transition-all duration-200 pt-[calc(env(safe-area-inset-top)+2.75rem)] md:pt-0 bg-background",
-        standalone ? "h-[var(--app-h,100dvh)]" : "h-dvh",
+        // --app-h tracks the visual viewport (ViewportHeightSync) so the
+        // shell shrinks above the on-screen keyboard in browser tabs and the
+        // installed PWA alike; dvh ignores the keyboard on iOS. Falls back to
+        // dvh (not vh) so the iOS Safari URL bar never causes overflow.
+        // overflow-x-clip keeps any wide child from panning the whole page.
+        "loma-dashboard ml-0 min-w-0 flex flex-col overflow-x-clip transition-all duration-200 pt-[calc(env(safe-area-inset-top)+2.75rem)] md:pt-0 bg-background",
+        "h-[var(--app-h,100dvh)]",
         sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
         <div className={cn(

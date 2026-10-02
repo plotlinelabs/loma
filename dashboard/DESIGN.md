@@ -39,7 +39,7 @@ Every element on screen must earn its place. If removing something doesn't hurt 
 - **No table borders.** The table container blends into the page.
 - **No header backgrounds.** Column headers are uppercase, small, muted — they orient, they don't decorate.
 - **Fewer columns.** If a column is useful <30% of the time, it doesn't belong in the default view. Put it in a tooltip on hover, or on the detail page.
-- **Hover reveals actions.** Row actions (continue, delete, menu) are invisible until the user hovers. This keeps the resting state clean.
+- **Hover reveals actions.** Row actions (continue, delete, menu) are invisible until the user hovers. This keeps the resting state clean. On touch devices there is no hover, so pair every `opacity-0 group-hover:opacity-100` with `pointer-coarse:opacity-100` and give the control a 44px hit area (`touch-target`, or a `Button`, which includes it).
 - **Hover reveals detail.** Secondary data (turns, duration, savings, confidence) lives in a tooltip on a related visible cell (e.g., cost).
 
 ### 4. Tuck away, don't remove
