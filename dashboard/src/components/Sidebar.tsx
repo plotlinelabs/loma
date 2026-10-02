@@ -44,6 +44,7 @@ import {
   RiMenuUnfoldLine,
   RiExpandUpDownLine,
   RiNotification3Line,
+  RiRocketLine,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -73,6 +74,11 @@ const navigation: NavItem[] = [
     name: "Chat",
     href: "/chat",
     icon: <RiChat1Line size={16} />,
+  },
+  {
+    name: "Onboarding",
+    href: "/onboarding",
+    icon: <RiRocketLine size={16} />,
   },
   {
     name: "Agents",
