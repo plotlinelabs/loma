@@ -40,13 +40,15 @@ function ChatPageContent() {
   // Tasks board start flow: ?continue=<id>&start=1 auto-sends a staged draft's prompt
   const startParam = searchParams.get("start") === "1";
   const skillContextParam = searchParams.get("skillContext");
+  // "New chat" from a folder page: ?project=<id> files the new chat in that folder
+  const projectParam = searchParams.get("project");
   const [initialItems, setInitialItems] = useState<ChatItem[] | undefined>();
   const [initialArtifacts, setInitialArtifacts] = useState<Artifact[] | undefined>();
   const [initialStatus, setInitialStatus] = useState<string | undefined>();
   const [loading, setLoading] = useState(!!continueId || !!flowId || !!taskId);
   const [promptPreview, setPromptPreview] = useState("");
   const [conversationTitle, setConversationTitle] = useState<string | null>(null);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(continueId ? null : projectParam);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleValue, setTitleValue] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -445,6 +447,7 @@ function ChatPageContent() {
         initialToolConfig={taskToolConfig}
         autoSend={autoSendParam || (startParam && !!taskDraftPrompt)}
         systemContext={skillContextParam || undefined}
+        projectId={!continueId && projectParam ? projectParam : undefined}
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
         onStreamComplete={handleStreamComplete}

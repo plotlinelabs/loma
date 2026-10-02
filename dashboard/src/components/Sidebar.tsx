@@ -13,6 +13,7 @@ import type { SystemRole } from "../lib/governance-api";
 import PetCompanion, { usePetSettings } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import ChatContextMenu from "./ChatContextMenu";
+import FolderTree, { CHAT_DRAG_TYPE } from "./FolderTree";
 import { useTheme } from "../lib/ThemeContext";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
@@ -551,31 +552,15 @@ export default function Sidebar({
             })}
           </nav>
 
-            {/* Projects */}
-            {!collapsed && projects.length > 0 && (
-              <div className="mt-6 flex flex-col">
-                <div className="px-3 pb-1.5">
-                  <span className="text-[10px] max-md:text-xs font-medium text-sidebar-foreground/60 uppercase tracking-[0.14em]">
-                    Projects
-                  </span>
-                </div>
-                <div className="px-2 space-y-px">
-                  {projects.map((p) => (
-                    <Link
-                      key={p.project_id}
-                      href={`/conversations?project=${p.project_id}`}
-                      prefetch
-                      onClick={onClose}
-                      title={p.name}
-                      className="group flex items-center gap-1 px-2 py-1 text-[13px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
-                    >
-                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
-                      <span className="truncate flex-1 min-w-0">{p.name}</span>
-                      <span className="text-[10px] text-muted-foreground tabular-nums">{p.conversation_count || 0}</span>
-                    </Link>
-                  ))}
-                </div>
-              </div>
+            {/* Folders (nested projects) */}
+            {!collapsed && (
+              <FolderTree
+                projects={projects}
+                onNavigate={onClose}
+                onCreate={(name) => addProject(name)}
+                onAssignChat={async (id, pid) => { await assignToProject(id, pid); reloadConversations(); }}
+                onChanged={refreshProjects}
+              />
             )}
 
             {/* Pinned */}
@@ -594,6 +579,8 @@ export default function Sidebar({
                     return (
                       <div
                         key={c.conversation_id}
+                        draggable
+                        onDragStart={(e) => e.dataTransfer.setData(CHAT_DRAG_TYPE, c.conversation_id)}
                         className={cn(
                           "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive
@@ -650,6 +637,8 @@ export default function Sidebar({
                     return (
                       <div
                         key={c.conversation_id}
+                        draggable
+                        onDragStart={(e) => e.dataTransfer.setData(CHAT_DRAG_TYPE, c.conversation_id)}
                         className={cn(
                           "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
                           isConvoActive

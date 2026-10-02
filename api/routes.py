@@ -610,6 +610,10 @@ async def handle_get_conversation(request: web.Request) -> web.Response:
         from api.task_routes import task_access
         can_view, _, _ = await task_access(db, conversation, user_email, system_role)
         if not can_view:
+            # Chats in a link-shared folder are readable (not messageable).
+            from api.project_routes import conversation_in_shared_project
+            can_view = await conversation_in_shared_project(db, conversation)
+        if not can_view:
             return web.json_response({"error": "Not found"}, status=404)
 
     turns = await db.turns.find({"conversation_id": cid}) \
@@ -1196,6 +1200,19 @@ async def handle_chat(request: web.Request) -> web.Response:
             else:
                 observer = ConversationObserver(db, metadata=metadata)
                 await observer.start()
+
+            # "New chat" started inside a folder: file the new conversation there.
+            new_project_id = body.get("project_id")
+            if new_project_id and isinstance(new_project_id, str) and not existing:
+                folder = await db.projects.find_one(
+                    {"project_id": new_project_id, "created_by": user_email, "deleted": {"$ne": True}},
+                    {"_id": 1},
+                )
+                if folder:
+                    await db.conversations.update_one(
+                        {"conversation_id": observer.conversation_id},
+                        {"$set": {"project_id": new_project_id}},
+                    )
 
             # Persist tool_config on the conversation document
             if tool_config and observer:

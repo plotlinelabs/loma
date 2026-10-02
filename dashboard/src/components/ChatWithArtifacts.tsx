@@ -85,6 +85,7 @@ export default function ChatWithArtifacts({
   initialToolConfig,
   autoSend,
   systemContext,
+  projectId,
   initialStatus,
   onConversationCreated,
   onStreamComplete,
@@ -101,6 +102,8 @@ export default function ChatWithArtifacts({
   initialToolConfig?: import("@/lib/api").ToolConfig | null;
   autoSend?: boolean;
   systemContext?: string;
+  /** Folder a brand-new chat is filed into (see ChatPanel) */
+  projectId?: string;
   initialStatus?: string;
   onConversationCreated?: (conversationId: string) => void;
   onStreamComplete?: (conversationId: string) => void;
@@ -205,6 +208,7 @@ export default function ChatWithArtifacts({
           initialToolConfig={initialToolConfig}
           autoSend={autoSend}
           systemContext={systemContext}
+          projectId={projectId}
           initialStatus={initialStatus}
           draftStorageKey={draftStorageKey}
           activeArtifactId={activeArtifactId}

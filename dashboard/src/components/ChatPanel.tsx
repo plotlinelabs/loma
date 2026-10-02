@@ -571,6 +571,7 @@ export default function ChatPanel({
   initialToolConfig,
   autoSend,
   systemContext,
+  projectId,
   initialStatus,
   draftStorageKey,
   activeArtifactId,
@@ -596,6 +597,8 @@ export default function ChatPanel({
   initialToolConfig?: import("@/lib/api").ToolConfig | null;
   autoSend?: boolean;
   systemContext?: string;
+  /** Folder a brand-new chat is filed into; ignored when resuming a conversation */
+  projectId?: string;
   initialStatus?: string;
   /** When set, unsent composer text is persisted to localStorage under this
    * key and restored on mount — an accidental close never loses a draft. */
@@ -1058,6 +1061,7 @@ export default function ChatPanel({
         selectedModel || undefined,
         selectedAgentId || undefined,
         toolConfig,
+        projectId,
       )) {
         if (event.type === "account_info") {
           setAccountInfo(event);

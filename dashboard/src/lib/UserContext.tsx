@@ -29,7 +29,7 @@ interface UserContextValue {
   /** Refresh projects list */
   refreshProjects: () => void;
   /** Create a new project */
-  addProject: (name: string) => Promise<Project>;
+  addProject: (name: string, parentId?: string | null) => Promise<Project>;
   /** Rename a conversation */
   renameConversation: (conversationId: string, newTitle: string) => Promise<void>;
   /** Delete a conversation */
@@ -117,8 +117,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
   }, [loading, user?.email]);
 
-  const addProject = async (name: string): Promise<Project> => {
-    const result = await createProject({ name });
+  const addProject = async (name: string, parentId?: string | null): Promise<Project> => {
+    const result = await createProject({ name, parent_id: parentId || null });
     loadProjects();
     return result.project;
   };
