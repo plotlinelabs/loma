@@ -447,3 +447,25 @@ async def test_list_boards_counts_tasks_waiting_on_caller(monkeypatch):
     match = db.conversations.aggregate.call_args.args[0][0]["$match"]
     assert match["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
     assert match["task_status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_needs_you_lists_waiting_tasks_across_boards(monkeypatch):
+    db = _db()
+    cursor = MagicMock()
+    cursor.sort.return_value.to_list = AsyncMock(return_value=[
+        {"conversation_id": "c1", "title": "Review report", "status": "completed", "task_board_id": "deals1"},
+        {"conversation_id": "c2", "title": None, "prompt": "Summarise inbox", "status": "error"},
+    ])
+    db.conversations.find = MagicMock(return_value=cursor)
+    _as(monkeypatch, db, EDITOR)
+
+    response = await task_routes.handle_needs_you(FakeRequest())
+
+    assert json.loads(response.body)["tasks"] == [
+        {"conversation_id": "c1", "title": "Review report", "status": "completed", "board_id": "deals1"},
+        {"conversation_id": "c2", "title": "Summarise inbox", "status": "error", "board_id": "personal"},
+    ]
+    query = db.conversations.find.call_args.args[0]
+    assert query["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
+    assert query["task_status"] == "active"

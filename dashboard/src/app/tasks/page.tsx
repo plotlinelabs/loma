@@ -33,6 +33,7 @@ import {
   type CardFilter,
   type CardFilterMatch,
   type CardViewState,
+  type NeedsYouTask,
   type Task,
   type TaskBoardSummary,
   type TaskCardItem,
@@ -62,6 +63,7 @@ import { InstallHint } from "@/components/tasks/InstallHint";
 import { AgentAttention } from "@/components/tasks/AgentAttention";
 import { BoardSwitcher } from "@/components/tasks/BoardSwitcher";
 import { BoardSidebar } from "@/components/tasks/BoardSidebar";
+import { BoardCommand } from "@/components/tasks/BoardCommand";
 import { ManageBoardDialog } from "@/components/tasks/ManageBoardDialog";
 import { CardBoard } from "@/components/tasks/CardBoard";
 import { CardTasksView } from "@/components/tasks/CardTasksView";
@@ -237,6 +239,53 @@ export default function TasksPage() {
     if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
     setBoardId(nextId);
   }, [boardId]);
+
+  // Quick switcher (Cmd/Ctrl+K) and the board jump keys.
+  const [commandOpen, setCommandOpen] = useState(false);
+  // Set after mount: shortcut labels follow the platform.
+  const [mac, setMac] = useState(false);
+  useEffect(() => { setMac(/Mac|iPhone|iPad/.test(navigator.platform)); }, []);
+  // A waiting task picked on another board: opened once that board loads.
+  const pendingTaskId = useRef<string | null>(null);
+  const openWaitingTask = (task: NeedsYouTask) => {
+    pendingTaskId.current = task.conversation_id;
+    if (task.board_id !== boardId) return selectBoard(task.board_id);
+    // Same board: nudge the effect below.
+    setBoard((current) => (current ? { ...current } : current));
+  };
+  useEffect(() => {
+    if (!board || !pendingTaskId.current) return;
+    const task = board.tasks.find((t) => t.conversation_id === pendingTaskId.current);
+    pendingTaskId.current = null;
+    if (!task) return;
+    setChatTask(task);
+    setChatDrawerOpen(true);
+  }, [board]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandOpen((open) => !open);
+        return;
+      }
+      // Boards 1-9: Alt/Option+number. Cmd/Ctrl+number also works where the
+      // browser passes it on (the installed app); in a tab it switches tabs.
+      const digit = /^Digit([1-9])$/.exec(event.code);
+      if (!digit || event.shiftKey || mod === event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      // Option+number types a character on a Mac, so leave text fields alone.
+      if (event.altKey && target?.closest("input, textarea, [contenteditable='true']")) return;
+      const next = boards[Number(digit[1]) - 1];
+      if (!next) return;
+      event.preventDefault();
+      setCommandOpen(false);
+      selectBoard(next.id);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [boards, selectBoard]);
 
   const refresh = useCallback(async () => {
     // Pause polling when the tab is hidden — but always allow the initial
@@ -850,9 +899,11 @@ export default function TasksPage() {
           boards={boards}
           currentId={boardId}
           collapsed={boardsCollapsed}
+          mac={mac}
           onToggleCollapsed={toggleBoardsCollapsed}
           onSelect={selectBoard}
           onCreate={() => openManageBoard(null)}
+          onSearch={() => setCommandOpen(true)}
         />
       )}
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col space-y-2">
@@ -1013,6 +1064,18 @@ export default function TasksPage() {
         summary={viewDialog?.mode === "rename" ? undefined
           : viewSummary(viewDialog?.mode === "duplicate" && viewDialog.view ? viewDialog.view : viewState) || undefined}
         onSubmit={submitViewDialog}
+      />
+      <BoardCommand
+        open={commandOpen}
+        onOpenChange={setCommandOpen}
+        boards={boards}
+        currentId={boardId}
+        mac={mac}
+        sidebarCollapsed={boardsCollapsed}
+        onSelectBoard={selectBoard}
+        onOpenTask={openWaitingTask}
+        onCreateBoard={() => openManageBoard(null)}
+        onToggleSidebar={toggleBoardsCollapsed}
       />
       <MoveToBoardDialog
         task={movingTask}

@@ -1382,6 +1382,21 @@ export function deleteTaskBoard(boardId: string): Promise<{ deleted: boolean; mo
   return boardRequest(`/${encodeURIComponent(boardId)}`, { method: "DELETE" }, "Failed to delete board");
 }
 
+/** A task waiting on the caller, on any board they can open. */
+export interface NeedsYouTask {
+  conversation_id: string;
+  title: string | null;
+  status: string;
+  /** "personal" for the caller's own board. */
+  board_id: string;
+}
+
+export async function fetchNeedsYouTasks(): Promise<NeedsYouTask[]> {
+  const res = await fetch(`${API_BASE}/api/tasks/needs-you`);
+  if (!res.ok) throw new Error(`Failed to fetch waiting tasks: ${res.status}`);
+  return (await res.json()).tasks ?? [];
+}
+
 export async function fetchNeedsInputCount(): Promise<number> {
   const res = await fetch(`${API_BASE}/api/tasks/needs-input-count`);
   if (!res.ok) throw new Error(`Failed to fetch needs-input count: ${res.status}`);

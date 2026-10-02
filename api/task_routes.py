@@ -1523,6 +1523,39 @@ async def handle_delete_tag(request: web.Request) -> web.Response:
 
 # ── Boards (list / create / share / delete) ──────────────────────────────────
 
+def _waiting_on(user_email: str) -> dict:
+    """Query for tasks waiting on a user: their own or assigned tasks that
+    stopped and need input or review (the nav badge rule)."""
+    return {
+        "$or": [{"metadata.user_name": user_email}, {"task_assignee": user_email}],
+        "task_status": "active",
+        "status": {"$in": list(NEEDS_INPUT_STATUSES)},
+        "deleted": {"$ne": True},
+    }
+
+
+async def handle_needs_you(request: web.Request) -> web.Response:
+    """GET /api/tasks/needs-you — the caller's waiting tasks across every
+    board, newest first, for the board switcher's quick search."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"tasks": []})
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    docs = await db.conversations.find(
+        _waiting_on(user_email),
+        {"conversation_id": 1, "title": 1, "prompt": 1, "status": 1, "task_board_id": 1},
+    ).sort("finished_at", -1).to_list(50)
+    return web.json_response({"tasks": [{
+        "conversation_id": doc.get("conversation_id"),
+        "title": doc.get("title") or (doc.get("prompt") or "")[:80] or None,
+        "status": doc.get("status"),
+        "board_id": doc.get("task_board_id") or PERSONAL_BOARD_ID,
+    } for doc in docs]})
+
+
 async def handle_list_boards(request: web.Request) -> web.Response:
     """GET /api/tasks/boards — the caller's personal board plus every shared
     board they own or are a member of."""
@@ -1543,12 +1576,7 @@ async def handle_list_boards(request: web.Request) -> web.Response:
     # Tasks waiting on the caller, per board (same rule as the nav badge:
     # their own or assigned tasks that stopped and need input or review).
     waiting = await db.conversations.aggregate([
-        {"$match": {
-            "$or": [{"metadata.user_name": user_email}, {"task_assignee": user_email}],
-            "task_status": "active",
-            "status": {"$in": list(NEEDS_INPUT_STATUSES)},
-            "deleted": {"$ne": True},
-        }},
+        {"$match": _waiting_on(user_email)},
         {"$group": {"_id": {"$ifNull": ["$task_board_id", PERSONAL_BOARD_ID]}, "count": {"$sum": 1}}},
     ]).to_list(None)
     needs_you = {row["_id"]: row["count"] for row in waiting}
@@ -2098,6 +2126,7 @@ def setup_task_routes(app: web.Application):
     app.router.add_get("/api/tasks/board-settings", handle_get_board_settings)
     app.router.add_put("/api/tasks/board-settings", handle_put_board_settings)
     app.router.add_get("/api/tasks/needs-input-count", handle_needs_input_count)
+    app.router.add_get("/api/tasks/needs-you", handle_needs_you)
     app.router.add_post("/api/tasks/tags", handle_create_tag)
     app.router.add_delete("/api/tasks/tags/{tag_id}", handle_delete_tag)
     app.router.add_post("/api/tasks", handle_create_task)
