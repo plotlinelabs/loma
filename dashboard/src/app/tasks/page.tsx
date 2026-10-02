@@ -64,6 +64,7 @@ import { BoardSwitcher } from "@/components/tasks/BoardSwitcher";
 import { BoardSidebar } from "@/components/tasks/BoardSidebar";
 import { ManageBoardDialog } from "@/components/tasks/ManageBoardDialog";
 import { CardBoard } from "@/components/tasks/CardBoard";
+import { CardTasksView } from "@/components/tasks/CardTasksView";
 import { CardPanel } from "@/components/tasks/CardPanel";
 import { MoveToBoardDialog } from "@/components/tasks/MoveTaskDialogs";
 import { BoardExtrasContext, assignablePeople, type BoardExtras } from "@/components/tasks/boardExtras";
@@ -80,6 +81,13 @@ const POLL_INTERVAL_MS = 5000;
 const BOARD_STORAGE_KEY = "loma-task-board";
 // Desktop board list: remembered as collapsed or open on this device.
 const BOARDS_SIDEBAR_STORAGE_KEY = "loma-boards-sidebar-collapsed";
+// Card boards: last view (cards or tasks) used on each board.
+const CARD_VIEW_STORAGE_PREFIX = "loma-card-board-view:";
+type CardBoardView = "cards" | "tasks";
+const readCardView = (id: string): CardBoardView =>
+  typeof window !== "undefined" && window.localStorage.getItem(CARD_VIEW_STORAGE_PREFIX + id) === "tasks"
+    ? "tasks"
+    : "cards";
 // Card boards: the open view and its (possibly unsaved) filters, per board.
 const VIEW_STORAGE_PREFIX = "loma-board-view:";
 
@@ -154,6 +162,13 @@ export default function TasksPage() {
   // Phones: search is an icon in the top bar; the field only takes a row once opened.
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Card boards: show the cards, or every task inside them grouped by status.
+  const [cardView, setCardView] = useState<CardBoardView>(() => readCardView(boardId));
+  useEffect(() => { setCardView(readCardView(boardId)); }, [boardId]);
+  const changeCardView = (view: CardBoardView) => {
+    setCardView(view);
+    window.localStorage.setItem(CARD_VIEW_STORAGE_PREFIX + boardId, view);
+  };
   // Shared boards: only show tasks (or cards holding tasks) assigned to me.
   const [assignedToMe, setAssignedToMe] = useState(false);
   // Card boards: field filters and saved views (named sets of filters).
@@ -568,6 +583,24 @@ export default function TasksPage() {
   const viewOnlyBadge = readOnly && (
     <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">View only</span>
   );
+  const viewToggle = cardMode && (
+    <div role="group" aria-label="Board view" className="inline-flex shrink-0 rounded-md bg-muted p-0.5">
+      {(["cards", "tasks"] as const).map((view) => (
+        <button
+          key={view}
+          type="button"
+          aria-pressed={cardView === view}
+          onClick={() => changeCardView(view)}
+          className={cn(
+            "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+            cardView === view ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {view === "cards" ? "Cards" : "Tasks"}
+        </button>
+      ))}
+    </div>
+  );
   const searchVisibleOnPhone = mobileSearchOpen || !!searchQuery;
   const toggleMobileSearch = () => {
     if (searchVisibleOnPhone) {
@@ -643,6 +676,7 @@ export default function TasksPage() {
           <PetCompanion state={petState} />
         </div>
         <div className="flex items-center gap-1">
+          {viewToggle && <div className="mr-1">{viewToggle}</div>}
           {currentBoard?.shared && (
             <Button variant={assignedFilterOn ? "secondary" : "ghost"} size="sm" aria-pressed={assignedFilterOn}
               onClick={() => setAssignedToMe((on) => !on)}>
@@ -765,6 +799,8 @@ export default function TasksPage() {
 
       <InstallHint />
 
+      {isMobile && viewToggle && <div>{viewToggle}</div>}
+
       {board && !cardMode && board.show_agent_work !== false && (
         <AgentAttention onDismiss={dismissAgentWork} dismissing={dismissingAgentWork} />
       )}
@@ -824,7 +860,15 @@ export default function TasksPage() {
       {!boardOwnsTopBar && topBar}
 
       {board ? (
-        cardMode ? (
+        cardMode && cardView === "tasks" ? (
+          <CardTasksView
+            board={board}
+            onOpenTask={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
+            onOpenCard={(card) => { setPanelCard(card); setCardPanelOpen(true); }}
+            includedTagIds={includedTagIds}
+            excludedTagIds={excludedTagIds}
+          />
+        ) : cardMode ? (
           <CardBoard
             board={board}
             onBoardChange={setBoard}
