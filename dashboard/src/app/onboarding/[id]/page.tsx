@@ -380,7 +380,7 @@ export default function OnboardingRecordPage() {
             {events.map((e) => (
               <li key={e.event_id} className="text-[12px] border-l border-border pl-3">
                 <div className="text-muted-foreground">
-                  <ClientTimestamp date={e.at} /> · {e.source === "human" ? e.actor.split("@")[0] : `auto · ${e.source}`}
+                  <ClientTimestamp iso={e.at} variant="short" /> · {e.source === "human" ? e.actor.split("@")[0] : `auto · ${e.source}`}
                 </div>
                 {e.note && <div className="mt-0.5">{e.note}</div>}
                 {e.changes.map((c) => (
