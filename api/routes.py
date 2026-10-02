@@ -1185,7 +1185,9 @@ async def handle_chat(request: web.Request) -> web.Response:
                     )
 
             # Agent identity: an explicit selection wins; resumed conversations fall
-            # back to the agent pinned on the conversation.
+            # back to the agent pinned on the conversation. An explicit empty
+            # agent_id (null or "") is the user switching back to the default
+            # agent, which unpins; a request without the field keeps the pin.
             requested_agent_id = body.get("agent_id")
             if requested_agent_id is not None and not isinstance(requested_agent_id, str):
                 return web.json_response({"error": "agent_id must be a string"}, status=400)
@@ -1194,6 +1196,12 @@ async def handle_chat(request: web.Request) -> web.Response:
                 agent_identity = await resolve_agent_for_chat(db, requested_agent_id, user_email)
                 if agent_identity is None:
                     return web.json_response({"error": "Agent not found"}, status=404)
+            elif "agent_id" in body:
+                if pinned_agent_id:
+                    await db.conversations.update_one(
+                        {"conversation_id": existing_conversation_id},
+                        {"$unset": {"metadata.agent_id": "", "metadata.agent_name": ""}},
+                    )
             elif pinned_agent_id:
                 # Pinned agent may have been deleted, disabled, or unshared since —
                 # degrade to the default agent rather than blocking the conversation.
@@ -1230,6 +1238,12 @@ async def handle_chat(request: web.Request) -> web.Response:
                 # Use stored tool_config from existing conversation if not in request
                 if tool_config is None and existing.get("tool_config"):
                     tool_config = existing["tool_config"]
+
+            # An agent's own scope is the only limit on its chats. The composer's
+            # Tools/Skills picks must not stack on it, and are left as saved so
+            # they come back when the user switches to the default agent.
+            if agent_identity:
+                tool_config = None
 
             # Board tasks carry the global default context plus the board's
             # working context on every turn. The run acts as the sender (the

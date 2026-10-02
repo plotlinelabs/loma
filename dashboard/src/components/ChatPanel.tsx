@@ -1072,7 +1072,9 @@ export default function ChatPanel({
         session?.user?.email ?? undefined,
         abortController.signal,
         selectedModel || undefined,
-        selectedAgentId || undefined,
+        // Until the agent list loads, "no selection" is not yet a choice of the
+        // default agent, so it must not unpin the conversation's agent.
+        selectedAgentId || (agentLoadState === "ready" ? null : undefined),
         selectedAgentId ? AGENT_TOOL_CONFIG : toolConfig,
       )) {
         if (event.type === "account_info") {
@@ -1359,7 +1361,7 @@ export default function ChatPanel({
 
       handleSend(answer);
     },
-    [items, conversationId, session, isStreaming, selectedModel, selectedAgentId],
+    [items, conversationId, session, isStreaming, selectedModel, selectedAgentId, agentLoadState],
   );
 
   const getQueueIndex = (itemIndex: number): number => {

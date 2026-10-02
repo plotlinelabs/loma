@@ -16,6 +16,7 @@ import {
   type AgentScopeItem,
 } from "@/hooks/agent-scope";
 import { PERSONAL_TOOL_LABELS } from "@/app/agents/selection-options";
+import { useUser } from "@/lib/UserContext";
 
 interface AgentScopeProps {
   agent: AgentIdentity;
@@ -62,6 +63,9 @@ function Section({ title, items }: { title: string; items: AgentScopeItem[] }) {
 export function AgentScope({ agent, skills, onOpen, onUseDefault, disabled }: AgentScopeProps) {
   const [open, setOpen] = useState(false);
   const isMobile = useIsMobile();
+  const { user } = useUser();
+  // Same rule as the Agents page: only the creator or an admin can edit.
+  const canEdit = user?.email === agent.created_by || user?.system_role === "admin";
   const summary = agentScopeSummary(agent);
   const changeOpen = (next: boolean) => {
     setOpen(next);
@@ -96,7 +100,7 @@ export function AgentScope({ agent, skills, onOpen, onUseDefault, disabled }: Ag
         )}
         <p className="mt-1 text-xs text-muted-foreground">
           Set by the agent, so they can&apos;t be changed here. Your own Tools
-          and Skills choices are paused while it&apos;s selected.
+          and Skills choices come back when you switch to Loma.
         </p>
       </div>
       <div className="min-h-0 flex-1 divide-y divide-border overflow-y-auto overscroll-contain">
@@ -104,13 +108,17 @@ export function AgentScope({ agent, skills, onOpen, onUseDefault, disabled }: Ag
         <Section title="Skills" items={agentScopeSkills(agent, skills)} />
       </div>
       <div className="flex items-center justify-between gap-2 border-t border-border p-1.5 text-xs">
-        <Link
-          href="/agents"
-          onClick={() => setOpen(false)}
-          className="rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          Edit in Agents
-        </Link>
+        {canEdit ? (
+          <Link
+            href={`/agents?edit=${encodeURIComponent(agent.agent_id)}`}
+            onClick={() => setOpen(false)}
+            className="rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            Edit agent
+          </Link>
+        ) : (
+          <span />
+        )}
         <button
           type="button"
           onClick={() => {
