@@ -1539,6 +1539,21 @@ async def handle_list_boards(request: web.Request) -> web.Response:
     ).sort("created_at", 1).to_list(200)
     boards = [_board_summary(None, "owner", user_email)]
     boards += [_board_summary(doc, _board_role(doc, user_email), user_email) for doc in docs]
+
+    # Tasks waiting on the caller, per board (same rule as the nav badge:
+    # their own or assigned tasks that stopped and need input or review).
+    waiting = await db.conversations.aggregate([
+        {"$match": {
+            "$or": [{"metadata.user_name": user_email}, {"task_assignee": user_email}],
+            "task_status": "active",
+            "status": {"$in": list(NEEDS_INPUT_STATUSES)},
+            "deleted": {"$ne": True},
+        }},
+        {"$group": {"_id": {"$ifNull": ["$task_board_id", PERSONAL_BOARD_ID]}, "count": {"$sum": 1}}},
+    ]).to_list(None)
+    needs_you = {row["_id"]: row["count"] for row in waiting}
+    for board in boards:
+        board["needs_you"] = needs_you.get(board["id"], 0)
     return web.json_response({"boards": boards})
 
 

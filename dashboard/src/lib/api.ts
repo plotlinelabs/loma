@@ -1208,6 +1208,8 @@ export interface TaskBoardSummary {
   /** Card board: columns hold cards, and tasks live inside cards. */
   card_mode?: boolean;
   members: TaskBoardMember[];
+  /** Board list only: the caller's tasks on this board that are waiting on them. */
+  needs_you?: number;
 }
 
 export type BoardFieldType =

@@ -425,3 +425,25 @@ async def test_removing_a_field_clears_its_values(monkeypatch):
     saved = db.task_boards.update_one.await_args.args[1]["$set"]["task_board.fields"]
     assert [f["id"] for f in saved] == ["val", "due", "url"]
     assert db.task_cards.update_many.await_args.args[1] == {"$unset": {"fields.reg": ""}}
+
+
+@pytest.mark.asyncio
+async def test_list_boards_counts_tasks_waiting_on_caller(monkeypatch):
+    db = _db()
+    boards_cursor = MagicMock()
+    boards_cursor.sort.return_value.to_list = AsyncMock(return_value=[SHARED])
+    db.task_boards.find = MagicMock(return_value=boards_cursor)
+    waiting_cursor = MagicMock()
+    waiting_cursor.to_list = AsyncMock(return_value=[
+        {"_id": "personal", "count": 1}, {"_id": "deals1", "count": 3}, {"_id": "gone", "count": 5},
+    ])
+    db.conversations.aggregate = MagicMock(return_value=waiting_cursor)
+    _as(monkeypatch, db, EDITOR)
+
+    response = await task_routes.handle_list_boards(FakeRequest())
+
+    boards = json.loads(response.body)["boards"]
+    assert [(b["id"], b["needs_you"]) for b in boards] == [("personal", 1), ("deals1", 3)]
+    match = db.conversations.aggregate.call_args.args[0][0]["$match"]
+    assert match["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
+    assert match["task_status"] == "active"

@@ -5,7 +5,7 @@ import PetCompanion from "@/components/PetCompanion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line, RiUserAddLine, RiUserLine } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line, RiTeamLine, RiUserAddLine, RiUserLine } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -61,6 +61,7 @@ import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { AgentAttention } from "@/components/tasks/AgentAttention";
 import { BoardSwitcher } from "@/components/tasks/BoardSwitcher";
+import { BoardSidebar } from "@/components/tasks/BoardSidebar";
 import { ManageBoardDialog } from "@/components/tasks/ManageBoardDialog";
 import { CardBoard } from "@/components/tasks/CardBoard";
 import { CardPanel } from "@/components/tasks/CardPanel";
@@ -77,6 +78,8 @@ import { cn } from "@/lib/utils";
 const POLL_INTERVAL_MS = 5000;
 // Last board opened on this device, so the page reopens where you left off.
 const BOARD_STORAGE_KEY = "loma-task-board";
+// Desktop board list: remembered as collapsed or open on this device.
+const BOARDS_SIDEBAR_STORAGE_KEY = "loma-boards-sidebar-collapsed";
 // Card boards: the open view and its (possibly unsaved) filters, per board.
 const VIEW_STORAGE_PREFIX = "loma-board-view:";
 
@@ -105,6 +108,15 @@ export default function TasksPage() {
     urlParam("board") || (typeof window !== "undefined" && window.localStorage.getItem(BOARD_STORAGE_KEY)) || PERSONAL_BOARD_ID,
   );
   const [boards, setBoards] = useState<TaskBoardSummary[]>([]);
+  // Restored after mount: the sidebar is server-rendered open.
+  const [boardsCollapsed, setBoardsCollapsed] = useState(false);
+  useEffect(() => {
+    setBoardsCollapsed(window.localStorage.getItem(BOARDS_SIDEBAR_STORAGE_KEY) === "1");
+  }, []);
+  const toggleBoardsCollapsed = () => setBoardsCollapsed((collapsed) => {
+    window.localStorage.setItem(BOARDS_SIDEBAR_STORAGE_KEY, collapsed ? "0" : "1");
+    return !collapsed;
+  });
   const [manageOpen, setManageOpen] = useState(false);
   const [managingBoard, setManagingBoard] = useState<TaskBoardSummary | null>(null);
   const previousColumns = useRef<Map<string, string> | null>(null);
@@ -250,16 +262,22 @@ export default function TasksPage() {
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
     refresh();
-    const interval = setInterval(refresh, POLL_INTERVAL_MS);
+    // The board list rides the same poll so its "needs you" counts stay live.
+    const interval = setInterval(() => {
+      refresh();
+      if (!document.hidden) void loadBoards();
+    }, POLL_INTERVAL_MS);
     const onVisible = () => {
-      if (!document.hidden) refresh();
+      if (document.hidden) return;
+      refresh();
+      void loadBoards();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [sessionStatus, refresh]);
+  }, [sessionStatus, refresh, loadBoards]);
 
   const dismissAgentWork = async () => {
     ++refreshVersion.current;
@@ -614,7 +632,13 @@ export default function TasksPage() {
           paint, before useIsMobile has resolved. */}
       {!isMobile && <div className="pwa-header-offset flex items-center justify-between gap-2 max-md:hidden">
         <div className="flex min-w-0 items-center gap-2">
-          <h1 className="min-w-0">{boardSwitcher}</h1>
+          {/* Desktop switches boards from the sidebar, so the title is plain. */}
+          <h1 className="min-w-0">
+            <span className="flex min-w-0 items-center gap-1 text-lg font-semibold">
+              {currentBoard?.shared && <RiTeamLine className="h-4 w-4 shrink-0 text-muted-foreground" />}
+              <span className="truncate">{currentBoard?.shared ? currentBoard.name : "Tasks"}</span>
+            </span>
+          </h1>
           {viewOnlyBadge}
           <PetCompanion state={petState} />
         </div>
@@ -784,7 +808,18 @@ export default function TasksPage() {
 
   return (
     <BoardExtrasContext.Provider value={boardExtras}>
-    <div className="flex h-full min-h-0 flex-col space-y-2 md:p-4 lg:p-6">
+    <div className="flex h-full min-h-0 md:gap-4 md:p-4 lg:p-6">
+      {!isMobile && (
+        <BoardSidebar
+          boards={boards}
+          currentId={boardId}
+          collapsed={boardsCollapsed}
+          onToggleCollapsed={toggleBoardsCollapsed}
+          onSelect={selectBoard}
+          onCreate={() => openManageBoard(null)}
+        />
+      )}
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col space-y-2">
       {mobileTopBar}
       {!boardOwnsTopBar && topBar}
 
@@ -941,6 +976,7 @@ export default function TasksPage() {
         onOpenChange={(open) => { if (!open) setMovingTask(null); }}
         onMoved={refresh}
       />
+    </div>
     </div>
     </BoardExtrasContext.Provider>
   );
