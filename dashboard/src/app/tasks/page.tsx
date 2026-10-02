@@ -5,7 +5,7 @@ import PetCompanion from "@/components/PetCompanion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line, RiUserAddLine, RiUserLine } from "@remixicon/react";
+import { RiAddLine, RiChatHistoryLine, RiCloseLine, RiFilter3Line, RiNotification3Line, RiNotificationOffLine, RiSearchLine, RiSettings3Line, RiTeamLine, RiUserAddLine, RiUserLine } from "@remixicon/react";
 import {
   getPushState,
   isPushConfigured,
@@ -26,7 +26,6 @@ import {
   fetchBoardViews,
   saveBoardSettings,
   updateBoardView,
-  fetchTaskBoards,
   fetchTasksBoard,
   updateTask,
   type BoardView,
@@ -74,10 +73,9 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { MobileTopBarActions, MobileTopBarTitle } from "@/components/mobile/MobileChrome";
 import { MobileBoardActions } from "@/components/mobile/MobileBoardActions";
 import { cn } from "@/lib/utils";
+import { BOARD_STORAGE_KEY, useBoards } from "@/lib/BoardsContext";
 
 const POLL_INTERVAL_MS = 5000;
-// Last board opened on this device, so the page reopens where you left off.
-const BOARD_STORAGE_KEY = "loma-task-board";
 // Card boards: last view (cards or tasks) used on each board.
 const CARD_VIEW_STORAGE_PREFIX = "loma-card-board-view:";
 type CardBoardView = "cards" | "tasks";
@@ -112,7 +110,9 @@ export default function TasksPage() {
   const [boardId, setBoardId] = useState<string>(() =>
     urlParam("board") || (typeof window !== "undefined" && window.localStorage.getItem(BOARD_STORAGE_KEY)) || PERSONAL_BOARD_ID,
   );
-  const [boards, setBoards] = useState<TaskBoardSummary[]>([]);
+  // The board list (and its needs-you counts) is shared with the nav.
+  const { boards, reload: loadBoards, request, consumeRequest, setCurrentBoardId } = useBoards();
+  useEffect(() => { setCurrentBoardId(boardId); }, [boardId, setCurrentBoardId]);
   const [manageOpen, setManageOpen] = useState(false);
   const [managingBoard, setManagingBoard] = useState<TaskBoardSummary | null>(null);
   const previousColumns = useRef<Map<string, string> | null>(null);
@@ -194,14 +194,6 @@ export default function TasksPage() {
   const hasBoardRef = useRef(false);
   const refreshVersion = useRef(0);
 
-  const loadBoards = useCallback(async () => {
-    try {
-      setBoards((await fetchTaskBoards()).boards);
-    } catch {
-      // The switcher keeps its last list; the board itself still loads.
-    }
-  }, []);
-
   const selectBoard = useCallback((nextId: string) => {
     window.localStorage.setItem(BOARD_STORAGE_KEY, nextId);
     if (nextId === boardId) return;
@@ -225,6 +217,28 @@ export default function TasksPage() {
     if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
     setBoardId(nextId);
   }, [boardId]);
+
+  // Requests from the nav or the quick switcher: open a board (and maybe one
+  // of its tasks, once that board loads), or create a board.
+  const pendingTaskId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!request) return;
+    consumeRequest();
+    if (request.kind === "create") return openManageBoard(null);
+    pendingTaskId.current = request.taskId ?? null;
+    if (request.boardId !== boardId) selectBoard(request.boardId);
+    // Same board: nudge the effect below.
+    else if (request.taskId) setBoard((current) => (current ? { ...current } : current));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request]);
+  useEffect(() => {
+    if (!board || !pendingTaskId.current) return;
+    const task = board.tasks.find((t) => t.conversation_id === pendingTaskId.current);
+    pendingTaskId.current = null;
+    if (!task) return;
+    setChatTask(task);
+    setChatDrawerOpen(true);
+  }, [board]);
 
   const refresh = useCallback(async () => {
     // Pause polling when the tab is hidden — but always allow the initial
@@ -265,6 +279,7 @@ export default function TasksPage() {
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
     refresh();
+    // The board list polls on its own (BoardsContext).
     const interval = setInterval(refresh, POLL_INTERVAL_MS);
     const onVisible = () => {
       if (!document.hidden) refresh();
@@ -377,6 +392,8 @@ export default function TasksPage() {
   }
   const activeTagFilterCount = includedTagIds.length + excludedTagIds.length;
   const currentBoard = board?.board ?? boards.find((b) => b.id === boardId);
+  // The board list carries the emoji (Personal's is per person).
+  const boardEmoji = boards.find((b) => b.id === boardId)?.emoji;
   // View-only members see the board but can't add, move or edit cards.
   const readOnly = currentBoard?.role === "viewer";
   // Card board: columns hold cards (deals, candidates...) with tasks inside.
@@ -647,7 +664,14 @@ export default function TasksPage() {
           paint, before useIsMobile has resolved. */}
       {!isMobile && <div className="pwa-header-offset flex items-center justify-between gap-2 max-md:hidden">
         <div className="flex min-w-0 items-center gap-2">
-          <h1 className="min-w-0">{boardSwitcher}</h1>
+          {/* Desktop switches boards from the nav, so the title is plain. */}
+          <h1 className="min-w-0">
+            <span className="flex min-w-0 items-center gap-1.5 text-lg font-semibold">
+              {boardEmoji && <span aria-hidden className="shrink-0 text-[18px] leading-none">{boardEmoji}</span>}
+              <span className="truncate">{currentBoard?.shared ? currentBoard.name : "Tasks"}</span>
+              {currentBoard?.shared && <RiTeamLine aria-label="Shared board" className="h-4 w-4 shrink-0 text-muted-foreground" />}
+            </span>
+          </h1>
           {viewOnlyBadge}
           <PetCompanion state={petState} />
         </div>

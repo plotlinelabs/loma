@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import Sidebar from "./Sidebar";
 import BottomNav from "./BottomNav";
+import QuickSwitcher from "./QuickSwitcher";
 import CrosscutIcon from "./CrosscutIcon";
 import ViewportHeightSync from "./ViewportHeightSync";
 import { useUser } from "../lib/UserContext";
@@ -104,6 +105,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         />
       </Suspense>
 
+      <QuickSwitcher />
       <ViewportHeightSync />
       <MobileTopBar onMenu={toggleSidebar} />
 

@@ -1233,6 +1233,10 @@ export interface TaskBoardSummary {
   /** Card board: columns hold cards, and tasks live inside cards. */
   card_mode?: boolean;
   members: TaskBoardMember[];
+  /** Board list only: the caller's tasks on this board that are waiting on them. */
+  needs_you?: number;
+  /** Shown in the nav. Owners set it on shared boards; Personal is per person. */
+  emoji?: string;
 }
 
 export type BoardFieldType =
@@ -1394,15 +1398,43 @@ export function deleteTaskCard(cardId: string): Promise<{ deleted: boolean; move
 
 export function updateTaskBoard(
   boardId: string,
-  updates: { name?: string; members?: TaskBoardMember[] },
+  updates: { name?: string; members?: TaskBoardMember[]; emoji?: string },
 ): Promise<{ board: TaskBoardSummary }> {
   return boardRequest(`/${encodeURIComponent(boardId)}`, {
     method: "PATCH", body: JSON.stringify(updates),
   }, "Failed to update board");
 }
 
+/** The caller's own board list settings: drag order and Personal's emoji. */
+export async function updateBoardPrefs(prefs: { order?: string[]; personal_emoji?: string }): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/tasks/boards-prefs`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to save board settings: ${res.status}`);
+  }
+}
+
 export function deleteTaskBoard(boardId: string): Promise<{ deleted: boolean; moved: number }> {
   return boardRequest(`/${encodeURIComponent(boardId)}`, { method: "DELETE" }, "Failed to delete board");
+}
+
+/** A task waiting on the caller, on any board they can open. */
+export interface NeedsYouTask {
+  conversation_id: string;
+  title: string | null;
+  status: string;
+  /** "personal" for the caller's own board. */
+  board_id: string;
+}
+
+export async function fetchNeedsYouTasks(): Promise<NeedsYouTask[]> {
+  const res = await fetch(`${API_BASE}/api/tasks/needs-you`);
+  if (!res.ok) throw new Error(`Failed to fetch waiting tasks: ${res.status}`);
+  return (await res.json()).tasks ?? [];
 }
 
 export async function fetchNeedsInputCount(): Promise<number> {
