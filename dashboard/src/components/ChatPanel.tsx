@@ -17,7 +17,7 @@ import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { useFileDrop } from "./composer/useFileDrop";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
-import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError } from "../lib/api";
+import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError, ConversationQueuedError, ChatRequestError } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
@@ -45,6 +45,15 @@ import {
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
+/** Conversation status while its message waits for a deploy to finish. */
+const DEPLOY_QUEUED_STATUS = "queued";
+
+/** Tag the newest user message as waiting for a deploy (server-side queue). */
+function markLatestUserDeployQueued(items: ChatItem[], on: boolean): ChatItem[] {
+  const idx = items.map((item) => item.role).lastIndexOf("user");
+  if (idx < 0 || !!items[idx].deployQueued === on) return items;
+  return items.map((item, i) => (i === idx ? { ...item, deployQueued: on } : item));
+}
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]);
 
@@ -109,6 +118,8 @@ export interface ChatItem {
   elapsedSeconds?: number;
   /** True when this user message is queued to be sent after the current stream finishes */
   queued?: boolean;
+  /** True when the server saved this message during a deploy and will run it once Loma is back */
+  deployQueued?: boolean;
   /** Who sent this user message (shared-board tasks: the run used their accounts). */
   sender?: string;
 }
@@ -880,13 +891,15 @@ export default function ChatPanel({
           data.conversation.final_response,
           data.turns,
         );
+        const waitingForDeploy = data.conversation.status === DEPLOY_QUEUED_STATUS;
         setItems((prev) => {
           const queued = prev.filter((item) => item.queued);
-          return queued.length > 0 ? [...rebuilt, ...queued] : rebuilt;
+          const base = waitingForDeploy ? markLatestUserDeployQueued(rebuilt, true) : rebuilt;
+          return queued.length > 0 ? [...base, ...queued] : base;
         });
         scrollToBottom();
 
-        if (data.conversation.status !== "running") {
+        if (data.conversation.status !== "running" && !waitingForDeploy) {
           setIsRecovering(false);
           setIsStreaming(false);
           setItems((prev) => withTerminalStatus(prev, data.conversation));
@@ -916,7 +929,7 @@ export default function ChatPanel({
 
   // If page loaded with a running conversation (refresh), enter recovery mode
   useEffect(() => {
-    if (initialStatus === "running" && initialConversationId) {
+    if ((initialStatus === "running" || initialStatus === DEPLOY_QUEUED_STATUS) && initialConversationId) {
       setIsRecovering(true);
       setIsStreaming(true);
     }
@@ -1212,6 +1225,26 @@ export default function ChatPanel({
           ...prev,
           { role: "assistant", content: STOPPED_BY_USER_MESSAGE },
         ]);
+      } else if (error instanceof ConversationQueuedError && activeConversationId) {
+        // A deploy is in progress. The server saved the message and will run it
+        // once the new version is up; follow the conversation until then.
+        setItems((prev) => markLatestUserDeployQueued(prev, true));
+        enteredRecovery = true;
+        setIsRecovering(true);
+      } else if (error instanceof ChatRequestError) {
+        // Refused before anything was saved: give the text and files back so
+        // nothing typed is lost, and drop the optimistic bubble.
+        if (!fromQueue) {
+          setItems((prev) => {
+            const idx = prev.map((item) => item.role).lastIndexOf("user");
+            return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev;
+          });
+        }
+        if (!isOverride) {
+          setInput((current) => (current.trim() ? current : displayText));
+          if (filesToSend?.length) setPendingFiles((current) => (current.length ? current : filesToSend));
+        }
+        setItems((prev) => [...prev, { role: "assistant", content: `Error: ${error.message}` }]);
       } else if (error instanceof ConversationBusyError && activeConversationId) {
         // A run is already going (another tab, a retry, a race). The server
         // injected it, dropped a duplicate, or we queue it for when the run
@@ -1644,7 +1677,7 @@ export default function ChatPanel({
                       )}
                       <div className={cn(
                         "chat-text rounded-xl px-3.5 py-2.5 max-w-[88%] md:max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
-                        item.queued
+                        item.queued || item.deployQueued
                           ? "bg-card/60 border border-dashed border-border"
                           : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
                       )}>
@@ -1692,6 +1725,12 @@ export default function ChatPanel({
                           <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground">
                             <RiTimeLine size={12} />
                             <span>Queued — will send when agent finishes</span>
+                          </div>
+                        )}
+                        {item.deployQueued && !item.queued && (
+                          <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground">
+                            <RiTimeLine size={12} />
+                            <span>Queued, Loma is updating. This will start as soon as it&apos;s back.</span>
                           </div>
                         )}
                         {item.fileNames && item.fileNames.length > 0 && (
@@ -1789,7 +1828,9 @@ export default function ChatPanel({
                   <div className="text-[13px]">
                     <span className="flex items-center gap-2 text-muted-foreground">
                       <RiLoader4Line size={14} className="animate-spin text-brand-500" />
-                      Still working on your request...
+                      {items.some((item) => item.deployQueued)
+                        ? "Waiting for Loma to finish updating..."
+                        : "Still working on your request..."}
                     </span>
                   </div>
                 </div>

@@ -113,35 +113,109 @@ async def test_get_drain_is_readable_from_anywhere_and_tolerates_no_db():
 
 
 @pytest.mark.asyncio
-async def test_chat_refused_while_draining():
+async def test_chat_refused_while_draining_without_a_database():
     drain.set_draining(True, "deploy abc1234")
     request = FakeRequest(body={"message": "hi"}, user_email="user@example.com")
-    response = await handle_chat(request)
+    with patch("api.routes.get_db", return_value=None):
+        response = await handle_chat(request)
     assert response.status == 503
     body = response_json(response)
     assert body["error"] == DRAIN_MESSAGE
     assert body["draining"] is True
 
 
+def _mock_db():
+    import uuid
+    from mongomock_motor import AsyncMongoMockClient
+    return AsyncMongoMockClient()[f"drain_{uuid.uuid4().hex}"]
+
+
 @pytest.mark.asyncio
-async def test_quick_add_task_refused_while_draining_but_drafts_allowed():
+async def test_new_chat_is_queued_while_draining():
+    drain.set_draining(True, "deploy abc1234")
+    db = _mock_db()
+    request = FakeRequest(
+        body={"message": "hi", "conversation_id": "c-new", "model": "m1",
+              "conversation_history": [{"role": "user", "content": "earlier"}]},
+        user_email="user@example.com")
+    with patch("api.routes.get_db", return_value=db):
+        response = await handle_chat(request)
+    assert response.status == 202
+    body = response_json(response)
+    assert body["queued"] is True
+    assert body["conversation_id"] == "c-new"
+
+    # The message is on the conversation, so a reload shows it.
+    convo = await db.conversations.find_one({"conversation_id": "c-new"})
+    assert convo["status"] == "queued"
+    assert [m["content"] for m in convo["messages"]] == ["hi"]
+    assert convo["metadata"]["user_name"] == "user@example.com"
+
+    entry = await db.pending_runs.find_one({})
+    assert entry["kind"] == "dashboard"
+    assert entry["conversation_id"] == "c-new"
+    assert entry["prompt"] == "hi"
+    assert entry["model"] == "m1"
+    assert entry["user_email"] == "user@example.com"
+    assert "User: earlier" in entry["conversation_context"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_on_existing_chat_is_queued_and_releases_the_claim():
+    from agent import active_streams
+
     drain.set_draining(True)
-    db = MagicMock()
-    with patch("api.task_routes.get_db", return_value=db):
+    db = _mock_db()
+    await db.conversations.insert_one({
+        "conversation_id": "c-old", "status": "completed", "source": "dashboard",
+        "metadata": {"user_name": "user@example.com"},
+        "messages": [{"role": "user", "content": "first"}],
+    })
+    request = FakeRequest(body={"message": "next", "conversation_id": "c-old"},
+                          user_email="user@example.com")
+    with patch("api.routes.get_db", return_value=db):
+        response = await handle_chat(request)
+    assert response.status == 202
+    convo = await db.conversations.find_one({"conversation_id": "c-old"})
+    assert convo["status"] == "queued"
+    assert [m["content"] for m in convo["messages"]] == ["first", "next"]
+    assert await db.pending_runs.count_documents({"conversation_id": "c-old"}) == 1
+    assert "c-old" not in active_streams._claims
+
+
+@pytest.mark.asyncio
+async def test_quick_add_task_is_queued_while_draining_and_drafts_still_work():
+    drain.set_draining(True)
+    db = _mock_db()
+    scheduled = MagicMock()
+    with patch("api.task_routes.get_db", return_value=db), \
+         patch("api.task_routes.asyncio.create_task", scheduled):
         response = await handle_create_task(
             FakeRequest(body={"prompt": "do it", "start": True}, user_email="user@example.com"))
-        assert response.status == 503
-        assert response_json(response)["error"] == DRAIN_MESSAGE
-
-        # A staged draft doesn't run anything, so it must get past the gate
-        # (it then fails on the mocked board lookup, which is fine here).
-        board = {"lanes": [{"id": "todo", "name": "Todo", "order": 0}], "prompt": "", "tags": []}
-        db.conversations.insert_one = AsyncMock()
-        with patch("api.task_routes._get_board_config_for", new=AsyncMock(return_value=board)), \
-             patch("api.task_routes._auto_title_task", new=AsyncMock()):
-            response = await handle_create_task(
-                FakeRequest(body={"prompt": "later", "title": "Draft"}, user_email="user@example.com"))
         assert response.status == 201
+        body = response_json(response)
+        assert body["queued"] is True
+        assert body["task"]["status"] == "queued"
+        assert body["task"]["column"] == "working"
+
+        cid = body["task"]["conversation_id"]
+        convo = await db.conversations.find_one({"conversation_id": cid})
+        assert convo["status"] == "queued"
+        assert [m["content"] for m in convo["messages"]] == ["do it"]
+        entry = await db.pending_runs.find_one({"conversation_id": cid})
+        assert entry["prompt"] == "do it"
+        # Only the auto-title task was scheduled, never a headless run.
+        names = [c.args[0].__qualname__ for c in scheduled.call_args_list]
+        assert "_run_task_headless" not in names
+        for c in scheduled.call_args_list:
+            c.args[0].close()
+
+        # A staged draft doesn't run anything and is unaffected by drain.
+        response = await handle_create_task(
+            FakeRequest(body={"prompt": "later", "title": "Draft"}, user_email="user@example.com"))
+        assert response.status == 201
+        assert "queued" not in response_json(response)
+    assert await db.pending_runs.count_documents({}) == 1
 
 
 @pytest.mark.asyncio

@@ -579,8 +579,9 @@ def derive_column(task: dict, lane_ids: list[str]) -> str:
     if task_status == "done":
         return "done"
     # active — status None means a quick-added task whose headless run is
-    # spinning up (observer.resume() sets "running" moments later).
-    if task.get("status") in (None, "running"):
+    # spinning up (observer.resume() sets "running" moments later); "queued"
+    # means it waits for a deploy to finish (api/pending_runs.py).
+    if task.get("status") in (None, "running", "queued"):
         return "working"
     return "needs_input"
 
@@ -711,11 +712,6 @@ async def handle_create_task(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "Attachments too large (max 8MB total)"}, status=400)
 
-    # Quick-add fires an agent run immediately; refuse while a deploy drains.
-    # Plain drafts are fine — nothing runs until the user sends a message.
-    if body.get("start") and is_draining():
-        return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
-
     board = await resolve_board(db, user_email, body.get("board"))
     if board is None:
         return web.json_response({"error": "Board not found"}, status=404)
@@ -744,12 +740,40 @@ async def handle_create_task(request: web.Request) -> web.Response:
 
     doc = _new_task_doc(user_email, prompt, title, model, lane, start=start, files=files,
                         tool_config=tool_config, board=board, card_id=card_id)
+    # Quick-add during a deploy drain: create the card now and queue its
+    # first run for the next server (api/pending_runs.py) instead of refusing.
+    queued = start and is_draining()
+    if queued:
+        from api import pending_runs
+        if not pending_runs.files_fit(files):
+            return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
+        doc["status"] = pending_runs.CONVERSATION_QUEUED
+        doc["messages"] = [{"role": "user", "content": prompt, "sender": user_email,
+                            "timestamp": doc["started_at"]}]
     await db.conversations.insert_one(doc)
 
     # Quick-added tasks (no explicit title) get an LLM title from the prompt.
     # Empty drafts skip this — enrichment titles them after the first run.
     if not title and prompt:
         asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
+
+    if queued:
+        await pending_runs.enqueue(
+            db, "dashboard",
+            conversation_id=doc["conversation_id"],
+            user_email=user_email,
+            source="dashboard",
+            prompt=prompt,
+            files=files or [],
+            model=model,
+            tool_config=tool_config,
+            conversation_context=await build_board_context(
+                db, user_email, board["id"] if board["shared"] else None, card_id,
+                conversation_id=doc["conversation_id"]),
+        )
+        return web.json_response(
+            {"task": _task_view(doc, lane_ids), "queued": True,
+             "message": pending_runs.QUEUED_MESSAGE}, status=201)
 
     if start:
         from api.recall_session import launch_recall
