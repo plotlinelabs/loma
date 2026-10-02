@@ -56,7 +56,7 @@ import { BoardSwitcher } from "@/components/tasks/BoardSwitcher";
 import { ManageBoardDialog } from "@/components/tasks/ManageBoardDialog";
 import { CardBoard } from "@/components/tasks/CardBoard";
 import { CardPanel } from "@/components/tasks/CardPanel";
-import { MoveToCardDialog } from "@/components/tasks/MoveTaskDialogs";
+import { MoveToBoardDialog } from "@/components/tasks/MoveTaskDialogs";
 import { BoardExtrasContext, assignablePeople, type BoardExtras } from "@/components/tasks/boardExtras";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { MobileTopBarActions, MobileTopBarTitle } from "@/components/mobile/MobileChrome";
@@ -335,8 +335,8 @@ export default function TasksPage() {
     role: currentBoard?.role ?? null,
     assignable,
     assignedToMe: assignedFilterOn,
-    // Your own tasks can move into a card on a card board you can edit.
-    onMoveToCard: cardMode ? undefined : (task: Task) => setMovingTask(task),
+    // Your own tasks can move to another board you can edit.
+    onMoveToBoard: cardMode ? undefined : (task: Task) => setMovingTask(task),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [myEmail, currentBoard?.role, assignable.join(","), assignedFilterOn, cardMode]);
   const openManageBoard = (target: TaskBoardSummary | null) => {
@@ -724,7 +724,7 @@ export default function TasksPage() {
           } : current);
         }}
       />
-      <MoveToCardDialog
+      <MoveToBoardDialog
         task={movingTask}
         open={!!movingTask}
         onOpenChange={(open) => { if (!open) setMovingTask(null); }}

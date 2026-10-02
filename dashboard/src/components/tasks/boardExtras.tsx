@@ -14,8 +14,8 @@ export interface BoardExtras {
   assignable: string[];
   /** "Assigned to me" filter is on. */
   assignedToMe: boolean;
-  /** Opens the "Move to card" picker for one of your tasks. */
-  onMoveToCard?: (task: Task) => void;
+  /** Opens the "Move to board" picker for one of your tasks. */
+  onMoveToBoard?: (task: Task) => void;
 }
 
 export const BoardExtrasContext = createContext<BoardExtras>({
