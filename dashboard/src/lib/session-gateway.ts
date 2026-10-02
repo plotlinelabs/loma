@@ -1,5 +1,6 @@
 import { getGatewaySecret } from "@/lib/gateway-config";
 import { auth } from "@/auth";
+import { isSameOrigin } from "@/lib/same-origin";
 import { createHmac, createHash } from "node:crypto";
 
 
@@ -7,7 +8,7 @@ export async function sessionGateway(request: Request, context: { params: Promis
   const session = await auth();
   const email = session?.user?.email?.trim().toLowerCase();
   if (!email) return Response.json({ error: "Sign in to manage agent work" }, { status: 401 });
-  if (request.method !== "GET" && request.headers.get("origin") !== new URL(request.url).origin) {
+  if (request.method !== "GET" && !isSameOrigin(request)) {
     return Response.json({ error: "Same-origin request required" }, { status: 403 });
   }
   let secret: string;

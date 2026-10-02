@@ -7,7 +7,7 @@ const { MongoClient } = require('mongodb');
   assert.match(process.env.OBSERVABILITY_DB_NAME, /^loma_local_/);
   assert.equal(process.env.LOMA_WORK_GATEWAY_SECRET, '');
   const base = process.env.AUTH_URL;
-  assert.match(base, /^http:\/\/localhost:13001$/);
+  assert.match(base, /^http:\/\/(localhost:13001|127\.0\.0\.1)$/); // second form: behind tests/nginx-like-proxy.cjs
   const mongo = await new MongoClient(process.env.OBSERVABILITY_MONGODB_URI).connect();
   const db = mongo.db(process.env.OBSERVABILITY_DB_NAME);
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH });
