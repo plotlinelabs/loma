@@ -277,7 +277,14 @@ class ConversationObserver:
                 "is_error": is_error,
             })
 
-    async def record_usage(self, usage: dict | None, total_cost_usd: float | None):
+    async def record_usage(
+        self,
+        usage: dict | None,
+        total_cost_usd: float | None,
+        *,
+        model: str | None = None,
+        runtime: str | None = None,
+    ):
         """Record this run's usage: a timestamped ledger row plus the
         conversation's running total.
 
@@ -286,6 +293,12 @@ class ConversationObserver:
         never ahead of the ledger. The running total always accumulates —
         deciding $set vs $inc on turn_offset used to wipe earlier spend when
         a resumed chat had total_turns == 0.
+
+        ``model`` / ``runtime`` are what this run actually used. The
+        conversation's ``model`` is only written when the chat is created, so
+        it is wrong for chats that switched model and blank for several
+        sources; it is only the fallback here. ``total_cost_usd=None`` means
+        the runtime has no price for the run (stored as cost_known=False).
         """
         if usage is None and total_cost_usd is None:
             return
@@ -313,12 +326,14 @@ class ConversationObserver:
                 user_email=((conv.get("metadata") or {}).get("user_name")
                             or self.metadata.get("user_name", "")),
                 source=conv.get("source") or self.metadata.get("source", "unknown"),
-                model=conv.get("model") or self.metadata.get("model", ""),
+                model=model or conv.get("model") or self.metadata.get("model", ""),
+                runtime=runtime or "",
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
                 cache_creation_tokens=cache_creation_tokens,
                 cost_usd=agent_cost,
+                cost_known=total_cost_usd is not None,
             ))
         except Exception as e:
             logger.warning("Observability: failed to record usage event: %s", e)

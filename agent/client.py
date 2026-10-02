@@ -1160,6 +1160,12 @@ async def _stream_agent(
                 )
             return
 
+    # The model this run really uses (pool default when none was picked),
+    # recorded per run in the usage ledger.
+    run_model = getattr(client, "_pool_model", None) or selected_claude_model or ""
+    if run_model and "/" not in run_model:
+        run_model = f"anthropic/{run_model}"
+
     # Record which account is processing this conversation
     if observer and account_email:
         await observer.record_account(account_email)
@@ -1651,7 +1657,9 @@ async def _stream_agent(
     stopped_by_user = active_stream is not None and active_stream.stopped
 
     if observer:
-        await observer.record_usage(last_usage, last_total_cost_usd)
+        await observer.record_usage(
+            last_usage, last_total_cost_usd, model=run_model, runtime="claude",
+        )
         if stopped_by_user:
             from agent.active_streams import STOPPED_BY_USER_REASON
             await observer.mark_interrupted(STOPPED_BY_USER_REASON)

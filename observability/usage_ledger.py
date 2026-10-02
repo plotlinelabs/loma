@@ -56,6 +56,8 @@ def build_usage_event(
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
     cost_usd: float = 0.0,
+    cost_known: bool = True,
+    runtime: str = "",
     approx: bool = False,
 ) -> dict:
     return {
@@ -65,11 +67,17 @@ def build_usage_event(
         "user_email": user_email or "",
         "source": source or "unknown",
         "model": model or "",
+        # claude | opencode | codex; "" on rows written before this field.
+        "runtime": runtime or "",
         "input_tokens": int(input_tokens or 0),
         "output_tokens": int(output_tokens or 0),
         "cache_read_tokens": int(cache_read_tokens or 0),
         "cache_creation_tokens": int(cache_creation_tokens or 0),
         "cost_usd": round(float(cost_usd or 0), 6),
+        # False when the runtime reports tokens but no price (Codex on a
+        # ChatGPT plan, unpriced OpenCode models). cost_usd is 0 then, and
+        # the UI shows "no price data" instead of a misleading $0.
+        "cost_known": bool(cost_known),
         "approx": approx,
         "recorded_at": datetime.now(timezone.utc),
     }
@@ -140,6 +148,11 @@ async def backfill_usage_events(db) -> int:
                     user_email=(conv.get("metadata") or {}).get("user_name", ""),
                     source=conv.get("source", "unknown"),
                     model=conv.get("model", ""),
+                    # Pre-ledger Codex runs were stored as $0 with tokens.
+                    cost_known=not (
+                        remainder["cost_usd"] <= _EPSILON_USD
+                        and str(conv.get("model") or "").startswith("codex/")
+                    ),
                     approx=True,
                     **{k: max(v, 0) for k, v in remainder.items()},
                 )

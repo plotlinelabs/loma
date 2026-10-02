@@ -155,3 +155,108 @@ async def test_my_usage_counts_spend_on_the_day_it_happened(db):
     assert week["totals"]["conversations"] == 1
     assert len(week["daily"]) == 2
     assert [d["total_cost_usd"] for d in week["daily"]] == pytest.approx([4.0, 1.0])
+
+
+@pytest.mark.asyncio
+async def test_record_usage_stores_run_model_and_unknown_cost(db):
+    # Chat created on one model, then switched: the ledger keeps what each run used.
+    await _seed_conversation(db, model="anthropic/claude-a")
+    await ConversationObserver(db, {}, "c1").record_usage(
+        USAGE, 1.0, model="anthropic/claude-b", runtime="claude")
+    # Codex reports tokens but no price.
+    await ConversationObserver(db, {}, "c1").record_usage(
+        USAGE, None, model="codex/gpt-x", runtime="codex")
+    # No model passed: falls back to the conversation's model.
+    await ConversationObserver(db, {}, "c1").record_usage(USAGE, 0.5)
+
+    events = await db[COLLECTION].find({"conversation_id": "c1"}).sort("at", 1).to_list(None)
+    assert [(e["model"], e["runtime"], e["cost_known"]) for e in events] == [
+        ("anthropic/claude-b", "claude", True),
+        ("codex/gpt-x", "codex", False),
+        ("anthropic/claude-a", "", True),
+    ]
+    assert events[1]["cost_usd"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backfill_marks_legacy_codex_zero_cost_as_unknown(db):
+    await _seed_conversation(db, cid="cx", model="codex/gpt-x", cost={
+        "input_tokens": 100, "output_tokens": 10, "total_cost_usd": 0})
+    await _seed_conversation(db, cid="cl", model="anthropic/claude-a", cost={
+        "input_tokens": 100, "output_tokens": 10, "total_cost_usd": 2.0})
+    assert await backfill_usage_events(db) == 2
+    cx = await db[COLLECTION].find_one({"event_id": "backfill:cx"})
+    cl = await db[COLLECTION].find_one({"event_id": "backfill:cl"})
+    assert cx["cost_known"] is False
+    assert cl["cost_known"] is True
+
+
+async def _event(db, event_id, cid, cost, model="m", at=None, cost_known=True, **kw):
+    await record_usage_event(db, build_usage_event(
+        event_id=event_id, conversation_id=cid, at=at or datetime.now(timezone.utc),
+        user_email=USER, source="dashboard", model=model, input_tokens=10,
+        output_tokens=1, cost_usd=cost, cost_known=cost_known, **kw))
+
+
+@pytest.mark.asyncio
+async def test_my_usage_by_model_and_paginated_chat_list(db):
+    for cid in ("a", "b", "c"):
+        await _seed_conversation(db, cid=cid)
+    await _event(db, "a1", "a", 1.0, model="anthropic/claude-x")
+    await _event(db, "a2", "a", 2.0, model="opencode/y")
+    await _event(db, "b1", "b", 5.0, model="anthropic/claude-x")
+    await _event(db, "c1", "c", 0.0, model="codex/z", cost_known=False)
+    await _event(db, "c2", "c", 0.0, model="")  # legacy row with no model
+
+    body = await _get_usage(db, days=7)
+    assert body["totals"]["runs"] == 5
+    assert body["totals"]["unpriced_runs"] == 1
+    assert body["totals"]["unpriced_tokens"] == 11
+    models = {m["model"]: m for m in body["by_model"]}
+    assert models["anthropic/claude-x"]["total_cost_usd"] == pytest.approx(6.0)
+    assert models["anthropic/claude-x"]["conversations"] == 2
+    assert models["codex/z"]["unpriced_runs"] == 1
+    assert "unknown" in models
+    assert body["by_model"][0]["model"] == "anthropic/claude-x"
+
+    # Costliest first, every chat (not just 5), with the models each used.
+    assert [c["conversation_id"] for c in body["chats"]] == ["b", "a", "c"]
+    assert body["chats_total"] == 3
+    a = body["chats"][1]
+    assert a["runs"] == 2 and a["models"] == ["anthropic/claude-x", "opencode/y"]
+    assert body["top_chats"][0]["conversation_id"] == "b"
+
+    cheap = await _get_usage(db, days=7, sort="cost_asc", limit=2, offset=1)
+    assert [c["conversation_id"] for c in cheap["chats"]] == ["a", "b"]
+    assert cheap["chats_total"] == 3
+    assert cheap["top_chats"] == []
+
+
+@pytest.mark.asyncio
+async def test_my_usage_rejects_bad_sort(db):
+    request = make_mocked_request("GET", "/api/usage/me?sort=drop")
+    with patch.object(my_usage_routes, "get_db", return_value=db), \
+            patch.object(my_usage_routes, "get_user_email", return_value=USER):
+        response = await my_usage_routes.handle_my_usage(request)
+    assert response.status == 400
+
+
+@pytest.mark.asyncio
+async def test_chat_runs_are_scoped_to_the_caller(db):
+    await _seed_conversation(db)
+    now = datetime.now(timezone.utc)
+    await _event(db, "r1", "c1", 1.0, model="anthropic/claude-x", at=now - timedelta(hours=2),
+                 runtime="claude")
+    await _event(db, "r2", "c1", 0.0, model="codex/z", at=now, cost_known=False, runtime="codex")
+    await record_usage_event(db, build_usage_event(
+        event_id="other", conversation_id="c1", at=now, user_email="x@example.com",
+        source="dashboard", model="m", cost_usd=9.0))
+
+    request = make_mocked_request(
+        "GET", "/api/usage/me/chats/c1/runs?days=7", match_info={"conversation_id": "c1"})
+    with patch.object(my_usage_routes, "get_db", return_value=db), \
+            patch.object(my_usage_routes, "get_user_email", return_value=USER):
+        response = await my_usage_routes.handle_my_chat_runs(request)
+    runs = json.loads(response.body)["runs"]
+    assert [(r["model"], r["cost_known"], r["runtime"]) for r in runs] == [
+        ("codex/z", False, "codex"), ("anthropic/claude-x", True, "claude")]

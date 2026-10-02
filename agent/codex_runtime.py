@@ -934,7 +934,9 @@ async def run_codex_agent(
             else:
                 usage_payload = total_usage if any(total_usage.values()) else None
                 # ChatGPT-plan usage has no per-token cost — report tokens only.
-                await observer.record_usage(usage_payload, None)
+                await observer.record_usage(
+                    usage_payload, None, model=f"codex/{model_id}", runtime="codex",
+                )
                 if active_stream is not None and active_stream.stopped:
                     from agent.active_streams import STOPPED_BY_USER_REASON
                     await observer.mark_interrupted(STOPPED_BY_USER_REASON)
