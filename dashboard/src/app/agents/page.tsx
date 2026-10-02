@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useUser } from "@/lib/UserContext";
 import { fetchSkills, basePath, type Skill } from "@/lib/api";
@@ -162,6 +162,17 @@ export default function AgentsPage() {
     setEditorError(null);
     setConfirmingDelete(false);
   };
+
+  // /agents?edit=<id> (the chat composer's "Edit agent" link) opens that
+  // agent's editor once, for people who can edit it.
+  const editParamHandled = useRef(false);
+  useEffect(() => {
+    if (editParamHandled.current || !agents.length || !user) return;
+    editParamHandled.current = true;
+    const editId = new URL(window.location.href).searchParams.get("edit");
+    const agent = editId ? agents.find((a) => a.agent_id === editId) : undefined;
+    if (agent && canManage(agent)) setEditor(editorFor(agent));
+  }, [agents, user, canManage]);
 
   const updateInput = (patch: Partial<EditorState["input"]>) => {
     setEditor((prev) => (prev ? { ...prev, input: { ...prev.input, ...patch } } : prev));

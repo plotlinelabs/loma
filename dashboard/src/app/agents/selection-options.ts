@@ -20,6 +20,10 @@ const PERSONAL_TOOLS = [
   { value: "telegram", label: "Telegram", category: "Messaging" },
 ];
 
+export const PERSONAL_TOOL_LABELS: Record<string, string> = Object.fromEntries(
+  PERSONAL_TOOLS.map(({ value, label }) => [value, label]),
+);
+
 export function skillOptions(skills: Skill[]): SelectionOption[] {
   return skills.map((skill) => ({
     value: skill.slug || skill.name,

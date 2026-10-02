@@ -1076,7 +1076,9 @@ export async function* streamChat(
   userEmail?: string,
   signal?: AbortSignal,
   selectedModel?: string,
-  agentId?: string,
+  /** An id selects that agent; null explicitly selects the default agent (and
+   *  unpins a conversation's agent); undefined leaves the conversation as is. */
+  agentId?: string | null,
   toolConfig?: ToolConfig,
 ): AsyncGenerator<ChatEvent, void, unknown> {
   const body: Record<string, unknown> = { message };
@@ -1085,7 +1087,7 @@ export async function* streamChat(
   if (conversationId) body.conversation_id = conversationId;
   if (userEmail) body.user_email = userEmail;
   if (selectedModel) body.model = selectedModel;
-  if (agentId) body.agent_id = agentId;
+  if (agentId !== undefined) body.agent_id = agentId || null;
   if (toolConfig) body.tool_config = toolConfig;
 
   const res = await fetch(`${API_BASE}/api/chat`, {
