@@ -30,7 +30,18 @@ const fixture = (userName) => ({
   ],
 });
 
+// `next dev` pins its "N" indicator to the bottom-left corner, on top of the
+// one-row composer's "+" button. It does not exist in a production build.
+const hideDevIndicator = (context) => context.addInitScript(() => {
+  addEventListener('DOMContentLoaded', () => {
+    const style = document.createElement('style');
+    style.textContent = 'nextjs-portal{display:none!important}';
+    document.head.appendChild(style);
+  });
+});
+
 async function login(context) {
+  await hideDevIndicator(context);
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
   await page.goto(`${base}/login`, { timeout: 90000, waitUntil: 'networkidle' });
@@ -93,8 +104,10 @@ const hitArea = async (page, locator) => {
     });
     record('pinch-zoom releases --app-h (shell falls back to 100dvh)', EXPECT_NEW ? zoomedAppH.zoomed === '' && zoomedAppH.restored !== '' : true, JSON.stringify(zoomedAppH));
     const menuBtn = page.getByRole('button', { name: 'Toggle menu' });
-    const menuHit = await hitArea(page, menuBtn);
-    record('hamburger has expanded touch hit area', EXPECT_NEW ? (menuHit.left && menuHit.right && menuHit.top && menuHit.bottom) : true, JSON.stringify(menuHit));
+    // The menu button sits in the 48px top bar and is a real 44px target (no
+    // pseudo-element growth needed).
+    const menuBox = await menuBtn.boundingBox();
+    record('hamburger is a 44px touch target', EXPECT_NEW ? (menuBox.width >= 44 && menuBox.height >= 44) : true, JSON.stringify(menuBox));
 
     // 02 sidebar drawer
     await menuBtn.tap();
@@ -199,7 +212,8 @@ const hitArea = async (page, locator) => {
     await page.evaluate(() => document.documentElement.style.removeProperty('--app-h'));
 
     // 07 composer pickers are bottom sheets
-    if (EXPECT_NEW) await page.getByRole('button', {name:'Chat settings',exact:true}).tap();
+    // Inside a conversation the composer is one row: pickers sit behind "+".
+    if (EXPECT_NEW) await page.getByRole('button', {name:'Chat options',exact:true}).tap();
     const toolsTrigger = page.getByRole('button', { name: /^Tools:/ }).first();
     await toolsTrigger.tap();
     const sheet = page.getByRole('dialog', {name:'Tools selection'});
@@ -211,12 +225,14 @@ const hitArea = async (page, locator) => {
     await sheet.waitFor({ state: 'detached' });
     if (EXPECT_NEW) {
       await page.keyboard.press('Escape');
-      await page.getByRole('dialog', {name:'Chat settings',exact:true}).waitFor({state:'hidden'});
+      await page.getByRole('dialog', {name:'Chat options',exact:true}).waitFor({state:'hidden'});
+      await page.getByRole('button', {name:'Chat options',exact:true}).tap();
+      await page.getByRole('dialog', {name:'Chat options',exact:true}).waitFor();
     }
     const modelTrigger = page.locator('button[title="Choose model"], button[title^="Model list unavailable"]').first();
     if (await modelTrigger.count() && await modelTrigger.isEnabled()) {
       await modelTrigger.tap();
-      const modelSheet = page.locator('[data-slot=sheet-content]');
+      const modelSheet = page.locator('[data-slot=sheet-content]').last();
       const asSheet = await modelSheet.waitFor({ timeout: 5000 }).then(() => true).catch(() => false);
       record('model picker opens as a bottom sheet', EXPECT_NEW ? asSheet : true);
       if (asSheet) await page.screenshot({ path: `${shots}/08-model-sheet.png` });
@@ -231,7 +247,7 @@ const hitArea = async (page, locator) => {
     await noHorizontalOverflow(page, '/tasks');
     const tasksGeometry = () => page.evaluate(() => {
       const ta = document.querySelector('textarea[placeholder="What do you need done?"]');
-      const card = ta && ta.closest('.rounded-xl');
+      const card = ta && ta.closest('[data-slot=task-composer]');
       const nav = document.querySelector('main > nav');
       if (!card || !nav) return null;
       const c = card.getBoundingClientRect(), n = nav.getBoundingClientRect();
@@ -244,7 +260,7 @@ const hitArea = async (page, locator) => {
       if (EXPECT_NEW) {
         record(`tasks composer sits above the bottom nav at ${label}`, !!g && g.cardBottom <= g.navTop && g.cardTop >= 0, JSON.stringify(g));
         record(`tasks bottom nav is inside the viewport at ${label}`, !!g && g.navBottom <= g.vh, JSON.stringify(g));
-        record(`tasks composer is one row tall at ${label}`, !!g && g.cardH <= 120, JSON.stringify(g));
+        record(`tasks composer is one row tall at ${label}`, !!g && g.cardH <= 64, JSON.stringify(g));
       } else console.log(`INFO tasks composer/nav geometry at ${label}: ${JSON.stringify(g)}`);
       await page.screenshot({ path: `${shots}/09-tasks-${vh}.png` });
     }

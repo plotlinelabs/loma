@@ -11,13 +11,22 @@ import { useUser } from "../lib/UserContext";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { RiMenuLine } from "@remixicon/react";
+import { MobileChromeProvider, MobileTopBar, useMobileChrome } from "@/components/mobile/MobileChrome";
 
 export default function LayoutShell({ children }: { children: React.ReactNode }) {
+  return (
+    <MobileChromeProvider>
+      <Shell>{children}</Shell>
+    </MobileChromeProvider>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isLogin = pathname === "/login";
   const isMobile = useIsMobile();
   const { user, loading } = useUser();
+  const { barHidden } = useMobileChrome();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -95,18 +104,8 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         />
       </Suspense>
 
-      {/* Mobile: reserve a short menu row so every route, including pages
-          without a pwa-header-offset, clears the floating menu button. */}
       <ViewportHeightSync />
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={toggleSidebar}
-        aria-label="Toggle menu"
-        className="md:hidden fixed left-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30 h-9 w-9 rounded-full border border-border bg-background/80 backdrop-blur text-muted-foreground press-scale"
-      >
-        <RiMenuLine size={18} />
-      </Button>
+      <MobileTopBar onMenu={toggleSidebar} />
 
       <main className={cn(
         // --app-h tracks the visual viewport (ViewportHeightSync) so the
@@ -114,13 +113,16 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         // installed PWA alike; dvh ignores the keyboard on iOS. Falls back to
         // dvh (not vh) so the iOS Safari URL bar never causes overflow.
         // overflow-x-clip keeps any wide child from panning the whole page.
-        "loma-dashboard ml-0 min-w-0 flex flex-col overflow-x-clip transition-all duration-200 pt-[calc(env(safe-area-inset-top)+2.75rem)] md:pt-0 bg-background",
+        // Phones: clear the 48px top bar; the space is handed back to the page
+        // while the bar is slid away on a downward scroll.
+        "loma-dashboard ml-0 min-w-0 flex flex-col overflow-x-clip transition-all duration-200 motion-reduce:transition-none md:pt-0 bg-background",
+        barHidden ? "pt-[env(safe-area-inset-top)]" : "pt-[calc(env(safe-area-inset-top)+3rem)]",
         "h-[var(--app-h,100dvh)]",
         sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
         <div className={cn(
           "flex-1 w-full flex flex-col min-h-0",
-          pathname.startsWith("/skills") ? "overflow-hidden" : "px-3 md:px-6 lg:px-8 py-4 md:py-6"
+          pathname.startsWith("/skills") ? "overflow-hidden" : "px-3 md:px-6 lg:px-8 pt-2 pb-4 md:py-6"
         )}>{children}</div>
         <BottomNav />
       </main>

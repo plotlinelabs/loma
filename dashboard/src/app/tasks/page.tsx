@@ -59,6 +59,9 @@ import { CardPanel } from "@/components/tasks/CardPanel";
 import { MoveToCardDialog } from "@/components/tasks/MoveTaskDialogs";
 import { BoardExtrasContext, assignablePeople, type BoardExtras } from "@/components/tasks/boardExtras";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { MobileTopBarActions, MobileTopBarTitle } from "@/components/mobile/MobileChrome";
+import { MobileBoardActions } from "@/components/mobile/MobileBoardActions";
+import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 5000;
 // Last board opened on this device, so the page reopens where you left off.
@@ -107,6 +110,9 @@ export default function TasksPage() {
   const [includedTagIds, setIncludedTagIds] = useState<string[]>([]);
   const [excludedTagIds, setExcludedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  // Phones: search is an icon in the top bar; the field only takes a row once opened.
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   // Shared boards: only show tasks (or cards holding tasks) assigned to me.
   const [assignedToMe, setAssignedToMe] = useState(false);
   // Personal task being moved into a card.
@@ -337,6 +343,70 @@ export default function TasksPage() {
     setManagingBoard(target);
     setManageOpen(true);
   };
+  const petState = board?.tasks.some((task) => task.column === "needs_input") ? "attention" : petCompleted ? "completed" : board?.tasks.some((task) => task.column === "working") ? "working" : "idle";
+  const boardSwitcher = (
+    <BoardSwitcher
+      boards={boards}
+      current={currentBoard}
+      onSelect={selectBoard}
+      onCreate={() => openManageBoard(null)}
+      onManage={() => currentBoard && openManageBoard(currentBoard)}
+    />
+  );
+  const viewOnlyBadge = readOnly && (
+    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">View only</span>
+  );
+  const searchVisibleOnPhone = mobileSearchOpen || !!searchQuery;
+  const toggleMobileSearch = () => {
+    if (searchVisibleOnPhone) {
+      setMobileSearchOpen(false);
+      setSearchQuery("");
+      return;
+    }
+    setMobileSearchOpen(true);
+    // Focus after the row is displayed; focusing also scrolls it into view.
+    requestAnimationFrame(() => searchInputRef.current?.focus());
+  };
+
+  // Phones: the board name and its actions live in the shell's top bar, so
+  // the page spends no rows on a header and the task list starts higher.
+  const mobileTopBar = (
+    <>
+      <MobileTopBarTitle>
+        <h1 className="min-w-0">{boardSwitcher}</h1>
+        {viewOnlyBadge}
+        <PetCompanion size={24} state={petState} />
+      </MobileTopBarTitle>
+      <MobileTopBarActions>
+        <MobileBoardActions
+          searchOpen={searchVisibleOnPhone}
+          onToggleSearch={toggleMobileSearch}
+          searchLabel={cardMode ? "Search cards and tasks" : "Search tasks"}
+          onNew={readOnly ? undefined : () => void (cardMode ? openNewCard() : openNewTaskDrawer())}
+          newLabel={cardMode ? "New card" : "New task"}
+          assignedToMe={currentBoard?.shared ? assignedFilterOn : undefined}
+          onToggleAssigned={currentBoard?.shared ? () => setAssignedToMe((on) => !on) : undefined}
+          tags={board?.tags ?? []}
+          includedTagIds={includedTagIds}
+          excludedTagIds={excludedTagIds}
+          onIncludeTag={(id, on) => {
+            setIncludedTagIds((ids) => on ? [...ids, id] : ids.filter((tagId) => tagId !== id));
+            if (on) setExcludedTagIds((ids) => ids.filter((tagId) => tagId !== id));
+          }}
+          onExcludeTag={(id, on) => {
+            setExcludedTagIds((ids) => on ? [...ids, id] : ids.filter((tagId) => tagId !== id));
+            if (on) setIncludedTagIds((ids) => ids.filter((tagId) => tagId !== id));
+          }}
+          onClearTags={() => { setIncludedTagIds([]); setExcludedTagIds([]); }}
+          onShare={canShare ? () => currentBoard && openManageBoard(currentBoard) : undefined}
+          onAddChat={!readOnly && !cardMode ? () => setAddChatOpen(true) : undefined}
+          pushState={pushState}
+          onTogglePush={togglePush}
+          onSettings={readOnly ? undefined : () => setSettingsOpen(true)}
+        />
+      </MobileTopBarActions>
+    </>
+  );
 
   // Everything above the board. On phones this is handed to MobileTaskBoard
   // so it scrolls with the list: the page column is fixed-height and these
@@ -344,24 +414,14 @@ export default function TasksPage() {
   // the list to 0 and pushes the pinned composer down over the bottom nav.
   const topBar = (
     <div className="flex flex-col gap-2">
-      {/* Phones: a shared board's name plus the action buttons do not fit on
-          one 390px row, so the actions wrap below the title instead of
-          squeezing it to nothing. */}
-      <div className="pwa-header-offset flex items-center justify-between gap-2 max-md:flex-wrap">
-        <div className="flex min-w-0 items-center gap-2 max-md:max-w-full">
-          <h1 className="min-w-0">
-            <BoardSwitcher
-              boards={boards}
-              current={currentBoard}
-              onSelect={selectBoard}
-              onCreate={() => openManageBoard(null)}
-              onManage={() => currentBoard && openManageBoard(currentBoard)}
-            />
-          </h1>
-          {readOnly && (
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">View only</span>
-          )}
-          <PetCompanion state={board?.tasks.some((task) => task.column === "needs_input") ? "attention" : petCompleted ? "completed" : board?.tasks.some((task) => task.column === "working") ? "working" : "idle"} />
+      {/* Desktop header row. Phones get the same title and actions in the
+          shell's top bar (mobileTopBar); `max-md:hidden` covers the first
+          paint, before useIsMobile has resolved. */}
+      {!isMobile && <div className="pwa-header-offset flex items-center justify-between gap-2 max-md:hidden">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="min-w-0">{boardSwitcher}</h1>
+          {viewOnlyBadge}
+          <PetCompanion state={petState} />
         </div>
         <div className="flex items-center gap-1">
           {currentBoard?.shared && (
@@ -482,7 +542,7 @@ export default function TasksPage() {
             </Tooltip>
           )}
         </div>
-      </div>
+      </div>}
 
       <InstallHint />
 
@@ -490,9 +550,10 @@ export default function TasksPage() {
         <AgentAttention onDismiss={dismissAgentWork} dismissing={dismissingAgentWork} />
       )}
 
-      <div className="relative w-full sm:max-w-sm">
+      <div className={cn("relative w-full sm:max-w-sm", !searchVisibleOnPhone && "max-md:hidden")}>
         <RiSearchLine className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
+          ref={searchInputRef}
           type="text"
           aria-label={cardMode ? "Search cards and tasks" : "Search tasks"}
           placeholder={cardMode ? "Search cards and their tasks..." : "Search task titles and conversations..."}
@@ -524,7 +585,8 @@ export default function TasksPage() {
 
   return (
     <BoardExtrasContext.Provider value={boardExtras}>
-    <div className="flex h-full min-h-0 flex-col space-y-2 p-4 lg:p-6">
+    <div className="flex h-full min-h-0 flex-col space-y-2 md:p-4 lg:p-6">
+      {mobileTopBar}
       {!boardOwnsTopBar && topBar}
 
       {board ? (

@@ -25,6 +25,7 @@ import { HumanTaskPanel } from "@/components/tasks/HumanTaskPanel";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
 import { fetchConversation, fetchFlow, basePath } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
+import { MobileTopBarActions, MobileTopBarTitle, useHideBottomNav } from "@/components/mobile/MobileChrome";
 
 // ── Chat Page Content ───────────────────────────────────────────────────────
 
@@ -66,6 +67,9 @@ function ChatPageContent() {
   // Track the active conversation ID — starts from URL param but also updates
   // when a fresh chat creates a new conversation (via onConversationCreated callback)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(continueId);
+  // Phones: inside a conversation the bottom tab bar gives its height to the
+  // messages; the top bar menu still reaches every page.
+  useHideBottomNav(!!activeConversationId);
 
   // Keep activeConversationId in sync if the URL param changes (e.g. navigation)
   useEffect(() => {
@@ -210,12 +214,16 @@ function ChatPageContent() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col -mb-3">
-      {/* Mobile: no header bar — chat actions live in a floating menu on the
-          right (mirrors the floating hamburger on the left). ChatContextMenu
-          carries pin/rename/board/project/delete. */}
+      {/* Mobile: the chat title and its actions live in the shell's top bar.
+          ChatContextMenu carries pin/rename/board/project/delete. */}
+      {activeConversationId && (
+        <MobileTopBarTitle>
+          <h1 className="min-w-0 truncate text-[15px] font-semibold text-foreground">{conversationTitle || promptPreview || "Chat"}</h1>
+        </MobileTopBarTitle>
+      )}
       {activeConversationId && !humanTask && user?.email === conversationOwner && (
-        <div className="md:hidden fixed right-3 top-[max(0.5rem,env(safe-area-inset-top))] z-30 flex items-center gap-2">
-          <CostChip conversationId={activeConversationId} />
+        <MobileTopBarActions>
+          <CostChip conversationId={activeConversationId} className="h-8 px-2.5" />
           <ChatContextMenu
             conversationId={activeConversationId}
             conversationTitle={conversationTitle || promptPreview || "Untitled"}
@@ -244,9 +252,9 @@ function ChatPageContent() {
             canShare={!!user?.email && user.email === conversationOwner}
             isShared={conversationShared}
             onSharingChange={setConversationShared}
-            triggerClassName="h-9 w-9 flex items-center justify-center rounded-full border border-border bg-background/80 backdrop-blur text-muted-foreground press-scale"
+            triggerClassName="size-10 flex items-center justify-center rounded-full text-muted-foreground press-scale [&_svg]:size-5"
           />
-        </div>
+        </MobileTopBarActions>
       )}
 
       {/* Header with title and action buttons — desktop only; hidden for auto-sent prompts until conversation starts */}
