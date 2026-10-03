@@ -249,8 +249,15 @@ class CodexWorker:
     a replacement in the background.
     """
 
-    def __init__(self, account: dict, model: str | None = None, extra_env: dict | None = None):
+    def __init__(
+        self, account: dict, model: str | None = None, extra_env: dict | None = None,
+        command_checker=None,
+    ):
         self.account = account
+        # Optional async callable(params) -> bool (True = allow). Set for a run
+        # limited to an agent's tool scope: the worker then asks before running
+        # commands and each command is checked here.
+        self.command_checker = command_checker
         self.model = model or default_codex_model()
         # Env for a worker started for one run (e.g. LOMA_CONVERSATION_DIR).
         self.extra_env = dict(extra_env or {})
@@ -328,7 +335,18 @@ class CodexWorker:
             # Server -> client request. approval_policy is "never", but
             # auto-approve defensively if an approval request arrives.
             # v2 decisions use accept/decline; legacy uses approved.
-            if method.endswith("requestApproval"):
+            is_command = method in ("item/commandExecution/requestApproval", "execCommandApproval")
+            if is_command and self.command_checker is not None:
+                try:
+                    allowed = await self.command_checker(msg.get("params") or {})
+                except Exception:
+                    logger.exception("Codex command check failed; declining")
+                    allowed = False
+                if method == "execCommandApproval":
+                    await self._respond(msg["id"], {"decision": "approved" if allowed else "denied"})
+                else:
+                    await self._respond(msg["id"], {"decision": "accept" if allowed else "decline"})
+            elif method.endswith("requestApproval"):
                 await self._respond(msg["id"], {"decision": "accept"})
             elif method in ("execCommandApproval", "applyPatchApproval"):
                 await self._respond(msg["id"], {"decision": "approved"})
@@ -455,7 +473,9 @@ class CodexWorker:
         params: dict = {
             "model": self.model,
             "cwd": str(PROJECT_ROOT),
-            "approvalPolicy": "never",
+            # "untrusted": every command that is not a known read-only one asks
+            # first, so command_checker sees it.
+            "approvalPolicy": "untrusted" if self.command_checker is not None else "never",
             "sandboxPolicy": {"mode": "danger-full-access"},
         }
         if system_prompt:
@@ -750,6 +770,7 @@ async def run_codex_agent(
     user_email: str | None = None,
     user_mcp_overrides: dict | None = None,
     extra_env: dict | None = None,
+    agent_scope: dict | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     """Run one turn through the Codex account pool, yielding dashboard events.
 
@@ -762,10 +783,35 @@ async def run_codex_agent(
     model_id = normalize_codex_model(selected_model) or default_codex_model()
     pool = get_codex_pool()
 
+    from agent.agent_scope import check_codex_command, filter_mcp_servers, scope_is_enforced
+
+    enforce_agent_scope = scope_is_enforced(agent_scope)
+
+    async def _check_command(params: dict) -> bool:
+        command = params.get("command")
+        if not command:
+            # v2 approvals may carry the parsed actions only.
+            command = " ".join(
+                str(a.get("command") or "") for a in (params.get("commandActions") or []) if isinstance(a, dict)
+            )
+        block = check_codex_command(agent_scope, command)
+        if block is None:
+            return True
+        logger.info("Blocked Codex command for agent %s: %s", agent_scope.get("agent_name"), block["target"])
+        if observer is not None:
+            try:
+                await observer.record_blocked_call(
+                    tool_name="Bash", kind=block["kind"], target=block["target"],
+                    reason=block["reason"], tool_use_id=params.get("itemId"),
+                )
+            except Exception:
+                logger.warning("Could not record blocked call", exc_info=True)
+        return False
+
     worker = await pool.acquire(model=model_id)
     borrowed_worker = worker
     execution_home = None
-    if user_mcp_overrides:
+    if user_mcp_overrides or enforce_agent_scope:
         # Hold one bounded pool slot, but never write scoped credentials to the
         # provider account's shared config or use its warm MCP processes.
         try:
@@ -775,9 +821,14 @@ async def run_codex_agent(
                             Path(execution_home.name) / "auth.json")
             (Path(execution_home.name) / "auth.json").chmod(0o600)
             worker = CodexWorker({**borrowed_worker.account, "config_dir": execution_home.name},
-                                 model=model_id, extra_env=extra_env)
+                                 model=model_id, extra_env=extra_env,
+                                 command_checker=_check_command if enforce_agent_scope else None)
             from agent.prompt import build_pooled_system_prompt
-            await worker.connect(mcp_servers={**pool._mcp_servers(), **user_mcp_overrides},
+            # A scoped agent only gets its own MCP servers; the rest never load.
+            mcp_servers = filter_mcp_servers(
+                agent_scope, {**pool._mcp_servers(), **(user_mcp_overrides or {})},
+            )
+            await worker.connect(mcp_servers=mcp_servers,
                                  system_prompt=build_pooled_system_prompt())
         except BaseException:
             if worker is not borrowed_worker:

@@ -1013,15 +1013,13 @@ async def _stream_agent(
     from agent.codex_runtime import selected_model_is_codex
     from agent.agent_scope import scope_is_enforced as _scope_is_enforced
 
-    if not selected_claude_model and isinstance(tool_config, dict) and _scope_is_enforced(
+    # The agent's tool/skill scope is enforced on every runtime: a PreToolUse
+    # hook on Claude, permission requests on OpenCode, command approvals on Codex.
+    runtime_agent_scope = (
         tool_config.get("agent_scope")
-    ):
-        # Runtime blocking is only wired into the Claude Agent SDK (PreToolUse
-        # hook). Codex/OpenCode runs keep the prompt-level scope only.
-        logger.warning(
-            "Agent scope for %s is not enforced on runtime for model %s (prompt-only)",
-            tool_config["agent_scope"].get("agent_name"), selected_model,
-        )
+        if isinstance(tool_config, dict) and _scope_is_enforced(tool_config.get("agent_scope"))
+        else None
+    )
 
     if selected_model and selected_model_is_codex(selected_model):
         try:
@@ -1036,6 +1034,7 @@ async def _stream_agent(
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
                 extra_env=run_env,
+                agent_scope=runtime_agent_scope,
             ):
                 yield event
         except Exception as e:
@@ -1072,6 +1071,7 @@ async def _stream_agent(
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
                 image_files=image_files or None,
+                agent_scope=runtime_agent_scope,
             ):
                 yield event
         except Exception as e:

@@ -13,6 +13,15 @@ and remote workers), and checks every tool call against it:
   `loma_skills.py` CLI, the Skill tool, claude.ai connectors) are denied by a
   PreToolUse hook whose message tells the model which agent to send the user to.
 
+The same check runs on every runtime:
+
+- Claude Agent SDK: PreToolUse hook (`make_pre_tool_use_hook`).
+- OpenCode: a dedicated session whose permission rules remove out-of-scope MCP
+  tools and turn Bash/Skill calls into permission requests, which the runtime
+  answers with `check_opencode_permission` (`opencode_permission_rules`).
+- Codex: a per-run worker with only in-scope MCP servers loaded and command
+  approval switched on; each command is checked with `check_codex_command`.
+
 Empty `tools[]` / `skills[]` keep their existing meaning: everything allowed.
 """
 
@@ -287,3 +296,85 @@ def make_pre_tool_use_hook(scope: dict, observer=None):
         }
 
     return _hook
+
+
+# ── OpenCode ────────────────────────────────────────────────────────────────
+
+def _opencode_name(value: str) -> str:
+    # OpenCode registers MCP tools as `<server>_<tool>` with both parts sanitized.
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", value or "")
+
+
+def opencode_permission_rules(scope: dict, mcp_server_names) -> list[dict]:
+    """Session permission rules for an agent run on OpenCode.
+
+    OpenCode evaluates rules last-match-wins. Start from "allow everything"
+    (the normal dashboard rules), then:
+    - deny every tool of an out-of-scope MCP server, which removes those tools
+      from the session entirely (OpenCode drops tools denied for pattern "*");
+    - ask before every Bash and Skill call so the runtime can run
+      `check_opencode_permission` and reply once/reject;
+    - deny `task`, because subagent sessions do not inherit these rules.
+    """
+    rules = [
+        {"permission": "*", "pattern": "*", "action": "allow"},
+        {"permission": "external_directory", "pattern": "*", "action": "allow"},
+    ]
+    if not scope_is_enforced(scope):
+        return rules
+    if scope.get("tools_restricted"):
+        allowed = _allowed_servers(scope)
+        for server in sorted(set(mcp_server_names or ())):
+            if server not in allowed:
+                rules.append({"permission": f"{_opencode_name(server)}_*", "pattern": "*", "action": "deny"})
+    rules.append({"permission": "bash", "pattern": "*", "action": "ask"})
+    if scope.get("skills_restricted"):
+        rules.append({"permission": "skill", "pattern": "*", "action": "ask"})
+    rules.append({"permission": "task", "pattern": "*", "action": "deny"})
+    return rules
+
+
+def _opencode_mcp_tool(permission: str, mcp_server_names) -> str | None:
+    """Map an OpenCode tool permission like `linear_list_issues` to `mcp__linear__list_issues`."""
+    # Longest server name first so `google_drive` wins over `google`.
+    for server in sorted(set(mcp_server_names or ()), key=len, reverse=True):
+        prefix = f"{_opencode_name(server)}_"
+        if permission.startswith(prefix):
+            return f"mcp__{server}__{permission[len(prefix):]}"
+    return None
+
+
+def check_opencode_permission(scope: dict | None, request: dict, mcp_server_names=()) -> dict | None:
+    """Check an OpenCode `permission.asked` request against the agent's scope."""
+    if not scope_is_enforced(scope):
+        return None
+    permission = str(request.get("permission") or "")
+    patterns = [str(p) for p in (request.get("patterns") or []) if p]
+    metadata = request.get("metadata") if isinstance(request.get("metadata"), dict) else {}
+
+    if permission == "bash":
+        commands = list(patterns)
+        if metadata.get("command"):
+            commands.append(str(metadata["command"]))
+        return check_tool_call(scope, "Bash", {"command": "\n".join(commands)})
+    if permission == "skill":
+        for skill in patterns or [str(metadata.get("name") or "")]:
+            block = check_tool_call(scope, "Skill", {"skill": skill})
+            if block:
+                return block
+        return None
+    if permission == "task":
+        return _blocked(scope, "tool", "subagents")
+    mcp_tool = _opencode_mcp_tool(permission, mcp_server_names)
+    if mcp_tool:
+        return check_tool_call(scope, mcp_tool, {})
+    return None
+
+
+# ── Codex ───────────────────────────────────────────────────────────────────
+
+def check_codex_command(scope: dict | None, command: Any) -> dict | None:
+    """Check a Codex command-execution approval request against the agent's scope."""
+    if isinstance(command, (list, tuple)):
+        command = " ".join(str(part) for part in command)
+    return check_tool_call(scope, "Bash", {"command": str(command or "")})
