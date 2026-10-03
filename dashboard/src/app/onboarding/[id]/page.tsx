@@ -386,10 +386,21 @@ export default function OnboardingRecordPage() {
                 {e.changes.map((c) => (
                   <div key={c.field} className="mt-0.5">
                     <span className="font-medium">{labelFor(c.field)}</span>:{" "}
-                    <span className="text-muted-foreground line-through">
-                      {c.field === "stage" ? stageLabel[c.old as string] ?? formatValue(c.old) : formatValue(c.old)}
-                    </span>{" "}
-                    → {c.field === "stage" ? stageLabel[c.new as string] ?? formatValue(c.new) : formatValue(c.new)}
+                    {formatValue(c.old) !== "" && (
+                      <>
+                        <span className="text-muted-foreground line-through">
+                          {c.field === "stage" ? stageLabel[c.old as string] ?? formatValue(c.old) : formatValue(c.old)}
+                        </span>{" "}
+                        →{" "}
+                      </>
+                    )}
+                    {formatValue(c.new) === "" ? (
+                      <span className="text-muted-foreground">cleared</span>
+                    ) : c.field === "stage" ? (
+                      stageLabel[c.new as string] ?? formatValue(c.new)
+                    ) : (
+                      formatValue(c.new)
+                    )}
                   </div>
                 ))}
               </li>
