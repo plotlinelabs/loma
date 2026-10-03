@@ -330,7 +330,8 @@ async def test_run_opencode_agent_retries_idle_timeout_on_fresh_session(monkeypa
 
     created_sessions = []
 
-    async def fake_create_session(title, *, base_url=None):
+    async def fake_create_session(title, *, base_url=None, permission=None):
+        assert permission is None
         created_sessions.append(title)
         return f"ses_{len(created_sessions)}"
 
@@ -429,7 +430,8 @@ async def test_run_opencode_agent_does_not_retry_model_errors(monkeypatch):
 
     monkeypatch.setattr(ocr, "is_known_model", fake_is_known_model)
 
-    async def fake_create_session(title, *, base_url=None):
+    async def fake_create_session(title, *, base_url=None, permission=None):
+        assert permission is None
         return "ses_1"
 
     monkeypatch.setattr(ocr, "_create_session", fake_create_session)
