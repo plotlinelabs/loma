@@ -17,7 +17,7 @@ from aiohttp import web
 
 from api.auth_helpers import require_admin, get_user_email
 from api.oauth_helpers import encrypt_token, decrypt_token, register_oauth_client
-from integrations.registry import PROVIDER_CATALOG, list_providers, get_provider
+from integrations.registry import PROVIDER_CATALOG, list_providers, get_provider, server_configured
 from observability.db import get_db
 
 logger = logging.getLogger(__name__)
@@ -52,10 +52,11 @@ async def _list_integrations(request: web.Request) -> web.Response:
     result = []
     for entry in list_providers():
         provider = entry["provider"]
-        # Determine status: DB-connected > system-managed (no auth needed) > not connected
+        # Determine status: DB-connected > system-managed (no auth needed, or
+        # keys already set on the server, e.g. Pylon) > not connected
         if provider in connected:
             status = "connected"
-        elif entry["auth_type"] == "none":
+        elif entry["auth_type"] == "none" or server_configured(provider):
             status = "system_managed"
         else:
             status = "not_connected"

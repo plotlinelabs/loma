@@ -56,13 +56,22 @@ async def _require_maintainer(db, user_email: str | None, auth_token: str | None
     return user_email
 
 
+def _file_index(files: list) -> list:
+    """List files without their bodies. Printing bodies here duplicated SKILL.md and
+    pushed large skills past the agent's tool-output limit, so it only saw the start."""
+    return [
+        {k: v for k, v in f.items() if k != "content"} | ({"size": len(f.get("content") or "")} if "content" in f else {})
+        for f in files if isinstance(f, dict)
+    ]
+
+
 def _compact_skill(skill: dict) -> dict:
     return {
         "slug": skill.get("slug"),
         "name": skill.get("name"),
         "description": skill.get("description"),
         "tags": skill.get("tags") or [],
-        "files": skill.get("files") or [],
+        "files": _file_index(skill.get("files") or []),
         "assets": skill.get("assets") or [],
         "source": skill.get("source"),
     }

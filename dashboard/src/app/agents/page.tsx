@@ -42,7 +42,7 @@ import {
 
 import { AgentWork } from "./AgentWork";
 import { SelectionTree } from "./SelectionTree";
-import { skillOptions, toolOptions } from "./selection-options";
+import { isUsableIntegration, skillOptions, toolOptions } from "./selection-options";
 
 const MOTIFS: AgentMotif[] = ["round", "square", "halo", "antenna"];
 
@@ -147,7 +147,7 @@ export default function AgentsPage() {
       .then((data) => setSkills(data.skills || []))
       .catch(() => setSkillsError("Could not load skills. Saved selections are preserved."));
     fetchIntegrations()
-      .then((list) => setIntegrations(list.filter((i) => i.status === "connected")))
+      .then((list) => setIntegrations(list.filter(isUsableIntegration)))
       .catch(() => setToolsError("Could not load organisation tools. Saved selections are preserved."));
   }, [loadAgents]);
 

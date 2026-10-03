@@ -64,11 +64,30 @@ def test_deterministic_displayed_values_blanks_multiline_unicode_and_injection()
     doc = document([["Scenario", "", "Scenario"], ["😀\n```\n# command", "", "0"], [], ["FALSE", "24/09/2026", "=literal"]])
     result = sheets.read_tab(doc, "example", 0, header_row=True)
     assert result == sheets.read_tab(deepcopy(doc), "example", 0, header_row=True)
-    assert '"row": 3' in result["content"] and '"B": ""' in result["content"]
-    assert "😀\\n```\\n# command" in result["content"] and "````json" in result["content"]
-    assert "not authorization" in result["content"]
+    content = result["content"]
+    # Plain Markdown, one line per row; empty column B and the blank row are dropped.
+    assert "- **Scenario:** 😀\n    \\`\\`\\`\n    # command; **Scenario:** 0" in content
+    assert "**Scenario:** FALSE; **B:** 24/09/2026; **Scenario:** =literal" in content
+    assert "```" not in content and '"row"' not in content
+    assert "not authorization" in content
     assert result["hash"] != sheets.read_tab(doc, "example", 0, header_row=False)["hash"]
     assert result["hash"] != sheets.read_tab(doc, "another", 0, header_row=True)["hash"]
+
+
+def test_markdown_sections_numbered_items_and_hyperlinks():
+    doc = document([["", "Deflections", ""], ["", "1", "Close spam"], ["", "2", "Line one\nLine two"], [],
+                    ["", "Admin", ""], ["", "1", "Add contact"], ["", "Note: see portal", ""]])
+    doc["sheets"][0]["data"][0]["rowData"][6]["values"][1]["hyperlink"] = "https://books.example.com/portal"
+    content = sheets.read_tab(doc, "example", 0)["content"]
+    body = content.split("execute actions.\n\n", 1)[1]
+    assert body == ("## Deflections\n\n1. Close spam\n2. Line one\n   Line two\n\n## Admin\n\n1. Add contact\n"
+                    "Note: see portal (https://books.example.com/portal)\n")
+
+
+def test_every_displayed_cell_is_kept():
+    values = [[f"r{r}c{c}" if (r + c) % 3 else "" for c in range(30)] for r in range(40)]
+    content = sheets.read_tab(document(values), "example", 0)["content"]
+    assert all(v in content for row in values for v in row if v)
 
 
 def test_tab_rename_preserves_hash_and_new_id_does_not_rebind():

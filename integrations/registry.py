@@ -402,6 +402,37 @@ PROVIDER_CATALOG = {
 }
 
 
+# CLI-only providers whose tools/*.py already read these server keys, so they
+# work without an Integrations-page connection. Each inner list is one complete
+# set; any complete set counts. MCP providers (GitHub, Linear, ...) are left out
+# because their MCP server still needs a connection.
+SERVER_ENV: dict[str, list[list[str]]] = {
+    "pylon": [["PYLON_API_KEY"]],
+    "monetize_now": [["MONETIZE_NOW_API_KEY"]],
+    "zoho_books": [
+        ["ZOHO_CLIENT_ID_IN", "ZOHO_CLIENT_SECRET_IN", "ZOHO_REFRESH_TOKEN_IN", "ZOHO_ORGANIZATION_ID_IN"],
+        ["ZOHO_CLIENT_ID_US", "ZOHO_CLIENT_SECRET_US", "ZOHO_REFRESH_TOKEN_US", "ZOHO_ORGANIZATION_ID_US"],
+    ],
+    "apollo": [["APOLLO_API_KEY"]],
+    "posthog": [["POSTHOG_API_KEY"]],
+    "grafana": [["GRAFANA_API_KEY", "GRAFANA_URL"]],
+    "grain": [["GRAIN_API_TOKEN"]],
+    "phantombuster": [["PHANTOMBUSTER_API_KEY"]],
+    "stitch": [["STITCH_API_KEY"]],
+    "dataroom": [["DATAROOM_API_TOKEN", "DATAROOM_BASE_URL"]],
+    "cdn_r2": [["R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]],
+    "slack_bot": [["SLACK_BOT_TOKEN"]],
+    "customer_admin": [["CUSTOMER_ADMIN_API_SECRET", "CUSTOMER_ADMIN_BASE_URL"]],
+}
+
+
+def server_configured(provider: str, environ=None) -> bool:
+    """True when the provider's keys are set on the server (env), not via the Integrations page."""
+    import os
+    env = os.environ if environ is None else environ
+    return any(all(str(env.get(name, "")).strip() for name in group) for group in SERVER_ENV.get(provider, []))
+
+
 def get_provider(provider: str) -> dict | None:
     """Look up a provider in the catalog. Returns None if not found."""
     return PROVIDER_CATALOG.get(provider)

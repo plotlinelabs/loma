@@ -12,7 +12,7 @@ function load(file, imports = {}) {
   return context.exports;
 }
 const meta = load('app/mcp/tool-meta.ts');
-const { skillOptions, toolOptions, withSavedOptions, toggleSelection } = load('app/agents/selection-options.ts', { '@/app/mcp/tool-meta': meta });
+const { skillOptions, toolOptions, withSavedOptions, toggleSelection, isUsableIntegration } = load('app/agents/selection-options.ts', { '@/app/mcp/tool-meta': meta });
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 test('skills preserve scopes, system subgroup, real folders and slug values', () => {
@@ -39,6 +39,17 @@ test('tools reuse catalogue categories, retain saved names and group unknown pro
   assert.deepEqual(options.find(({ value }) => value === 'Custom CRM').path, ['Organisation', 'Other']);
   assert.deepEqual(options.find(({ value }) => value === 'gmail').path, ['Personal', 'Google']);
   assert.equal(options.length, 9);
+});
+
+test('server-managed tools such as Pylon are offered, unconnected ones are not', () => {
+  const list = [
+    { provider: 'pylon', display_name: 'Pylon', status: 'system_managed' },
+    { provider: 'zoho_books', display_name: 'Zoho Books', status: 'not_connected' },
+  ];
+  const options = plain(toolOptions(list));
+  assert.deepEqual(options.find(({ value }) => value === 'Pylon').path, ['Organisation', 'Operations']);
+  assert.equal(options.some(({ value }) => value === 'Zoho Books'), false);
+  assert.deepEqual(list.map(isUsableIntegration), [true, false]);
 });
 
 test('unknown saved selections remain visible and options are deduplicated', () => {

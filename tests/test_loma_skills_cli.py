@@ -37,3 +37,20 @@ def test_dump_prints_markdown(monkeypatch, capsys):
 
     assert status == 0
     assert capsys.readouterr().out == "# Demo\n"
+
+
+def test_get_prints_skill_md_once_and_lists_files_without_bodies(monkeypatch, capsys):
+    body = "x" * 40_000
+
+    async def fake_get_skill(db, slug):
+        return {"slug": slug, "name": "Demo", "content": body,
+                "files": [{"path": "SKILL.md", "kind": "inline_text", "content": body},
+                          {"path": "notes.md", "kind": "inline_text", "content": "n" * 10}]}
+
+    monkeypatch.setattr(loma_skills, "_connect_db", lambda: (SimpleNamespace(close=lambda: None), object()))
+    monkeypatch.setattr(loma_skills.skill_service, "get_skill", fake_get_skill)
+
+    assert asyncio.run(loma_skills._run(SimpleNamespace(command="get", slug="demo"))) == 0
+    output = capsys.readouterr().out
+    assert output.count(body) == 1
+    assert '"size": 10' in output and "nnnnnnnnnn" not in output
