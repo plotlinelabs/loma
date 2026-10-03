@@ -171,3 +171,21 @@ async def test_routes_require_auth():
         with pytest.raises(Exception) as exc:
             await routes.handle_list(FakeRequest(user_email=""))
     assert getattr(exc.value, "status", None) == 401
+
+
+@pytest.mark.asyncio
+async def test_noop_sync_does_not_reset_staleness():
+    db = make_db()
+    rec = await svc.create_record(db, {"name": "Iku", "fields": {"org_id": "o1"}}, actor="a@x.com")
+    before = (await svc.get_record(db, rec["record_id"]))["updated_at"]
+    events = len(db.onboarding_events.docs)
+
+    # Automated sync with a note but no real change: nothing logged, no bump.
+    await svc.apply_changes(db, rec, {"org_id": "o1"}, actor="bot", source="mongodb", note="daily sync")
+    assert len(db.onboarding_events.docs) == events
+    assert (await svc.get_record(db, rec["record_id"]))["updated_at"] == before
+
+    # Human note-only save: logged as a comment, still no bump.
+    await svc.apply_changes(db, rec, {}, actor="a@x.com", note="Called client, waiting on build")
+    assert len(db.onboarding_events.docs) == events + 1
+    assert (await svc.get_record(db, rec["record_id"]))["updated_at"] == before
