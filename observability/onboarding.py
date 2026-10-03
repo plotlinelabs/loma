@@ -268,10 +268,15 @@ async def apply_changes(db, record: dict, changes: dict, *, actor: str, source: 
             sets[f"{key}_lower"] = value.lower()
         applied.append({"field": key, "old": old, "new": value})
 
-    if applied or note:
-        sets["updated_at"] = ts
-        sets["updated_by"] = actor
-        await db.onboarding_records.update_one({"record_id": record["record_id"]}, {"$set": sets})
+    # Only real changes bump updated_at (drives the "stale" flag). A human note
+    # with no changes is still logged as a comment; an automated no-op is not
+    # logged at all, so a daily sync cannot keep every record looking fresh.
+    log_note_only = bool(note) and source == HUMAN
+    if applied or log_note_only:
+        if applied:
+            sets["updated_at"] = ts
+            sets["updated_by"] = actor
+            await db.onboarding_records.update_one({"record_id": record["record_id"]}, {"$set": sets})
         await db.onboarding_events.insert_one({
             "event_id": uuid.uuid4().hex[:12],
             "record_id": record["record_id"],
