@@ -38,15 +38,25 @@ Commands:
 Auth: --user-email / --auth-token, or LOMA_USER_EMAIL / LOMA_AUTH_TOKEN in the environment.
 Never write the token into a script or file: it expires after an hour anyway.
 
-scenario spec (YAML or JSON), e.g.:
-  app_id: com.example.demo   # stopped, then launched at t0 (optional)
-  duration_s: 8                         # capture window, 1-20 s
-  record: true                          # mp4 of the window, saved next to the other captures
-  sample_ms: 250                        # screen-change timeline (no images in the result)
-  log_tags: [LoaderTest, WidgetLoader]
-  steps:
-    - {at_ms: 1500, action: tap_text, match: Grid}
-    - {at_ms: 4000, action: key, key: back}
+scenario spec (YAML or JSON). The same spec shape covers any test; names below are placeholders:
+  app_id: com.example.app        # optional: stopped, then launched at t0
+  duration_s: 30                 # capture window, 1-60 s
+  record: true                   # optional mp4 of the window
+  log_tags: [MyTag, OtherTag]    # optional: keep log lines containing any of these
+  steps:                         # run one after the other (after_ms after the previous step, default 0)
+    - {action: tap_text, match: "Sign in"}
+    - {action: set_text, match: "Email", text: "a@b.co"}
+    - {action: wait_for, match: "Welcome", timeout_s: 15}
+    - {action: screenshot, name: home}
+  expect:                        # optional: the runner returns verdict pass/fail + reasons
+    app_running: true
+    logs: [{match: "login_ok", by_ms: 8000}, {match: "ERROR", max: 0}]
+  Timing tests: give steps a fixed offset instead ({at_ms: 1500, action: tap, x: 540, y: 1200}) and add
+  sample_ms: 250 (screen-change timeline; sample_region / sample_min_change narrow it) with
+  expect: {settled_by_ms: 3000}.
+  Step actions: tap, tap_text, wait_for, set_text, clear_text, scroll_until_visible, swipe, type, key,
+  open_url, screenshot, launch_app, stop_app. stop_on_fail: true ends the steps at the first failure;
+  end_after_steps: true returns as soon as the steps are done (duration_s is then only an upper bound).
 
 Files (screenshots, burst frames, recordings, flow screenshots) are written to
 $LOMA_CONVERSATION_DIR/device/ when that is set, else to a per-conversation dir

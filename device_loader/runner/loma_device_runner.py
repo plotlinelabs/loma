@@ -130,12 +130,28 @@ EPOCH_LINE = re.compile(r'\s*([0-9]{9,11}\.[0-9]+)\s')  # logcat -v epoch
 IOS_LOG_TIME = re.compile(r'([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?')  # log show compact
 # scenario: one call runs timed steps while the runner records video, samples screen changes and
 # captures logs, so the agent spends one model turn per test case instead of ~10.
+# Nothing here is specific to one kind of test: steps are the same inputs as the single ops, timed
+# either at a fixed offset (at_ms) or one after the other (after_ms), and expect turns the result
+# into pass/fail on the runner.
 SCENARIO_STEPS = {'tap': ({'x', 'y'}, set()), 'swipe': ({'x1', 'y1', 'x2', 'y2'}, {'duration_ms'}),
                   'type': ({'text'}, set()), 'key': ({'key'}, set()), 'open_url': ({'url'}, set()),
                   'tap_text': ({'match'}, {'by', 'exact', 'timeout_s'}),
-                  'wait_for': ({'match'}, {'by', 'exact', 'timeout_s', 'gone'})}
+                  'wait_for': ({'match'}, {'by', 'exact', 'timeout_s', 'gone'}),
+                  'set_text': ({'text'}, {'match', 'by', 'exact', 'clear'}),
+                  'clear_text': (set(), {'match', 'by', 'exact'}),
+                  'scroll_until_visible': ({'match'}, {'by', 'exact', 'direction', 'max_swipes'}),
+                  'screenshot': (set(), {'name'}), 'launch_app': (set(), {'app_id'}),
+                  'stop_app': (set(), {'app_id'})}
+STEP_TIMING = {'at_ms', 'after_ms'}
 MAX_SCENARIO_STEPS = 40
-MAX_STEP_WAIT = 10
+MAX_SCENARIO_SECONDS = 60
+MAX_SCENARIO_SHOTS = 6
+MAX_STEP_WAIT = 30
+END_TAIL = 0.7  # end_after_steps: keep capturing this long after the last step, to catch its effect
+SHOT_NAME = re.compile(r'[A-Za-z0-9_-]{1,40}\Z')
+EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'logs', 'log_order'}
+LOG_EXPECT_KEYS = {'match', 'min', 'max', 'by_ms', 'after_ms'}
+MAX_LOG_EXPECTS = 12
 SCENARIO_GRACE = 30  # steps still running at the end of the window get this long, then are cancelled
 MIN_SAMPLE_MS = 150
 MAX_RAW_FRAME = 64 * 1024 * 1024  # an uncompressed screencap (1440x3200 RGBA is ~18 MB)
@@ -143,7 +159,7 @@ LOG_LINE_CHARS = 300
 # Screen-change sampling: a small grey grid per frame instead of images, so the model gets
 # "the screen changed at 1050 ms in this box" rather than frames it must look at.
 GRID_COLS, GRID_ROWS = 24, 48
-TOP_CROP = 0.05  # skip the status bar (clock, battery, network) so it never counts as a change
+TOP_CROP = 0.05  # default region skips the status bar (clock, battery); sample_region overrides it
 CELL_DELTA = 24  # grey-level difference (0-255) for one grid cell to count as changed
 
 
@@ -404,26 +420,53 @@ def tag_filter(lines, tags, needle=None, text=lambda line: line):
     return kept, counts
 
 
-def need_steps(args, window_ms):
-    """Scenario steps: [{at_ms, action, ...}], in at_ms order, inside the capture window."""
+def need_number(args, key, low, high, default):
+    value = args.get(key, default)
+    if type(value) not in (int, float) or not low <= value <= high:
+        raise OpError(f'Invalid {key} ({low}-{high})')
+    return float(value)
+
+
+def need_region(args, key):
+    """Optional [x1, y1, x2, y2] in screen pixels: the part of the screen to watch for changes."""
+    region = args.get(key)
+    if region is None:
+        return None
+    if (not isinstance(region, list) or len(region) != 4 or not all(type(v) is int and 0 <= v <= 10000 for v in region)
+            or region[2] <= region[0] or region[3] <= region[1]):
+        raise OpError(f'Invalid {key} (expected [x1, y1, x2, y2] in screen pixels)')
+    return tuple(region)
+
+
+def need_steps(args, window_ms, app_id=None, allowed_apps=()):
+    """Scenario steps: [{action, at_ms | after_ms, ...}].
+
+    at_ms runs the step at a fixed offset from t0 (timing tests); after_ms (default 0) runs it
+    that long after the previous step finished (ordinary flows, where each step waits for the last).
+    """
     steps = args.get('steps') or []
     if not isinstance(steps, list) or len(steps) > MAX_SCENARIO_STEPS:
         raise OpError(f'steps must be a list of at most {MAX_SCENARIO_STEPS} steps')
-    checked, last = [], 0
+    checked, last, shots = [], 0, 0
     for index, step in enumerate(steps, 1):
         if not isinstance(step, dict) or step.get('action') not in SCENARIO_STEPS:
             raise OpError(f'steps[{index}]: action must be one of ' + ', '.join(sorted(SCENARIO_STEPS)))
         action = step['action']
         required, optional = SCENARIO_STEPS[action]
-        given = set(step) - {'action', 'at_ms'}
+        given = set(step) - {'action'} - STEP_TIMING
         if not required <= given <= required | optional:
             raise OpError(f'steps[{index}] ({action}): needs {sorted(required)}'
                           + (f', may take {sorted(optional)}' if optional else ''))
-        at = need_int(step, 'at_ms', 0, window_ms - 1)
-        if at < last:
-            raise OpError(f'steps[{index}]: steps must be in at_ms order')
-        last = at
-        item = {'action': action, 'at_ms': at}
+        item = {'action': action}
+        if 'at_ms' in step and 'after_ms' in step:
+            raise OpError(f'steps[{index}]: use at_ms or after_ms, not both')
+        if 'at_ms' in step:
+            item['at_ms'] = need_int(step, 'at_ms', 0, window_ms - 1)
+            if item['at_ms'] < last:
+                raise OpError(f'steps[{index}]: at_ms steps must be in at_ms order')
+            last = item['at_ms']
+        else:
+            item['after_ms'] = need_int(step, 'after_ms', 0, window_ms - 1, default=0)
         if action == 'tap':
             item.update(x=need_int(step, 'x', 0, 10000), y=need_int(step, 'y', 0, 10000))
         elif action == 'swipe':
@@ -435,34 +478,153 @@ def need_steps(args, window_ms):
             item['key'] = need_str(step, 'key', max_len=32)
         elif action == 'open_url':
             item['url'] = check_url(need_str(step, 'url', max_len=2000))
-        else:
+        elif action in ('tap_text', 'wait_for'):
             item['selector'] = need_selector(step)
             item['timeout_s'] = need_int(step, 'timeout_s', 0, MAX_STEP_WAIT, default=5)
             item['gone'] = need_bool(step, 'gone') if action == 'wait_for' else False
+        elif action in ('set_text', 'clear_text'):
+            if action == 'set_text':
+                need_str(step, 'text', max_len=MAX_TEXT)
+                need_bool(step, 'clear', default=True)
+            if 'match' in step:
+                need_selector(step)
+            item['args'] = {k: step[k] for k in given}
+        elif action == 'scroll_until_visible':
+            item['selector'] = need_selector(step)
+            item['direction'] = step.get('direction', 'down')
+            if item['direction'] not in ('down', 'up'):
+                raise OpError(f'steps[{index}]: direction must be down or up')
+            item['max_swipes'] = need_int(step, 'max_swipes', 1, 20, default=8)
+        elif action == 'screenshot':
+            shots += 1
+            if shots > MAX_SCENARIO_SHOTS:
+                raise OpError(f'At most {MAX_SCENARIO_SHOTS} screenshot steps per scenario')
+            item['name'] = need_str(step, 'name', SHOT_NAME, 40, optional=True) or f'step{index}'
+        else:  # launch_app / stop_app: the scenario's app unless the step names another one
+            target = need_str(step, 'app_id', APP_ID, 255, optional=True) or app_id
+            if not target:
+                raise OpError(f'steps[{index}] ({action}): needs app_id (none set on the scenario)')
+            if allowed_apps and target not in allowed_apps:
+                raise OpError(f"steps[{index}]: app {target} is not in this runner's allowed_app_ids")
+            item['app_id'] = target
         checked.append(item)
     return checked
+
+
+def need_expect(args, has_logs, has_frames, has_app):
+    """Optional pass/fail rules, checked on the runner so the model reads a verdict, not raw data."""
+    expect = args.get('expect')
+    if expect is None:
+        return None
+    if not isinstance(expect, dict) or not set(expect) <= EXPECT_KEYS:
+        raise OpError('expect may contain: ' + ', '.join(sorted(EXPECT_KEYS)))
+    out = {'steps_ok': need_bool(expect, 'steps_ok', default=True)}
+    if 'app_running' in expect:
+        if not has_app:
+            raise OpError('expect.app_running needs app_id')
+        out['app_running'] = need_bool(expect, 'app_running')
+    if 'settled_by_ms' in expect:
+        if not has_frames:
+            raise OpError('expect.settled_by_ms needs sample_ms (the screen-change timeline)')
+        out['settled_by_ms'] = need_int(expect, 'settled_by_ms', 0, MAX_SCENARIO_SECONDS * 1000)
+    rules, order = expect.get('logs') or [], expect.get('log_order') or []
+    if (rules or order) and not has_logs:
+        raise OpError('expect.logs / expect.log_order need log_tags (which log lines to capture)')
+    if not isinstance(rules, list) or len(rules) > MAX_LOG_EXPECTS:
+        raise OpError(f'expect.logs must be a list of at most {MAX_LOG_EXPECTS} rules')
+    out['logs'] = []
+    for index, rule in enumerate(rules, 1):
+        if not isinstance(rule, dict) or not {'match'} <= set(rule) <= LOG_EXPECT_KEYS:
+            raise OpError(f'expect.logs[{index}]: needs match, may take min, max, by_ms, after_ms')
+        item = {'match': need_str(rule, 'match', max_len=200)}
+        for key, high in (('min', 100000), ('max', 100000), ('by_ms', MAX_SCENARIO_SECONDS * 1000),
+                          ('after_ms', MAX_SCENARIO_SECONDS * 1000)):
+            if key in rule:
+                item[key] = need_int(rule, key, 0, high)
+        item.setdefault('min', 0 if 'max' in item else 1)
+        out['logs'].append(item)
+    if (not isinstance(order, list) or len(order) > MAX_LOG_EXPECTS
+            or not all(isinstance(m, str) and 0 < len(m) <= 200 for m in order)):
+        raise OpError(f'expect.log_order must be a list of at most {MAX_LOG_EXPECTS} strings')
+    out['log_order'] = order
+    return out
+
+
+def judge(expect, result, entries):
+    """Reasons the scenario failed its expect rules (empty list = pass). entries: [(t_ms, line)]."""
+    failed = []
+    launch = result.get('launch')
+    if launch is not None and not launch['ok']:
+        failed.append(f"launch failed: {launch.get('error')}")
+    if expect['steps_ok']:
+        for step in result.get('steps') or []:
+            if step.get('skipped'):
+                failed.append(f"step {step['i']} ({step['action']}) did not run")
+            elif not step.get('ok'):
+                failed.append(f"step {step['i']} ({step['action']}): {step.get('error')}")
+    if 'app_running' in expect and result.get('app_running') is not expect['app_running']:
+        state = {True: 'running', False: 'not running', None: 'unknown'}[result.get('app_running')]
+        failed.append(f"app is {state} at the end (expected {'running' if expect['app_running'] else 'stopped'})")
+    if 'settled_by_ms' in expect:
+        frames = result.get('frames') or {}
+        last = frames.get('last_change_ms')
+        if not frames.get('samples'):
+            failed.append('no screen samples were captured, so settled_by_ms cannot be checked')
+        elif last is not None and last > expect['settled_by_ms']:
+            failed.append(f"screen still changing at {last} ms (expected settled by {expect['settled_by_ms']} ms)")
+
+    def hits(match):
+        return [at for at, line in entries if match.lower() in line.lower()]
+    for rule in expect['logs']:
+        found, name = hits(rule['match']), repr(rule['match'])
+        if len(found) < rule['min']:
+            failed.append(f"log {name}: {len(found)} lines (expected at least {rule['min']})")
+        if 'max' in rule and len(found) > rule['max']:
+            failed.append(f"log {name}: {len(found)} lines (expected at most {rule['max']})")
+        if found and 'by_ms' in rule and found[0] > rule['by_ms']:
+            failed.append(f"log {name}: first at {found[0]} ms (expected by {rule['by_ms']} ms)")
+        if found and 'after_ms' in rule and found[0] < rule['after_ms']:
+            failed.append(f"log {name}: first at {found[0]} ms (expected after {rule['after_ms']} ms)")
+    previous = None
+    for match in expect['log_order']:
+        found = hits(match)
+        if not found:
+            failed.append(f'log order: {match!r} never appeared')
+            break
+        if previous is not None and found[0] < previous[1]:
+            failed.append(f'log order: {match!r} ({found[0]} ms) came before {previous[0]!r} ({previous[1]} ms)')
+        previous = (match, found[0])
+    return failed
 
 
 # ── Screen-change signatures (pure Python: no image library on the runner) ──
 
 
-def grid_signature(width, height, grey_at):
-    """Mean grey level (0-255) of 3x3 samples in each grid cell below the status bar.
+def grid_signature(width, height, grey_at, region=None):
+    """Mean grey level (0-255) of 3x3 samples in each grid cell of the watched region.
 
-    grey_at(x, y) returns r + g + b of one pixel. ~10k pixel reads per frame.
+    region is (x1, y1, x2, y2) in screen pixels, clamped to the frame; by default the whole
+    screen below the status bar. grey_at(x, y) returns r + g + b of one pixel. ~10k reads per frame.
     """
-    top = int(height * TOP_CROP)
-    usable = height - top
+    if region is None:
+        left, top, right, bottom = 0, int(height * TOP_CROP), width, height
+    else:
+        left, top, right, bottom = (min(region[0], width), min(region[1], height),
+                                    min(region[2], width), min(region[3], height))
+    span_x, span_y = right - left, bottom - top
+    if span_x < GRID_COLS or span_y < GRID_ROWS:
+        raise OpError(f'sample_region is too small or off screen (screen is {width}x{height}, '
+                      f'need at least {GRID_COLS}x{GRID_ROWS} px)')
     cells = []
     for row in range(GRID_ROWS):
-        ys = [top + (row * 4 + k) * usable // (GRID_ROWS * 4) for k in (1, 2, 3)]
+        ys = [top + (row * 4 + k) * span_y // (GRID_ROWS * 4) for k in (1, 2, 3)]
         for col in range(GRID_COLS):
-            xs = [(col * 4 + k) * width // (GRID_COLS * 4) for k in (1, 2, 3)]
+            xs = [left + (col * 4 + k) * span_x // (GRID_COLS * 4) for k in (1, 2, 3)]
             cells.append(sum(grey_at(x, y) for y in ys for x in xs) // 27)
-    return {'width': width, 'height': height, 'top': top, 'cells': cells}
+    return {'width': width, 'height': height, 'area': (left, top, right, bottom), 'cells': cells}
 
 
-def android_raw_signature(data):
+def android_raw_signature(data, region=None):
     """`screencap` without -p: a 12- or 16-byte header (width, height, format[, colorspace]) + RGBA rows."""
     if len(data) < 16:
         raise OpError('Empty screen frame')
@@ -477,10 +639,10 @@ def android_raw_signature(data):
     def grey_at(x, y):
         i = header + y * stride + x * 4
         return data[i] + data[i + 1] + data[i + 2]
-    return grid_signature(width, height, grey_at)
+    return grid_signature(width, height, grey_at, region)
 
 
-def bmp_signature(data):
+def bmp_signature(data, region=None):
     """`simctl io screenshot --type=bmp`: an uncompressed 24/32-bit BMP (bottom-up or top-down rows)."""
     if data[:2] != b'BM' or len(data) < 30:
         raise OpError('Unexpected simulator frame (not a BMP)')
@@ -497,13 +659,13 @@ def bmp_signature(data):
     def grey_at(x, y):
         i = offset + (rows - 1 - y if height > 0 else y) * stride + x * step
         return data[i] + data[i + 1] + data[i + 2]
-    return grid_signature(width, rows, grey_at)
+    return grid_signature(width, rows, grey_at, region)
 
 
 def merge_changes(samples, spacing_ms):
     """Consecutive changed samples -> periods {from_ms, to_ms, frames, max_changed, box}.
 
-    A shimmer or a transition changes every frame for a while; one period per burst of
+    An animation or a transition changes every frame for a while; one period per burst of
     change reads as "animating from 300 to 1500 ms in this box", not 20 separate events.
     """
     periods = []
@@ -523,16 +685,17 @@ def merge_changes(samples, spacing_ms):
 
 def frame_change(previous, current):
     """(fraction of grid cells that changed, bounding box in screen pixels or None)."""
-    if previous is None or (previous['width'], previous['height']) != (current['width'], current['height']):
+    if previous is None or (previous['width'], previous['height'], previous['area']) != (
+            current['width'], current['height'], current['area']):
         return None
     changed = [i for i, (a, b) in enumerate(zip(previous['cells'], current['cells'])) if abs(a - b) >= CELL_DELTA]
     if not changed:
         return 0.0, None
     rows, cols = [i // GRID_COLS for i in changed], [i % GRID_COLS for i in changed]
-    width, top = current['width'], current['top']
-    usable = current['height'] - top
-    box = [min(cols) * width // GRID_COLS, top + min(rows) * usable // GRID_ROWS,
-           (max(cols) + 1) * width // GRID_COLS, top + (max(rows) + 1) * usable // GRID_ROWS]
+    left, top, right, bottom = current['area']
+    span_x, span_y = right - left, bottom - top
+    box = [left + min(cols) * span_x // GRID_COLS, top + min(rows) * span_y // GRID_ROWS,
+           left + (max(cols) + 1) * span_x // GRID_COLS, top + (max(rows) + 1) * span_y // GRID_ROWS]
     return round(len(changed) / len(current['cells']), 3), box
 
 
@@ -821,15 +984,26 @@ class Android:
     async def capture(self, serial):
         return 'png', await self.screenshot(serial)
 
-    async def record(self, serial, seconds, started=None):
+    async def record(self, serial, seconds, started=None, bitrate=4000000, stop=None):
         path = '/sdcard/loma_rec.mp4'
         task = asyncio.ensure_future(run(self._sh(serial, 'screenrecord', '--time-limit', str(seconds),
-                                                  '--bit-rate', '4000000', path), timeout=seconds + 30))
+                                                  '--bit-rate', str(int(bitrate)), path), timeout=seconds + 30))
         try:
             await asyncio.sleep(0.8)  # screenrecord needs a moment before frames flow
             if started is not None:
                 await started()
-            await task
+            if stop is None:
+                await task
+            else:  # stop: an asyncio.Event that ends the recording early (scenario end_after_steps)
+                waiter = asyncio.ensure_future(stop.wait())
+                await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+                waiter.cancel()
+                if task.done():
+                    task.result()
+                else:
+                    await run(self._sh(serial, 'pkill -INT screenrecord'), timeout=15, check=False)
+                    await asyncio.gather(task, return_exceptions=True)  # interrupted on purpose
+                    await asyncio.sleep(0.5)  # let screenrecord finish writing the mp4
             # adb pull to a file: run() caps stdout at MAX_OUTPUT, which would silently cut the mp4.
             with tempfile.TemporaryDirectory(prefix='loma-rec-') as tmp:
                 target = Path(tmp) / 'rec.mp4'
@@ -853,10 +1027,18 @@ class Android:
         return out.decode('utf-8', 'replace').splitlines()
 
 
-    async def frame(self, serial):
+    async def frame(self, serial, region=None):
         """Screen-change signature from an uncompressed screencap (no PNG encode on the device)."""
         _, out, _ = await run([self.adb, '-s', serial, 'exec-out', 'screencap'], timeout=15, limit=MAX_RAW_FRAME)
-        return await asyncio.to_thread(android_raw_signature, out)
+        return await asyncio.to_thread(android_raw_signature, out, region)
+
+    async def is_running(self, serial, app_id):
+        """True / False, or None when it cannot be told (used to spot a crash during a scenario)."""
+        code, out, _ = await run(self._sh(serial, 'pidof', app_id), timeout=10, check=False)
+        text = out.decode('utf-8', 'replace').strip()
+        if code == 0 and re.fullmatch(r'[0-9 ]+', text):
+            return True
+        return False if code == 1 and not text else None
 
     async def clock_skew(self, serial):
         """Device clock minus this machine's clock, in seconds (0 when they agree or it can't be read)."""
@@ -1034,7 +1216,7 @@ class IOS:
     async def capture(self, serial):
         return 'png', await self.screenshot(serial)
 
-    async def record(self, serial, seconds, started=None):
+    async def record(self, serial, seconds, started=None, bitrate=None, stop=None):  # simctl has no bitrate option
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / 'rec.mp4'
             proc = await asyncio.create_subprocess_exec(
@@ -1044,7 +1226,13 @@ class IOS:
                 await asyncio.sleep(0.8)
                 if started is not None:
                     await started()
-                await asyncio.sleep(seconds)
+                if stop is None:
+                    await asyncio.sleep(seconds)
+                else:
+                    try:
+                        await asyncio.wait_for(stop.wait(), seconds)
+                    except asyncio.TimeoutError:
+                        pass
                 proc.send_signal(2)  # SIGINT finalises the movie file
                 await asyncio.wait_for(proc.wait(), 20)
             except BaseException:
@@ -1135,13 +1323,19 @@ class IOS:
         return out.decode('utf-8', 'replace').splitlines()[-lines:]
 
 
-    async def frame(self, serial):
+    async def frame(self, serial, region=None):
         """Screen-change signature from an uncompressed BMP screenshot."""
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / 'frame.bmp'
             await run(['xcrun', 'simctl', 'io', serial, 'screenshot', '--type=bmp', str(target)], timeout=15)
             data = target.read_bytes()
-        return await asyncio.to_thread(bmp_signature, data)
+        return await asyncio.to_thread(bmp_signature, data, region)
+
+    async def is_running(self, serial, app_id):
+        code, out, _ = await run(['xcrun', 'simctl', 'spawn', serial, 'launchctl', 'list'], timeout=15, check=False)
+        if code != 0:
+            return None
+        return f'UIKitApplication:{app_id}[' in out.decode('utf-8', 'replace')
 
     async def clock_skew(self, serial):
         return 0.0  # simulators use this machine's clock
@@ -1440,25 +1634,36 @@ class Runner:
     # ── Scenario: timed steps + video + screen-change timeline + logs, in one call ──
 
     async def scenario(self, driver, serial, args, app_id):
-        duration = need_int(args, 'duration_s', 1, 20)
-        steps = need_steps(args, duration * 1000)
+        duration = need_int(args, 'duration_s', 1, MAX_SCENARIO_SECONDS)
         record = need_bool(args, 'record')
         sample_ms = need_int(args, 'sample_ms', 0, 2000, default=0)
         if 0 < sample_ms < MIN_SAMPLE_MS:
             raise OpError(f'sample_ms must be 0 (off) or {MIN_SAMPLE_MS}-2000')
+        if not sample_ms and {'sample_region', 'sample_min_change'} & set(args):
+            raise OpError('sample_region / sample_min_change need sample_ms')
         tags = need_tags(args, 'log_tags')
-        source = need_log_source(args, 'log_source')
-        log_lines = need_int(args, 'log_lines', 1, 2000, default=200)
-        stop_first = need_bool(args, 'stop_first', default=True)
         if not app_id and {'extras', 'bool_extras', 'activity', 'console'} & set(args):
             raise OpError('extras / activity / console need app_id')
-        launch = need_launch(args) if app_id else None
+        plan = {
+            'app_id': app_id, 'duration': duration, 'sample_ms': sample_ms, 'tags': tags,
+            'steps': need_steps(args, duration * 1000, app_id, self.allowed_apps),
+            'region': need_region(args, 'sample_region'),
+            'min_change': need_number(args, 'sample_min_change', 0, 1, 0),
+            'source': need_log_source(args, 'log_source'),
+            'log_lines': need_int(args, 'log_lines', 1, 2000, default=200),
+            'stop_on_fail': need_bool(args, 'stop_on_fail'),
+            'end_after_steps': need_bool(args, 'end_after_steps'),
+            'stop_recording': asyncio.Event(),
+            'launch': need_launch(args) if app_id else None,
+            'expect': need_expect(args, bool(tags), bool(sample_ms), bool(app_id)),
+        }
+        stop_first = need_bool(args, 'stop_first', default=True)
         loop = asyncio.get_running_loop()
         if app_id and stop_first:
             await driver.stop(serial, app_id)
         if tags:
             try:
-                await driver.logs(serial, 1, True, source)
+                await driver.logs(serial, 1, True, plan['source'])
             except OpError:  # iOS console: there is none until the launch below creates a fresh one
                 pass
         started = asyncio.Event()
@@ -1468,7 +1673,10 @@ class Runner:
         recording, result = None, {'duration_s': duration}
         if record:  # recording first, so the launch is on video; t0 is when frames start flowing
             began = loop.time()
-            recording = asyncio.ensure_future(driver.record(serial, duration + 1, mark_started))
+            # Longer windows record at a lower bitrate so the file stays under the media limit.
+            bitrate = min(4000000, MAX_MEDIA_BYTES * 6 // (duration + 1))
+            recording = asyncio.ensure_future(driver.record(serial, duration + 1, mark_started, bitrate=bitrate,
+                                                            stop=plan['stop_recording']))
             waiter = asyncio.ensure_future(started.wait())
             await asyncio.wait({recording, waiter}, return_when=asyncio.FIRST_COMPLETED)
             if not started.is_set():
@@ -1477,40 +1685,47 @@ class Runner:
                 raise OpError('Recording ended before it started')
             result['video_offset_ms'] = int((loop.time() - began) * 1000)
         try:
-            return await self._scenario_window(driver, serial, app_id, launch, steps, duration, sample_ms, tags,
-                                               source, log_lines, recording, result)
+            return await self._scenario_window(driver, serial, plan, recording, result)
         except BaseException:
             if recording is not None and not recording.done():
                 recording.cancel()
                 await asyncio.gather(recording, return_exceptions=True)
             raise
 
-    async def _scenario_window(self, driver, serial, app_id, launch, steps, duration, sample_ms, tags, source,
-                               log_lines, recording, result):
+    async def _scenario_window(self, driver, serial, plan, recording, result):
         loop = asyncio.get_running_loop()
+        app_id, steps, duration, sample_ms, tags = (plan[k] for k in ('app_id', 'steps', 'duration', 'sample_ms', 'tags'))
         start, wall = loop.time(), time.time()
         window_end = start + duration
         frames = {'interval_ms': sample_ms, 'samples': 0, 'changes': []}
-        console, step_results, background, use_console = [], [], [], False
+        console, step_results, shots, background, use_console = [], [], [], [], False
         try:
             if sample_ms:
-                background.append(asyncio.ensure_future(
-                    self._sample_frames(driver, serial, start, window_end, sample_ms, frames)))
+                background.append(asyncio.ensure_future(self._sample_frames(
+                    driver, serial, start, window_end, sample_ms, frames, plan['region'], plan['min_change'])))
             if app_id:
                 try:
-                    await driver.launch(serial, app_id, **launch)
+                    await driver.launch(serial, app_id, **plan['launch'])
                     result['launch'] = {'ok': True, 'took_ms': int((loop.time() - start) * 1000)}
                 except OpError as exc:
                     result['launch'] = {'ok': False, 'error': str(exc)[:300]}
-            if tags and driver.platform == 'ios' and self._console_ready(driver, serial, source):
+            if tags and driver.platform == 'ios' and self._console_ready(driver, serial, plan['source']):
                 use_console = True
-                fresh = bool(app_id and launch.get('console'))  # this launch started a new capture file
+                fresh = bool(app_id and plan['launch'].get('console'))  # this launch started a new capture file
                 background.append(asyncio.ensure_future(self._tail_console(driver, serial, start, console, fresh)))
-            runner = asyncio.ensure_future(self._run_steps(driver, serial, steps, start, step_results))
+            runner = asyncio.ensure_future(self._run_steps(driver, serial, steps, start, window_end, step_results,
+                                                           shots, plan['stop_on_fail']))
             background.append(runner)
-            await asyncio.sleep(max(0.0, window_end - loop.time()))
+            if plan['end_after_steps'] and steps:  # duration_s is then only an upper bound
+                await asyncio.wait({runner}, timeout=max(0.0, window_end - loop.time()))
+                if runner.done():
+                    await asyncio.sleep(max(0.0, min(END_TAIL, window_end - loop.time())))
+                    plan['stop_recording'].set()
+            else:
+                await asyncio.sleep(max(0.0, window_end - loop.time()))
             if not runner.done():
                 await asyncio.wait({runner}, timeout=SCENARIO_GRACE)
+            result['ran_ms'] = int((loop.time() - start) * 1000)
         finally:
             for task in background:
                 task.cancel()
@@ -1519,10 +1734,16 @@ class Runner:
             if 'ok' not in entry:  # still running when the window (plus grace) ended
                 entry.update(ok=False, error='cancelled: still running at the end of the window')
         done = len(step_results)
-        step_results += [{'i': i, 'action': s['action'], 'at_ms': s['at_ms'], 'skipped': True}
-                         for i, s in enumerate(steps[done:], done + 1)]
+        for index, step in enumerate(steps[done:], done + 1):
+            skipped = {'i': index, 'action': step['action'], 'skipped': True}
+            step_results.append({**skipped, 'at_ms': step['at_ms']} if 'at_ms' in step else skipped)
         if steps:
             result['steps'] = step_results
+        if app_id:
+            try:
+                result['app_running'] = await driver.is_running(serial, app_id)
+            except OpError:
+                result['app_running'] = None
         if sample_ms:
             changes = merge_changes(frames['changes'], max(sample_ms, frames.get('capture_ms', 0)))
             frames.update(changes=changes[:40], units='pixels',
@@ -1530,12 +1751,26 @@ class Runner:
             if len(changes) > 40:
                 frames['changes_dropped'] = len(changes) - 40
             result['frames'] = frames
+        entries = []
         if tags:
-            result['logs'] = await self._scenario_logs(driver, serial, source, tags, wall,
-                                                       console if use_console else None, log_lines)
-        if recording is not None:
-            data = await asyncio.wait_for(recording, duration + 40)
-            result.update(mp4_base64=base64.b64encode(data).decode(), video_bytes=len(data))
+            result['logs'], entries = await self._scenario_logs(driver, serial, plan['source'], tags, wall,
+                                                                console if use_console else None, plan['log_lines'])
+        if plan['expect'] is not None:
+            failed = judge(plan['expect'], result, entries)
+            result.update(verdict='fail' if failed else 'pass', **({'failed': failed[:20]} if failed else {}))
+        budget = MAX_MEDIA_BYTES - sum(len(shot['png_base64']) * 3 // 4 for shot in shots)
+        if shots:
+            result['screenshots'] = shots
+        if recording is not None:  # a video that cannot be delivered never loses the rest of the result
+            try:
+                data = await asyncio.wait_for(recording, duration + 40)
+                if len(data) > budget:
+                    result['video_error'] = (f'recording is {len(data) // (1024 * 1024)} MB, over the media limit; '
+                                             'use a shorter duration_s or fewer screenshot steps')
+                else:
+                    result.update(mp4_base64=base64.b64encode(data).decode(), video_bytes=len(data))
+            except (OpError, asyncio.TimeoutError) as exc:
+                result['video_error'] = str(exc)[:300] or 'recording did not finish'
         return result
 
     def _console_ready(self, driver, serial, source):
@@ -1544,20 +1779,29 @@ class Runner:
         except OpError:
             return False
 
-    async def _run_steps(self, driver, serial, steps, start, results):
+    async def _run_steps(self, driver, serial, steps, start, window_end, results, shots, stop_on_fail):
         loop = asyncio.get_running_loop()
+        previous_end = loop.time()
         for index, step in enumerate(steps, 1):
-            await asyncio.sleep(max(0.0, start + step['at_ms'] / 1000 - loop.time()))
+            due = start + step['at_ms'] / 1000 if 'at_ms' in step else previous_end + step['after_ms'] / 1000
+            if due >= window_end:  # no time left in the window: this and later steps are reported as skipped
+                return
+            await asyncio.sleep(max(0.0, due - loop.time()))
             began = loop.time()
-            entry = {'i': index, 'action': step['action'], 'at_ms': step['at_ms'], 'ran_ms': int((began - start) * 1000)}
+            entry = {'i': index, 'action': step['action'], 'ran_ms': int((began - start) * 1000)}
+            if 'at_ms' in step:
+                entry['at_ms'] = step['at_ms']
             results.append(entry)
             try:
-                entry.update(await self._scenario_step(driver, serial, step), ok=True)
-            except OpError as exc:  # report and continue: later steps may still be meaningful
+                entry.update(await self._scenario_step(driver, serial, step, entry['ran_ms'], shots), ok=True)
+            except OpError as exc:
                 entry.update(ok=False, error=str(exc)[:300])
-            entry['took_ms'] = int((loop.time() - began) * 1000)
+            previous_end = loop.time()
+            entry['took_ms'] = int((previous_end - began) * 1000)
+            if not entry['ok'] and stop_on_fail:
+                return
 
-    async def _scenario_step(self, driver, serial, step):
+    async def _scenario_step(self, driver, serial, step, ran_ms, shots):
         action = step['action']
         if action == 'tap':
             await driver.tap(serial, step['x'], step['y'])
@@ -1574,6 +1818,28 @@ class Runner:
         if action == 'open_url':
             await driver.open_url(serial, step['url'])
             return {}
+        if action in ('set_text', 'clear_text'):
+            await self.set_text(driver, serial, step['args'], action == 'set_text')
+            return {}
+        if action == 'scroll_until_visible':
+            found = await self.scroll_until_visible(driver, serial, step['selector'], step['direction'],
+                                                    step['max_swipes'])
+            if not found['found']:
+                raise OpError(f"{step['selector'][0]!r} not found after {found['swipes']} swipes. "
+                              f"Visible: {found['visible'][:15]}")
+            return {'swipes': found['swipes']}
+        if action == 'screenshot':
+            data = await driver.screenshot(serial)
+            if sum(len(shot['png_base64']) for shot in shots) * 3 // 4 + len(data) > MAX_MEDIA_BYTES // 2:
+                raise OpError('Screenshot budget for this scenario is used up')
+            shots.append({'name': step['name'], 'at_ms': ran_ms, 'png_base64': base64.b64encode(data).decode()})
+            return {'name': step['name']}
+        if action == 'launch_app':
+            await driver.launch(serial, step['app_id'])
+            return {}
+        if action == 'stop_app':
+            await driver.stop(serial, step['app_id'])
+            return {}
         found = await self.wait_for(driver, serial, step['selector'], step['timeout_s'], step['gone'])
         if action == 'wait_for':
             if not found['found']:
@@ -1586,25 +1852,27 @@ class Runner:
         await driver.tap(serial, *element['center'])
         return {'tapped': element.get('text') or element.get('label') or element.get('id'), 'at': element['center']}
 
-    async def _sample_frames(self, driver, serial, start, until, interval_ms, out):
-        """Fills out['changes'] with {at_ms, changed (fraction of screen), box} as frames differ."""
+    async def _sample_frames(self, driver, serial, start, until, interval_ms, out, region=None, min_change=0.0):
+        """Fills out['changes'] with {at_ms, changed (fraction of the watched region), box} as frames differ."""
         loop = asyncio.get_running_loop()
         previous, failures, capture_s, tick = None, 0, 0.0, start
         while loop.time() < until:
             began = loop.time()
             try:
-                signature = await driver.frame(serial)
+                signature = await driver.frame(serial, region)
             except OpError as exc:
                 failures += 1
                 out['error'] = str(exc)[:200]
                 if failures >= 3:
                     return
+                await asyncio.sleep(0.05)
                 continue
             capture_s += loop.time() - began
             out['samples'] += 1
             out['capture_ms'] = int(capture_s * 1000 / out['samples'])
+            out['region'] = list(signature['area'])
             change = frame_change(previous, signature)
-            if change is not None and change[0] > 0:
+            if change is not None and change[0] > 0 and change[0] >= min_change:
                 out['changes'].append({'at_ms': int((began - start) * 1000), 'changed': change[0], 'box': change[1]})
             previous = signature
             tick = max(tick + interval_ms / 1000, loop.time())
@@ -1633,7 +1901,7 @@ class Runner:
                 if tag not in first and tag.lower() in line.lower():
                     first[tag] = at
         return {'counts': counts, 'first_ms': first, 't_ms': timing, 'total': len(kept),
-                'lines': [[at, line[:LOG_LINE_CHARS]] for at, line in kept[-limit:]]}
+                'lines': [[at, line[:LOG_LINE_CHARS]] for at, line in kept[-limit:]]}, kept
 
     # ── Compound ops: one round trip from the agent, polling here on the runner machine ──
 

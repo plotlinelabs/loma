@@ -37,26 +37,42 @@ until then.
 Every device call is a model turn, and every turn re-sends the whole conversation. The
 cheapest test is the one with the fewest calls, so:
 
-- **One test case = one `scenario` call.** For anything timed (launch, loaders, shimmer,
-  flicker, height collapse, a toast, a tap-then-check), do NOT chain record + tap + logs + frame
-  diffs by hand. Write a spec and run it once:
+- **One test case = one `scenario` call**, whatever is being tested (a login flow, a deep link,
+  a purchase, a loader, a crash check). Do NOT chain tap + wait + logs + screenshot calls by hand.
+  Write a spec for the case and run it once. The spec is generic: use the app id, element texts
+  and log tags of the app under test (the names below are placeholders, never copy them).
   ```yaml
-  app_id: com.example.demo   # stopped, then launched at t0
-  duration_s: 8                         # 1-20 s window
-  record: true                          # video for the user / the PR
-  sample_ms: 250                        # screen-change timeline, no images
-  log_tags: [LoaderTest, WidgetLoader]
-  steps:                                # at_ms from t0; run while recording
-    - {at_ms: 1500, action: tap_text, match: Grid}
-    - {at_ms: 4000, action: key, key: back}
+  app_id: com.example.app          # optional: stopped, then launched at t0
+  duration_s: 30                   # upper bound, 1-60 s
+  end_after_steps: true            # return as soon as the steps are done
+  stop_on_fail: true               # a failed step ends the case
+  log_tags: [MyTag, OtherTag]      # optional: log lines containing any of these
+  steps:                           # run in order; after_ms = pause after the previous step
+    - {action: tap_text, match: "Sign in"}
+    - {action: set_text, match: "Email", text: "a@b.co"}
+    - {action: wait_for, match: "Welcome", timeout_s: 15}
+    - {action: screenshot, name: home}       # evidence for the user / the PR
+  expect:                          # the runner decides pass/fail
+    app_running: true              # false at the end = the app died
+    logs: [{match: "login_ok", by_ms: 8000}, {match: "ERROR", max: 0}]
   ```
   `scenario --device-id ID --spec case.yaml` (isolated: `device.scenario` with the same fields).
-  It returns each step's `ran_ms` / `took_ms` / `ok`, `frames.changes` as periods
-  (`from_ms`, `to_ms`, `box` in pixels, `max_changed` = fraction of the screen) plus
-  `last_change_ms` (when the screen settled), and `logs.first_ms` / `counts` per tag with
-  `t_ms` per line. Assert on these numbers; open the video only if the numbers are ambiguous.
-  `video_offset_ms` is where t0 sits in the video. On Android, keep animations **on** for
-  loader / animation tests (`animations --on`).
+  Read `verdict` and `failed` first; they are usually all you need. Each step also reports
+  `ran_ms` / `took_ms` / `ok`, and `app_running` tells you whether the app survived.
+
+  | Need | Add to the spec |
+  |---|---|
+  | Steps: `tap`, `tap_text`, `wait_for` (`gone: true`), `set_text`, `clear_text`, `scroll_until_visible`, `swipe`, `type`, `key`, `open_url`, `screenshot`, `launch_app`, `stop_app` | `steps` (max 40) |
+  | Exact timing (animation, loader, toast, flicker, launch time) | `at_ms` on the steps instead of `after_ms`, no `end_after_steps`, and `sample_ms: 250` |
+  | When did the screen change, and where | `sample_ms` returns `frames.changes` (periods with `from_ms`, `to_ms`, `box`) and `last_change_ms`; no images reach you |
+  | Watch one area, or ignore a blinking cursor / clock | `sample_region: [x1, y1, x2, y2]`, `sample_min_change: 0.02` |
+  | "Settled within N ms" | `expect: {settled_by_ms: N}` |
+  | Log checks | `expect.logs` rules (`min`, `max`, `by_ms`, `after_ms`) and `expect.log_order: [A, B]` |
+  | Background / foreground, kill and relaunch | `key: home`, `stop_app`, `launch_app` steps |
+  | Video evidence | `record: true` (`video_offset_ms` is where t0 sits in the video) |
+
+  On Android, turn animations **on** (`animations --on`) for timing or animation cases, and off
+  for ordinary flows. If the video cannot be delivered you still get the rest (`video_error`).
 - **Logs: tags + cursor, never re-read.** `logs --tag A --tag B` keeps lines with any tag and
   returns `counts`. Every logs result has a `cursor`; pass `--since <cursor>` next time to get
   only newer lines instead of `--clear` + re-reading thousands of lines.
@@ -76,8 +92,9 @@ cheapest test is the one with the fewest calls, so:
 - **Animations off on Android emulators** (`animations --off`) at the start of a session:
   `ui-tree` stops stalling on "UI not idle" and taps don't land mid-transition. Turn them back
   on (`--on`) before testing an animation or loader, and at the end of the session.
-- **Time-sensitive states** (loaders, toasts, animations): use `scenario` (above). `burst` and
-  `record` still exist for a single capture, but cannot run steps while capturing.
+- **Time-sensitive states** (anything that appears or changes within a second or two): use
+  `scenario` with `at_ms` steps. `burst` and `record` still exist for a single capture, but
+  cannot run steps while capturing.
 - **Never build your own harness** (wrapper scripts, frame-diff scripts, contact sheets): if
   `scenario` cannot express a case, say what is missing in your report.
 - **Repeat work goes in a Maestro flow.** Once a path works, run it with `run-flow` in one call,
@@ -115,9 +132,9 @@ cheapest test is the one with the fewest calls, so:
    When the element has no useful text (icons, empty fields), use its ref from
    `ui-tree --compact`: `tap --ref e7`. Use `tap --x --y` only for things not in the tree
    (Flutter canvases, games, some WebViews), taking coordinates from a screenshot.
-   **Flutter:** only widgets with Semantics show up (often a merged label like "Tab1\nTab 1",
+   **Flutter:** only widgets with Semantics show up (often a merged label like "Title\nSubtitle",
    so `--exact` fails). In test harness apps you own, wrap tappable widgets in
-   `Semantics(identifier: 'tab_grid', child: ...)` and match `--by id` (the iOS
+   `Semantics(identifier: 'submit_button', child: ...)` and match `--by id` (the iOS
    accessibilityIdentifier; recent Flutter versions also expose it as the Android resource-id).
    If `ui-tree` does not show it, give the widget a unique `Semantics(label: ...)` instead.
    Do this before the first device run, not after the third failed `tap-text`.

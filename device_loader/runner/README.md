@@ -61,7 +61,7 @@ runner should stay up while you are logged out.
 | install (build fetched by Loma, checksum-verified), uninstall, launch, stop, reset_app | Run shell commands on your machine |
 | open_url (deep links), tap, swipe, type, key | Read or write files on your machine |
 | screenshot, ui_tree, logs (tag filters, since-cursor) | See physical devices (unless you opt in) |
-| scenario: the same inputs at fixed times while recording, sampling screen changes and reading logs | |
+| scenario: the same inputs as one test case (in order, or at fixed times), with optional video, screenshots, screen-change sampling, logs and pass/fail rules | |
 | run_flow (Maestro YAML, screened) | Run Maestro JavaScript (unless you opt in) |
 
 ## Policy (`~/.loma-device-runner/config.json`)

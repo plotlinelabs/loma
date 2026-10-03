@@ -128,7 +128,7 @@ class DeviceTools:
             return await self._deliver_screenshot(data) if what == 'screenshot' else data
         if tool == 'device.scenario':
             data = await service.call(owner, scope, device_id, 'scenario', args)
-            return await self._deliver_video(data)
+            return await self._deliver_flow_screenshots(await self._deliver_video(data))
         data = await service.call(owner, scope, device_id, 'run_flow', args)
         return await self._deliver_flow_screenshots(data)
 
