@@ -165,7 +165,7 @@ function KV({ label, children }: { label: string; children: React.ReactNode }) {
     return null;
   return (
     <div className="flex gap-1.5 text-[12px] leading-5">
-      <span className="text-muted-foreground shrink-0 w-[76px] truncate">
+      <span className="text-muted-foreground shrink-0 w-[104px] truncate">
         {label}
       </span>
       <span className="min-w-0 truncate">{children}</span>
@@ -222,7 +222,7 @@ function ModulesLine({ r }: { r: OnboardingRecord }) {
   return (
     <div className="mt-1.5 text-[12px] leading-5">
       <div className="flex items-center gap-1.5 tabular-nums">
-        <span className="text-muted-foreground w-[76px] shrink-0">Modules</span>
+        <span className="text-muted-foreground w-[104px] shrink-0">Modules</span>
         <span title="Paid / Integrated / In use">
           <span className={cn(!paid && "text-amber-700")}>
             {paid ? `${paid} paid` : "paid not set"}
