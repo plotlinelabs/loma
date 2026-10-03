@@ -8,12 +8,26 @@ human typed unless --force is given.
 
 Commands:
   onboarding.py --auth-token T --user-email E config
-  onboarding.py --auth-token T --user-email E list [--stage KEY] [--flag overdue|stale|blocked|late|pilot_ending]
+  onboarding.py --auth-token T --user-email E list [--stage KEY] [--flag overdue|stale|blocked|late|pilot_ending|idle|paid_gap|unpaid_enabled]
   onboarding.py --auth-token T --user-email E get (--record-id ID | --name NAME | --org-id ORG)
   onboarding.py --auth-token T --user-email E update (--record-id ID | --name NAME | --org-id ORG)
       --set key=value [--set key=value ...] [--source SRC] [--note TEXT] [--force]
   onboarding.py --auth-token T --user-email E create --name NAME [--account ACCOUNT]
       [--stage KEY] [--set key=value ...] [--source SRC]
+
+Field keys, stage keys, the module catalogue and rule thresholds come from
+`config` (edited by people on the Onboarding > Template page). Each field's
+`source` says who owns it; only fill fields whose source matches yours.
+
+Module layers: modules_paid is ticked by a person from the contract. Sync
+modules_enabled (product shouldEnable* switches), modules_integrated and
+modules_in_use using the module catalogue labels and signals.
+
+First campaign: set first_campaign_live (campaign start date),
+first_campaign_users and live_campaigns. It only counts once users reach
+rules.first_campaign_min_users. For upsell records (engagement_type
+"PN upsell" / "Module upsell") fill these for the upsold module only, not
+the app's first campaign.
 
 Field keys and stage keys come from `config`. Multiselect values are
 comma-separated; dates are YYYY-MM-DD; an empty value clears a field.
