@@ -1,14 +1,17 @@
 """Onboarding tracker routes.
 
-GET    /api/onboarding/config                  stages, field definitions, can_edit
+GET    /api/onboarding/config                  template (stages, fields, modules, rules) + permissions
+PUT    /api/onboarding/config                  save the template {stages, fields, modules, rules, ...}
+GET    /api/onboarding/config/history          template change history
 GET    /api/onboarding/records                 all records with computed columns
 POST   /api/onboarding/records                 create {name, account?, stage?, fields?}
 GET    /api/onboarding/records/{record_id}     record + activity + sibling apps
 PATCH  /api/onboarding/records/{record_id}     {changes: {...}, note?}
 
-Every signed-in user can view. Editing needs `edit_min_role` from the
-config (default: every signed-in user). Dashboard edits are logged with
-source `human`, so agent syncs never overwrite them.
+Every signed-in user can view. Editing records needs `edit_min_role` and
+editing the template needs `template_min_role` (both default to every
+signed-in user). Dashboard edits are logged with source `human`, so agent
+syncs never overwrite them.
 """
 
 import logging
@@ -34,16 +37,26 @@ def _ctx(request):
     return db, email
 
 
-def _can_edit(request, cfg: dict) -> bool:
-    need = ROLE_HIERARCHY.get(cfg.get("edit_min_role") or "chatter", 1)
+def _has_role(request, role: str | None) -> bool:
+    need = ROLE_HIERARCHY.get(role or "chatter", 1)
     return ROLE_HIERARCHY.get(get_system_role(request), 0) >= need
+
+
+def _can_edit(request, cfg: dict) -> bool:
+    return _has_role(request, cfg.get("edit_min_role"))
+
+
+def _can_edit_template(request, cfg: dict) -> bool:
+    return _has_role(request, cfg.get("template_min_role"))
+
+
+def _forbid(message: str):
+    raise web.HTTPForbidden(text=f'{{"error": "{message}"}}', content_type="application/json")
 
 
 def _require_edit(request, cfg: dict):
     if not _can_edit(request, cfg):
-        raise web.HTTPForbidden(
-            text='{"error": "You do not have edit access to Onboarding"}',
-            content_type="application/json")
+        _forbid("You do not have edit access to Onboarding")
 
 
 async def _json_body(request) -> dict:
@@ -56,10 +69,32 @@ async def _json_body(request) -> dict:
     return body
 
 
+def _config_response(request, cfg: dict, **extra) -> web.Response:
+    return web.json_response({**cfg, "can_edit": _can_edit(request, cfg),
+                              "can_edit_template": _can_edit_template(request, cfg), **extra})
+
+
 async def handle_config(request: web.Request) -> web.Response:
     db, _ = _ctx(request)
+    return _config_response(request, await svc.get_config(db))
+
+
+async def handle_save_config(request: web.Request) -> web.Response:
+    db, email = _ctx(request)
     cfg = await svc.get_config(db)
-    return web.json_response({**cfg, "can_edit": _can_edit(request, cfg)})
+    if not _can_edit_template(request, cfg):
+        _forbid("You do not have access to edit the Onboarding template")
+    body = await _json_body(request)
+    try:
+        saved, changes = await svc.save_template(db, body, actor=email)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return _config_response(request, saved, changes=changes)
+
+
+async def handle_config_history(request: web.Request) -> web.Response:
+    db, _ = _ctx(request)
+    return web.json_response({"history": await svc.list_template_history(db)})
 
 
 async def handle_list(request: web.Request) -> web.Response:
@@ -123,6 +158,8 @@ async def handle_update(request: web.Request) -> web.Response:
 
 def setup_onboarding_routes(app: web.Application):
     app.router.add_get("/api/onboarding/config", handle_config)
+    app.router.add_put("/api/onboarding/config", handle_save_config)
+    app.router.add_get("/api/onboarding/config/history", handle_config_history)
     app.router.add_get("/api/onboarding/records", handle_list)
     app.router.add_post("/api/onboarding/records", handle_create)
     app.router.add_get("/api/onboarding/records/{record_id}", handle_get)
