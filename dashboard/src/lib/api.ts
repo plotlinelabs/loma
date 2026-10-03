@@ -1,3 +1,5 @@
+import type { AgentSwitchEvent, AttributedMessage, BlockedCall } from "./agent-attribution";
+
 // Base path for preview deployments (e.g. /pr/27). Empty in production.
 export const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
@@ -64,11 +66,12 @@ export interface Conversation {
   /** Attachments staged with a board-task draft (cleared once started) */
   draft_files?: ChatFile[];
   tool_config?: ToolConfig | null;
-  messages?: Array<{
-    role: "user" | "assistant";
-    content: string;
-    timestamp?: string;
-  }>;
+  messages?: AttributedMessage[];
+  /** Agent changes part-way through the thread (picker, "Loma", Slack naming). */
+  agent_events?: AgentSwitchEvent[];
+  /** Tool/skill calls the active agent's scope blocked. */
+  blocked_calls?: BlockedCall[];
+  blocked_call_count?: number;
 }
 
 export interface Turn {
@@ -197,6 +200,10 @@ export async function fetchConversations(params: {
   search?: string;
   person?: string;
   topic?: string;
+  /** An agent_id, or "loma" for runs answered by the default agent only. */
+  agent?: string;
+  /** Only runs where the agent's scope blocked a tool or skill call. */
+  blocked?: boolean;
 } = {}): Promise<ConversationListResponse> {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set("page", String(params.page));
@@ -206,6 +213,8 @@ export async function fetchConversations(params: {
   if (params.search) searchParams.set("search", params.search);
   if (params.person) searchParams.set("person", params.person);
   if (params.topic) searchParams.set("topic", params.topic);
+  if (params.agent) searchParams.set("agent", params.agent);
+  if (params.blocked) searchParams.set("blocked", "1");
 
   const res = await fetch(`${API_BASE}/api/conversations?${searchParams}`);
   if (!res.ok) throw new Error(`Failed to fetch conversations: ${res.status}`);
@@ -1047,6 +1056,27 @@ export class ConversationBusyError extends Error {
   }
 }
 
+/** 202 from /api/chat: a deploy is in progress, so the server saved the
+ * message and will run it once the new version is up. */
+export class ConversationQueuedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationQueuedError";
+  }
+}
+
+/** /api/chat refused the request before any run started (e.g. 4xx/5xx).
+ * Nothing was saved, so the client should give the text back to the user. */
+export class ChatRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ChatRequestError";
+    this.status = status;
+  }
+}
+
 export async function* streamChat(
   message: string,
   conversationHistory?: ChatMessage[],
@@ -1055,7 +1085,9 @@ export async function* streamChat(
   userEmail?: string,
   signal?: AbortSignal,
   selectedModel?: string,
-  agentId?: string,
+  /** An id selects that agent; null explicitly selects the default agent (and
+   *  unpins a conversation's agent); undefined leaves the conversation as is. */
+  agentId?: string | null,
   toolConfig?: ToolConfig,
 ): AsyncGenerator<ChatEvent, void, unknown> {
   const body: Record<string, unknown> = { message };
@@ -1064,7 +1096,7 @@ export async function* streamChat(
   if (conversationId) body.conversation_id = conversationId;
   if (userEmail) body.user_email = userEmail;
   if (selectedModel) body.model = selectedModel;
-  if (agentId) body.agent_id = agentId;
+  if (agentId !== undefined) body.agent_id = agentId || null;
   if (toolConfig) body.tool_config = toolConfig;
 
   const res = await fetch(`${API_BASE}/api/chat`, {
@@ -1074,6 +1106,10 @@ export async function* streamChat(
     signal,
   });
 
+  if (res.status === 202) {
+    const body = await res.json().catch(() => ({}));
+    throw new ConversationQueuedError(body.message || "Queued. Loma is updating.");
+  }
   if (!res.ok) {
     // Surface the backend's message (e.g. "restarting for a deploy") instead
     // of a bare status code.
@@ -1081,7 +1117,7 @@ export async function* streamChat(
     if (res.status === 409 && body.busy) {
       throw new ConversationBusyError(body.error || "Agent is busy", !!body.injected, !!body.duplicate);
     }
-    throw new Error(body.error || `Chat request failed: ${res.status}`);
+    throw new ChatRequestError(body.error || `Chat request failed: ${res.status}`, res.status);
   }
   if (!res.body) throw new Error("No response body");
 
@@ -1208,6 +1244,10 @@ export interface TaskBoardSummary {
   /** Card board: columns hold cards, and tasks live inside cards. */
   card_mode?: boolean;
   members: TaskBoardMember[];
+  /** Board list only: the caller's tasks on this board that are waiting on them. */
+  needs_you?: number;
+  /** Shown in the nav. Owners set it on shared boards; Personal is per person. */
+  emoji?: string;
 }
 
 export type BoardFieldType =
@@ -1369,15 +1409,43 @@ export function deleteTaskCard(cardId: string): Promise<{ deleted: boolean; move
 
 export function updateTaskBoard(
   boardId: string,
-  updates: { name?: string; members?: TaskBoardMember[] },
+  updates: { name?: string; members?: TaskBoardMember[]; emoji?: string },
 ): Promise<{ board: TaskBoardSummary }> {
   return boardRequest(`/${encodeURIComponent(boardId)}`, {
     method: "PATCH", body: JSON.stringify(updates),
   }, "Failed to update board");
 }
 
+/** The caller's own board list settings: drag order and Personal's emoji. */
+export async function updateBoardPrefs(prefs: { order?: string[]; personal_emoji?: string }): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/tasks/boards-prefs`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to save board settings: ${res.status}`);
+  }
+}
+
 export function deleteTaskBoard(boardId: string): Promise<{ deleted: boolean; moved: number }> {
   return boardRequest(`/${encodeURIComponent(boardId)}`, { method: "DELETE" }, "Failed to delete board");
+}
+
+/** A task waiting on the caller, on any board they can open. */
+export interface NeedsYouTask {
+  conversation_id: string;
+  title: string | null;
+  status: string;
+  /** "personal" for the caller's own board. */
+  board_id: string;
+}
+
+export async function fetchNeedsYouTasks(): Promise<NeedsYouTask[]> {
+  const res = await fetch(`${API_BASE}/api/tasks/needs-you`);
+  if (!res.ok) throw new Error(`Failed to fetch waiting tasks: ${res.status}`);
+  return (await res.json()).tasks ?? [];
 }
 
 export async function fetchNeedsInputCount(): Promise<number> {
@@ -1497,6 +1565,80 @@ export async function saveBoardSettings(settings: {
     throw new Error(body.error || `Failed to save board settings: ${res.status}`);
   }
   return res.json();
+}
+
+// ---------- Card board views (saved filters) ----------
+
+export type CardFilterOp =
+  | "any_of" | "none_of"
+  | "eq" | "gt" | "lt" | "between"
+  | "before" | "after" | "on"
+  | "contains" | "not_contains"
+  | "checked" | "not_checked"
+  | "empty" | "not_empty";
+
+export type CardFilterValue = string | number | boolean | null | Array<string | number | null>;
+
+/** One condition on a card board: `field` is a board field id, or "__stage" / "__assignee". */
+export interface CardFilter {
+  id: string;
+  field: string;
+  op: CardFilterOp;
+  value: CardFilterValue;
+}
+
+export type CardFilterMatch = "all" | "any";
+
+/** The filter state a view saves. */
+export interface CardViewState {
+  filters: CardFilter[];
+  match: CardFilterMatch;
+  search: string;
+  assigned_to_me: boolean;
+}
+
+export interface BoardView extends CardViewState {
+  id: string;
+  board_id: string;
+  name: string;
+  owner: string;
+  /** Everyone on the board sees it (otherwise only its creator). */
+  shared: boolean;
+  mine: boolean;
+  can_edit: boolean;
+}
+
+async function viewRequest<T>(path: string, boardId: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/tasks/views${path}${boardQuery(boardId)}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `View request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function fetchBoardViews(boardId: string): Promise<{ views: BoardView[] }> {
+  return viewRequest("", boardId, "GET");
+}
+
+export function createBoardView(
+  boardId: string, view: CardViewState & { name: string; shared: boolean },
+): Promise<{ view: BoardView }> {
+  return viewRequest("", boardId, "POST", view);
+}
+
+export function updateBoardView(
+  boardId: string, viewId: string, updates: Partial<CardViewState & { name: string; shared: boolean }>,
+): Promise<{ view: BoardView }> {
+  return viewRequest(`/${encodeURIComponent(viewId)}`, boardId, "PATCH", updates);
+}
+
+export function deleteBoardView(boardId: string, viewId: string): Promise<{ deleted: boolean }> {
+  return viewRequest(`/${encodeURIComponent(viewId)}`, boardId, "DELETE");
 }
 
 // ---------- Dictation (speech-to-text) ----------

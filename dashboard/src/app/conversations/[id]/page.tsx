@@ -23,6 +23,9 @@ import MarkdownContent from "../../../components/MarkdownContent";
 import ClientTimestamp from "../../../components/ClientTimestamp";
 import { useConversationPolling } from "../../../hooks/useConversationPolling";
 import { useUser } from "../../../lib/UserContext";
+import { AgentAuthor, AgentSwitchDivider } from "../../../components/AgentAuthor";
+import { useAgentDirectory } from "../../../hooks/useAgentDirectory";
+import { blockedByToolUse, buildTimeline, runAgentLabel } from "../../../lib/agent-attribution";
 
 const sourceLabels: Record<string, string> = {
   slack_mention: "Slack Mention",
@@ -65,6 +68,7 @@ export default function ConversationDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const agents = useAgentDirectory();
 
   const handlePollingData = useCallback((conv: Conversation, newTurns: Turn[]) => {
     setConversation(conv);
@@ -114,7 +118,9 @@ export default function ConversationDetailPage() {
     );
   }
 
+  const blockedCalls = conversation.blocked_calls || [];
   const metaItems = [
+    { label: "Agent", value: runAgentLabel(conversation.metadata) },
     { label: "Duration", value: formatDuration(conversation.duration_ms ?? undefined) },
     { label: "Turns", value: String(conversation.total_turns) },
     { label: "Model", value: conversation.model || "-" },
@@ -228,6 +234,17 @@ export default function ConversationDetailPage() {
             {conversation.status}
           </Badge>
           <ConfidenceBadge confidence={conversation.confidence} />
+          {blockedCalls.length > 0 && (
+            <a href="#blocked-calls">
+              <Badge
+                variant="secondary"
+                className="text-[10px] bg-amber-50 text-amber-800"
+                title="The agent tried tools or skills outside its scope, and they were blocked"
+              >
+                {blockedCalls.length} blocked
+              </Badge>
+            </a>
+          )}
           {isPolling && (
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
@@ -310,36 +327,40 @@ export default function ConversationDetailPage() {
           <h2 className="text-xs font-medium text-muted-foreground">
             Messages ({conversation.messages.length})
           </h2>
-          {[...conversation.messages]
-            .sort((a, b) => {
+          {buildTimeline(
+            [...conversation.messages].sort((a, b) => {
               if (!a.timestamp || !b.timestamp) return 0;
               return a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0;
-            })
-            .map((msg, i) => (
+            }),
+            conversation.agent_events,
+          ).map((item, i) => item.kind === "switch" ? (
+            <AgentSwitchDivider key={`switch-${i}`} event={item.event} />
+          ) : (
             <div
               key={i}
               className={cn(
                 "rounded-lg px-3 py-2",
-                msg.role === "user"
+                item.message.role === "user"
                   ? "bg-blue-50/60"
                   : "bg-card border border-border"
               )}
             >
               <div className="flex items-center gap-2 mb-1">
-                <span className={cn(
-                  "text-[10px] font-semibold uppercase",
-                  msg.role === "user" ? "text-blue-600" : "text-muted-foreground"
-                )}>
-                  {msg.role}
-                </span>
-                {msg.timestamp && (
-                  <ClientTimestamp iso={msg.timestamp} variant="time" className="text-[10px] text-muted-foreground" />
+                {item.message.role === "assistant" ? (
+                  <AgentAuthor message={item.message} agents={agents} />
+                ) : (
+                  <span className="text-[10px] font-semibold uppercase text-blue-600">
+                    user
+                  </span>
+                )}
+                {item.message.timestamp && (
+                  <ClientTimestamp iso={item.message.timestamp} variant="time" className="text-[10px] text-muted-foreground" />
                 )}
               </div>
-              {msg.role === "assistant" ? (
-                <MarkdownContent content={msg.content} className="text-[13px] text-foreground/80 leading-relaxed" />
+              {item.message.role === "assistant" ? (
+                <MarkdownContent content={item.message.content} className="text-[13px] text-foreground/80 leading-relaxed" />
               ) : (
-                <div className="text-[13px] text-foreground/80 whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                <div className="text-[13px] text-foreground/80 whitespace-pre-wrap leading-relaxed">{item.message.content}</div>
               )}
             </div>
           ))}
@@ -361,13 +382,42 @@ export default function ConversationDetailPage() {
         </>
       )}
 
+      {/* Calls the agent's scope blocked */}
+      {blockedCalls.length > 0 && (
+        <div id="blocked-calls" className="space-y-1.5">
+          <h2 className="text-xs font-medium text-muted-foreground">
+            Blocked calls ({blockedCalls.length})
+          </h2>
+          <div className="bg-amber-50/50 border border-amber-200/70 rounded-lg divide-y divide-amber-200/60">
+            {blockedCalls.map((call, i) => (
+              <div key={i} className="px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-900">
+                    {call.kind === "skill" ? "Skill" : "Tool"}: {call.target}
+                  </Badge>
+                  <span className="text-muted-foreground">
+                    {call.agent_name || "Agent"} · Turn {call.turn_number} · <code className="font-mono">{call.tool_name}</code>
+                  </span>
+                  {call.timestamp && (
+                    <ClientTimestamp iso={call.timestamp} variant="time" className="text-[10px] text-muted-foreground" />
+                  )}
+                </div>
+                {call.reason && (
+                  <p className="mt-1 text-muted-foreground leading-relaxed">{call.reason.split(" Do not retry")[0]}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Agent Turns — collapsed by default for long conversations */}
       {turns.length > 0 && (
         <div>
           <h2 className="text-xs font-medium text-muted-foreground mb-1">
             Agent Turns ({turns.length})
           </h2>
-          <TurnViewer turns={turns} />
+          <TurnViewer turns={turns} blocked={blockedByToolUse(blockedCalls)} />
         </div>
       )}
     </div>

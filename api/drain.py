@@ -6,6 +6,10 @@ drain on, polls the running count until it reaches zero (bounded), and only
 then recreates the containers. Without drain, `docker compose up` SIGTERMs
 the backend mid-run and every active task/chat dies silently.
 
+New work that arrives while draining is not refused: chat, quick-add tasks
+and Slack save it to `pending_runs` and the next server starts it (see
+api/pending_runs.py). Scheduled flows use `deferred_run_at` the same way.
+
 State is in-process (a restart clears it, which is exactly what we want).
 
 Routes live under the public `/health` prefix so the deploy script can call
@@ -30,7 +34,8 @@ logger = logging.getLogger(__name__)
 # must never block a deploy forever.
 RUNNING_HEARTBEAT_WINDOW_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 2
 
-# What callers show the user when a new run is refused during drain.
+# Shown when a run can't be queued during drain (no database, or the
+# attachments are too large to store).
 DRAIN_MESSAGE = "Loma is restarting for a deploy. Please try again in a minute."
 
 _state: dict = {"draining": False, "since": None, "reason": ""}
@@ -94,7 +99,7 @@ async def handle_get_drain(request: web.Request) -> web.Response:
 
 
 async def handle_set_drain(request: web.Request) -> web.Response:
-    """POST /health/drain — start refusing new agent runs (loopback only)."""
+    """POST /health/drain — stop starting new agent runs; queue them (loopback only)."""
     if not is_loopback(request):
         return web.json_response({"error": "Forbidden"}, status=403)
     reason = ""
@@ -113,6 +118,9 @@ async def handle_clear_drain(request: web.Request) -> web.Response:
     if not is_loopback(request):
         return web.json_response({"error": "Forbidden"}, status=403)
     set_draining(False)
+    # No restart is coming: start whatever was queued during the drain now.
+    from api.pending_runs import schedule_dispatch
+    schedule_dispatch()
     return await handle_get_drain(request)
 
 

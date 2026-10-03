@@ -10,6 +10,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useAgentIdentities } from "@/hooks/useAgentIdentities";
 import { AgentPicker } from "@/components/composer/AgentPicker";
+import { AgentScope } from "@/components/composer/AgentScope";
+import { AGENT_TOOL_CONFIG } from "@/hooks/agent-scope";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
@@ -17,7 +19,7 @@ import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { useFileDrop } from "./composer/useFileDrop";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
-import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError } from "../lib/api";
+import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError, ConversationQueuedError, ChatRequestError } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
@@ -26,6 +28,10 @@ import PetCompanion, { PetRunway } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import {
+  DEFAULT_AGENT_NAME, agentForTime, type AttributedMessage,
+} from "@/lib/agent-attribution";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -45,6 +51,15 @@ import {
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
+/** Conversation status while its message waits for a deploy to finish. */
+const DEPLOY_QUEUED_STATUS = "queued";
+
+/** Tag the newest user message as waiting for a deploy (server-side queue). */
+function markLatestUserDeployQueued(items: ChatItem[], on: boolean): ChatItem[] {
+  const idx = items.map((item) => item.role).lastIndexOf("user");
+  if (idx < 0 || !!items[idx].deployQueued === on) return items;
+  return items.map((item, i) => (i === idx ? { ...item, deployQueued: on } : item));
+}
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]);
 
@@ -102,6 +117,12 @@ export interface ChatItem {
   selectedLabels?: string[];
   /** Artifact IDs referenced by this message (for inline artifact cards) */
   artifactIds?: string[];
+  /** Assistant items: the agent that wrote it (Loma when unset). */
+  agentName?: string;
+  agentId?: string | null;
+  /** User items sent from this tab: the agent that will answer. */
+  replyAgentName?: string;
+  replyAgentId?: string | null;
   /** File attachments delivered by the agent */
   fileAttachments?: FileAttachment[];
   /** Client-observed response duration for this assistant message */
@@ -109,6 +130,8 @@ export interface ChatItem {
   elapsedSeconds?: number;
   /** True when this user message is queued to be sent after the current stream finishes */
   queued?: boolean;
+  /** True when the server saved this message during a deploy and will run it once Loma is back */
+  deployQueued?: boolean;
   /** Who sent this user message (shared-board tasks: the run used their accounts). */
   sender?: string;
 }
@@ -264,7 +287,10 @@ function extractClarifyBlock(text: string): {
  * Each turn may contain tool_calls, tool_results, and text_blocks.
  */
 export function rebuildItemsFromConversation(
-  messages: Array<{ role: string; content: string; timestamp?: string; sender?: string }> | undefined,
+  messages: Array<{
+    role: string; content: string; timestamp?: string; sender?: string;
+    agent_id?: string | null; agent_name?: string;
+  }> | undefined,
   prompt: string,
   finalResponse: string,
   turns: Turn[],
@@ -278,6 +304,9 @@ export function rebuildItemsFromConversation(
           role: m.role as "user" | "assistant",
           content: m.content,
           ...(m.role === "user" && m.sender ? { sender: m.sender } : {}),
+          ...(m.role === "assistant"
+            ? { agentId: m.agent_id ?? null, agentName: m.agent_name || DEFAULT_AGENT_NAME }
+            : {}),
         })),
         artifacts: [],
       };
@@ -350,7 +379,10 @@ export function rebuildItemsFromConversation(
     const textBlocks = turn.text_blocks || [];
     const text = textBlocks.map((b) => b.text).join("\n\n").trim();
     if (text) {
-      items.push({ role: "assistant", content: text });
+      // Unknown while the run is still going: the panel then uses the agent
+      // the message was sent to.
+      const author = agentForTime(messages as AttributedMessage[] | undefined, turn.timestamp);
+      items.push({ role: "assistant", content: text, ...(author || {}) });
     }
   }
 
@@ -654,10 +686,37 @@ export default function ChatPanel({
   } = useAgentModels(initialModel);
   const {
     agents: agentIdentities,
+    selectedAgent,
     selectedAgentId,
     selectAgent,
     loadState: agentLoadState,
   } = useAgentIdentities(initialAgentId);
+  const agentsById = useMemo(
+    () => Object.fromEntries(agentIdentities.map((a) => [a.agent_id, a])),
+    [agentIdentities],
+  );
+  // Name replies only once an agent is involved, so plain Loma chats look as before.
+  const threadHasAgents = useMemo(
+    () => !!selectedAgentId || items.some((it) => !!it.agentId || !!it.replyAgentId),
+    [items, selectedAgentId],
+  );
+  /** Who wrote assistant item i: its saved agent, else the agent it was sent to. */
+  const replyAuthor = (index: number): { agentId: string | null; agentName: string } => {
+    const item = items[index];
+    if (item?.agentName) return { agentId: item.agentId ?? null, agentName: item.agentName };
+    for (let j = index - 1; j >= 0; j--) {
+      const prev = items[j];
+      if (prev.role === "user" && prev.replyAgentName) {
+        return { agentId: prev.replyAgentId ?? null, agentName: prev.replyAgentName };
+      }
+      if (prev.role === "assistant" && prev.agentName) {
+        return { agentId: prev.agentId ?? null, agentName: prev.agentName };
+      }
+    }
+    return selectedAgent
+      ? { agentId: selectedAgent.agent_id, agentName: selectedAgent.name }
+      : { agentId: null, agentName: DEFAULT_AGENT_NAME };
+  };
   const {
     tools: availableTools,
     skills: availableSkills,
@@ -880,13 +939,15 @@ export default function ChatPanel({
           data.conversation.final_response,
           data.turns,
         );
+        const waitingForDeploy = data.conversation.status === DEPLOY_QUEUED_STATUS;
         setItems((prev) => {
           const queued = prev.filter((item) => item.queued);
-          return queued.length > 0 ? [...rebuilt, ...queued] : rebuilt;
+          const base = waitingForDeploy ? markLatestUserDeployQueued(rebuilt, true) : rebuilt;
+          return queued.length > 0 ? [...base, ...queued] : base;
         });
         scrollToBottom();
 
-        if (data.conversation.status !== "running") {
+        if (data.conversation.status !== "running" && !waitingForDeploy) {
           setIsRecovering(false);
           setIsStreaming(false);
           setItems((prev) => withTerminalStatus(prev, data.conversation));
@@ -916,7 +977,7 @@ export default function ChatPanel({
 
   // If page loaded with a running conversation (refresh), enter recovery mode
   useEffect(() => {
-    if (initialStatus === "running" && initialConversationId) {
+    if ((initialStatus === "running" || initialStatus === DEPLOY_QUEUED_STATUS) && initialConversationId) {
       setIsRecovering(true);
       setIsStreaming(true);
     }
@@ -962,7 +1023,12 @@ export default function ChatPanel({
       // Show message immediately
       setItems((prev) => [
         ...prev,
-        { role: "user", content: displayText, fileNames, files: filesToQueue, queued: !conversationId || hasFiles },
+        {
+          role: "user", content: displayText, fileNames, files: filesToQueue,
+          queued: !conversationId || hasFiles,
+          replyAgentName: selectedAgent?.name || DEFAULT_AGENT_NAME,
+          replyAgentId: selectedAgent?.agent_id ?? null,
+        },
       ]);
       if (!isOverride) {
         setInput("");
@@ -1025,7 +1091,11 @@ export default function ChatPanel({
       setPendingFiles([]);
     }
     if (!fromQueue) {
-      setItems((prev) => [...prev, { role: "user", content: displayMessage, fileNames, files: filesToSend }]);
+      setItems((prev) => [...prev, {
+        role: "user", content: displayMessage, fileNames, files: filesToSend,
+        replyAgentName: selectedAgent?.name || DEFAULT_AGENT_NAME,
+        replyAgentId: selectedAgent?.agent_id ?? null,
+      }]);
       // User sent a message — always snap down and resume following the stream.
       isAtBottomRef.current = true;
       scrollToBottom({ force: true });
@@ -1056,8 +1126,10 @@ export default function ChatPanel({
         session?.user?.email ?? undefined,
         abortController.signal,
         selectedModel || undefined,
-        selectedAgentId || undefined,
-        toolConfig,
+        // Until the agent list loads, "no selection" is not yet a choice of the
+        // default agent, so it must not unpin the conversation's agent.
+        selectedAgentId || (agentLoadState === "ready" ? null : undefined),
+        selectedAgentId ? AGENT_TOOL_CONFIG : toolConfig,
       )) {
         if (event.type === "account_info") {
           setAccountInfo(event);
@@ -1212,6 +1284,26 @@ export default function ChatPanel({
           ...prev,
           { role: "assistant", content: STOPPED_BY_USER_MESSAGE },
         ]);
+      } else if (error instanceof ConversationQueuedError && activeConversationId) {
+        // A deploy is in progress. The server saved the message and will run it
+        // once the new version is up; follow the conversation until then.
+        setItems((prev) => markLatestUserDeployQueued(prev, true));
+        enteredRecovery = true;
+        setIsRecovering(true);
+      } else if (error instanceof ChatRequestError) {
+        // Refused before anything was saved: give the text and files back so
+        // nothing typed is lost, and drop the optimistic bubble.
+        if (!fromQueue) {
+          setItems((prev) => {
+            const idx = prev.map((item) => item.role).lastIndexOf("user");
+            return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev;
+          });
+        }
+        if (!isOverride) {
+          setInput((current) => (current.trim() ? current : displayText));
+          if (filesToSend?.length) setPendingFiles((current) => (current.length ? current : filesToSend));
+        }
+        setItems((prev) => [...prev, { role: "assistant", content: `Error: ${error.message}` }]);
       } else if (error instanceof ConversationBusyError && activeConversationId) {
         // A run is already going (another tab, a retry, a race). The server
         // injected it, dropped a duplicate, or we queue it for when the run
@@ -1323,7 +1415,7 @@ export default function ChatPanel({
 
       handleSend(answer);
     },
-    [items, conversationId, session, isStreaming, selectedModel, selectedAgentId],
+    [items, conversationId, session, isStreaming, selectedModel, selectedAgentId, agentLoadState],
   );
 
   const getQueueIndex = (itemIndex: number): number => {
@@ -1396,6 +1488,14 @@ export default function ChatPanel({
 
   const isEmptyState = items.length === 0 && !isStreaming;
 
+  // A selected agent brings its own tools and skills, so the pickers give way
+  // to a read-only summary of that scope.
+  const scopePicker = selectedAgent ? (
+    <AgentScope agent={selectedAgent} skills={availableSkills} onOpen={loadToolsCatalog} onUseDefault={() => selectAgent(null)} disabled={isStreaming} />
+  ) : (
+    <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+  );
+
   // Shared by the empty-state and in-conversation composers.
   const composerPickers = (
     <>
@@ -1409,9 +1509,9 @@ export default function ChatPanel({
       {isMobile ? (
         <ComposerSettings>
           <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-          <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+          {scopePicker}
         </ComposerSettings>
-      ) : <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />}
+      ) : scopePicker}
     </>
   );
 
@@ -1422,7 +1522,7 @@ export default function ChatPanel({
     <ComposerSettings trigger="plus" title="Chat options" description="Attach files, or choose the model, agent, tools and skills." onAttach={() => fileInputRef.current?.click()}>
       <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
       <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
-      <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+      {scopePicker}
     </ComposerSettings>
   );
 
@@ -1644,7 +1744,7 @@ export default function ChatPanel({
                       )}
                       <div className={cn(
                         "chat-text rounded-xl px-3.5 py-2.5 max-w-[88%] md:max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
-                        item.queued
+                        item.queued || item.deployQueued
                           ? "bg-card/60 border border-dashed border-border"
                           : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
                       )}>
@@ -1694,6 +1794,12 @@ export default function ChatPanel({
                             <span>Queued — will send when agent finishes</span>
                           </div>
                         )}
+                        {item.deployQueued && !item.queued && (
+                          <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground">
+                            <RiTimeLine size={12} />
+                            <span>Queued, Loma is updating. This will start as soon as it&apos;s back.</span>
+                          </div>
+                        )}
                         {item.fileNames && item.fileNames.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap gap-1.5">
                             {item.fileNames.map((name, fi) => {
@@ -1726,10 +1832,21 @@ export default function ChatPanel({
                 }
 
                 // Assistant message — editorial style, no bubble
+                const author = replyAuthor(i);
+                const authorAgent = author.agentId ? agentsById[author.agentId] : undefined;
                 return (
                   <div key={i} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
-                    <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
+                    {authorAgent ? (
+                      <AgentAvatar avatar={authorAgent.avatar} size={24} className="rounded-full shrink-0" />
+                    ) : (
+                      <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
+                    )}
                     <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
+                      {threadHasAgents && (
+                        <div className="not-prose mb-1 text-[11px] font-semibold text-muted-foreground" data-testid="reply-agent">
+                          {author.agentName}
+                        </div>
+                      )}
                       {item.content ? (
                         <MarkdownContent content={item.content} />
                       ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (
@@ -1789,7 +1906,9 @@ export default function ChatPanel({
                   <div className="text-[13px]">
                     <span className="flex items-center gap-2 text-muted-foreground">
                       <RiLoader4Line size={14} className="animate-spin text-brand-500" />
-                      Still working on your request...
+                      {items.some((item) => item.deployQueued)
+                        ? "Waiting for Loma to finish updating..."
+                        : "Still working on your request..."}
                     </span>
                   </div>
                 </div>

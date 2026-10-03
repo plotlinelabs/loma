@@ -133,6 +133,9 @@ async def init_observability():
     # Card boards: cards on a board, and the tasks inside a card.
     await _db.task_cards.create_index("card_id", unique=True)
     await _db.task_cards.create_index("board_id")
+    # Saved card filters ("views") on a card board.
+    await _db.task_board_views.create_index("view_id", unique=True)
+    await _db.task_board_views.create_index([("board_id", 1), ("owner", 1)])
     await _db.conversations.create_index("task_card_id", sparse=True)
 
     # Web push subscriptions (tasks board attention) — one doc per browser
@@ -158,6 +161,8 @@ async def init_observability():
     await _db.agent_identities.create_index("created_by")
     await _db.agent_identities.create_index("visibility")
     await _db.conversations.create_index("metadata.agent_id")
+    await _db.agent_identity_versions.create_index([("agent_id", 1), ("version", -1)], unique=True)
+    await _db.conversations.create_index("blocked_call_count", sparse=True)
 
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)

@@ -6,18 +6,23 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { Turn } from "../lib/api";
+import type { BlockedCall } from "../lib/agent-attribution";
 import ClientTimestamp from "./ClientTimestamp";
 
 interface TurnViewerProps {
   turns: Turn[];
+  /** Calls the agent's scope blocked, keyed by tool_use_id. */
+  blocked?: Record<string, BlockedCall>;
 }
 
 function ToolCallCard({
   call,
   result,
+  blocked,
 }: {
   call: Turn["tool_calls"] extends (infer T)[] | undefined ? T : never;
   result?: Turn["tool_results"] extends (infer T)[] | undefined ? T : never;
+  blocked?: BlockedCall;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -32,7 +37,15 @@ function ToolCallCard({
           <span className="text-brand-700 text-xs font-mono font-medium">
             {call.tool_name}
           </span>
-          {result?.is_error && (
+          {blocked ? (
+            <Badge
+              variant="secondary"
+              className="text-xs bg-amber-100 text-amber-900"
+              title={`Outside ${blocked.agent_name || "the agent"}'s scope`}
+            >
+              Blocked
+            </Badge>
+          ) : result?.is_error && (
             <Badge variant="destructive" className="text-xs">Error</Badge>
           )}
         </div>
@@ -75,7 +88,7 @@ function ToolCallCard({
   );
 }
 
-export default function TurnViewer({ turns }: TurnViewerProps) {
+export default function TurnViewer({ turns, blocked = {} }: TurnViewerProps) {
   if (!turns.length) {
     return (
       <p className="text-muted-foreground text-[13px] italic">No turns recorded.</p>
@@ -126,6 +139,7 @@ export default function TurnViewer({ turns }: TurnViewerProps) {
                     key={i}
                     call={call}
                     result={resultMap.get(call.tool_use_id)}
+                    blocked={blocked[call.tool_use_id]}
                   />
                 ))}
               </div>

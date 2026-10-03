@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useUser } from "@/lib/UserContext";
 import { fetchSkills, basePath, type Skill } from "@/lib/api";
@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -47,7 +48,7 @@ const MOTIFS: AgentMotif[] = ["round", "square", "halo", "antenna"];
 
 interface EditorState {
   agent: AgentIdentity | null; // null = creating
-  input: Required<Pick<AgentIdentityInput, "name" | "description" | "identity_prompt" | "skills" | "tools" | "visibility" | "avatar">>;
+  input: Required<Pick<AgentIdentityInput, "name" | "description" | "identity_prompt" | "skills" | "tools" | "visibility" | "avatar" | "enforce_scope">>;
 }
 
 function emptyEditor(): EditorState {
@@ -61,6 +62,7 @@ function emptyEditor(): EditorState {
       tools: [],
       visibility: "private",
       avatar: randomAvatarSpec(),
+      enforce_scope: true,
     },
   };
 }
@@ -76,6 +78,7 @@ function editorFor(agent: AgentIdentity): EditorState {
       tools: agent.tools || [],
       visibility: agent.visibility,
       avatar: agent.avatar || randomAvatarSpec(),
+      enforce_scope: agent.enforce_scope !== false,
     },
   };
 }
@@ -162,6 +165,17 @@ export default function AgentsPage() {
     setEditorError(null);
     setConfirmingDelete(false);
   };
+
+  // /agents?edit=<id> (the chat composer's "Edit agent" link) opens that
+  // agent's editor once, for people who can edit it.
+  const editParamHandled = useRef(false);
+  useEffect(() => {
+    if (editParamHandled.current || !agents.length || !user) return;
+    editParamHandled.current = true;
+    const editId = new URL(window.location.href).searchParams.get("edit");
+    const agent = editId ? agents.find((a) => a.agent_id === editId) : undefined;
+    if (agent && canManage(agent)) setEditor(editorFor(agent));
+  }, [agents, user, canManage]);
 
   const updateInput = (patch: Partial<EditorState["input"]>) => {
     setEditor((prev) => (prev ? { ...prev, input: { ...prev.input, ...patch } } : prev));
@@ -280,6 +294,14 @@ export default function AgentsPage() {
                   </span>
                   {(agent.conversation_count ?? 0) > 0 && (
                     <span className="shrink-0">{agent.conversation_count} chats</span>
+                  )}
+                  <span className="shrink-0 font-mono" title="Config version: bumps when instructions, skills, tools or blocking change">
+                    v{agent.config_version || 1}
+                  </span>
+                  {agent.enforce_scope === false && (
+                    <span className="shrink-0 text-amber-700" title="Tool and skill lists are guidance only for this agent">
+                      Not blocking
+                    </span>
                   )}
                   <span className="ml-auto flex items-center gap-0.5">
                     <Button
@@ -402,6 +424,24 @@ export default function AgentsPage() {
                 onChange={(tools) => updateInput({ tools })}
                 error={toolsError}
               />
+
+              <div className="grid gap-1.5">
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="agent-enforce-scope">Block tools and skills outside these lists</Label>
+                  <Switch
+                    id="agent-enforce-scope"
+                    checked={editor.input.enforce_scope}
+                    disabled={!hasRole("admin") && editor.input.enforce_scope}
+                    onCheckedChange={(enforce_scope) => updateInput({ enforce_scope })}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {editor.input.enforce_scope
+                    ? "On: anything not selected above is unavailable to this agent, and blocked attempts are shown in the run. Empty lists mean all tools or all skills."
+                    : "Off: the lists are only guidance in the agent's instructions. Nothing is blocked."}
+                  {editor.input.enforce_scope && !hasRole("admin") && " Only admins can turn this off."}
+                </p>
+              </div>
 
               <div className="grid gap-1.5">
                 <Label>Sharing</Label>

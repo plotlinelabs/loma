@@ -32,7 +32,7 @@ import {
   type TaskCardItem,
   type TasksBoardResponse,
 } from "@/lib/api";
-import { isDraft, isParked } from "./taskDisplay";
+import { DEPLOY_QUEUED_LABEL, isDraft, isParked } from "./taskDisplay";
 import { AssigneeBadge } from "./boardExtras";
 import { AddExistingTaskDialog } from "./MoveTaskDialogs";
 import { rankBetween } from "./transitions";
@@ -142,6 +142,7 @@ function FieldInput({ field, value, disabled, onSave }: {
 }
 
 function taskLabel(task: Task): { text: string; className: string } | null {
+  if (task.status === "queued") return { text: DEPLOY_QUEUED_LABEL, className: "text-muted-foreground" };
   if (task.column === "working") return { text: "Loma running", className: "text-blue-600" };
   if (task.column === "needs_input") return { text: "Needs input", className: "text-amber-600" };
   if (isParked(task)) return { text: "Paused", className: "text-muted-foreground" };

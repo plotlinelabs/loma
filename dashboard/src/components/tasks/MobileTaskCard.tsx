@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { BoardLane, Task, TaskPriority } from "@/lib/api";
-import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
+import { DEPLOY_QUEUED_LABEL, deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
@@ -80,6 +80,7 @@ export function MobileTaskCard({
           <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
             <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
+            {task.status === "queued" && <span>{DEPLOY_QUEUED_LABEL}</span>}
           </div>
           <div className="mt-1 flex items-center gap-1 overflow-hidden">
             {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}

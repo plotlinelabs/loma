@@ -101,10 +101,11 @@ async def execute_flow(flow_id: str):
         flow.get("created_by", {}).get("source", "")
         or flow.get("created_by", {}).get("user_name", "")
     )
+    agent = None
     try:
         effective_user_email = await require_execution_account(db, flow)
         if flow.get("agent_id"):
-            await validate_agent_work(db, flow)
+            agent = await validate_agent_work(db, flow)
     except ValueError as exc:
         await db.flows.update_one({"flow_id": flow_id}, {"$set": {"last_error": str(exc)}})
         logger.warning("[SCHEDULER] Flow %s: %s", flow_id, exc)
@@ -121,9 +122,18 @@ async def execute_flow(flow_id: str):
         "visibility": visibility,
         "run_as": effective_user_email,
     }
+    run_tool_config = None
     if flow.get("agent_id"):
         metadata["agent_id"] = flow["agent_id"]
         metadata["agent_snapshot"] = flow["agent_snapshot"]
+        if agent:
+            from agent.agent_scope import build_agent_scope
+            metadata["agent_name"] = agent.get("name")
+            metadata["agent_config_version"] = int(agent.get("config_version") or 1)
+            run_tool_config = {
+                "enabled_tools": None, "enabled_skills": None,
+                "agent_scope": await build_agent_scope(db, agent),
+            }
     if visibility == "private" and creator_email:
         metadata["user_name"] = creator_email
 
@@ -147,6 +157,7 @@ async def execute_flow(flow_id: str):
             selected_model=selected_model,
             raise_on_opencode_error=True,
             user_email=effective_user_email,
+            tool_config=run_tool_config,
         ):
             if isinstance(chunk, str):
                 last_text = chunk

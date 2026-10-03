@@ -28,6 +28,10 @@ export interface AgentIdentity {
   created_at?: string;
   updated_at?: string;
   conversation_count?: number;
+  /** Block tool/skill calls outside this agent's lists. Default on; admins can turn it off. */
+  enforce_scope?: boolean;
+  /** Bumped whenever instructions, skills, tools or blocking change. */
+  config_version?: number;
 }
 
 export interface AgentIdentityInput {
@@ -40,6 +44,7 @@ export interface AgentIdentityInput {
   default_model?: string | null;
   avatar?: AgentAvatarSpec;
   status?: "active" | "disabled";
+  enforce_scope?: boolean;
 }
 
 async function parseError(res: Response, fallback: string): Promise<never> {

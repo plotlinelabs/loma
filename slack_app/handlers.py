@@ -11,11 +11,19 @@ from api.dashboard_ingestion import ingest_dashboard_chat
 from api.drain import DRAIN_MESSAGE, is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
+from agent.agent_scope import build_agent_scope
+from observability.agent_events import record_agent_switch
+from api.agent_identity_routes import (
+    build_agent_context_block, list_agents_for_chat, resolve_agent_for_chat,
+)
+from slack_app.agent_mentions import (
+    find_agent_reference, format_agent_list, is_list_agents_command,
+)
 from slack_app.brevity import maybe_compress_slack_reply
 from slack_app.channels import get_channel_config
 from slack_app.utils import (
     strip_bot_mention, truncate_for_slack, get_thread_context,
-    get_dm_context, download_slack_files, BOT_MENTION_RE,
+    get_dm_context, download_slack_files, BOT_MENTION_RE, message_text,
 )
 from draft_with_loma.models import create_draft, get_draft, update_draft, delete_draft
 from draft_with_loma.blocks import (
@@ -32,6 +40,26 @@ THINKING_EMOJI = "hourglass_flowing_sand"
 TASK_CAPTURE_EMOJI = "loma-task"
 
 CONVERSATION_TRACKER_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3001").rstrip("/") + "/conversations"
+
+
+def agent_post_identity(observer) -> dict:
+    """How a reply shows which agent wrote it in Slack.
+
+    With SLACK_POST_AS_AGENT=1 (needs the bot's `chat:write.customize` scope)
+    the reply is posted under the agent's name. Otherwise a one-line footer
+    names the agent. Plain Loma replies are unchanged.
+    """
+    md = getattr(observer, "metadata", None) if observer else None
+    if not isinstance(md, dict) or not md.get("agent_id"):
+        return {}
+    name = md.get("agent_name") or "Agent"
+    if os.environ.get("SLACK_POST_AS_AGENT", "").lower() in ("1", "true", "yes"):
+        kwargs = {"username": f"{name} (Loma)"}
+        icon = os.environ.get("SLACK_AGENT_ICON_URL")
+        if icon:
+            kwargs["icon_url"] = icon
+        return kwargs
+    return {"footer": True, "agent_name": name}
 
 
 async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, prompt="", observer=None):
@@ -87,10 +115,15 @@ async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, p
         db=observer.db if observer else None,
         conversation_id=observer.conversation_id if observer else None))
     logger.info("[SLACK] Posting final response (%d chars)", len(final_text))
+    post_kwargs = agent_post_identity(observer)
+    if post_kwargs.pop("footer", None):
+        final_text = f"{final_text}\n\n_Answered by {post_kwargs.pop('agent_name')} (Loma agent)_"
+    post_kwargs.pop("agent_name", None)
     await client.chat_postMessage(
         channel=channel,
         text=final_text,
         thread_ts=thread_ts,
+        **post_kwargs,
     )
 
 
@@ -115,7 +148,7 @@ async def _record_flow_run(db, flow_id, conversation_id):
 
 async def _handle_agent_request(
     client, channel, thread_ts, event_ts, prompt, context, files, source, user_id,
-    flow_id=None, message_has_files=None,
+    flow_id=None, message_has_files=None, user_message=None,
 ):
     """Common flow: hourglass \u2192 observer \u2192 stream agent \u2192 post responses.
 
@@ -123,17 +156,21 @@ async def _handle_agent_request(
     duplication. When ``flow_id`` is set, the run is attributed to that flow.
     ``message_has_files`` says whether this message itself carries files
     (``files`` may also hold earlier thread files); defaults to ``bool(files)``.
+    ``user_message`` is the sender's own text (``prompt`` minus any channel
+    prefix); when it starts with an agent's name, that agent answers and is
+    pinned to the thread.
     """
     if message_has_files is None:
         message_has_files = bool(files)
-    # A deploy is waiting for in-flight runs to finish; tell the user to retry
-    # rather than start a run that the restart would cut short.
+    queue_args = dict(
+        channel=channel, thread_ts=thread_ts, event_ts=event_ts, prompt=prompt,
+        context=context, files=files, source=source, user_id=user_id,
+        flow_id=flow_id, message_has_files=message_has_files,
+    )
+    # A deploy is waiting for in-flight runs to finish: queue this for the
+    # next server rather than start a run that the restart would cut short.
     if is_draining():
-        logger.info("[SLACK] Draining for a deploy; refusing new run in %s/%s", channel, thread_ts)
-        try:
-            await client.chat_postMessage(channel=channel, text=DRAIN_MESSAGE, thread_ts=thread_ts)
-        except Exception as e:
-            logger.warning("[SLACK] Failed to post drain notice: %s", e)
+        await _queue_for_deploy(client, **queue_args)
         return
 
     # Add hourglass reaction as acknowledgement
@@ -154,6 +191,8 @@ async def _handle_agent_request(
         observer = None
         existing_convo = None
         user_email = None
+        agent_identity = None
+        named_agent = None
         db = get_db()
         if db is not None:
             existing_convo = await db.conversations.find_one(
@@ -181,6 +220,43 @@ async def _handle_agent_request(
             }
             if flow_id:
                 metadata["flow_id"] = flow_id
+
+            # Agent identity: naming an agent at the start of the message picks
+            # it and pins it to the thread; otherwise the thread keeps its
+            # pinned agent. Both only resolve agents the sender may chat with,
+            # and the run still uses the sender's own credentials.
+            named_agent, remainder = await find_agent_reference(db, user_message, user_email)
+            pinned_agent_id = ((existing_convo or {}).get("metadata") or {}).get("agent_id")
+            if named_agent:
+                agent_identity = named_agent
+                if remainder.strip() and user_message and prompt.endswith(user_message):
+                    prompt = prompt[: len(prompt) - len(user_message)] + remainder
+                    metadata["prompt"] = prompt
+            elif pinned_agent_id and user_email:
+                # May since be deleted, disabled or unshared: fall back to Loma.
+                agent_identity = await resolve_agent_for_chat(db, pinned_agent_id, user_email)
+            if agent_identity:
+                metadata["agent_id"] = agent_identity["agent_id"]
+                metadata["agent_name"] = agent_identity["name"]
+                metadata["agent_config_version"] = int(agent_identity.get("config_version") or 1)
+                if existing_convo:
+                    await db.conversations.update_one(
+                        {"conversation_id": existing_convo["conversation_id"]},
+                        {"$set": {
+                            "metadata.agent_id": agent_identity["agent_id"],
+                            "metadata.agent_name": agent_identity["name"],
+                            "metadata.agent_config_version": metadata["agent_config_version"],
+                        }},
+                    )
+                    if pinned_agent_id != agent_identity["agent_id"]:
+                        existing_md = existing_convo.get("metadata") or {}
+                        await record_agent_switch(
+                            db, existing_convo["conversation_id"],
+                            {"agent_id": pinned_agent_id, "name": existing_md.get("agent_name")}
+                            if pinned_agent_id else None,
+                            agent_identity, user_email or user_id, source="slack",
+                        )
+
             if existing_convo:
                 # One active run per thread: hand a follow-up to the run in
                 # progress, or queue it until that run finishes.
@@ -189,7 +265,9 @@ async def _handle_agent_request(
                 if not await active_streams.try_claim(claimed_conversation_id, run_id):
                     # Injection only carries text, so a message with files
                     # waits for its own run instead of losing them.
-                    if not message_has_files and await _inject_into_active_run(
+                    # A message that names an agent needs a fresh run with that
+                    # agent's context, so it is queued rather than injected.
+                    if not message_has_files and not named_agent and await _inject_into_active_run(
                         claimed_conversation_id, prompt, db, user_email,
                     ):
                         try:
@@ -213,19 +291,13 @@ async def _handle_agent_request(
                         await active_streams.wait_for_release(claimed_conversation_id)
                     # A deploy may have started draining while this waited.
                     if is_draining():
-                        logger.info(
-                            "[SLACK] Draining for a deploy; dropping queued run in %s/%s",
-                            channel, thread_ts,
-                        )
                         try:
                             await client.reactions_remove(
                                 name=THINKING_EMOJI, channel=channel, timestamp=event_ts,
                             )
                         except Exception:
                             pass
-                        await client.chat_postMessage(
-                            channel=channel, text=DRAIN_MESSAGE, thread_ts=thread_ts,
-                        )
+                        await _queue_for_deploy(client, **queue_args)
                         return
                 observer = ConversationObserver(
                     db, metadata=metadata,
@@ -239,14 +311,35 @@ async def _handle_agent_request(
             # Only post the tracking link for NEW conversations (first message in thread)
             if not existing_convo:
                 tracking_url = f"{CONVERSATION_TRACKER_BASE_URL}/{observer.conversation_id}"
+                as_agent = f" ({agent_identity['name']})" if agent_identity else ""
                 try:
                     await client.chat_postMessage(
                         channel=channel,
-                        text=f"\u23f3 Working on it! Follow progress \u2192 {tracking_url}",
+                        text=f"\u23f3 Working on it{as_agent}! Follow progress \u2192 {tracking_url}",
                         thread_ts=thread_ts,
                     )
                 except Exception as e:
                     logger.warning("[SLACK] Failed to post tracking link: %s", e)
+
+            elif named_agent:
+                try:
+                    await client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts,
+                        text=f"Switched this thread to *{agent_identity['name']}*.",
+                    )
+                except Exception as e:
+                    logger.warning("[SLACK] Failed to post agent switch notice: %s", e)
+
+        # The active agent's persona and skill/tool scope lead the context,
+        # and the scope is enforced at runtime (agent/agent_scope.py).
+        run_tool_config = None
+        if agent_identity:
+            agent_block = await build_agent_context_block(db, agent_identity)
+            context = f"{agent_block}\n\n{context}" if context else agent_block
+            run_tool_config = {
+                "enabled_tools": None, "enabled_skills": None,
+                "agent_scope": await build_agent_scope(db, agent_identity),
+            }
 
         # Stream the agent response
         logger.info("[AGENT] Starting streaming agent run...")
@@ -257,6 +350,7 @@ async def _handle_agent_request(
             observer=observer,
             source=source,
             user_email=user_email,
+            tool_config=run_tool_config,
         )
         await _stream_response(client, channel, thread_ts, event_ts, agent_stream, prompt=prompt, observer=observer)
         logger.info("[SLACK] All responses posted successfully")
@@ -290,6 +384,33 @@ async def _handle_agent_request(
     finally:
         if run_id:
             await active_streams.release_claim(claimed_conversation_id, run_id)
+
+
+async def _queue_for_deploy(client, *, channel, thread_ts, event_ts, **fields):
+    """Save a Slack run for the server that boots after the deploy.
+
+    Falls back to the old "try again" notice when there is no database or
+    the attachments are too large to store.
+    """
+    from api import pending_runs
+
+    db = get_db()
+    text = DRAIN_MESSAGE
+    if db is not None and pending_runs.files_fit(fields.get("files")):
+        try:
+            await pending_runs.enqueue(
+                db, "slack", channel=channel, thread_ts=thread_ts, event_ts=event_ts,
+                **{**fields, "files": fields.get("files") or []},
+            )
+            text = pending_runs.QUEUED_MESSAGE
+        except Exception:
+            logger.exception("[SLACK] Failed to queue run for after the deploy")
+    logger.info("[SLACK] Draining for a deploy; %s run in %s/%s",
+                "queued" if text != DRAIN_MESSAGE else "refused", channel, thread_ts)
+    try:
+        await client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
+    except Exception as e:
+        logger.warning("[SLACK] Failed to post drain notice: %s", e)
 
 
 async def _inject_into_active_run(conversation_id, prompt, db, user_email) -> bool:
@@ -343,6 +464,10 @@ def register_handlers(app):
             )
             return
 
+        if is_list_agents_command(user_message):
+            await _reply_with_agent_list(client, channel, thread_ts, user)
+            return
+
         # Gather thread context (including files from earlier messages)
         context = ""
         thread_raw_files = []
@@ -374,7 +499,7 @@ def register_handlers(app):
         await _handle_agent_request(
             client, channel, thread_ts, event_ts, prompt, context, files, source, user,
             flow_id=channel_config.get("flow_id") if channel_config else None,
-            message_has_files=bool(raw_files),
+            message_has_files=bool(raw_files), user_message=user_message,
         )
 
     @app.event("message")
@@ -446,6 +571,10 @@ def register_handlers(app):
             logger.info("[SLACK] Empty DM with no files, ignoring")
             return
 
+        if is_list_agents_command(text):
+            await _reply_with_agent_list(client, channel, thread_ts, user)
+            return
+
         # Gather thread context (including files from earlier messages)
         context = ""
         thread_raw_files = []
@@ -467,7 +596,7 @@ def register_handlers(app):
         prompt = text or "What is in this file?"
         await _handle_agent_request(
             client, channel, thread_ts, event_ts, prompt, context, files,
-            "slack_dm", user, message_has_files=bool(raw_files),
+            "slack_dm", user, message_has_files=bool(raw_files), user_message=text,
         )
 
     @app.event("reaction_added")
@@ -672,6 +801,19 @@ async def _post_ephemeral_safe(
     logger.warning("[DRAFT] Could not post ephemeral to %s for user %s", channel_id, user_id)
 
 
+async def _reply_with_agent_list(client, channel: str, thread_ts: str, slack_user_id: str) -> None:
+    """Answer "@Loma agents" with the agents this Slack user can chat with."""
+    db = get_db()
+    user_email = await _resolve_user_email(client, slack_user_id)
+    agents = await list_agents_for_chat(db, user_email) if db is not None and user_email else []
+    try:
+        await client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts, text=format_agent_list(agents),
+        )
+    except Exception as e:
+        logger.warning("[SLACK] Failed to post agent list: %s", e)
+
+
 async def _resolve_user_email(client, slack_user_id: str) -> str | None:
     """Resolve a Slack user ID to their email address."""
     try:
@@ -727,7 +869,7 @@ async def _capture_loma_task(client, event: dict) -> None:
         for message in thread_messages:
             author = message.get("user") or message.get("bot_profile", {}).get("name") or "unknown"
             marker = " [selected]" if message.get("ts") == message_ts else ""
-            parts.append(f"[{author}]{marker}: {message.get('text', '')}")
+            parts.append(f"[{author}]{marker}: {message_text(message)}")
         prompt = (
             "Follow up on this Slack message. Use the thread as context and complete the action requested.\n\n"
             f"Slack link: {permalink}\n"
@@ -792,7 +934,7 @@ async def _read_thread_with_user_token(user_token: str, channel_id: str, thread_
     parts = []
     for msg in messages:
         user = msg.get("user", "unknown")
-        text = msg.get("text", "")
+        text = message_text(msg)
         if msg.get("bot_id"):
             parts.append(f"[bot]: {text}")
         else:

@@ -1,18 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { fetchConversations, fetchPinnedConversations, fetchPoolStatus } from "../lib/api";
-import type { Conversation, PoolStatus } from "../lib/api";
+import { fetchPoolStatus } from "../lib/api";
+import type { PoolStatus } from "../lib/api";
 import { useUser } from "../lib/UserContext";
-import { useTaskAttention } from "../lib/TaskAttentionContext";
 import { useNotifications } from "../lib/NotificationsContext";
 import type { SystemRole } from "../lib/governance-api";
 import PetCompanion, { usePetSettings } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
-import ChatContextMenu from "./ChatContextMenu";
+import { NavBoards, NAV_ACTIVE, NAV_IDLE, NAV_ROW } from "./NavBoards";
 import { useTheme } from "../lib/ThemeContext";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
@@ -22,13 +21,12 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  RiChat1Line,
-  RiCheckboxLine,
   RiRobot2Line,
   RiGridLine,
-  RiMoneyDollarCircleLine,
+  RiPlug2Line,
   RiTimeLine,
   RiBookOpenLine,
   RiDownloadLine,
@@ -51,54 +49,17 @@ type NavItem = {
   name: string;
   href: string;
   icon: React.ReactNode;
-  /** Key into badgeCounts for an attention count shown next to the item */
-  badgeKey?: string;
   /** Minimum system role required to see this nav item */
   minRole?: SystemRole;
 };
 
+/** Below Tasks and its boards. The nav is kept to Tasks, Onboarding and Flows; everything
+ * else lives in the account menu. */
 const navigation: NavItem[] = [
-  {
-    name: "Tasks",
-    href: "/tasks",
-    badgeKey: "tasks",
-    icon: <RiCheckboxLine size={16} />,
-  },
-  {
-    name: "Notifications",
-    href: "/notifications",
-    badgeKey: "notifications",
-    icon: <RiNotification3Line size={16} />,
-  },
-  {
-    name: "Chat",
-    href: "/chat",
-    icon: <RiChat1Line size={16} />,
-  },
   {
     name: "Onboarding",
     href: "/onboarding",
     icon: <RiRocketLine size={16} />,
-  },
-  {
-    name: "Agents",
-    href: "/agents",
-    icon: <RiRobot2Line size={16} />,
-  },
-  {
-    name: "Activity",
-    href: "/conversations",
-    icon: <RiGridLine size={16} />,
-  },
-  {
-    name: "My Usage",
-    href: "/my-usage",
-    icon: <RiMoneyDollarCircleLine size={16} />,
-  },
-  {
-    name: "Integrations",
-    href: "/integrations/manage",
-    icon: <RiSettings3Line size={16} />,
   },
   {
     name: "Flows",
@@ -106,34 +67,52 @@ const navigation: NavItem[] = [
     minRole: "analyst",
     icon: <RiTimeLine size={16} />,
   },
-  {
-    name: "Skills",
-    href: "/skills",
-    minRole: "analyst",
-    icon: <RiBookOpenLine size={16} />,
-  },
-  {
-    name: "Webhook Logs",
-    href: "/webhook-logs",
-    minRole: "analyst",
-    icon: <RiDownloadLine size={16} />,
-  },
 ];
 
 const userMenuNav: NavItem[] = [
-  {
-    name: "Analytics",
-    href: "/analytics",
-    minRole: "analyst",
-    icon: <RiBarChartBoxLine size={16} />,
-  },
-  {
-    name: "Admin",
-    href: "/admin",
-    minRole: "maintainer",
-    icon: <RiShieldCheckLine size={16} />,
-  },
+  { name: "Agents", href: "/agents", icon: <RiRobot2Line size={16} /> },
+  { name: "Activity", href: "/conversations", icon: <RiGridLine size={16} /> },
+  { name: "Integrations", href: "/integrations/manage", icon: <RiPlug2Line size={16} /> },
+  { name: "Skills", href: "/skills", minRole: "analyst", icon: <RiBookOpenLine size={16} /> },
+  { name: "Webhook Logs", href: "/webhook-logs", minRole: "analyst", icon: <RiDownloadLine size={16} /> },
+  { name: "Analytics", href: "/analytics", minRole: "analyst", icon: <RiBarChartBoxLine size={16} /> },
+  { name: "Admin", href: "/admin", minRole: "maintainer", icon: <RiShieldCheckLine size={16} /> },
 ];
+
+/** Notifications bell beside the logo, with the unread count. */
+function NotificationBell({ collapsed, onNavigate }: { collapsed: boolean; onNavigate: () => void }) {
+  const pathname = usePathname();
+  const { unreadCount } = useNotifications();
+  const active = pathname.startsWith("/notifications");
+  const label = unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          href="/notifications"
+          prefetch
+          onClick={onNavigate}
+          aria-label={label}
+          aria-current={active ? "page" : undefined}
+          className={cn(
+            "relative flex h-7 w-7 items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring max-md:h-9 max-md:w-9",
+            active ? "bg-sidebar-accent text-sidebar-primary" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+          )}
+        >
+          <RiNotification3Line size={16} className="max-md:h-5 max-md:w-5" />
+          {unreadCount > 0 && (collapsed ? (
+            <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
+          ) : (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white tabular-nums">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          ))}
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent side={collapsed ? "right" : "bottom"}>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 function SidebarSkeleton() {
   const widths = [72, 80, 56, 64, 96, 72, 96, 88];
@@ -365,66 +344,18 @@ export default function Sidebar({
   onToggleCollapse: () => void;
 }) {
   const { data: session, status } = useSession();
-  const { loading: userLoading, hasRole, pinnedIds, isPinned, togglePin, projects, renameConversation, removeConversation, assignToProject, unassignFromProject, addProject, refreshProjects } = useUser();
+  const { loading: userLoading, hasRole } = useUser();
   const { theme, setTheme } = useTheme();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const activeContinueId = pathname === "/chat" ? searchParams.get("continue") : null;
-  const [myConversations, setMyConversations] = useState<Conversation[]>([]);
-  const [pinnedConversations, setPinnedConversations] = useState<Conversation[]>([]);
-  const { needsInputCount } = useTaskAttention();
-  const { unreadCount: unreadNotificationCount } = useNotifications();
-  const badgeCounts: Record<string, number> = { tasks: needsInputCount, notifications: unreadNotificationCount };
   const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
 
   // Filter nav items by role
   const visibleNav = navigation.filter((item) => !item.minRole || hasRole(item.minRole));
 
-  // Reload conversations after a mutation (rename, delete, project change)
-  const reloadConversations = useCallback(() => {
-    if (status === "authenticated" && session?.user?.email) {
-      fetchConversations({ person: session.user.email, page: 1 })
-        .then((data) => setMyConversations(data.conversations.slice(0, 8)))
-        .catch(() => {});
-    }
-    if (pinnedIds.size > 0) {
-      fetchPinnedConversations()
-        .then((data) => setPinnedConversations(data.conversations))
-        .catch(() => {});
-    }
-  }, [status, session?.user?.email, pinnedIds.size]);
-
-  // Refresh sidebar conversations when a stream completes (title may have been generated)
-  useEffect(() => {
-    const handler = () => reloadConversations();
-    window.addEventListener("conversations-updated", handler);
-    return () => window.removeEventListener("conversations-updated", handler);
-  }, [reloadConversations]);
-
   // Close sidebar on route change (mobile)
   useEffect(() => {
     onClose();
   }, [pathname]);
-
-  // Load user's recent conversations (wait for user to load so isPinned works correctly)
-  useEffect(() => {
-    if (!userLoading && status === "authenticated" && session?.user?.email) {
-      fetchConversations({ person: session.user.email, page: 1 })
-        .then((data) => setMyConversations(data.conversations.slice(0, 8)))
-        .catch((e) => console.error("Failed to load my conversations:", e));
-    }
-  }, [userLoading, status, session?.user?.email]);
-
-  // Load pinned conversations
-  useEffect(() => {
-    if (pinnedIds.size > 0) {
-      fetchPinnedConversations()
-        .then((data) => setPinnedConversations(data.conversations))
-        .catch((e) => console.error("Failed to load pinned conversations:", e));
-    } else {
-      setPinnedConversations([]);
-    }
-  }, [pinnedIds]);
 
   // Poll pool status every 5 seconds
   useEffect(() => {
@@ -470,8 +401,8 @@ export default function Sidebar({
 
   const sidebarContent = (
     <>
-      {/* Logo + collapse toggle + close button */}
-      <div className={cn("flex shrink-0 items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-1" : "px-5 pt-6 pb-5")}>
+      {/* Logo, notifications bell, collapse toggle and (phones) close button */}
+      <div className={cn("flex shrink-0 items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-2" : "px-5 pt-6 pb-4")}>
         <div className={cn("flex items-center gap-2", collapsed && "justify-center")}>
           <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 20} /></Link>} />
           {!collapsed && (
@@ -480,7 +411,8 @@ export default function Sidebar({
             </Link>
           )}
         </div>
-        <div className="flex items-center gap-0.5">
+        <div className={cn("flex items-center gap-0.5", collapsed && "flex-col")}>
+          <NotificationBell collapsed={collapsed} onNavigate={onClose} />
           <Button
             variant="ghost"
             size="icon-xs"
@@ -506,195 +438,44 @@ export default function Sidebar({
         <SidebarSkeleton />
       ) : (
         <>
-          {/* One scroll region for the nav plus projects, pinned and recents,
-              with the account footer pinned below it. `min-h-0` lets the
-              region shrink and scroll instead of overflowing. The nav must
-              live inside it: on phones the roomier 10-item nav alone is taller
-              than a short viewport (360x640), so a non-shrinking nav above
-              this region collapsed the lists to 0px and pushed the theme and
-              account rows off-screen with nothing to scroll. */}
+          {/* Tasks with its boards, then Flows. `min-h-0` lets the region
+              shrink and scroll on short screens (and long board lists)
+              instead of pushing the account row off-screen. */}
           <ScrollArea className="flex-1 min-h-0">
-          {/* Navigation */}
-          <nav className="loma-sidebar-nav px-3 space-y-0.5 pb-1">
+          <nav aria-label="Main" className="px-3 space-y-0.5 pb-2">
+            <NavBoards collapsed={collapsed} onNavigate={onClose} />
             {visibleNav.map((item) => {
-              const isActive = item.href === "/"
-                ? pathname === "/" || pathname === ""
-                : pathname.startsWith(item.href);
-              return (
+              const isActive = pathname.startsWith(item.href);
+              const link = (
                 <Link
                   key={item.name}
                   href={item.href}
                   prefetch
                   onClick={onClose}
                   className={cn(
-                    // Roomier on phones (Claude-app scale), compact on desktop
-                    "relative flex items-center rounded-lg text-[13px] font-medium transition-colors duration-150",
-                    "max-md:text-[16px] max-md:[&_svg]:h-5 max-md:[&_svg]:w-5",
+                    NAV_ROW,
                     collapsed
                       ? "justify-center px-0 py-1.5 mx-auto w-10"
                       : "px-3 py-2 gap-2.5 max-md:py-2.5 max-md:gap-3",
-                    isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                    isActive ? NAV_ACTIVE : NAV_IDLE,
                   )}
                   aria-current={isActive ? "page" : undefined}
-                  title={collapsed ? item.name : undefined}
+                  aria-label={collapsed ? item.name : undefined}
                 >
                   <span className={cn("relative flex-shrink-0 transition-colors", isActive ? "text-sidebar-primary" : "text-current")}>
                     {item.icon}
-                    {collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500" />
-                    )}
                   </span>
                   {!collapsed && <span>{item.name}</span>}
-                  {!collapsed && item.badgeKey && badgeCounts[item.badgeKey] > 0 ? (
-                    <span className="ml-auto min-w-[20px] h-5 px-1 shrink-0 whitespace-nowrap flex items-center justify-center rounded bg-current/10 text-[11px] font-semibold tabular-nums">
-                      {badgeCounts[item.badgeKey]}
-                    </span>
-                  ) : null}
                 </Link>
               );
+              return collapsed ? (
+                <Tooltip key={item.name}>
+                  <TooltipTrigger asChild>{link}</TooltipTrigger>
+                  <TooltipContent side="right">{item.name}</TooltipContent>
+                </Tooltip>
+              ) : link;
             })}
           </nav>
-
-            {/* Projects */}
-            {!collapsed && projects.length > 0 && (
-              <div className="mt-6 flex flex-col">
-                <div className="px-3 pb-1.5">
-                  <span className="text-[10px] max-md:text-xs font-medium text-sidebar-foreground/60 uppercase tracking-[0.14em]">
-                    Projects
-                  </span>
-                </div>
-                <div className="px-2 space-y-px">
-                  {projects.map((p) => (
-                    <Link
-                      key={p.project_id}
-                      href={`/conversations?project=${p.project_id}`}
-                      prefetch
-                      onClick={onClose}
-                      title={p.name}
-                      className="group flex items-center gap-1 px-2 py-1 text-[13px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150 text-muted-foreground hover:text-foreground hover:bg-muted"
-                    >
-                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#94a3b8' }} />
-                      <span className="truncate flex-1 min-w-0">{p.name}</span>
-                      <span className="text-[10px] text-muted-foreground tabular-nums">{p.conversation_count || 0}</span>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Pinned */}
-            {!collapsed && pinnedConversations.length > 0 && (
-              <div className="mt-6 flex flex-col">
-                <div className="px-3 pb-1.5">
-                  <span className="text-[10px] max-md:text-xs font-medium text-sidebar-foreground/60 uppercase tracking-[0.14em]">
-                    Pinned
-                  </span>
-                </div>
-                <div className="px-2 space-y-px">
-                  {pinnedConversations.map((c) => {
-                    const title = c.title || c.prompt?.slice(0, 50) || "Untitled";
-                    const displayTitle = title;
-                    const isConvoActive = activeContinueId === c.conversation_id;
-                    return (
-                      <div
-                        key={c.conversation_id}
-                        className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
-                          isConvoActive
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/60"
-                        )}
-                      >
-                        <Link
-                          href={`/chat?continue=${c.conversation_id}`}
-                          prefetch
-                          onClick={onClose}
-                          className="truncate flex-1 min-w-0"
-                          title={title}
-                        >
-                          {displayTitle}
-                        </Link>
-                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
-                          <ChatContextMenu
-                            conversationId={c.conversation_id}
-                            conversationTitle={title}
-                            isPinned={true}
-                            projectId={c.project_id}
-                            taskStatus={c.task_status}
-                            projects={projects}
-                            onRename={async (id, newTitle) => { await renameConversation(id, newTitle); reloadConversations(); }}
-                            onDelete={async (id) => { await removeConversation(id); reloadConversations(); }}
-                            onTogglePin={togglePin}
-                            onAssignProject={async (id, pid) => { await assignToProject(id, pid); reloadConversations(); }}
-                            onRemoveProject={async (id) => { await unassignFromProject(id); reloadConversations(); }}
-                            onCreateProject={async (name) => { await addProject(name); }}
-                            triggerClassName="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Recents (excluding pinned) */}
-            {!collapsed && myConversations.filter((c) => !isPinned(c.conversation_id)).length > 0 && (
-              <div className="mt-6 flex flex-col">
-                <div className="px-3 pb-1.5">
-                  <span className="text-[10px] max-md:text-xs font-medium text-sidebar-foreground/60 uppercase tracking-[0.14em]">
-                    Recents
-                  </span>
-                </div>
-                <div className="px-2 space-y-px">
-                  {myConversations.filter((c) => !isPinned(c.conversation_id)).map((c) => {
-                    const title = c.title || c.prompt?.slice(0, 50) || "Untitled";
-                    const displayTitle = title;
-                    const isConvoActive = activeContinueId === c.conversation_id;
-                    return (
-                      <div
-                        key={c.conversation_id}
-                        className={cn(
-                          "group flex items-center gap-1 px-2 py-1 text-[12px] max-md:px-3 max-md:py-2 max-md:text-[15px] rounded-lg transition-all duration-150",
-                          isConvoActive
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-sidebar-foreground/75 hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/60"
-                        )}
-                      >
-                        <Link
-                          href={`/chat?continue=${c.conversation_id}`}
-                          prefetch
-                          onClick={onClose}
-                          className="truncate flex-1 min-w-0"
-                          title={title}
-                        >
-                          {displayTitle}
-                        </Link>
-                        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
-                          <ChatContextMenu
-                            conversationId={c.conversation_id}
-                            conversationTitle={title}
-                            isPinned={false}
-                            projectId={c.project_id}
-                            taskStatus={c.task_status}
-                            projects={projects}
-                            onRename={async (id, newTitle) => { await renameConversation(id, newTitle); reloadConversations(); }}
-                            onDelete={async (id) => { await removeConversation(id); reloadConversations(); }}
-                            onTogglePin={togglePin}
-                            onAssignProject={async (id, pid) => { await assignToProject(id, pid); reloadConversations(); }}
-                            onRemoveProject={async (id) => { await unassignFromProject(id); reloadConversations(); }}
-                            onCreateProject={async (name) => { await addProject(name); }}
-                            triggerClassName="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </ScrollArea>
 
           {/* Bottom section: pool status, theme toggle, user */}
@@ -789,10 +570,7 @@ export default function Sidebar({
                         )}
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent side="top" align="start" className="w-[180px]">
-                      <DropdownMenuItem onSelect={() => { openPetSettings(); onClose(); }}>
-                        <RiSettings3Line size={16} />Pet settings
-                      </DropdownMenuItem>
+                    <DropdownMenuContent side="top" align="start" className="w-[200px]">
                       {userMenuNav.filter((item) => !item.minRole || hasRole(item.minRole)).map((item) => (
                         <DropdownMenuItem key={item.href} asChild>
                           <Link href={item.href} onClick={onClose} className="flex items-center gap-2 text-[13px]">
@@ -801,6 +579,11 @@ export default function Sidebar({
                           </Link>
                         </DropdownMenuItem>
                       ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => { openPetSettings(); onClose(); }} className="text-[13px]">
+                        <RiSettings3Line size={16} />Pet settings
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => signOut({ callbackUrl: "/login" })}
                         className="text-red-600 focus:text-red-600 text-[13px]"

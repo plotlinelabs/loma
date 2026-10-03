@@ -464,14 +464,45 @@ def _board_role(board_doc: dict, user_email: str) -> str | None:
     return None
 
 
-def _board_summary(board_doc: dict | None, role: str | None, user_email: str) -> dict:
+# Board emoji shown in the nav. Boards without one get a stable default
+# picked from the board id, so two boards rarely look the same.
+PERSONAL_BOARD_EMOJI = "🏠"
+DEFAULT_BOARD_EMOJIS = ("🚀", "📣", "🧭", "🛠️", "📊", "🎯", "💡", "🧪", "📦", "🌱", "🔥", "🗂️")
+MAX_BOARD_EMOJI_LEN = 16
+MAX_BOARD_ORDER = 300
+
+
+def _default_board_emoji(board_id: str, taken: set | frozenset = frozenset()) -> str:
+    """Stable pick from the board id, skipping emojis already in `taken`."""
+    start = sum(board_id.encode()) % len(DEFAULT_BOARD_EMOJIS)
+    for step in range(len(DEFAULT_BOARD_EMOJIS)):
+        emoji = DEFAULT_BOARD_EMOJIS[(start + step) % len(DEFAULT_BOARD_EMOJIS)]
+        if emoji not in taken:
+            return emoji
+    return DEFAULT_BOARD_EMOJIS[start]
+
+
+def _validate_board_emoji(value) -> str | None:
+    """A short string with at least one non-ASCII character (an emoji)."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > MAX_BOARD_EMOJI_LEN or any(c.isspace() for c in value):
+        return None
+    return value if any(ord(c) > 127 for c in value) else None
+
+
+def _board_summary(board_doc: dict | None, role: str | None, user_email: str,
+                   personal_emoji: str | None = None) -> dict:
     """Public shape of a board for the switcher and the board header."""
     if board_doc is None:
         return {"id": PERSONAL_BOARD_ID, "name": PERSONAL_BOARD_NAME, "owner": user_email,
+                "emoji": personal_emoji or PERSONAL_BOARD_EMOJI,
                 "role": role, "shared": False, "card_mode": False, "members": []}
     return {
         "id": board_doc["board_id"],
         "name": board_doc.get("name") or "Untitled board",
+        "emoji": board_doc.get("emoji") or _default_board_emoji(board_doc["board_id"]),
         # The creator. Co-owners are members with role "owner".
         "owner": board_doc.get("owner"),
         "role": role,
@@ -579,8 +610,9 @@ def derive_column(task: dict, lane_ids: list[str]) -> str:
     if task_status == "done":
         return "done"
     # active — status None means a quick-added task whose headless run is
-    # spinning up (observer.resume() sets "running" moments later).
-    if task.get("status") in (None, "running"):
+    # spinning up (observer.resume() sets "running" moments later); "queued"
+    # means it waits for a deploy to finish (api/pending_runs.py).
+    if task.get("status") in (None, "running", "queued"):
         return "working"
     return "needs_input"
 
@@ -711,11 +743,6 @@ async def handle_create_task(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "Attachments too large (max 8MB total)"}, status=400)
 
-    # Quick-add fires an agent run immediately; refuse while a deploy drains.
-    # Plain drafts are fine — nothing runs until the user sends a message.
-    if body.get("start") and is_draining():
-        return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
-
     board = await resolve_board(db, user_email, body.get("board"))
     if board is None:
         return web.json_response({"error": "Board not found"}, status=404)
@@ -744,12 +771,40 @@ async def handle_create_task(request: web.Request) -> web.Response:
 
     doc = _new_task_doc(user_email, prompt, title, model, lane, start=start, files=files,
                         tool_config=tool_config, board=board, card_id=card_id)
+    # Quick-add during a deploy drain: create the card now and queue its
+    # first run for the next server (api/pending_runs.py) instead of refusing.
+    queued = start and is_draining()
+    if queued:
+        from api import pending_runs
+        if not pending_runs.files_fit(files):
+            return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
+        doc["status"] = pending_runs.CONVERSATION_QUEUED
+        doc["messages"] = [{"role": "user", "content": prompt, "sender": user_email,
+                            "timestamp": doc["started_at"]}]
     await db.conversations.insert_one(doc)
 
     # Quick-added tasks (no explicit title) get an LLM title from the prompt.
     # Empty drafts skip this — enrichment titles them after the first run.
     if not title and prompt:
         asyncio.create_task(_auto_title_task(db, doc["conversation_id"], prompt))
+
+    if queued:
+        await pending_runs.enqueue(
+            db, "dashboard",
+            conversation_id=doc["conversation_id"],
+            user_email=user_email,
+            source="dashboard",
+            prompt=prompt,
+            files=files or [],
+            model=model,
+            tool_config=tool_config,
+            conversation_context=await build_board_context(
+                db, user_email, board["id"] if board["shared"] else None, card_id,
+                conversation_id=doc["conversation_id"]),
+        )
+        return web.json_response(
+            {"task": _task_view(doc, lane_ids), "queued": True,
+             "message": pending_runs.QUEUED_MESSAGE}, status=201)
 
     if start:
         from api.recall_session import launch_recall
@@ -1523,6 +1578,39 @@ async def handle_delete_tag(request: web.Request) -> web.Response:
 
 # ── Boards (list / create / share / delete) ──────────────────────────────────
 
+def _waiting_on(user_email: str) -> dict:
+    """Query for tasks waiting on a user: their own or assigned tasks that
+    stopped and need input or review (the nav badge rule)."""
+    return {
+        "$or": [{"metadata.user_name": user_email}, {"task_assignee": user_email}],
+        "task_status": "active",
+        "status": {"$in": list(NEEDS_INPUT_STATUSES)},
+        "deleted": {"$ne": True},
+    }
+
+
+async def handle_needs_you(request: web.Request) -> web.Response:
+    """GET /api/tasks/needs-you — the caller's waiting tasks across every
+    board, newest first, for the board switcher's quick search."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"tasks": []})
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    docs = await db.conversations.find(
+        _waiting_on(user_email),
+        {"conversation_id": 1, "title": 1, "prompt": 1, "status": 1, "task_board_id": 1},
+    ).sort("finished_at", -1).to_list(50)
+    return web.json_response({"tasks": [{
+        "conversation_id": doc.get("conversation_id"),
+        "title": doc.get("title") or (doc.get("prompt") or "")[:80] or None,
+        "status": doc.get("status"),
+        "board_id": doc.get("task_board_id") or PERSONAL_BOARD_ID,
+    } for doc in docs]})
+
+
 async def handle_list_boards(request: web.Request) -> web.Response:
     """GET /api/tasks/boards — the caller's personal board plus every shared
     board they own or are a member of."""
@@ -1535,11 +1623,71 @@ async def handle_list_boards(request: web.Request) -> web.Response:
 
     docs = await db.task_boards.find(
         {"$or": [{"owner": user_email}, {"members.email": user_email}]},
-        {"board_id": 1, "name": 1, "owner": 1, "members": 1, "created_at": 1, "card_mode": 1},
+        {"board_id": 1, "name": 1, "owner": 1, "members": 1, "created_at": 1, "card_mode": 1, "emoji": 1},
     ).sort("created_at", 1).to_list(200)
-    boards = [_board_summary(None, "owner", user_email)]
+    prefs = ((await db.users.find_one({"email": user_email}, {"board_prefs": 1})) or {}).get("board_prefs") or {}
+    boards = [_board_summary(None, "owner", user_email, prefs.get("personal_emoji"))]
     boards += [_board_summary(doc, _board_role(doc, user_email), user_email) for doc in docs]
+    # Older boards have no emoji yet: give each one a default nobody else in
+    # this list is using, so two rows never look the same.
+    taken = {boards[0]["emoji"]} | {doc["emoji"] for doc in docs if doc.get("emoji")}
+    for board, doc in zip(boards[1:], docs):
+        if not doc.get("emoji"):
+            board["emoji"] = _default_board_emoji(doc["board_id"], taken)
+            taken.add(board["emoji"])
+
+    # The caller's own drag order. Boards it doesn't mention (new ones) keep
+    # their default place after the ordered ones.
+    order = {board_id: i for i, board_id in enumerate(prefs.get("order") or [])}
+    boards = [b for _, b in sorted(
+        enumerate(boards), key=lambda pair: (pair[1]["id"] not in order, order.get(pair[1]["id"], pair[0])),
+    )]
+
+    # Tasks waiting on the caller, per board (same rule as the nav badge:
+    # their own or assigned tasks that stopped and need input or review).
+    waiting = await db.conversations.aggregate([
+        {"$match": _waiting_on(user_email)},
+        {"$group": {"_id": {"$ifNull": ["$task_board_id", PERSONAL_BOARD_ID]}, "count": {"$sum": 1}}},
+    ]).to_list(None)
+    needs_you = {row["_id"]: row["count"] for row in waiting}
+    for board in boards:
+        board["needs_you"] = needs_you.get(board["id"], 0)
     return web.json_response({"boards": boards})
+
+
+async def handle_put_board_prefs(request: web.Request) -> web.Response:
+    """PUT /api/tasks/boards-prefs — the caller's own board list settings:
+    `order` (board ids, top to bottom) and `personal_emoji` (their Personal
+    board's emoji). Order is per person, so it never changes anyone else's."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Observability not configured"}, status=503)
+    user_email = get_user_email(request)
+    if not user_email:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "Expected a JSON object"}, status=400)
+
+    updates: dict = {}
+    if "order" in body:
+        order = body["order"]
+        if (not isinstance(order, list) or len(order) > MAX_BOARD_ORDER
+                or not all(isinstance(i, str) and 0 < len(i) <= 64 for i in order)):
+            return web.json_response({"error": "order must be a list of board ids"}, status=400)
+        updates["board_prefs.order"] = list(dict.fromkeys(order))
+    if "personal_emoji" in body:
+        emoji = _validate_board_emoji(body["personal_emoji"])
+        if not emoji:
+            return web.json_response({"error": "personal_emoji must be a single emoji"}, status=400)
+        updates["board_prefs.personal_emoji"] = emoji
+    if not updates:
+        return web.json_response({"error": "Nothing to update"}, status=400)
+    await db.users.update_one({"email": user_email}, {"$set": updates})
+    return web.json_response({"ok": True})
 
 
 def _validate_board_name(name) -> str | None:
@@ -1581,10 +1729,19 @@ async def handle_create_board(request: web.Request) -> web.Response:
         fields = [{"id": str(uuid.uuid4())[:8], **copy.deepcopy(field)}
                   for field in template["fields"]]
 
+    board_id = uuid.uuid4().hex[:12]
+    emoji = _validate_board_emoji(body.get("emoji"))
+    if not emoji:
+        # A default the caller's other boards aren't using yet.
+        visible = await db.task_boards.find(
+            {"$or": [{"owner": user_email}, {"members.email": user_email}]}, {"emoji": 1},
+        ).to_list(200)
+        emoji = _default_board_emoji(board_id, {d.get("emoji") for d in visible} | {PERSONAL_BOARD_EMOJI})
     now = datetime.now(timezone.utc)
     doc = {
-        "board_id": uuid.uuid4().hex[:12],
+        "board_id": board_id,
         "name": name,
+        "emoji": emoji,
         "owner": user_email,
         "members": [],
         "card_mode": card_mode,
@@ -1641,6 +1798,12 @@ async def handle_update_board(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": f"Board names must be 1-{MAX_BOARD_NAME_LEN} characters"}, status=400)
         updates["name"] = name
+
+    if "emoji" in body:
+        emoji = _validate_board_emoji(body["emoji"])
+        if not emoji:
+            return web.json_response({"error": "emoji must be a single emoji"}, status=400)
+        updates["emoji"] = emoji
 
     if "members" in body:
         members_in = body["members"]
@@ -1711,6 +1874,7 @@ async def handle_delete_board(request: web.Request) -> web.Response:
          "$set": {"task_lane": None, "task_tag_ids": []}},
     )
     await db.task_cards.delete_many({"board_id": doc["board_id"]})
+    await db.task_board_views.delete_many({"board_id": doc["board_id"]})
     await db.task_boards.delete_one({"board_id": doc["board_id"]})
     return web.json_response({"deleted": True, "moved": result.modified_count})
 
@@ -2070,7 +2234,10 @@ async def card_tool_run(db, user_email: str, conversation_id: str, command: str,
 def setup_task_routes(app: web.Application):
     """Register tasks-board routes on the aiohttp app."""
     # Static paths must be registered before the {conversation_id} route.
+    from api.task_views import setup_view_routes
+    setup_view_routes(app)
     app.router.add_get("/api/tasks/boards", handle_list_boards)
+    app.router.add_put("/api/tasks/boards-prefs", handle_put_board_prefs)
     app.router.add_post("/api/tasks/boards", handle_create_board)
     app.router.add_patch("/api/tasks/boards/{board_id}", handle_update_board)
     app.router.add_delete("/api/tasks/boards/{board_id}", handle_delete_board)
@@ -2080,6 +2247,7 @@ def setup_task_routes(app: web.Application):
     app.router.add_get("/api/tasks/board-settings", handle_get_board_settings)
     app.router.add_put("/api/tasks/board-settings", handle_put_board_settings)
     app.router.add_get("/api/tasks/needs-input-count", handle_needs_input_count)
+    app.router.add_get("/api/tasks/needs-you", handle_needs_you)
     app.router.add_post("/api/tasks/tags", handle_create_tag)
     app.router.add_delete("/api/tasks/tags/{tag_id}", handle_delete_tag)
     app.router.add_post("/api/tasks", handle_create_task)

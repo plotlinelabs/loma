@@ -18,6 +18,7 @@ import yaml
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeSDKClient,
+    HookMatcher,
     ResultMessage,
     StreamEvent,
     TaskNotificationMessage,
@@ -1010,6 +1011,15 @@ async def _stream_agent(
     # Codex (ChatGPT subscription) selections route through the Codex account
     # pool — same round-robin architecture as the Claude pool.
     from agent.codex_runtime import selected_model_is_codex
+    from agent.agent_scope import scope_is_enforced as _scope_is_enforced
+
+    # The agent's tool/skill scope is enforced on every runtime: a PreToolUse
+    # hook on Claude, permission requests on OpenCode, command approvals on Codex.
+    runtime_agent_scope = (
+        tool_config.get("agent_scope")
+        if isinstance(tool_config, dict) and _scope_is_enforced(tool_config.get("agent_scope"))
+        else None
+    )
 
     if selected_model and selected_model_is_codex(selected_model):
         try:
@@ -1024,6 +1034,7 @@ async def _stream_agent(
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
                 extra_env=run_env,
+                agent_scope=runtime_agent_scope,
             ):
                 yield event
         except Exception as e:
@@ -1060,6 +1071,7 @@ async def _stream_agent(
                 user_email=user_email,
                 user_mcp_overrides=user_mcp_overrides,
                 image_files=image_files or None,
+                agent_scope=runtime_agent_scope,
             ):
                 yield event
         except Exception as e:
@@ -1086,9 +1098,18 @@ async def _stream_agent(
     client = None
     account_email: str | None = None
 
+    # The active agent's tool/skill scope (built in api/routes.py). An enforced
+    # scope needs its own client: filtered MCP servers plus a PreToolUse hook.
+    from agent.agent_scope import (
+        filter_allowed_tools, filter_mcp_servers, make_pre_tool_use_hook, scope_is_enforced,
+    )
+    agent_scope = tool_config.get("agent_scope") if isinstance(tool_config, dict) else None
+    enforce_agent_scope = scope_is_enforced(agent_scope)
+
     needs_ephemeral = bool(
         (user_mcp_overrides or excluded_integrations)
         or (tool_config and tool_config.get("enabled_tools") is not None)
+        or enforce_agent_scope
     )
 
     if needs_ephemeral and selected_claude_model:
@@ -1115,6 +1136,17 @@ async def _stream_agent(
                 # Always keep Skill (internal plumbing for loma_skills CLI)
                 enabled_set.add("Skill")
                 allowed_tools = [t for t in allowed_tools if t in enabled_set]
+            if enforce_agent_scope:
+                # Tools outside the agent's scope are never loaded, and the hook
+                # denies the calls that filtering can't reach (Bash CLI tools,
+                # loma_skills, Skill, claude.ai connectors).
+                options.mcp_servers = filter_mcp_servers(agent_scope, options.mcp_servers)
+                allowed_tools = filter_allowed_tools(agent_scope, allowed_tools)
+                hooks = dict(options.hooks or {})
+                hooks.setdefault("PreToolUse", []).append(
+                    HookMatcher(matcher=None, hooks=[make_pre_tool_use_hook(agent_scope, observer)])
+                )
+                options.hooks = hooks
             options.allowed_tools = allowed_tools
             # Per-run client: tag it for run-end cleanup and give it the run env.
             proc_tag = new_proc_tag()
@@ -1137,6 +1169,16 @@ async def _stream_agent(
                 await pool.safe_disconnect(client)
             client = None
             user_mcp_overrides = {}
+            if enforce_agent_scope:
+                # A pooled client loads every tool. Fail closed rather than run
+                # the agent without its scope.
+                if observer:
+                    await observer.record_error(f"Could not start a scoped agent session: {e}")
+                yield (
+                    f"I couldn't start a session limited to {agent_scope.get('agent_name')}'s "
+                    "tools, so I stopped instead of running without those limits. Please try again."
+                )
+                return
 
     if client is None:
         try:
@@ -1834,6 +1876,38 @@ def conversation_work_dir(conversation_id: str) -> str | None:
     return str(path)
 
 
+async def _queue_for_deploy(observer, prompt, conversation_context, files, source,
+                            user_email, selected_model, tool_config) -> str | None:
+    """Save a run that waited behind a busy conversation while a deploy
+    started draining. Returns the notice to show, or None if it couldn't be
+    queued. The caller's prompt is already recorded on the conversation."""
+    from api import pending_runs
+    db = getattr(observer, "db", None)
+    if db is None or not pending_runs.files_fit(files):
+        return None
+    try:
+        await pending_runs.enqueue(
+            db, "headless",
+            conversation_id=observer.conversation_id,
+            user_email=user_email,
+            source=source,
+            prompt=prompt,
+            files=files or [],
+            model=selected_model or "",
+            tool_config=tool_config,
+            conversation_context=conversation_context,
+        )
+        await db.conversations.update_one(
+            {"conversation_id": observer.conversation_id},
+            {"$set": {"status": pending_runs.CONVERSATION_QUEUED}},
+        )
+    except Exception:
+        logger.exception("Failed to queue run of %s for after the deploy", observer.conversation_id)
+        return None
+    logger.info("Draining for a deploy; queued run of %s", observer.conversation_id)
+    return pending_runs.QUEUED_MESSAGE
+
+
 async def stream_agent(prompt: str, conversation_context: str = "", files=None,
         observer=None, include_steps=False, source="slack", user_email=None,
         selected_model=None, raise_on_opencode_error=False, tool_config=None,
@@ -1858,11 +1932,14 @@ async def stream_agent(prompt: str, conversation_context: str = "", files=None,
             )
             while not await try_claim(conversation_id, run_id):
                 await wait_for_release(conversation_id)
-            # A deploy may have started draining while this waited.
+            # A deploy may have started draining while this waited: save the
+            # run for the next server instead of dropping it.
             from api.drain import DRAIN_MESSAGE, is_draining
             if is_draining():
-                logger.info("Draining for a deploy; dropping queued run of %s", conversation_id)
-                yield DRAIN_MESSAGE
+                yield await _queue_for_deploy(
+                    observer, prompt, conversation_context, files, source,
+                    user_email, selected_model, tool_config,
+                ) or DRAIN_MESSAGE
                 return
             # The finished run marked the conversation completed; flip it back.
             await observer.resume(record_prompt=False)

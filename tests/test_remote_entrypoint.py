@@ -31,6 +31,14 @@ VALID_ENV = {
 }
 
 
+@pytest.fixture(autouse=True)
+def isolated_account_store(monkeypatch, tmp_path):
+    """Never discover the host's shared logins or inherit its login service."""
+    monkeypatch.setenv('CLAUDE_USERS_DIR', str(tmp_path / 'claude-users'))
+    monkeypatch.setenv('LOMA_CLAUDE_SHARED_LOGIN', 'off')
+    monkeypatch.setenv('LOMA_REMOTE_ACCOUNT_CAPACITY', '1')
+
+
 def set_env(monkeypatch, **overrides):
     for name in ('LOMA_REMOTE_WORKERS', 'LOMA_WORKER_URL', 'LOMA_WORKER_CONTROL_TOKEN',
                  'LOMA_WORKER_TLS_CA', 'LOMA_WORKER_TLS_CERT', 'LOMA_WORKER_TLS_KEY',
@@ -88,7 +96,9 @@ def test_incomplete_configuration_fails_closed(monkeypatch, overrides):
         dep.load_deployment()
 
 
-def test_valid_configuration_parses(monkeypatch):
+@pytest.mark.parametrize('shared_login', ['on', 'off'])
+def test_valid_configuration_parses(monkeypatch, shared_login):
+    monkeypatch.setenv('LOMA_CLAUDE_SHARED_LOGIN', shared_login)
     set_env(monkeypatch, LOMA_REMOTE_CLAUDE_ACCOUNTS='a@example.test=/srv/accounts/a, b@example.test=/srv/accounts/b',
             LOMA_REMOTE_CODEX_ACCOUNTS='c@example.test=/srv/accounts/c',
             LOMA_REMOTE_DEFAULT_MODEL='anthropic/claude-sonnet-4-5')
@@ -202,9 +212,11 @@ def test_local_cli_utilities_fail_closed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pool_status_never_500s_in_remote_mode(monkeypatch, tmp_path):
+@pytest.mark.parametrize('shared_login', ['on', 'off'])
+async def test_pool_status_never_500s_in_remote_mode(monkeypatch, tmp_path, shared_login):
     """The dashboard polls /api/pool-status on every session; with no local
     pool it must report remote mode (and misconfiguration) instead of raising."""
+    monkeypatch.setenv('LOMA_CLAUDE_SHARED_LOGIN', shared_login)
     from api.routes import handle_pool_status
     set_env(monkeypatch, LOMA_WORKER_URL=None)  # flag on, transport missing
     response = await handle_pool_status(None)

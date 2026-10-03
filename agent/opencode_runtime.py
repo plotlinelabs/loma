@@ -211,6 +211,11 @@ def _opencode_session_permission_rules() -> list[dict]:
     ]
 
 
+def _opencode_blocked_tool_name(request: dict) -> str:
+    permission = str(request.get("permission") or "")
+    return {"bash": "Bash", "skill": "Skill", "task": "Task"}.get(permission, permission or "tool")
+
+
 class OpenCodeError(RuntimeError):
     """Raised when OpenCode cannot serve a dashboard chat request."""
 
@@ -840,13 +845,15 @@ async def _checkout_warm_session(server: _OpenCodeServer, model_id: str) -> str 
     return None
 
 
-async def _create_session(title: str, *, base_url: str | None = None) -> str:
+async def _create_session(
+    title: str, *, base_url: str | None = None, permission: list[dict] | None = None,
+) -> str:
     session = await _request_json(
         "POST",
         "/session",
         json_body={
             "title": title[:120],
-            "permission": _opencode_session_permission_rules(),
+            "permission": permission or _opencode_session_permission_rules(),
         },
         params={"directory": str(PROJECT_ROOT)},
         timeout=30,
@@ -1280,6 +1287,7 @@ async def _run_opencode_agent(
     user_email: str | None = None,
     user_mcp_overrides: dict | None = None,
     image_files: list[dict] | None = None,
+    agent_scope: dict | None = None,
 ) -> AsyncGenerator[str | dict, None]:
     """Run one dashboard chat turn through OpenCode and yield dashboard events."""
     started_at = time.perf_counter()
@@ -1307,17 +1315,40 @@ async def _run_opencode_agent(
     base_url = server.base_url
 
     conversation_id = getattr(observer, "conversation_id", None)
+
+    # An agent with an enforced tool/skill scope gets its own session whose
+    # permission rules hide out-of-scope MCP tools and route Bash/Skill calls
+    # through permission requests (checked below). Warm sessions allow
+    # everything, so they are never used for it.
+    from agent.agent_scope import (
+        check_opencode_permission, config_hash as _scope_hash, opencode_permission_rules, scope_is_enforced,
+    )
+    enforce_agent_scope = scope_is_enforced(agent_scope)
+    scope_mcp_names = set(_opencode_mcp_names) | set(user_mcp_overrides or {})
+    if enforce_agent_scope and not scope_mcp_names:
+        try:
+            scope_mcp_names = set((await _load_current_agent_config()).get("mcp_servers", {}))
+        except Exception:
+            logger.warning("Could not load MCP server names for agent scope", exc_info=True)
+    session_permission = (
+        opencode_permission_rules(agent_scope, scope_mcp_names) if enforce_agent_scope else None
+    )
+    scope_key = (
+        "scope:" + _scope_hash({"tools": sorted(map(str, session_permission or []))})
+        if enforce_agent_scope else None
+    )
+
     session_cache_key = (
-        (server.config_hash, conversation_id, selected_model) if conversation_id else None
+        (server.config_hash, conversation_id, selected_model, scope_key) if conversation_id else None
     )
     session_id = _opencode_session_cache.get(session_cache_key) if session_cache_key else None
     warm_session_used = False
     reused_session = bool(session_id)
     if not session_id:
-        session_id = await _checkout_warm_session(server, selected_model)
+        session_id = None if enforce_agent_scope else await _checkout_warm_session(server, selected_model)
         if session_id is None:
             session_id = await _create_session(
-                full_prompt[:80] or "Dashboard chat", base_url=base_url
+                full_prompt[:80] or "Dashboard chat", base_url=base_url, permission=session_permission,
             )
             _schedule_prewarm(server, selected_model)
         else:
@@ -1590,6 +1621,47 @@ async def _run_opencode_agent(
                     if _event_session_id(properties) != session_id:
                         continue
 
+                    if event_type == "permission.asked" and enforce_agent_scope:
+                        # Scoped agent: answer every request with the scope check.
+                        # Reply "once" (never "always") so nothing is saved that
+                        # could skip the check later.
+                        permission_id = properties.get("id")
+                        if not permission_id:
+                            continue
+                        try:
+                            block = check_opencode_permission(agent_scope, properties, scope_mcp_names)
+                        except Exception:
+                            logger.exception("Agent scope check failed; rejecting OpenCode permission")
+                            block = {"kind": "tool", "target": properties.get("permission") or "tool",
+                                     "reason": "This call could not be checked against the agent's tool limits."}
+                        reply = {"reply": "once"}
+                        if block:
+                            reply = {"reply": "reject", "message": block["reason"]}
+                            logger.info(
+                                "Blocked OpenCode %s for agent %s: %s",
+                                properties.get("permission"), agent_scope.get("agent_name"), block["target"],
+                            )
+                            if observer is not None:
+                                try:
+                                    await observer.record_blocked_call(
+                                        tool_name=_opencode_blocked_tool_name(properties),
+                                        kind=block["kind"], target=block["target"], reason=block["reason"],
+                                        tool_use_id=(properties.get("tool") or {}).get("callID"),
+                                    )
+                                except Exception:
+                                    logger.warning("Could not record blocked call", exc_info=True)
+                            if include_steps:
+                                yield {"type": "status", "message": f"Blocked {block['target']} (outside {agent_scope.get('agent_name')}'s tools)"}
+                        await _request_json(
+                            "POST",
+                            f"/permission/{permission_id}/reply",
+                            json_body=reply,
+                            params={"directory": str(PROJECT_ROOT)},
+                            timeout=30,
+                            base_url=base_url,
+                        )
+                        continue
+
                     if event_type == "permission.asked":
                         permission_id = properties.get("id")
                         permission_name = properties.get("permission") or "permission"
@@ -1706,10 +1778,10 @@ async def _run_opencode_agent(
                 server.active_turns += 1
                 base_url = server.base_url
                 session_id = await _create_session(
-                    full_prompt[:80] or "Dashboard chat", base_url=base_url
+                    full_prompt[:80] or "Dashboard chat", base_url=base_url, permission=session_permission,
                 )
                 if conversation_id:
-                    session_cache_key = (server.config_hash, conversation_id, selected_model)
+                    session_cache_key = (server.config_hash, conversation_id, selected_model, scope_key)
                     _opencode_session_cache[session_cache_key] = session_id
                 abort_target["session_id"] = session_id
                 abort_target["base_url"] = base_url

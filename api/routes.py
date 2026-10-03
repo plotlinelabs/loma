@@ -30,6 +30,8 @@ from api.dashboard_ingestion import ingest_dashboard_chat
 from api.drain import DRAIN_MESSAGE, is_draining
 from api import skill_service
 from api.agent_identity_routes import build_agent_context_block, resolve_agent_for_chat
+from agent.agent_scope import build_agent_scope
+from observability.agent_events import record_agent_switch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
@@ -481,6 +483,8 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
     search = request.query.get("search", "").strip()
     person = request.query.get("person", "").strip()
     topic = request.query.get("topic", "").strip()
+    agent_filter = request.query.get("agent", "").strip()
+    blocked_only = request.query.get("blocked", "").lower() in ("1", "true", "yes")
     page = int(request.query.get("page", 1))
     per_page = min(int(request.query.get("per_page", 50)), 100)
 
@@ -559,11 +563,23 @@ async def handle_list_conversations(request: web.Request) -> web.Response:
                 {"final_response": {"$regex": search, "$options": "i"}},
             ]
 
+    # Agent filter: runs the agent is pinned to, or that have a reply from it.
+    # "loma" means runs answered by the default agent only.
+    extra_conditions: list[dict] = []
+    if agent_filter == "loma":
+        query["metadata.agent_id"] = {"$in": [None, ""]}
+    elif agent_filter:
+        extra_conditions.append({"$or": [
+            {"metadata.agent_id": agent_filter},
+            {"messages.agent_id": agent_filter},
+        ]})
+    if blocked_only:
+        query["blocked_call_count"] = {"$gt": 0}
+
     # Merge isolation condition with $and to avoid $or key conflicts
     if isolation_condition:
-        final_query = {"$and": [query, isolation_condition]} if query else isolation_condition
-    else:
-        final_query = query
+        extra_conditions.append(isolation_condition)
+    final_query = {"$and": [query, *extra_conditions]} if extra_conditions else query
 
     total = await db.conversations.count_documents(final_query)
 
@@ -966,6 +982,15 @@ async def handle_interrupt_agent(request: web.Request) -> web.Response:
             from agent.active_streams import request_pending_stop
             await request_pending_stop(cid)
             return web.json_response({"interrupted": True, "pending": True, "conversation_id": cid})
+        if (
+            conversation
+            and conversation.get("status") == "queued"
+            and (owner == user_email or get_system_role(request) == "admin")
+        ):
+            # Waiting for a deploy to finish: drop it before it starts.
+            from api.pending_runs import cancel_conversation
+            await cancel_conversation(db, cid)
+            return web.json_response({"interrupted": True, "conversation_id": cid})
         return web.json_response({"error": "No active stream for this conversation"}, status=404)
 
     try:
@@ -1035,6 +1060,49 @@ async def _busy_conversation_response(
     )
 
 
+async def _queue_chat_for_deploy(
+    db, conversation_id: str, existing, metadata: dict, message: str, files,
+    user_email: str, selected_model, tool_config, conversation_context: str,
+    run_tool_config=None,
+) -> web.Response:
+    """202 for a chat message that arrived while a deploy drains.
+
+    The message is recorded on the conversation (so a reload shows it, not a
+    blank chat) and saved as a pending run the next server starts.
+    """
+    from api import pending_runs
+
+    if not pending_runs.files_fit(files):
+        return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
+    await pending_runs.record_queued_message(
+        db, conversation_id, message, sender=user_email,
+        new_conversation=None if existing else metadata,
+    )
+    if tool_config:
+        await db.conversations.update_one(
+            {"conversation_id": conversation_id}, {"$set": {"tool_config": tool_config}},
+        )
+    await pending_runs.enqueue(
+        db, "dashboard",
+        conversation_id=conversation_id,
+        user_email=user_email,
+        source="dashboard",
+        prompt=message,
+        files=files or [],
+        model=selected_model or "",
+        tool_config=run_tool_config or tool_config,
+        conversation_context=conversation_context,
+        metadata={k: metadata[k] for k in ("agent_id", "agent_name", "agent_config_version")
+                  if k in metadata},
+    )
+    return web.json_response({
+        "queued": True,
+        "draining": True,
+        "conversation_id": conversation_id,
+        "message": pending_runs.QUEUED_MESSAGE,
+    }, status=202)
+
+
 async def handle_chat(request: web.Request) -> web.Response:
     """POST /api/chat — SSE stream for dashboard chat.
 
@@ -1058,6 +1126,8 @@ async def handle_chat(request: web.Request) -> web.Response:
     if tool_config is not None:
         if not isinstance(tool_config, dict):
             return web.json_response({"error": "tool_config must be an object"}, status=400)
+        # The agent scope is built server-side only; never trust a client copy.
+        tool_config = {k: v for k, v in tool_config.items() if k != "agent_scope"}
         for key in ("enabled_skills", "enabled_tools"):
             val = tool_config.get(key)
             if val is not None and not isinstance(val, list):
@@ -1085,15 +1155,11 @@ async def handle_chat(request: web.Request) -> web.Response:
     if not user_email:
         return web.json_response({"error": "Authentication required"}, status=401)
 
-    # A deploy is waiting for in-flight runs to finish; don't start a new one
-    # that would only get killed. The client surfaces the message as-is.
-    if is_draining():
-        return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
-
     # Set up observability — reuse existing conversation if conversation_id provided
     observer = None
     existing = None
     agent_identity = None
+    run_tool_config = None
     run_id = None
     db = get_db()
     existing_conversation_id = body.get("conversation_id")
@@ -1140,15 +1206,31 @@ async def handle_chat(request: web.Request) -> web.Response:
                     )
 
             # Agent identity: an explicit selection wins; resumed conversations fall
-            # back to the agent pinned on the conversation.
+            # back to the agent pinned on the conversation. An explicit empty
+            # agent_id (null or "") is the user switching back to the default
+            # agent, which unpins; a request without the field keeps the pin.
             requested_agent_id = body.get("agent_id")
             if requested_agent_id is not None and not isinstance(requested_agent_id, str):
                 return web.json_response({"error": "agent_id must be a string"}, status=400)
             pinned_agent_id = ((existing or {}).get("metadata") or {}).get("agent_id")
+            pinned_agent = {
+                "agent_id": pinned_agent_id,
+                "name": ((existing or {}).get("metadata") or {}).get("agent_name"),
+            } if pinned_agent_id else None
             if requested_agent_id:
                 agent_identity = await resolve_agent_for_chat(db, requested_agent_id, user_email)
                 if agent_identity is None:
                     return web.json_response({"error": "Agent not found"}, status=404)
+            elif "agent_id" in body:
+                if pinned_agent_id:
+                    await db.conversations.update_one(
+                        {"conversation_id": existing_conversation_id},
+                        {"$unset": {"metadata.agent_id": "", "metadata.agent_name": "",
+                                    "metadata.agent_config_version": ""}},
+                    )
+                    await record_agent_switch(
+                        db, existing_conversation_id, pinned_agent, None, user_email,
+                    )
             elif pinned_agent_id:
                 # Pinned agent may have been deleted, disabled, or unshared since —
                 # degrade to the default agent rather than blocking the conversation.
@@ -1156,53 +1238,58 @@ async def handle_chat(request: web.Request) -> web.Response:
             if agent_identity:
                 metadata["agent_id"] = agent_identity["agent_id"]
                 metadata["agent_name"] = agent_identity["name"]
-                if existing and pinned_agent_id != agent_identity["agent_id"]:
+                metadata["agent_config_version"] = int(agent_identity.get("config_version") or 1)
+                if existing:
+                    # Keep name and version current on every run; they can change.
                     await db.conversations.update_one(
                         {"conversation_id": existing_conversation_id},
                         {"$set": {
                             "metadata.agent_id": agent_identity["agent_id"],
                             "metadata.agent_name": agent_identity["name"],
+                            "metadata.agent_config_version": metadata["agent_config_version"],
                         }},
                     )
-
-            if existing_conversation_id:
-                observer = ConversationObserver(
-                    db, metadata=metadata,
-                    conversation_id=existing_conversation_id,
-                )
-                if existing:
-                    if existing.get("task_status") == "todo":
-                        # Sending on a staged board task flips it to active. This
-                        # covers both fresh drafts (set started_at — resume() never
-                        # does, and Activity sorts by it) and parked chats resumed
-                        # from a lane (keep their original timestamps).
-                        now = datetime.now(timezone.utc)
-                        flip: dict = {"task_status": "active"}
-                        if not existing.get("started_at"):
-                            flip["started_at"] = now
-                            flip["task_started_at"] = now
-                        await db.conversations.update_one(
-                            {"conversation_id": existing_conversation_id},
-                            # Draft attachments ride the first message (the client
-                            # seeds them as pending files) — drop the staged copy.
-                            {"$set": flip, "$unset": {"draft_files": ""}},
+                    if pinned_agent_id != agent_identity["agent_id"]:
+                        await record_agent_switch(
+                            db, existing_conversation_id, pinned_agent, agent_identity, user_email,
                         )
-                    await observer.resume()
-                    # Use stored tool_config from existing conversation if not in request
-                    if tool_config is None and existing.get("tool_config"):
-                        tool_config = existing["tool_config"]
-                else:
-                    await observer.start()
-            else:
-                observer = ConversationObserver(db, metadata=metadata)
-                await observer.start()
 
-            # Persist tool_config on the conversation document
-            if tool_config and observer:
-                await db.conversations.update_one(
-                    {"conversation_id": observer.conversation_id},
-                    {"$set": {"tool_config": tool_config}},
-                )
+            if existing:
+                if existing.get("task_status") == "todo":
+                    # Sending on a staged board task flips it to active. This
+                    # covers both fresh drafts (set started_at — resume() never
+                    # does, and Activity sorts by it) and parked chats resumed
+                    # from a lane (keep their original timestamps).
+                    now = datetime.now(timezone.utc)
+                    flip: dict = {"task_status": "active"}
+                    if not existing.get("started_at"):
+                        flip["started_at"] = now
+                        flip["task_started_at"] = now
+                    await db.conversations.update_one(
+                        {"conversation_id": existing_conversation_id},
+                        # Draft attachments ride the first message (the client
+                        # seeds them as pending files) — drop the staged copy.
+                        {"$set": flip, "$unset": {"draft_files": ""}},
+                    )
+                # Use stored tool_config from existing conversation if not in request
+                if tool_config is None and existing.get("tool_config"):
+                    tool_config = {
+                        k: v for k, v in existing["tool_config"].items() if k != "agent_scope"
+                    }
+
+            # An agent's own scope is the only limit on its chats. The composer's
+            # Tools/Skills picks must not stack on it, and are left as saved so
+            # they come back when the user switches to the default agent.
+            # The agent's scope rides a run-only copy of tool_config (so it
+            # reaches the deploy queue and remote workers) and is enforced at
+            # runtime by agent/agent_scope.py. It is never saved as the
+            # conversation's tool_config.
+            if agent_identity:
+                tool_config = None
+                run_tool_config = {
+                    "enabled_tools": None, "enabled_skills": None,
+                    "agent_scope": await build_agent_scope(db, agent_identity),
+                }
 
             # Board tasks carry the global default context plus the board's
             # working context on every turn. The run acts as the sender (the
@@ -1227,6 +1314,39 @@ async def handle_chat(request: web.Request) -> web.Response:
                     f"{agent_block}\n\n{conversation_context}"
                     if conversation_context else agent_block
                 )
+
+            # A deploy is waiting for in-flight runs to finish. Don't start a
+            # run the restart would kill: save the message and let the next
+            # server run it (api/pending_runs.py).
+            if is_draining():
+                return await _queue_chat_for_deploy(
+                    db, existing_conversation_id or str(uuid.uuid4()), existing, metadata,
+                    message, files, user_email, selected_model, tool_config,
+                    conversation_context, run_tool_config=run_tool_config,
+                )
+
+            if existing_conversation_id:
+                observer = ConversationObserver(
+                    db, metadata=metadata,
+                    conversation_id=existing_conversation_id,
+                )
+                if existing:
+                    await observer.resume()
+                else:
+                    await observer.start()
+            else:
+                observer = ConversationObserver(db, metadata=metadata)
+                await observer.start()
+
+            # Persist tool_config on the conversation document
+            if tool_config and observer:
+                await db.conversations.update_one(
+                    {"conversation_id": observer.conversation_id},
+                    {"$set": {"tool_config": tool_config}},
+                )
+        elif is_draining():
+            # No database to queue in: refuse as before.
+            return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
 
         from api.recall_session import launch_recall
         recall_session = await launch_recall(request, observer.conversation_id if observer else None, user_email)
@@ -1279,7 +1399,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                 source="dashboard",
                 user_email=user_email,
                 selected_model=selected_model,
-                tool_config=tool_config,
+                tool_config=run_tool_config or tool_config,
                 recall_session=recall_session,
             ):
                 # If the client already disconnected, keep consuming events so the
