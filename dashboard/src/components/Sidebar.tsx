@@ -42,6 +42,7 @@ import {
   RiMenuUnfoldLine,
   RiExpandUpDownLine,
   RiNotification3Line,
+  RiRocketLine,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -52,9 +53,14 @@ type NavItem = {
   minRole?: SystemRole;
 };
 
-/** Below Tasks and its boards. The nav is kept to Tasks and Flows; everything
+/** Below Tasks and its boards. The nav is kept to Tasks, Onboarding and Flows; everything
  * else lives in the account menu. */
 const navigation: NavItem[] = [
+  {
+    name: "Onboarding",
+    href: "/onboarding",
+    icon: <RiRocketLine size={16} />,
+  },
   {
     name: "Flows",
     href: "/flows",
