@@ -34,6 +34,20 @@ IOS_PRIVACY = {'all', 'calendar', 'contacts-limited', 'contacts', 'location', 'l
                'photos', 'media-library', 'microphone', 'motion', 'reminders', 'siri'}
 MAX_EXTRAS = 20
 MAX_WAIT = 1200
+CURSOR = re.compile(r'[tc]:[0-9]{1,20}(?:\.[0-9]{1,6})?\Z')
+MAX_LOG_TAGS = 8
+# scenario steps reuse the single-op validation below; at_ms is relative to the scenario start.
+STEP_ACTIONS = {'tap', 'swipe', 'type', 'key', 'open_url', 'tap_text', 'wait_for', 'set_text', 'clear_text',
+                'scroll_until_visible', 'screenshot', 'launch_app', 'stop_app'}
+MAX_STEPS = 40
+MAX_STEP_WAIT = 30
+MAX_SCENARIO_SECONDS = 60
+MAX_SCENARIO_SHOTS = 6
+SHOT_NAME = re.compile(r'[A-Za-z0-9_-]{1,40}\Z')
+EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'logs', 'log_order'}
+LOG_EXPECT_INTS = {'min': 100000, 'max': 100000, 'by_ms': MAX_SCENARIO_SECONDS * 1000,
+                   'after_ms': MAX_SCENARIO_SECONDS * 1000}
+MAX_LOG_EXPECTS = 12
 
 SELECTOR = {'by', 'exact'}
 LAUNCH = {'extras', 'bool_extras', 'activity'}
@@ -52,7 +66,7 @@ OPS = {
     'swipe': ({'x1', 'y1', 'x2', 'y2'}, {'duration_ms'}),
     'type': ({'text'}, set()),
     'key': ({'key'}, set()),
-    'logs': (set(), {'lines', 'filter', 'clear', 'source'}),
+    'logs': (set(), {'lines', 'filter', 'clear', 'source', 'tags', 'since'}),
     'run_flow': ({'flow'}, {'verbose'}),
     'set_text': ({'text'}, {'match', 'clear', 'ref'} | SELECTOR),
     'clear_text': (set(), {'match', 'ref'} | SELECTOR),
@@ -62,18 +76,24 @@ OPS = {
     'burst': ({'count'}, {'interval_ms', 'app_id'} | LAUNCH),
     'record': ({'duration_s'}, {'app_id'} | LAUNCH),
     'animations': ({'enabled'}, set()),
+    'scenario': ({'duration_s'}, {'app_id', 'steps', 'record', 'sample_ms', 'sample_region', 'sample_min_change',
+                                  'log_tags', 'log_source', 'log_lines', 'stop_first', 'stop_on_fail', 'end_after_steps',
+                                  'console',
+                                  'expect'} | LAUNCH),
 }
 # Arguments the backend consumes itself; never forwarded to the runner.
 BACKEND_ARGS = {'ui_tree': {'compact', 'clickable_only', 'filter'}, 'run_flow': {'verbose'},
                 'install': {'wait_s', 'dispatch_workflow'}}
 INTS = {'x': (0, 10000), 'y': (0, 10000), 'x1': (0, 10000), 'y1': (0, 10000), 'x2': (0, 10000),
         'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 60),
-        'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 20),
-        'wait_s': (0, MAX_WAIT)}
-BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled'}
-ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'}}
+        'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 60),
+        'wait_s': (0, MAX_WAIT), 'sample_ms': (0, 2000), 'log_lines': (1, 2000)}
+BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled', 'record',
+         'stop_first', 'stop_on_fail', 'end_after_steps'}
+ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'},
+         'log_source': {'auto', 'system', 'console'}}
 STRS = {'url': 2000, 'text': 500, 'filter': 200, 'flow': 64 * 1024, 'key': 32, 'app_id': 255, 'upload_id': 64,
-        'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8}
+        'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8, 'since': 40}
 REF = re.compile(r'e[1-9][0-9]{0,3}\Z')
 # Element refs (e1, e2, ...) from the latest ui_tree, per (user, scope, device). Module level:
 # the HTTP routes build a new DeviceService per request. The model taps by ref instead of copying
@@ -84,7 +104,8 @@ _REFS = {}
 # Ops after which the screen may be different, so earlier refs must not be reused. Cleared before
 # the op is sent, so a failed or timed-out attempt (e.g. a half-done install) also invalidates them.
 REF_RESET_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'tap', 'tap_text', 'swipe',
-                 'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst'}
+                 'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst',
+                 'scenario'}
 
 # Runner features newer than 1.0.0: an older runner rejects the op or silently ignores the argument,
 # so the backend refuses them up front with an upgrade hint (the runner reports VERSION in its hello).
@@ -93,6 +114,9 @@ NEW_RUNNER_OPS = {'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_unti
                   'animations'}
 NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
                    'install': {'grant_appops', 'grant_privacy', 'force'}, 'logs': {'source'}}
+# (minimum runner version, ops, op -> arguments) for each runner release after 1.0.0.
+RUNNER_GATES = ((NEEDS_RUNNER, NEW_RUNNER_OPS, NEW_RUNNER_ARGS),
+                ((1, 2, 0), {'scenario'}, {'logs': {'tags', 'since'}}))
 
 
 def _version(text):
@@ -102,12 +126,16 @@ def _version(text):
 def _check_runner_version(conn, op, args):
     """args are the runner-bound arguments (backend-only ones already removed)."""
     version = getattr(conn, 'version', None)
-    if version is None or _version(version) >= NEEDS_RUNNER:
+    if version is None:
         return
-    newer = sorted(NEW_RUNNER_ARGS.get(op, set()) & set(args))
-    if op in NEW_RUNNER_OPS or newer:
+    for needed, ops, new_args in RUNNER_GATES:
+        if _version(version) >= needed:
+            continue
+        newer = sorted(new_args.get(op, set()) & set(args))
+        if op not in ops and not newer:
+            continue
         what = op + (' with ' + ', '.join(newer) if newer else '')
-        need = '.'.join(map(str, NEEDS_RUNNER))
+        need = '.'.join(map(str, needed))
         raise DeviceError(f'Runner too old for {what} (runner {version or "unknown"}); update the Loma Device Runner '
                           f'to >= {need}: download the new loma_device_runner.py from Integrations > Devices and '
                           'run `python3 loma_device_runner.py setup` on that machine')
@@ -180,6 +208,123 @@ def _validate(op, args):
             raise DeviceError('Invalid url (needs a scheme, no spaces or quotes)')
     if op == 'install' and ('build' in args) == ('upload_id' in args):
         raise DeviceError('install needs exactly one of build or upload_id')
+    for key in ('tags', 'log_tags'):
+        if key in args:
+            _validate_tags(key, args[key])
+    if 'since' in args:
+        if not CURSOR.fullmatch(args['since']):
+            raise DeviceError('Invalid since (use the cursor returned by the previous logs call)')
+        if args.get('clear'):
+            raise DeviceError('Use since or clear, not both')
+    if op == 'record' and args['duration_s'] > 20:
+        raise DeviceError('duration_s must be an integer between 1 and 20')
+    if op == 'scenario':
+        _validate_scenario(args)
+
+
+def _validate_tags(key, tags):
+    if (not isinstance(tags, list) or not 1 <= len(tags) <= MAX_LOG_TAGS
+            or not all(isinstance(t, str) and 0 < len(t) <= 100 and '\x00' not in t for t in tags)):
+        raise DeviceError(f'{key} must be a list of 1-{MAX_LOG_TAGS} strings (max 100 chars each)')
+
+
+def _validate_scenario(args):
+    """Same rules as the runner (need_steps / need_expect), so a bad spec fails before it reaches a device."""
+    if args['duration_s'] > MAX_SCENARIO_SECONDS:
+        raise DeviceError(f'duration_s is at most {MAX_SCENARIO_SECONDS} in a scenario')
+    sampling = args.get('sample_ms', 0)
+    if 0 < sampling < 150:
+        raise DeviceError('sample_ms must be 0 (off) or 150-2000')
+    if not sampling and {'sample_region', 'sample_min_change'} & set(args):
+        raise DeviceError('sample_region / sample_min_change need sample_ms')
+    region = args.get('sample_region')
+    if region is not None and (not isinstance(region, list) or len(region) != 4
+                               or not all(type(v) is int and 0 <= v <= 10000 for v in region)
+                               or region[2] <= region[0] or region[3] <= region[1]):
+        raise DeviceError('sample_region must be [x1, y1, x2, y2] in screen pixels')
+    floor = args.get('sample_min_change', 0)
+    if type(floor) not in (int, float) or not 0 <= floor <= 1:
+        raise DeviceError('sample_min_change must be a fraction from 0 to 1')
+    if 'app_id' not in args and ({'console'} | LAUNCH) & set(args):
+        raise DeviceError('extras / activity / console need app_id (the app the scenario launches)')
+    if 'log_source' in args or 'log_lines' in args:
+        if 'log_tags' not in args:
+            raise DeviceError('log_source / log_lines need log_tags (which log lines to keep)')
+    steps = args.get('steps', [])
+    if not isinstance(steps, list) or len(steps) > MAX_STEPS:
+        raise DeviceError(f'steps must be a list of at most {MAX_STEPS} steps')
+    window, last, shots = args['duration_s'] * 1000, 0, 0
+    for index, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or step.get('action') not in STEP_ACTIONS:
+            raise DeviceError(f'steps[{index}]: action must be one of ' + ', '.join(sorted(STEP_ACTIONS)))
+        action = step['action']
+        if 'at_ms' in step and 'after_ms' in step:
+            raise DeviceError(f'steps[{index}]: use at_ms (fixed offset from the start) or after_ms '
+                              '(delay after the previous step), not both')
+        for key in ('at_ms', 'after_ms'):
+            if key in step and (type(step[key]) is not int or not 0 <= step[key] < window):
+                raise DeviceError(f'steps[{index}]: {key} must be an integer from 0 to {window - 1} (inside duration_s)')
+        if 'at_ms' in step:
+            if step['at_ms'] < last:
+                raise DeviceError(f'steps[{index}]: at_ms steps must be in at_ms order')
+            last = step['at_ms']
+        rest = {k: v for k, v in step.items() if k not in ('action', 'at_ms', 'after_ms')}
+        if 'ref' in rest:
+            raise DeviceError(f'steps[{index}]: refs cannot be used in a scenario (the screen changes); '
+                              'use match or x/y')
+        try:
+            if action == 'screenshot':
+                shots += 1
+                if set(rest) - {'name'} or ('name' in rest and not (isinstance(rest['name'], str)
+                                                                    and SHOT_NAME.fullmatch(rest['name']))):
+                    raise DeviceError('takes only name (letters, digits, - and _)')
+                if shots > MAX_SCENARIO_SHOTS:
+                    raise DeviceError(f'at most {MAX_SCENARIO_SHOTS} screenshot steps per scenario')
+            elif action in ('launch_app', 'stop_app'):
+                if set(rest) - {'app_id'}:
+                    raise DeviceError('takes only app_id')
+                target = rest.get('app_id', args.get('app_id'))
+                if not isinstance(target, str) or not APP_ID.fullmatch(target):
+                    raise DeviceError('needs app_id (on the step or on the scenario)')
+            else:
+                _validate(action, rest)
+        except DeviceError as exc:
+            raise DeviceError(f'steps[{index}] ({action}): {exc}') from None
+        if rest.get('timeout_s', 0) > MAX_STEP_WAIT:
+            raise DeviceError(f'steps[{index}]: timeout_s is at most {MAX_STEP_WAIT} inside a scenario')
+    if 'expect' in args:
+        _validate_expect(args)
+
+
+def _validate_expect(args):
+    expect = args['expect']
+    if not isinstance(expect, dict) or not set(expect) <= EXPECT_KEYS:
+        raise DeviceError('expect may contain: ' + ', '.join(sorted(EXPECT_KEYS)))
+    for key in ('steps_ok', 'app_running'):
+        if key in expect and type(expect[key]) is not bool:
+            raise DeviceError(f'expect.{key} must be true or false')
+    if 'app_running' in expect and 'app_id' not in args:
+        raise DeviceError('expect.app_running needs app_id')
+    if 'settled_by_ms' in expect:
+        value = expect['settled_by_ms']
+        if type(value) is not int or not 0 <= value <= MAX_SCENARIO_SECONDS * 1000:
+            raise DeviceError('expect.settled_by_ms must be an integer number of milliseconds')
+        if not args.get('sample_ms'):
+            raise DeviceError('expect.settled_by_ms needs sample_ms (the screen-change timeline)')
+    rules, order = expect.get('logs', []), expect.get('log_order', [])
+    if (rules or order) and 'log_tags' not in args:
+        raise DeviceError('expect.logs / expect.log_order need log_tags (which log lines to capture)')
+    if not isinstance(rules, list) or len(rules) > MAX_LOG_EXPECTS:
+        raise DeviceError(f'expect.logs must be a list of at most {MAX_LOG_EXPECTS} rules')
+    for index, rule in enumerate(rules, 1):
+        if (not isinstance(rule, dict) or not {'match'} <= set(rule) <= {'match'} | set(LOG_EXPECT_INTS)
+                or not isinstance(rule['match'], str) or not 0 < len(rule['match']) <= 200
+                or any(type(rule[k]) is not int or not 0 <= rule[k] <= high
+                       for k, high in LOG_EXPECT_INTS.items() if k in rule)):
+            raise DeviceError(f'expect.logs[{index}]: needs match (text), may take min, max, by_ms, after_ms (integers)')
+    if (not isinstance(order, list) or len(order) > MAX_LOG_EXPECTS
+            or not all(isinstance(m, str) and 0 < len(m) <= 200 for m in order)):
+        raise DeviceError(f'expect.log_order must be a list of at most {MAX_LOG_EXPECTS} strings')
 
 
 def _validate_extras(name, extras):
@@ -481,6 +626,13 @@ class DeviceService:
                                'png': _decode(f.get('png_base64'), 'screenshot')} for f in data.get('frames') or []]
         elif op == 'record':
             data['mp4'] = _decode(data.pop('mp4_base64', None), 'recording')
+        elif op == 'scenario':
+            if 'mp4_base64' in data:
+                data['mp4'] = _decode(data.pop('mp4_base64'), 'recording')
+            if data.get('screenshots'):
+                data['screenshots'] = [{'name': shot.get('name'), 'at_ms': shot.get('at_ms'),
+                                        'png': _decode(shot.get('png_base64'), 'scenario screenshot')}
+                                       for shot in data['screenshots']]
         elif op == 'ui_tree':
             data = compact_tree(data, local.get('compact', False), local.get('clickable_only', False),
                                 local.get('filter'))

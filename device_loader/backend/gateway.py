@@ -31,7 +31,7 @@ MAX_SCREENSHOTS = 8  # per run; shares the run's 20-file artifact budget with wo
 WAIT_SECONDS = 90  # below the worker's 120 s per-call RPC timeout
 
 TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'device.app',
-         'device.input', 'device.observe', 'device.run_flow'}
+         'device.input', 'device.observe', 'device.run_flow', 'device.scenario'}
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
 INPUT_ACTIONS = {'animations', 'tap', 'swipe', 'type', 'key', 'open_url', 'set_text', 'clear_text', 'tap_text', 'wait_for',
                  'scroll_until_visible'}
@@ -126,15 +126,18 @@ class DeviceTools:
             what = _action(args, 'what', OBSERVE_ACTIONS)
             data = await service.call(owner, scope, device_id, what, args)
             return await self._deliver_screenshot(data) if what == 'screenshot' else data
+        if tool == 'device.scenario':
+            data = await service.call(owner, scope, device_id, 'scenario', args)
+            return await self._deliver_flow_screenshots(await self._deliver_video(data))
         data = await service.call(owner, scope, device_id, 'run_flow', args)
         return await self._deliver_flow_screenshots(data)
 
-    async def _store_png(self, png, label):
+    async def _store_png(self, png, label, ext='png'):
         if self.screenshots >= MAX_SCREENSHOTS:
             raise DeviceError(f'Screenshot limit for this run reached ({MAX_SCREENSHOTS}); use ui_tree, '
                               'and keep screenshots for final evidence')
         try:
-            receipt = self.artifacts.ingest(f'device-{label}-{self.screenshots + 1}.png', png)
+            receipt = self.artifacts.ingest(f'device-{label}-{self.screenshots + 1}.{ext}', png)
             info = await self.on_artifact(dict(receipt))
         except (ValueError, OSError):
             raise DeviceError('Could not store the screenshot (run file limit reached?)') from None
@@ -147,6 +150,16 @@ class DeviceTools:
                 'file': await self._store_png(png, 'screenshot'),
                 'note': 'The screenshot is shown to the user in this chat as evidence. You cannot view '
                         'images here; use device.observe ui_tree to check what is on screen.'}
+
+    async def _deliver_video(self, data):
+        """A scenario recording goes to the user as evidence (same budget as screenshots)."""
+        mp4 = data.pop('mp4', None)
+        if mp4 is not None:
+            try:
+                data['video'] = await self._store_png(mp4, 'scenario', 'mp4')
+            except DeviceError as exc:
+                data['video_not_delivered'] = str(exc)
+        return data
 
     async def _deliver_flow_screenshots(self, data):
         """Maestro takeScreenshot files go to the user like device.observe screenshots (same budget)."""

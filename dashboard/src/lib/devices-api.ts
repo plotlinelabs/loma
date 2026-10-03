@@ -13,6 +13,8 @@ export interface DeviceRunner {
   hostname: string | null;
   os: string | null;
   version: string | null;
+  latest_version?: string;
+  update_available?: boolean;
   capabilities: string[];
   shared_with: string[];
   online: boolean;

@@ -270,6 +270,12 @@ export default function DevicesPanel() {
                       {runner.version ? ` · runner ${runner.version}` : ""}
                       {runner.capabilities.length ? ` · ${runner.capabilities.join(", ")}` : ""}
                     </div>
+                    {runner.update_available && (
+                      <div className="text-xs text-amber-600">
+                        Update to runner {runner.latest_version}: download loma_device_runner.py again and run{" "}
+                        <code>python3 loma_device_runner.py setup</code> on that machine
+                      </div>
+                    )}
                   </div>
                   {runner.is_owner && (
                     <>

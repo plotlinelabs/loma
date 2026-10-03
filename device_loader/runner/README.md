@@ -60,7 +60,8 @@ runner should stay up while you are logged out.
 |---|---|
 | install (build fetched by Loma, checksum-verified), uninstall, launch, stop, reset_app | Run shell commands on your machine |
 | open_url (deep links), tap, swipe, type, key | Read or write files on your machine |
-| screenshot, ui_tree, logs | See physical devices (unless you opt in) |
+| screenshot, ui_tree, logs (tag filters, since-cursor) | See physical devices (unless you opt in) |
+| scenario: the same inputs as one test case (in order, or at fixed times), with optional video, screenshots, screen-change sampling, logs and pass/fail rules | |
 | run_flow (Maestro YAML, screened) | Run Maestro JavaScript (unless you opt in) |
 
 ## Policy (`~/.loma-device-runner/config.json`)
@@ -69,7 +70,8 @@ runner should stay up while you are logged out.
 "policy": {
   "allow_physical_devices": false,
   "allowed_app_ids": ["com.example.demo"],
-  "allow_maestro_scripts": false
+  "allow_maestro_scripts": false,
+  "keep_awake": true
 }
 ```
 
@@ -77,11 +79,15 @@ runner should stay up while you are logged out.
 - `allowed_app_ids`: if non-empty, only these app ids can be installed/launched/stopped/reset/uninstalled, and Maestro flows may only target them. `install` then needs an `app_id`, and the package that actually got installed is checked too.
 - `allow_maestro_scripts`: permit Maestro commands outside the built-in allowlist (`runScript`, `evalScript`, `runFlow`, `addMedia`, `file:` sub-flows, ...), `${...}` and extra flow config keys. Maestro JavaScript can make HTTP requests from your machine and sub-flows can read files on it, so this is off by default.
 
+- `keep_awake` (macOS, default `true`): while the agent is using a device, hold a `caffeinate -i -s` assertion so
+  the Mac does not idle-sleep and drop the connection mid-test. It lapses 15 minutes after the last device call.
+  A closed lid on battery still sleeps (macOS policy).
+
 Run `setup` again after editing the policy to restart the runner.
 
 ## Tips for reliable agent testing
 
 - Use a **dedicated** emulator/simulator for Loma, with no personal Google/Apple account signed in.
-- Run `caffeinate -dimsu` (macOS) during long sessions so the machine does not sleep.
+- Runner 1.2.0+ keeps the Mac awake while devices are in use (`keep_awake`); keep the lid open or plug in power.
 - Emulators can run headless: `emulator -avd loma-test -no-window -no-snapshot-save`.
 - Revoke the runner under **Integrations → Devices** at any time; it stops within seconds.
