@@ -23,7 +23,8 @@ from api.auth_helpers import get_system_role, get_user_email, is_loopback, requi
 from device_loader.backend import builds, store
 from device_loader.backend.builds import blobs, FILENAME, MAX_BLOB
 from device_loader.backend.hub import DeviceError, hub
-from device_loader.backend.service import DeviceService
+from device_loader.backend.service import DeviceService, _version
+from device_loader.runner.loma_device_runner import VERSION as RUNNER_VERSION
 from observability.db import get_db
 from tools._auth_token import verify_user_auth_token
 
@@ -179,7 +180,9 @@ def _runner_view(runner, user_email):
     return {
         'runner_id': runner['runner_id'], 'name': runner.get('name'), 'owner': runner.get('owner_email'),
         'is_owner': runner.get('owner_email') == user_email, 'hostname': runner.get('hostname'),
-        'os': runner.get('os'), 'version': runner.get('version'),
+        'os': runner.get('os'), 'version': runner.get('version'), 'latest_version': RUNNER_VERSION,
+        # Newer device ops (scenario, logs cursors) are refused by older runners until they update.
+        'update_available': bool(runner.get('version')) and _version(runner.get('version')) < _version(RUNNER_VERSION),
         'capabilities': runner.get('capabilities') or [], 'shared_with': runner.get('shared_with') or [],
         'online': conn is not None, 'last_seen': last_seen.isoformat() if last_seen else None,
         'created_at': store.aware(runner['created_at']).isoformat() if runner.get('created_at') else None}

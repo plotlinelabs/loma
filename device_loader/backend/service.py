@@ -34,6 +34,12 @@ IOS_PRIVACY = {'all', 'calendar', 'contacts-limited', 'contacts', 'location', 'l
                'photos', 'media-library', 'microphone', 'motion', 'reminders', 'siri'}
 MAX_EXTRAS = 20
 MAX_WAIT = 1200
+CURSOR = re.compile(r'[tc]:[0-9]{1,20}(?:\.[0-9]{1,6})?\Z')
+MAX_LOG_TAGS = 8
+# scenario steps reuse the single-op validation below; at_ms is relative to the scenario start.
+STEP_ACTIONS = {'tap', 'swipe', 'type', 'key', 'open_url', 'tap_text', 'wait_for'}
+MAX_STEPS = 40
+MAX_STEP_WAIT = 10
 
 SELECTOR = {'by', 'exact'}
 LAUNCH = {'extras', 'bool_extras', 'activity'}
@@ -52,7 +58,7 @@ OPS = {
     'swipe': ({'x1', 'y1', 'x2', 'y2'}, {'duration_ms'}),
     'type': ({'text'}, set()),
     'key': ({'key'}, set()),
-    'logs': (set(), {'lines', 'filter', 'clear', 'source'}),
+    'logs': (set(), {'lines', 'filter', 'clear', 'source', 'tags', 'since'}),
     'run_flow': ({'flow'}, {'verbose'}),
     'set_text': ({'text'}, {'match', 'clear', 'ref'} | SELECTOR),
     'clear_text': (set(), {'match', 'ref'} | SELECTOR),
@@ -62,6 +68,8 @@ OPS = {
     'burst': ({'count'}, {'interval_ms', 'app_id'} | LAUNCH),
     'record': ({'duration_s'}, {'app_id'} | LAUNCH),
     'animations': ({'enabled'}, set()),
+    'scenario': ({'duration_s'}, {'app_id', 'steps', 'record', 'sample_ms', 'log_tags', 'log_source', 'log_lines',
+                                  'stop_first', 'console'} | LAUNCH),
 }
 # Arguments the backend consumes itself; never forwarded to the runner.
 BACKEND_ARGS = {'ui_tree': {'compact', 'clickable_only', 'filter'}, 'run_flow': {'verbose'},
@@ -69,11 +77,13 @@ BACKEND_ARGS = {'ui_tree': {'compact', 'clickable_only', 'filter'}, 'run_flow': 
 INTS = {'x': (0, 10000), 'y': (0, 10000), 'x1': (0, 10000), 'y1': (0, 10000), 'x2': (0, 10000),
         'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 60),
         'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 20),
-        'wait_s': (0, MAX_WAIT)}
-BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled'}
-ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'}}
+        'wait_s': (0, MAX_WAIT), 'sample_ms': (0, 2000), 'log_lines': (1, 2000)}
+BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled', 'record',
+         'stop_first'}
+ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'},
+         'log_source': {'auto', 'system', 'console'}}
 STRS = {'url': 2000, 'text': 500, 'filter': 200, 'flow': 64 * 1024, 'key': 32, 'app_id': 255, 'upload_id': 64,
-        'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8}
+        'match': 200, 'activity': 255, 'dispatch_workflow': 100, 'ref': 8, 'since': 40}
 REF = re.compile(r'e[1-9][0-9]{0,3}\Z')
 # Element refs (e1, e2, ...) from the latest ui_tree, per (user, scope, device). Module level:
 # the HTTP routes build a new DeviceService per request. The model taps by ref instead of copying
@@ -84,7 +94,8 @@ _REFS = {}
 # Ops after which the screen may be different, so earlier refs must not be reused. Cleared before
 # the op is sent, so a failed or timed-out attempt (e.g. a half-done install) also invalidates them.
 REF_RESET_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'tap', 'tap_text', 'swipe',
-                 'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst'}
+                 'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst',
+                 'scenario'}
 
 # Runner features newer than 1.0.0: an older runner rejects the op or silently ignores the argument,
 # so the backend refuses them up front with an upgrade hint (the runner reports VERSION in its hello).
@@ -93,6 +104,9 @@ NEW_RUNNER_OPS = {'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_unti
                   'animations'}
 NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
                    'install': {'grant_appops', 'grant_privacy', 'force'}, 'logs': {'source'}}
+# (minimum runner version, ops, op -> arguments) for each runner release after 1.0.0.
+RUNNER_GATES = ((NEEDS_RUNNER, NEW_RUNNER_OPS, NEW_RUNNER_ARGS),
+                ((1, 2, 0), {'scenario'}, {'logs': {'tags', 'since'}}))
 
 
 def _version(text):
@@ -102,12 +116,16 @@ def _version(text):
 def _check_runner_version(conn, op, args):
     """args are the runner-bound arguments (backend-only ones already removed)."""
     version = getattr(conn, 'version', None)
-    if version is None or _version(version) >= NEEDS_RUNNER:
+    if version is None:
         return
-    newer = sorted(NEW_RUNNER_ARGS.get(op, set()) & set(args))
-    if op in NEW_RUNNER_OPS or newer:
+    for needed, ops, new_args in RUNNER_GATES:
+        if _version(version) >= needed:
+            continue
+        newer = sorted(new_args.get(op, set()) & set(args))
+        if op not in ops and not newer:
+            continue
         what = op + (' with ' + ', '.join(newer) if newer else '')
-        need = '.'.join(map(str, NEEDS_RUNNER))
+        need = '.'.join(map(str, needed))
         raise DeviceError(f'Runner too old for {what} (runner {version or "unknown"}); update the Loma Device Runner '
                           f'to >= {need}: download the new loma_device_runner.py from Integrations > Devices and '
                           'run `python3 loma_device_runner.py setup` on that machine')
@@ -180,6 +198,55 @@ def _validate(op, args):
             raise DeviceError('Invalid url (needs a scheme, no spaces or quotes)')
     if op == 'install' and ('build' in args) == ('upload_id' in args):
         raise DeviceError('install needs exactly one of build or upload_id')
+    for key in ('tags', 'log_tags'):
+        if key in args:
+            _validate_tags(key, args[key])
+    if 'since' in args:
+        if not CURSOR.fullmatch(args['since']):
+            raise DeviceError('Invalid since (use the cursor returned by the previous logs call)')
+        if args.get('clear'):
+            raise DeviceError('Use since or clear, not both')
+    if op == 'scenario':
+        _validate_scenario(args)
+
+
+def _validate_tags(key, tags):
+    if (not isinstance(tags, list) or not 1 <= len(tags) <= MAX_LOG_TAGS
+            or not all(isinstance(t, str) and 0 < len(t) <= 100 and '\x00' not in t for t in tags)):
+        raise DeviceError(f'{key} must be a list of 1-{MAX_LOG_TAGS} strings (max 100 chars each)')
+
+
+def _validate_scenario(args):
+    if 0 < args.get('sample_ms', 0) < 150:
+        raise DeviceError('sample_ms must be 0 (off) or 150-2000')
+    if 'app_id' not in args and ({'console'} | LAUNCH) & set(args):
+        raise DeviceError('extras / activity / console need app_id (the app the scenario launches)')
+    if 'log_source' in args or 'log_lines' in args:
+        if 'log_tags' not in args:
+            raise DeviceError('log_source / log_lines need log_tags (which log lines to keep)')
+    steps = args.get('steps', [])
+    if not isinstance(steps, list) or len(steps) > MAX_STEPS:
+        raise DeviceError(f'steps must be a list of at most {MAX_STEPS} steps')
+    window, last = args['duration_s'] * 1000, 0
+    for index, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or step.get('action') not in STEP_ACTIONS:
+            raise DeviceError(f'steps[{index}]: action must be one of ' + ', '.join(sorted(STEP_ACTIONS)))
+        action, at = step['action'], step.get('at_ms')
+        if type(at) is not int or not 0 <= at < window:
+            raise DeviceError(f'steps[{index}]: at_ms must be an integer from 0 to {window - 1} (inside duration_s)')
+        if at < last:
+            raise DeviceError(f'steps[{index}]: steps must be in at_ms order')
+        last = at
+        rest = {k: v for k, v in step.items() if k not in ('action', 'at_ms')}
+        if 'ref' in rest:
+            raise DeviceError(f'steps[{index}]: refs cannot be used in a scenario (the screen changes); '
+                              'use tap_text or x/y')
+        try:
+            _validate(action, rest)
+        except DeviceError as exc:
+            raise DeviceError(f'steps[{index}] ({action}): {exc}') from None
+        if rest.get('timeout_s', 0) > MAX_STEP_WAIT:
+            raise DeviceError(f'steps[{index}]: timeout_s is at most {MAX_STEP_WAIT} inside a scenario')
 
 
 def _validate_extras(name, extras):
@@ -481,6 +548,8 @@ class DeviceService:
                                'png': _decode(f.get('png_base64'), 'screenshot')} for f in data.get('frames') or []]
         elif op == 'record':
             data['mp4'] = _decode(data.pop('mp4_base64', None), 'recording')
+        elif op == 'scenario' and 'mp4_base64' in data:
+            data['mp4'] = _decode(data.pop('mp4_base64'), 'recording')
         elif op == 'ui_tree':
             data = compact_tree(data, local.get('compact', False), local.get('clickable_only', False),
                                 local.get('filter'))

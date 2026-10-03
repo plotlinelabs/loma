@@ -30,8 +30,23 @@ Commands:
   device.py ... screenshot --device-id ID [--out PATH] [--preview]    (then Read the PNG / preview JPEG)
   device.py ... burst --device-id ID --count N [--interval-ms MS] [--app-id PKG [--extra K=V ...]] [--preview]
   device.py ... record --device-id ID --duration S [--app-id PKG [--extra K=V ...]]
-  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--clear] [--source auto|system|console]
+  device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--tag TAG ...] [--since CURSOR] [--clear]
+                [--source auto|system|console]     (every result has a cursor; pass it as --since next time)
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
+  device.py ... scenario --device-id ID --spec case.yaml   (timed steps + video + screen changes + logs, one call)
+
+Auth: --user-email / --auth-token, or LOMA_USER_EMAIL / LOMA_AUTH_TOKEN in the environment.
+Never write the token into a script or file: it expires after an hour anyway.
+
+scenario spec (YAML or JSON), e.g.:
+  app_id: com.example.demo   # stopped, then launched at t0 (optional)
+  duration_s: 8                         # capture window, 1-20 s
+  record: true                          # mp4 of the window, saved next to the other captures
+  sample_ms: 250                        # screen-change timeline (no images in the result)
+  log_tags: [LoaderTest, WidgetLoader]
+  steps:
+    - {at_ms: 1500, action: tap_text, match: Grid}
+    - {at_ms: 4000, action: key, key: back}
 
 Files (screenshots, burst frames, recordings, flow screenshots) are written to
 $LOMA_CONVERSATION_DIR/device/ when that is set, else to a per-conversation dir
@@ -222,7 +237,13 @@ def build_body(args):
             log_args['filter'] = args.filter
         if args.source:
             log_args['source'] = args.source
+        if args.tag:
+            log_args['tags'] = args.tag
+        if args.since:
+            log_args['since'] = args.since
         return {**call, 'op': 'logs', 'args': log_args}
+    if args.command == 'scenario':
+        return {**call, 'op': 'scenario', 'args': load_spec(args.spec)}
     if args.command == 'run-flow':
         with open(args.flow_file) as handle:
             flow_args = {'flow': handle.read()}
@@ -232,10 +253,27 @@ def build_body(args):
     raise SystemExit('Unknown command')
 
 
+def load_spec(path):
+    """A scenario spec file (YAML or JSON object); the backend and runner validate its contents."""
+    with open(path) as handle:
+        text = handle.read()
+    try:
+        spec = json.loads(text)
+    except ValueError:
+        import yaml
+        try:
+            spec = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise SystemExit(f'--spec is not valid YAML/JSON: {str(exc)[:300]}')
+    if not isinstance(spec, dict):
+        raise SystemExit('--spec must be a mapping (duration_s, steps, ...)')
+    return spec
+
+
 def parser():
     p = argparse.ArgumentParser(description='Drive devices on your Loma Device Runners')
-    p.add_argument('--user-email', required=True)
-    p.add_argument('--auth-token', required=True)
+    p.add_argument('--user-email', default=os.environ.get('LOMA_USER_EMAIL'))
+    p.add_argument('--auth-token', default=os.environ.get('LOMA_AUTH_TOKEN'))
     p.add_argument('--scope', required=True,
                    help='Lease scope: pass this conversation id, so leases are per chat')
     sub = p.add_subparsers(dest='command', required=True)
@@ -336,6 +374,10 @@ def parser():
     s.add_argument('--filter')
     s.add_argument('--clear', action='store_true')
     s.add_argument('--source', choices=['auto', 'system', 'console'])
+    s.add_argument('--tag', action='append', metavar='TAG', help='Keep lines containing any --tag (counts per tag)')
+    s.add_argument('--since', metavar='CURSOR', help='Only lines after the cursor a previous logs call returned')
+    s = with_device('scenario')
+    s.add_argument('--spec', required=True, help='YAML/JSON scenario spec (see the module docstring)')
     s = with_device('run-flow')
     s.add_argument('--flow-file', required=True)
     s.add_argument('--verbose', action='store_true', help='Full Maestro output and JUnit report')
@@ -419,7 +461,10 @@ def save_media(args, result):
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    p = parser()
+    args = p.parse_args(argv)
+    if not args.user_email or not args.auth_token:
+        p.error('--user-email and --auth-token are required (or set LOMA_USER_EMAIL / LOMA_AUTH_TOKEN)')
     body = build_body(args)
     headers = {'X-Loma-User': args.user_email, 'X-Loma-Auth-Token': args.auth_token}
     if args.command == 'install' and args.file:
