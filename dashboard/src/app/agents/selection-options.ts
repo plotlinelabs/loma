@@ -37,12 +37,18 @@ export function skillOptions(skills: Skill[]): SelectionOption[] {
   }));
 }
 
+// Usable by agents: connected on the Integrations page, or set up on the server
+// ("system_managed", e.g. Pylon, MonetizeNow, Zoho Books, Sentry).
+export function isUsableIntegration(integration: Integration): boolean {
+  return integration.status === "connected" || integration.status === "system_managed";
+}
+
 export function toolOptions(integrations: Integration[]): SelectionOption[] {
   return [
     ...PERSONAL_TOOLS.map(({ value, label, category }) => ({
       value, label, path: ["Personal", category],
     })),
-    ...integrations.filter((integration) => integration.status === "connected").map((integration) => ({
+    ...integrations.filter(isUsableIntegration).map((integration) => ({
       // Existing agents store display names. Do not silently migrate their values.
       value: integration.display_name || integration.provider,
       label: integration.display_name || integration.provider,
