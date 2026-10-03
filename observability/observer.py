@@ -371,6 +371,39 @@ class ConversationObserver:
         except Exception as e:
             logger.warning("Observability: failed to record usage: %s", e)
 
+    def agent_attribution(self) -> dict:
+        """Which agent produced this run's reply. No agent means Loma."""
+        md = self.metadata if isinstance(self.metadata, dict) else {}
+        agent_id = md.get("agent_id")
+        if not agent_id:
+            return {"agent_id": None, "agent_name": "Loma"}
+        snapshot = md.get("agent_snapshot") if isinstance(md.get("agent_snapshot"), dict) else {}
+        out = {"agent_id": agent_id, "agent_name": md.get("agent_name") or snapshot.get("name") or "Loma"}
+        if md.get("agent_config_version"):
+            out["agent_config_version"] = md["agent_config_version"]
+        return out
+
+    async def record_blocked_call(self, tool_name: str, kind: str, target: str, reason: str = "",
+                                  tool_use_id: str | None = None):
+        """Record a tool or skill call that the agent's scope blocked."""
+        entry = {
+            "turn_number": self.turn_offset + self.turn_count,
+            "tool_name": tool_name,
+            "tool_use_id": tool_use_id,
+            "kind": kind,
+            "target": target,
+            "reason": reason[:1000],
+            "timestamp": datetime.now(timezone.utc),
+            **self.agent_attribution(),
+        }
+        try:
+            await self.db.conversations.update_one(
+                {"conversation_id": self.conversation_id},
+                {"$push": {"blocked_calls": entry}, "$inc": {"blocked_call_count": 1}},
+            )
+        except Exception as e:
+            logger.warning("Observability: failed to record blocked call: %s", e)
+
     async def finish(self, final_response: str = ""):
         """Mark conversation as completed and trigger confidence assessment."""
         self._stop_heartbeat()
@@ -400,6 +433,7 @@ class ConversationObserver:
                     "role": "assistant",
                     "content": final_response[:5000],
                     "timestamp": now,
+                    **self.agent_attribution(),
                 }}
             await self.db.conversations.update_one(
                 {"conversation_id": self.conversation_id},

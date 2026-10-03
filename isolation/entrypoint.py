@@ -79,6 +79,11 @@ def allowed_tools_for(tool_config):
 def allowed_skills_for(tool_config):
     if isinstance(tool_config, dict) and tool_config.get('enabled_skills') is not None:
         return tuple(str(slug) for slug in tool_config['enabled_skills'])
+    # An active agent with a skill list limits the worker's skill gateway too.
+    scope = tool_config.get('agent_scope') if isinstance(tool_config, dict) else None
+    from agent.agent_scope import scope_is_enforced
+    if scope_is_enforced(scope) and scope.get('skills_restricted'):
+        return tuple(str(slug) for slug in scope.get('skills') or ())
     return None
 
 

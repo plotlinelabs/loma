@@ -21,9 +21,9 @@ AGENTS = [AR, AR_PRO, FIN]
     ("ar-agent check invoice 12", AR, "check invoice 12"),
     ("AR Agent Pro: hi", AR_PRO, "hi"),
     ("finance: what is due?", FIN, "what is due?"),
+    ("ar agent check invoice 12", AR, "check invoice 12"),
     # Ordinary sentences never switch agents.
     ("Finance team asked about invoice 12", None, "Finance team asked about invoice 12"),
-    ("ar agent check invoice 12", None, "ar agent check invoice 12"),
     ("check invoice 12 with AR Agent: now", None, "check invoice 12 with AR Agent: now"),
     ("ar-agents are cool", None, "ar-agents are cool"),
     ("", None, ""),
@@ -131,3 +131,35 @@ async def test_private_agent_of_someone_else_does_not_match(db):
     # Its owner can use it.
     kwargs, metadata, _ = await _run(db, "Secret Agent: hi", email="o@x.so")
     assert kwargs["prompt"] == "hi" and metadata["agent_id"] == "ag-private"
+
+
+# -- flexible syntax ----------------------------------------------------------
+
+_FLEX_AGENTS = [{"name": "AR Agent", "agent_id": "a"}, {"name": "Finance", "agent_id": "f"}]
+
+
+@pytest.mark.parametrize("text", [
+    "- AR agent - what do we need to do here?",
+    "- AR agent: what do we need to do here?",
+    "[AR Agent] what do we need to do here?",
+    "&lt;ar agent&gt; what do we need to do here?",
+    "/AR agent/ what do we need to do here?",
+    "*AR Agent*: what do we need to do here?",
+    "ar agent what do we need to do here?",
+    "AR Agent — what do we need to do here?",
+])
+def test_flexible_agent_syntax(text):
+    agent, rest = match_agent_reference(text, _FLEX_AGENTS)
+    assert agent and agent["agent_id"] == "a"
+    assert rest == "what do we need to do here?"
+
+
+@pytest.mark.parametrize("text", ["- Finance - hi", "[finance] hi", "/finance/ hi", "Finance, hi"])
+def test_single_word_agent_with_punctuation(text):
+    agent, rest = match_agent_reference(text, _FLEX_AGENTS)
+    assert agent and agent["agent_id"] == "f" and rest == "hi"
+
+
+@pytest.mark.parametrize("text", ["Finance team asked", "finance-team hi", "finance/ops hi", "AR Agents are cool"])
+def test_no_accidental_agent_switch(text):
+    assert match_agent_reference(text, _FLEX_AGENTS) == (None, text)

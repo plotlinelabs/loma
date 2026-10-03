@@ -56,9 +56,144 @@ def format_assistant_context(text: str, keep_full: bool = False) -> str:
     return f"{ASSISTANT_CONTEXT_LABEL}: {text}"
 
 
-def _last_bot_index(messages: list) -> int:
+# Messages from other bots and integrations (Pylon, Zoho, alerts...) often put
+# everything in attachments or blocks with an empty ``text`` field. Cap how
+# much of one such message goes into the context.
+MESSAGE_CONTEXT_MAX_CHARS = 8000
+
+
+def _element_text(element) -> str:
+    """Text of a Block Kit text object or element (mrkdwn / plain_text)."""
+    if isinstance(element, dict):
+        if isinstance(element.get("text"), str):
+            return element["text"]
+        if isinstance(element.get("text"), dict):
+            return _element_text(element["text"])
+    return ""
+
+
+def _rich_text(elements) -> str:
+    out = []
+    for el in elements or []:
+        kind = el.get("type")
+        if kind in ("text",):
+            out.append(el.get("text", ""))
+        elif kind == "link":
+            out.append(f"<{el.get('url', '')}|{el['text']}>" if el.get("text") else el.get("url", ""))
+        elif kind == "user":
+            out.append(f"<@{el.get('user_id', '')}>")
+        elif kind == "channel":
+            out.append(f"<#{el.get('channel_id', '')}>")
+        elif kind == "emoji":
+            out.append(f":{el.get('name', '')}:")
+        elif "elements" in el:
+            out.append(_rich_text(el["elements"]))
+            if kind in ("rich_text_section", "rich_text_preformatted", "rich_text_quote"):
+                out.append("\n")
+    return "".join(out)
+
+
+def blocks_to_text(blocks) -> str:
+    """Flatten Slack Block Kit blocks to readable text (buttons and selects included)."""
+    lines = []
+    for block in blocks or []:
+        kind = block.get("type")
+        if kind in ("section", "header"):
+            text = _element_text(block)
+            if text:
+                lines.append(text)
+            for field in block.get("fields") or []:
+                if _element_text(field):
+                    lines.append(_element_text(field))
+        elif kind == "context":
+            text = " ".join(t.strip() for t in map(_element_text, block.get("elements") or []) if t.strip())
+            if text:
+                lines.append(text)
+        elif kind == "rich_text":
+            text = _rich_text(block.get("elements")).strip()
+            if text:
+                lines.append(text)
+        elif kind == "actions":
+            for el in block.get("elements") or []:
+                label = _element_text(el) or _element_text(el.get("placeholder"))
+                selected = _element_text((el.get("initial_option") or {}).get("text"))
+                if selected:
+                    lines.append(f"[{label or 'Select'}: {selected}]")
+                elif el.get("url") and label:
+                    lines.append(f"[{label}: {el['url']}]")
+    return "\n".join(lines).strip()
+
+
+def message_text(msg: dict) -> str:
+    """Full readable text of a Slack message: text, blocks and attachments.
+
+    ``text`` is often empty for integration posts (Pylon tickets, alerts),
+    with the real content in ``attachments`` or ``blocks``.
+    """
+    parts = []
+    text = (msg.get("text") or "").strip()
+    if text:
+        parts.append(text)
+    elif msg.get("blocks"):
+        block_text = blocks_to_text(msg["blocks"])
+        if block_text:
+            parts.append(block_text)
+    for att in msg.get("attachments") or []:
+        # Link unfurls just preview a URL that is already in the text.
+        if att.get("from_url") or att.get("original_url"):
+            continue
+        att_parts = [att.get("pretext"), att.get("title"), att.get("author_name")]
+        body = blocks_to_text(att.get("blocks")) or att.get("text") or att.get("fallback")
+        att_parts.append(body)
+        for field in att.get("fields") or []:
+            if field.get("title") or field.get("value"):
+                att_parts.append(f"{field.get('title', '')}: {field.get('value', '')}".strip(": "))
+        att_text = "\n".join(p.strip() for p in att_parts if p and p.strip())
+        if att_text and att_text not in text:
+            parts.append(att_text)
+    full = "\n".join(parts)
+    if len(full) > MESSAGE_CONTEXT_MAX_CHARS:
+        full = full[:MESSAGE_CONTEXT_MAX_CHARS].rstrip() + " ... _(message trimmed)_"
+    return full
+
+
+def _author(msg: dict) -> str:
+    """Who wrote a message: a user ID, or the integration's bot name."""
+    if msg.get("user"):
+        return msg["user"]
+    profile = msg.get("bot_profile") or {}
+    return profile.get("name") or msg.get("username") or "bot"
+
+
+# Bot ID of this Loma app, per Slack token, so only Loma's own earlier replies
+# are labelled "Assistant". Other bots' posts (Pylon etc.) are thread content.
+_own_bot_ids: dict = {}
+
+
+async def _own_bot_id(client) -> str | None:
+    key = getattr(client, "token", None) or id(client)
+    if key in _own_bot_ids:
+        return _own_bot_ids[key]
+    try:
+        bot_id = (await client.auth_test()).get("bot_id")
+    except Exception:
+        bot_id = None
+    if isinstance(bot_id, str) and bot_id:
+        _own_bot_ids[key] = bot_id
+        return bot_id
+    return None
+
+
+def _is_own_reply(msg: dict, own_bot_id: str | None) -> bool:
+    if not msg.get("bot_id"):
+        return False
+    # Unknown own ID (auth.test failed): keep the old behaviour, any bot = Loma.
+    return own_bot_id is None or msg["bot_id"] == own_bot_id
+
+
+def _last_bot_index(messages: list, own_bot_id: str | None = None) -> int:
     for index in range(len(messages) - 1, -1, -1):
-        if messages[index].get("bot_id"):
+        if _is_own_reply(messages[index], own_bot_id):
             return index
     return -1
 
@@ -118,10 +253,11 @@ async def get_thread_context(
 
     context_parts = []
     thread_files = []
-    last_bot_index = _last_bot_index(context_messages)
+    own_bot_id = await _own_bot_id(client)
+    last_bot_index = _last_bot_index(context_messages, own_bot_id)
     for index, msg in enumerate(context_messages):
-        user = msg.get("user", "bot")
-        text = msg.get("text", "")
+        user = _author(msg)
+        text = message_text(msg)
         files = msg.get("files", [])
         subtype = msg.get("subtype", "")
 
@@ -139,10 +275,11 @@ async def get_thread_context(
                 subtype, list(msg.keys()), text,
             )
 
-        if msg.get("bot_id"):
+        if _is_own_reply(msg, own_bot_id):
             context_parts.append(format_assistant_context(text, keep_full=index == last_bot_index))
         else:
-            context_parts.append(f"**User ({user})**: {text}")
+            label = f"Bot ({user})" if msg.get("bot_id") else f"User ({user})"
+            context_parts.append(f"**{label}**: {text}")
             if files:
                 context_parts.append(f"  _(attached {len(files)} file(s))_")
                 thread_files.extend(files)
@@ -183,16 +320,18 @@ async def get_dm_context(
 
     context_parts = []
     thread_files = []
-    last_bot_index = _last_bot_index(context_messages)
+    own_bot_id = await _own_bot_id(client)
+    last_bot_index = _last_bot_index(context_messages, own_bot_id)
     for index, msg in enumerate(context_messages):
-        user = msg.get("user", "bot")
-        text = msg.get("text", "")
+        user = _author(msg)
+        text = message_text(msg)
         files = msg.get("files", [])
 
-        if msg.get("bot_id"):
+        if _is_own_reply(msg, own_bot_id):
             context_parts.append(format_assistant_context(text, keep_full=index == last_bot_index))
         else:
-            context_parts.append(f"**User ({user})**: {text}")
+            label = f"Bot ({user})" if msg.get("bot_id") else f"User ({user})"
+            context_parts.append(f"**{label}**: {text}")
             if files:
                 context_parts.append(f"  _(attached {len(files)} file(s))_")
                 thread_files.extend(files)

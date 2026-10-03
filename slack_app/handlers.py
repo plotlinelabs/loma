@@ -11,6 +11,8 @@ from api.dashboard_ingestion import ingest_dashboard_chat
 from api.drain import DRAIN_MESSAGE, is_draining
 from observability.db import get_db
 from observability.observer import ConversationObserver
+from agent.agent_scope import build_agent_scope
+from observability.agent_events import record_agent_switch
 from api.agent_identity_routes import (
     build_agent_context_block, list_agents_for_chat, resolve_agent_for_chat,
 )
@@ -21,7 +23,7 @@ from slack_app.brevity import maybe_compress_slack_reply
 from slack_app.channels import get_channel_config
 from slack_app.utils import (
     strip_bot_mention, truncate_for_slack, get_thread_context,
-    get_dm_context, download_slack_files, BOT_MENTION_RE,
+    get_dm_context, download_slack_files, BOT_MENTION_RE, message_text,
 )
 from draft_with_loma.models import create_draft, get_draft, update_draft, delete_draft
 from draft_with_loma.blocks import (
@@ -38,6 +40,26 @@ THINKING_EMOJI = "hourglass_flowing_sand"
 TASK_CAPTURE_EMOJI = "loma-task"
 
 CONVERSATION_TRACKER_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3001").rstrip("/") + "/conversations"
+
+
+def agent_post_identity(observer) -> dict:
+    """How a reply shows which agent wrote it in Slack.
+
+    With SLACK_POST_AS_AGENT=1 (needs the bot's `chat:write.customize` scope)
+    the reply is posted under the agent's name. Otherwise a one-line footer
+    names the agent. Plain Loma replies are unchanged.
+    """
+    md = getattr(observer, "metadata", None) if observer else None
+    if not isinstance(md, dict) or not md.get("agent_id"):
+        return {}
+    name = md.get("agent_name") or "Agent"
+    if os.environ.get("SLACK_POST_AS_AGENT", "").lower() in ("1", "true", "yes"):
+        kwargs = {"username": f"{name} (Loma)"}
+        icon = os.environ.get("SLACK_AGENT_ICON_URL")
+        if icon:
+            kwargs["icon_url"] = icon
+        return kwargs
+    return {"footer": True, "agent_name": name}
 
 
 async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, prompt="", observer=None):
@@ -93,10 +115,15 @@ async def _stream_response(client, channel, thread_ts, react_ts, agent_stream, p
         db=observer.db if observer else None,
         conversation_id=observer.conversation_id if observer else None))
     logger.info("[SLACK] Posting final response (%d chars)", len(final_text))
+    post_kwargs = agent_post_identity(observer)
+    if post_kwargs.pop("footer", None):
+        final_text = f"{final_text}\n\n_Answered by {post_kwargs.pop('agent_name')} (Loma agent)_"
+    post_kwargs.pop("agent_name", None)
     await client.chat_postMessage(
         channel=channel,
         text=final_text,
         thread_ts=thread_ts,
+        **post_kwargs,
     )
 
 
@@ -211,14 +238,24 @@ async def _handle_agent_request(
             if agent_identity:
                 metadata["agent_id"] = agent_identity["agent_id"]
                 metadata["agent_name"] = agent_identity["name"]
-                if existing_convo and pinned_agent_id != agent_identity["agent_id"]:
+                metadata["agent_config_version"] = int(agent_identity.get("config_version") or 1)
+                if existing_convo:
                     await db.conversations.update_one(
                         {"conversation_id": existing_convo["conversation_id"]},
                         {"$set": {
                             "metadata.agent_id": agent_identity["agent_id"],
                             "metadata.agent_name": agent_identity["name"],
+                            "metadata.agent_config_version": metadata["agent_config_version"],
                         }},
                     )
+                    if pinned_agent_id != agent_identity["agent_id"]:
+                        existing_md = existing_convo.get("metadata") or {}
+                        await record_agent_switch(
+                            db, existing_convo["conversation_id"],
+                            {"agent_id": pinned_agent_id, "name": existing_md.get("agent_name")}
+                            if pinned_agent_id else None,
+                            agent_identity, user_email or user_id, source="slack",
+                        )
 
             if existing_convo:
                 # One active run per thread: hand a follow-up to the run in
@@ -293,10 +330,16 @@ async def _handle_agent_request(
                 except Exception as e:
                     logger.warning("[SLACK] Failed to post agent switch notice: %s", e)
 
-        # The active agent's persona and skill/tool scope lead the context.
+        # The active agent's persona and skill/tool scope lead the context,
+        # and the scope is enforced at runtime (agent/agent_scope.py).
+        run_tool_config = None
         if agent_identity:
             agent_block = await build_agent_context_block(db, agent_identity)
             context = f"{agent_block}\n\n{context}" if context else agent_block
+            run_tool_config = {
+                "enabled_tools": None, "enabled_skills": None,
+                "agent_scope": await build_agent_scope(db, agent_identity),
+            }
 
         # Stream the agent response
         logger.info("[AGENT] Starting streaming agent run...")
@@ -307,6 +350,7 @@ async def _handle_agent_request(
             observer=observer,
             source=source,
             user_email=user_email,
+            tool_config=run_tool_config,
         )
         await _stream_response(client, channel, thread_ts, event_ts, agent_stream, prompt=prompt, observer=observer)
         logger.info("[SLACK] All responses posted successfully")
@@ -825,7 +869,7 @@ async def _capture_loma_task(client, event: dict) -> None:
         for message in thread_messages:
             author = message.get("user") or message.get("bot_profile", {}).get("name") or "unknown"
             marker = " [selected]" if message.get("ts") == message_ts else ""
-            parts.append(f"[{author}]{marker}: {message.get('text', '')}")
+            parts.append(f"[{author}]{marker}: {message_text(message)}")
         prompt = (
             "Follow up on this Slack message. Use the thread as context and complete the action requested.\n\n"
             f"Slack link: {permalink}\n"
@@ -890,7 +934,7 @@ async def _read_thread_with_user_token(user_token: str, channel_id: str, thread_
     parts = []
     for msg in messages:
         user = msg.get("user", "unknown")
-        text = msg.get("text", "")
+        text = message_text(msg)
         if msg.get("bot_id"):
             parts.append(f"[bot]: {text}")
         else:

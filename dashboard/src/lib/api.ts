@@ -1,3 +1,5 @@
+import type { AgentSwitchEvent, AttributedMessage, BlockedCall } from "./agent-attribution";
+
 // Base path for preview deployments (e.g. /pr/27). Empty in production.
 export const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
@@ -64,11 +66,12 @@ export interface Conversation {
   /** Attachments staged with a board-task draft (cleared once started) */
   draft_files?: ChatFile[];
   tool_config?: ToolConfig | null;
-  messages?: Array<{
-    role: "user" | "assistant";
-    content: string;
-    timestamp?: string;
-  }>;
+  messages?: AttributedMessage[];
+  /** Agent changes part-way through the thread (picker, "Loma", Slack naming). */
+  agent_events?: AgentSwitchEvent[];
+  /** Tool/skill calls the active agent's scope blocked. */
+  blocked_calls?: BlockedCall[];
+  blocked_call_count?: number;
 }
 
 export interface Turn {
@@ -197,6 +200,10 @@ export async function fetchConversations(params: {
   search?: string;
   person?: string;
   topic?: string;
+  /** An agent_id, or "loma" for runs answered by the default agent only. */
+  agent?: string;
+  /** Only runs where the agent's scope blocked a tool or skill call. */
+  blocked?: boolean;
 } = {}): Promise<ConversationListResponse> {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set("page", String(params.page));
@@ -206,6 +213,8 @@ export async function fetchConversations(params: {
   if (params.search) searchParams.set("search", params.search);
   if (params.person) searchParams.set("person", params.person);
   if (params.topic) searchParams.set("topic", params.topic);
+  if (params.agent) searchParams.set("agent", params.agent);
+  if (params.blocked) searchParams.set("blocked", "1");
 
   const res = await fetch(`${API_BASE}/api/conversations?${searchParams}`);
   if (!res.ok) throw new Error(`Failed to fetch conversations: ${res.status}`);

@@ -67,7 +67,10 @@ async def _send(db, **body):
 async def test_agent_chat_ignores_the_composers_picks_and_keeps_them_saved():
     db = await _db(tool_config=NARROW)
     run, convo = await _send(db, agent_id="ar", tool_config={"enabled_skills": [], "enabled_tools": ["slack"]})
-    assert run["tool_config"] is None
+    # Only the agent's own scope rides the run; the composer's picks don't.
+    assert run["tool_config"]["enabled_tools"] is None
+    assert run["tool_config"]["enabled_skills"] is None
+    assert run["tool_config"]["agent_scope"]["agent_id"] == "ar"
     assert "## Active Agent: AR Agent" in run["conversation_context"]
     assert convo["tool_config"] == NARROW
 
@@ -77,7 +80,8 @@ async def test_pinned_agent_chat_does_not_fall_back_to_saved_picks():
     db = await _db(pinned=True, tool_config=NARROW)
     run, _ = await _send(db)  # an older client: no agent_id, no tool_config
     assert run["metadata"]["agent_id"] == "ar"
-    assert run["tool_config"] is None
+    assert run["tool_config"]["enabled_tools"] is None
+    assert run["tool_config"]["agent_scope"]["agent_id"] == "ar"
 
 
 @pytest.mark.asyncio

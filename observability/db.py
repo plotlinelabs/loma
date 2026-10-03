@@ -155,6 +155,8 @@ async def init_observability():
     await _db.agent_identities.create_index("created_by")
     await _db.agent_identities.create_index("visibility")
     await _db.conversations.create_index("metadata.agent_id")
+    await _db.agent_identity_versions.create_index([("agent_id", 1), ("version", -1)], unique=True)
+    await _db.conversations.create_index("blocked_call_count", sparse=True)
 
     # Org integrations (dynamic MCP config)
     await _db.integrations.create_index("provider", unique=True)
