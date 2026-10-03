@@ -6,8 +6,10 @@ import { useRouter } from "next/navigation";
 import {
   RiAddLine,
   RiArrowDownSLine,
+  RiArrowRightLine,
   RiArrowRightSLine,
   RiKanbanView2,
+  RiLayoutGridLine,
   RiSearchLine,
   RiTableLine,
 } from "@remixicon/react";
@@ -32,16 +34,23 @@ import {
   fetchOnboardingConfig,
   fetchOnboardingRecords,
   updateOnboardingRecord,
+  FLAG_BORDER,
   FLAG_COLORS,
   FLAG_LABELS,
   formatValue,
+  milestoneIndex,
 } from "@/lib/onboarding-api";
-import type { OnboardingConfig, OnboardingRecord } from "@/lib/onboarding-api";
+import type {
+  OnboardingConfig,
+  OnboardingRecord,
+  OnboardingStage,
+} from "@/lib/onboarding-api";
 
 type ViewKey =
   | "active"
   | "integrating"
-  | "pilot"
+  | "live"
+  | "idle"
   | "attention"
   | "handed_over"
   | "closed"
@@ -50,32 +59,65 @@ type ViewKey =
 const VIEWS: { key: ViewKey; label: string }[] = [
   { key: "active", label: "All active" },
   { key: "integrating", label: "In integration" },
-  { key: "pilot", label: "Live / Pilot" },
+  { key: "live", label: "Live / Adopting" },
+  { key: "idle", label: "Live, no campaign" },
   { key: "attention", label: "Needs attention" },
   { key: "handed_over", label: "Handed over" },
   { key: "closed", label: "Churned / Lost" },
   { key: "all", label: "All" },
 ];
 
-const INTEGRATING = ["signed", "kickoff", "sdk", "advanced", "qa"];
+// Fields with their own place on the card, so the generic list skips them.
+const CARD_SPECIAL = new Set([
+  "owner",
+  "next_step",
+  "next_step_due",
+  "first_campaign_live",
+]);
 
-function inView(r: OnboardingRecord, view: ViewKey, terminal: Set<string>) {
+/**
+ * Stage groups derived from the template: everything before the stage
+ * carrying the `sdk_live` milestone is "integration", from it onwards is
+ * "live". Terminal stages are split by position (first = handed over).
+ */
+function stageGroups(stages: OnboardingStage[]) {
+  const liveAt = milestoneIndex(stages, "sdk_live");
+  const cut = liveAt < 0 ? stages.length : liveAt;
+  const open = stages.filter((s) => !s.terminal);
+  const terminal = stages.filter((s) => s.terminal);
+  return {
+    integrating: open.filter((s) => stages.indexOf(s) < cut).map((s) => s.key),
+    live: open.filter((s) => stages.indexOf(s) >= cut).map((s) => s.key),
+    handedOver: terminal.slice(0, 1).map((s) => s.key),
+    closed: terminal.slice(1).map((s) => s.key),
+  };
+}
+
+type Groups = ReturnType<typeof stageGroups>;
+
+function stagesForView(view: ViewKey, g: Groups): string[] | null {
   switch (view) {
     case "active":
-      return !terminal.has(r.stage);
+      return [...g.integrating, ...g.live];
     case "integrating":
-      return INTEGRATING.includes(r.stage);
-    case "pilot":
-      return r.stage === "live" || r.stage === "pilot";
-    case "attention":
-      return r.derived.flags.length > 0;
+      return g.integrating;
+    case "live":
+    case "idle":
+      return g.live;
     case "handed_over":
-      return r.stage === "handed_over";
+      return g.handedOver;
     case "closed":
-      return r.stage === "closed";
+      return g.closed;
     default:
-      return true;
+      return null; // all stages
   }
+}
+
+function inView(r: OnboardingRecord, view: ViewKey, g: Groups) {
+  if (view === "attention") return r.derived.flags.length > 0;
+  if (view === "idle") return r.derived.flags.includes("idle");
+  const allowed = stagesForView(view, g);
+  return allowed === null || allowed.includes(r.stage);
 }
 
 function median(nums: number[]): number | null {
@@ -89,15 +131,24 @@ function Stat({
   label,
   value,
   hint,
+  tone,
 }: {
   label: string;
   value: string | number;
   hint?: string;
+  tone?: "red";
 }) {
   return (
     <Card className="px-4 py-3 gap-0">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-xl font-semibold tabular-nums mt-0.5">{value}</div>
+      <div
+        className={cn(
+          "text-xl font-semibold tabular-nums mt-0.5",
+          tone === "red" && value !== 0 && "text-red-600",
+        )}
+      >
+        {value}
+      </div>
       {hint && (
         <div className="text-[11px] text-muted-foreground/80 mt-0.5">
           {hint}
@@ -109,58 +160,111 @@ function Stat({
 
 type Layout = "board" | "table";
 
-/** Stages a view can contain, so empty lanes still render as drop targets. */
-function lanesForView<T extends { key: string; terminal?: boolean }>(
-  view: ViewKey,
-  stages: T[],
-): T[] {
-  switch (view) {
-    case "active":
-      return stages.filter((s) => !s.terminal);
-    case "integrating":
-      return stages.filter((s) => INTEGRATING.includes(s.key));
-    case "pilot":
-      return stages.filter((s) => s.key === "live" || s.key === "pilot");
-    case "handed_over":
-      return stages.filter((s) => s.key === "handed_over");
-    case "closed":
-      return stages.filter((s) => s.key === "closed");
-    default:
-      return stages;
-  }
-}
-
-const FLAG_BORDER: Record<string, string> = {
-  overdue: "border-l-red-500",
-  late: "border-l-red-500",
-  blocked: "border-l-orange-500",
-  stale: "border-l-amber-400",
-  pilot_ending: "border-l-blue-500",
-};
-
 function KV({ label, children }: { label: string; children: React.ReactNode }) {
   if (children === "" || children === null || children === undefined)
     return null;
   return (
     <div className="flex gap-1.5 text-[12px] leading-5">
-      <span className="text-muted-foreground shrink-0 w-[68px]">{label}</span>
+      <span className="text-muted-foreground shrink-0 w-[76px] truncate">
+        {label}
+      </span>
       <span className="min-w-0 truncate">{children}</span>
+    </div>
+  );
+}
+
+function shortDate(iso: string) {
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+function AdoptionLine({ r, minUsers }: { r: OnboardingRecord; minUsers: number }) {
+  const d = r.derived;
+  const f = r.fields;
+  if (d.first_campaign_qualified) {
+    return (
+      <div className="mt-1.5 rounded bg-emerald-50 px-2 py-1 text-[12px] leading-snug text-emerald-800">
+        First campaign {shortDate(String(f.first_campaign_live))}
+        {f.first_campaign_users ? ` · ${formatValue(f.first_campaign_users)} users` : ""}
+        {d.days_live_to_first_campaign !== null
+          ? ` · ${d.days_live_to_first_campaign}d after live`
+          : ""}
+      </div>
+    );
+  }
+  if (d.days_live_without_campaign !== null) {
+    const idle = d.flags.includes("idle");
+    return (
+      <div
+        className={cn(
+          "mt-1.5 rounded px-2 py-1 text-[12px] leading-snug",
+          idle ? "bg-red-50 text-red-700" : "bg-muted/50 text-muted-foreground",
+        )}
+        title={`A first campaign counts once it reaches ${minUsers}+ users`}
+      >
+        No campaign with {minUsers}+ users · {d.days_live_without_campaign}d since
+        live
+      </div>
+    );
+  }
+  return null;
+}
+
+function ModulesLine({ r }: { r: OnboardingRecord }) {
+  const f = r.fields;
+  const count = (k: string) => (Array.isArray(f[k]) ? (f[k] as string[]).length : 0);
+  const paid = count("modules_paid");
+  const integrated = count("modules_integrated");
+  const inUse = count("modules_in_use");
+  if (!paid && !integrated && !inUse) return null;
+  const gaps = r.derived.module_gaps;
+  return (
+    <div className="mt-1.5 text-[12px] leading-5">
+      <div className="flex items-center gap-1.5 tabular-nums">
+        <span className="text-muted-foreground w-[76px] shrink-0">Modules</span>
+        <span title="Paid / Integrated / In use">
+          <span className={cn(!paid && "text-amber-700")}>
+            {paid ? `${paid} paid` : "paid not set"}
+          </span>
+          <span className="text-muted-foreground"> · </span>
+          {integrated} integrated
+          <span className="text-muted-foreground"> · </span>
+          {inUse} in use
+        </span>
+      </div>
+      {gaps.paid_not_integrated.length > 0 && (
+        <div className="truncate text-orange-700" title="Paid for, not integrated">
+          Not integrated: {gaps.paid_not_integrated.join(", ")}
+        </div>
+      )}
+      {gaps.enabled_not_paid.length > 0 && (
+        <div className="truncate text-violet-700" title="Switched on, not in contract">
+          Enabled, unpaid: {gaps.enabled_not_paid.join(", ")}
+        </div>
+      )}
     </div>
   );
 }
 
 function BoardCard({
   r,
+  config,
+  stageLabel,
   appCount,
   draggable,
   onDragStart,
   onOpen,
+  onMove,
 }: {
   r: OnboardingRecord;
+  config: OnboardingConfig;
+  stageLabel: Record<string, string>;
   appCount: number;
   draggable: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onOpen: () => void;
+  onMove: (stage: string) => void;
 }) {
   const d = r.derived;
   const f = r.fields;
@@ -171,6 +275,9 @@ function BoardCard({
       : "";
   const next = formatValue(f.next_step);
   const nextDue = formatValue(f.next_step_due);
+  const cardFields = config.fields.filter(
+    (fd) => fd.on_card && !CARD_SPECIAL.has(fd.key),
+  );
   return (
     <div
       draggable={draggable}
@@ -205,22 +312,23 @@ function BoardCard({
           {appCount > 1 ? ` · ${appCount} apps` : ""}
         </div>
       )}
-      <div className="mt-1.5 space-y-0">
-        <KV label="Platforms">{formatValue(f.platforms)}</KV>
-        <KV label="Pending">{formatValue(f.modules_pending)}</KV>
-        <KV label="Target">{formatValue(f.target_go_live)}</KV>
-        <KV label="First live">{formatValue(f.first_live)}</KV>
+      <div className="mt-1.5">
+        {cardFields.map((fd) => {
+          let v = formatValue(f[fd.key]);
+          if (fd.key === "blocker_owner" && v === "None") v = "";
+          return (
+            <KV key={fd.key} label={fd.label}>
+              {v}
+            </KV>
+          );
+        })}
         <KV label="Days to live">{daysToLive}</KV>
         <KV label="Pilot left">
           {d.pilot_days_left !== null ? `${d.pilot_days_left}d` : ""}
         </KV>
-        <KV label="Billing">{formatValue(f.billing_status)}</KV>
-        <KV label="Blocker">
-          {formatValue(f.blocker_owner) === "None"
-            ? ""
-            : formatValue(f.blocker_owner)}
-        </KV>
       </div>
+      <ModulesLine r={r} />
+      <AdoptionLine r={r} minUsers={config.rules.first_campaign_min_users} />
       {(next || nextDue) && (
         <div className="mt-1.5 rounded bg-muted/50 px-2 py-1 text-[12px] leading-snug">
           <span className="text-muted-foreground">Next: </span>
@@ -230,7 +338,22 @@ function BoardCard({
           )}
         </div>
       )}
-      {d.flags.length > 0 && (
+      {d.suggested_stage && config.can_edit && (
+        <button
+          type="button"
+          data-testid="onboarding-suggest"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMove(d.suggested_stage as string);
+          }}
+          className="mt-1.5 flex w-full items-center gap-1 rounded border border-dashed border-primary/40 px-2 py-1 text-left text-[12px] text-primary hover:bg-primary/5"
+          title="Product data supports this stage"
+        >
+          Move to {stageLabel[d.suggested_stage] ?? d.suggested_stage}
+          <RiArrowRightLine size={12} />
+        </button>
+      )}
+      {(d.flags.length > 0 || d.missing_required.length > 0) && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {d.flags.map((fl) => (
             <Badge
@@ -241,6 +364,17 @@ function BoardCard({
               {FLAG_LABELS[fl] ?? fl}
             </Badge>
           ))}
+          {d.missing_required.length > 0 && (
+            <Badge
+              variant="outline"
+              className="rounded text-[10px] px-1.5 py-0 text-muted-foreground"
+              title={`Required by this stage: ${d.missing_required
+                .map((k) => config.fields.find((x) => x.key === k)?.label ?? k)
+                .join(", ")}`}
+            >
+              {d.missing_required.length} to fill
+            </Badge>
+          )}
         </div>
       )}
     </div>
@@ -277,27 +411,21 @@ export default function OnboardingPage() {
       Object.fromEntries((config?.stages ?? []).map((s) => [s.key, s.label])),
     [config],
   );
-  const terminal = useMemo(
-    () =>
-      new Set(
-        (config?.stages ?? []).filter((s) => s.terminal).map((s) => s.key),
-      ),
-    [config],
-  );
+  const groups = useMemo(() => stageGroups(config?.stages ?? []), [config]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return records.filter(
       (r) =>
-        inView(r, view, terminal) &&
+        inView(r, view, groups) &&
         (!q ||
           r.name.toLowerCase().includes(q) ||
           r.account.toLowerCase().includes(q) ||
           formatValue(r.fields.owner).toLowerCase().includes(q)),
     );
-  }, [records, view, query, terminal]);
+  }, [records, view, query, groups]);
 
-  const groups = useMemo(() => {
+  const accountGroups = useMemo(() => {
     const map = new Map<string, OnboardingRecord[]>();
     for (const r of visible) {
       const list = map.get(r.account) ?? [];
@@ -314,7 +442,10 @@ export default function OnboardingPage() {
   }, [records]);
 
   const lanes = useMemo(() => {
-    const stages = lanesForView(view, config?.stages ?? []);
+    const allowed = stagesForView(view, groups);
+    const stages = (config?.stages ?? []).filter(
+      (s) => allowed === null || allowed.includes(s.key),
+    );
     const built = stages.map((s) => ({
       ...s,
       // Keep a client's apps next to each other inside a lane.
@@ -325,10 +456,10 @@ export default function OnboardingPage() {
             a.account.localeCompare(b.account) || a.name.localeCompare(b.name),
         ),
     }));
-    // Filtered views (needs attention, search) only show lanes that have matches.
-    const filtered = view === "attention" || query.trim() !== "";
+    // Filtered views (needs attention, idle, search) only show lanes with matches.
+    const filtered = view === "attention" || view === "idle" || query.trim() !== "";
     return filtered ? built.filter((l) => l.cards.length > 0) : built;
-  }, [view, config, visible, query]);
+  }, [view, config, visible, query, groups]);
 
   // A view with one lane (handed over, churned) spreads its cards in a grid.
   const single = !loading && lanes.length === 1;
@@ -356,20 +487,24 @@ export default function OnboardingPage() {
   }
 
   const stats = useMemo(() => {
-    const active = records.filter((r) => !terminal.has(r.stage));
     const live = records.filter((r) => r.derived.days_to_live_net !== null);
+    const toCampaign = records
+      .map((r) => r.derived.days_live_to_first_campaign)
+      .filter((n): n is number => n !== null);
     return {
-      active: active.length,
-      integrating: records.filter((r) => INTEGRATING.includes(r.stage)).length,
-      pilots: records.filter((r) => r.stage === "pilot" || r.stage === "live")
+      integrating: records.filter((r) => groups.integrating.includes(r.stage))
         .length,
+      live: records.filter((r) => groups.live.includes(r.stage)).length,
+      idle: records.filter((r) => r.derived.flags.includes("idle")).length,
       attention: records.filter((r) => r.derived.flags.length > 0).length,
       medianNet: median(live.map((r) => r.derived.days_to_live_net as number)),
       medianGross: median(
         live.map((r) => r.derived.days_to_live_gross as number),
       ),
+      medianToCampaign: median(toCampaign),
+      toCampaignCount: toCampaign.length,
     };
-  }, [records, terminal]);
+  }, [records, groups]);
 
   async function handleCreate() {
     if (!newName.trim()) return;
@@ -383,34 +518,43 @@ export default function OnboardingPage() {
     }
   }
 
+  const minUsers = config?.rules.first_campaign_min_users ?? 100;
+
   return (
     <div className="mx-auto w-full max-w-[1400px] px-4 py-6 md:px-8">
       <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
         <div>
           <h1 className="text-lg font-semibold">Onboarding</h1>
           <p className="text-[13px] text-muted-foreground">
-            Every customer integration, from kickoff to handover. One card per
-            app.
+            Every customer integration, from kickoff to first campaign to
+            handover. One card per app.
           </p>
         </div>
-        {config?.can_edit && (
-          <div className="flex items-center gap-2">
-            <Input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-              placeholder="New app, e.g. Careem - Pay"
-              className="h-8 w-56 text-[13px]"
-            />
-            <Button
-              size="sm"
-              onClick={handleCreate}
-              disabled={creating || !newName.trim()}
-            >
-              <RiAddLine size={14} /> Add
-            </Button>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {config?.can_edit && (
+            <>
+              <Input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+                placeholder="New app, e.g. Careem - Pay"
+                className="h-8 w-56 text-[13px]"
+              />
+              <Button
+                size="sm"
+                onClick={handleCreate}
+                disabled={creating || !newName.trim()}
+              >
+                <RiAddLine size={14} /> Add
+              </Button>
+            </>
+          )}
+          <Button asChild size="sm" variant="outline">
+            <Link href="/onboarding/template">
+              <RiLayoutGridLine size={14} /> Template
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -419,14 +563,19 @@ export default function OnboardingPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5 mb-5">
-        <Stat label="Active" value={stats.active} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6 mb-5">
         <Stat label="In integration" value={stats.integrating} />
-        <Stat label="Live / Pilot" value={stats.pilots} />
+        <Stat label="Live / Adopting" value={stats.live} />
+        <Stat
+          label="Live, no campaign"
+          value={stats.idle}
+          tone="red"
+          hint={`No campaign with ${minUsers}+ users after ${config?.rules.idle_days ?? 14}d`}
+        />
         <Stat
           label="Needs attention"
           value={stats.attention}
-          hint="Overdue, stale, blocked or late"
+          hint="Any flag set"
         />
         <Stat
           label="Median days to live"
@@ -436,6 +585,11 @@ export default function OnboardingPage() {
               ? `Net of client delays. Gross ${stats.medianGross}`
               : undefined
           }
+        />
+        <Stat
+          label="Median live to 1st campaign"
+          value={stats.medianToCampaign !== null ? `${stats.medianToCampaign}d` : "-"}
+          hint={`${stats.toCampaignCount} app${stats.toCampaignCount === 1 ? "" : "s"} with a known date`}
         />
       </div>
 
@@ -450,7 +604,7 @@ export default function OnboardingPage() {
           >
             {v.label}
             <span className="ml-1 text-muted-foreground tabular-nums">
-              {records.filter((r) => inView(r, v.key, terminal)).length}
+              {records.filter((r) => inView(r, v.key, groups)).length}
             </span>
           </Button>
         ))}
@@ -501,6 +655,8 @@ export default function OnboardingPage() {
               ? Array.from({ length: 5 }).map((_, i) => ({
                   key: `sk-${i}`,
                   label: "",
+                  description: "",
+                  milestone: undefined as string | undefined | null,
                   cards: [] as OnboardingRecord[],
                   terminal: false,
                 }))
@@ -534,37 +690,48 @@ export default function OnboardingPage() {
                       ? "w-full"
                       : !loading && lane.cards.length === 0
                         ? "w-[170px]"
-                        : "w-[280px]",
+                        : "w-[290px]",
+                    lane.milestone && "bg-emerald-50/40",
                     isDrop && "ring-2 ring-primary/40 bg-primary/5",
                   )}
                 >
-                  <div className="flex items-center justify-between px-3 py-2 border-b">
-                    {loading ? (
-                      <Skeleton className="h-3 w-24" />
-                    ) : (
-                      <span className="text-[13px] font-medium">
-                        {lane.label}
-                      </span>
-                    )}
-                    {!loading && (
-                      <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
-                        {flagged > 0 && (
-                          <span
-                            className="rounded bg-red-50 px-1.5 text-red-700"
-                            title="Cards with flags"
-                          >
-                            {flagged} flagged
-                          </span>
-                        )}
-                        {lane.cards.length}
-                      </span>
+                  <div
+                    className="px-3 py-2 border-b"
+                    title={lane.description || undefined}
+                  >
+                    <div className="flex items-center justify-between">
+                      {loading ? (
+                        <Skeleton className="h-3 w-24" />
+                      ) : (
+                        <span className="text-[13px] font-medium">
+                          {lane.label}
+                        </span>
+                      )}
+                      {!loading && (
+                        <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
+                          {flagged > 0 && (
+                            <span
+                              className="rounded bg-red-50 px-1.5 text-red-700"
+                              title="Cards with flags"
+                            >
+                              {flagged} flagged
+                            </span>
+                          )}
+                          {lane.cards.length}
+                        </span>
+                      )}
+                    </div>
+                    {!loading && lane.description && lane.cards.length > 0 && (
+                      <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground line-clamp-1">
+                        {lane.description}
+                      </div>
                     )}
                   </div>
                   <div
                     className={cn(
                       "flex-1 overflow-y-auto p-2 min-h-[80px]",
                       single
-                        ? "grid content-start gap-2 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]"
+                        ? "grid content-start gap-2 grid-cols-[repeat(auto-fill,minmax(270px,1fr))]"
                         : "space-y-2",
                     )}
                   >
@@ -577,20 +744,24 @@ export default function OnboardingPage() {
                         No clients
                       </div>
                     )}
-                    {lane.cards.map((r) => (
-                      <BoardCard
-                        key={r.record_id}
-                        r={r}
-                        appCount={appCounts[r.account] ?? 1}
-                        draggable={!!config?.can_edit}
-                        onDragStart={(e) => {
-                          e.dataTransfer.effectAllowed = "move";
-                          e.dataTransfer.setData("text/plain", r.record_id);
-                          setDragId(r.record_id);
-                        }}
-                        onOpen={() => router.push(`/onboarding/${r.record_id}`)}
-                      />
-                    ))}
+                    {config &&
+                      lane.cards.map((r) => (
+                        <BoardCard
+                          key={r.record_id}
+                          r={r}
+                          config={config}
+                          stageLabel={stageLabel}
+                          appCount={appCounts[r.account] ?? 1}
+                          draggable={!!config.can_edit}
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", r.record_id);
+                            setDragId(r.record_id);
+                          }}
+                          onOpen={() => router.push(`/onboarding/${r.record_id}`)}
+                          onMove={(stage) => moveToStage(r.record_id, stage)}
+                        />
+                      ))}
                   </div>
                 </div>
               );
@@ -607,10 +778,9 @@ export default function OnboardingPage() {
                 <TableHead>Client / App</TableHead>
                 <TableHead>Stage</TableHead>
                 <TableHead>Owner</TableHead>
-                <TableHead>Platforms</TableHead>
-                <TableHead>Pending</TableHead>
-                <TableHead>Target go-live</TableHead>
-                <TableHead>First live</TableHead>
+                <TableHead>Paid / Integr. / In use</TableHead>
+                <TableHead>SDK live</TableHead>
+                <TableHead>1st campaign</TableHead>
                 <TableHead className="text-right">Days to live</TableHead>
                 <TableHead>Billing</TableHead>
                 <TableHead>Next step</TableHead>
@@ -621,7 +791,7 @@ export default function OnboardingPage() {
               {loading &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 11 }).map((__, j) => (
+                    {Array.from({ length: 10 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-3 w-16" />
                       </TableCell>
@@ -629,7 +799,7 @@ export default function OnboardingPage() {
                   </TableRow>
                 ))}
               {!loading &&
-                groups.map(([account, rows]) => {
+                accountGroups.map(([account, rows]) => {
                   const multi = rows.length > 1 || rows[0].name !== account;
                   const isCollapsed = collapsed[account];
                   return [
@@ -645,7 +815,7 @@ export default function OnboardingPage() {
                         }
                       >
                         <TableCell
-                          colSpan={11}
+                          colSpan={10}
                           className="py-1.5 text-[13px] font-medium"
                         >
                           <span className="inline-flex items-center gap-1">
@@ -667,6 +837,10 @@ export default function OnboardingPage() {
                       ? []
                       : rows.map((r) => {
                           const d = r.derived;
+                          const n = (k: string) =>
+                            Array.isArray(r.fields[k])
+                              ? (r.fields[k] as string[]).length
+                              : 0;
                           return (
                             <TableRow
                               key={r.record_id}
@@ -696,17 +870,23 @@ export default function OnboardingPage() {
                               <TableCell className="text-muted-foreground">
                                 {formatValue(r.fields.owner).split("@")[0]}
                               </TableCell>
-                              <TableCell className="max-w-40 truncate">
-                                {formatValue(r.fields.platforms)}
-                              </TableCell>
-                              <TableCell className="max-w-40 truncate">
-                                {formatValue(r.fields.modules_pending)}
-                              </TableCell>
-                              <TableCell className="whitespace-nowrap">
-                                {formatValue(r.fields.target_go_live)}
+                              <TableCell className="tabular-nums">
+                                {n("modules_paid") || "-"} / {n("modules_integrated")} /{" "}
+                                {n("modules_in_use")}
                               </TableCell>
                               <TableCell className="whitespace-nowrap">
                                 {formatValue(r.fields.first_live)}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap">
+                                {d.first_campaign_qualified
+                                  ? formatValue(r.fields.first_campaign_live)
+                                  : d.days_live_without_campaign !== null
+                                    ? (
+                                      <span className="text-muted-foreground">
+                                        none · {d.days_live_without_campaign}d
+                                      </span>
+                                    )
+                                    : ""}
                               </TableCell>
                               <TableCell className="text-right tabular-nums whitespace-nowrap">
                                 {d.days_to_live_net !== null ? (
@@ -764,7 +944,7 @@ export default function OnboardingPage() {
                 })}
             </TableBody>
           </Table>
-          {!loading && groups.length === 0 && (
+          {!loading && accountGroups.length === 0 && (
             <EmptyState
               title="No clients in this view"
               description="Try another view or clear the search."
@@ -776,9 +956,9 @@ export default function OnboardingPage() {
         {config?.can_edit && layout === "board"
           ? "Drag a card to another lane to change its stage. "
           : ""}
-        Days to live: net of client-blocked days / gross. Cards are flagged when
-        the next step is overdue, nothing changed for 7 days, a blocker is set,
-        the target date passed, or the pilot ends within 14 days.
+        A first campaign counts once it reaches {minUsers}+ users. Days to
+        live: net of client-blocked days / gross. Stages, fields, modules and
+        thresholds are edited on the Template page.
       </p>
     </div>
   );
