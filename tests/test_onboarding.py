@@ -176,9 +176,9 @@ def test_first_campaign_needs_min_users_and_drives_suggestion():
 def test_module_gaps_and_flags():
     today = date(2026, 10, 2)
     rec = {"stage": "first_campaign", "fields": {
-        "modules_enabled": ["In-app nudges", "Widgets", "Gamification"],
-        "modules_integrated": ["In-app nudges", "Widgets"],
-        "modules_in_use": ["In-app nudges"]}}
+        "modules_enabled": ["Nudges", "Widgets", "Luck games"],
+        "modules_integrated": ["Nudges", "Widgets"],
+        "modules_in_use": ["Nudges"]}}
     d = svc.derive(rec, cfg(), today)
     # Nothing ticked as paid yet: no paid-based gaps, only integrated-not-used.
     assert d["module_gaps"]["paid_not_integrated"] == []
@@ -186,15 +186,86 @@ def test_module_gaps_and_flags():
     assert d["module_gaps"]["integrated_not_used"] == ["Widgets"]
     assert "modules_paid" in d["missing_required"]
 
-    rec["fields"]["modules_paid"] = ["In-app nudges", "Widgets", "Stories"]
+    rec["fields"]["modules_paid"] = ["Nudges", "Widgets", "Stories"]
     d = svc.derive(rec, cfg(), today)
     assert d["module_gaps"]["paid_not_integrated"] == ["Stories"]
-    assert d["module_gaps"]["enabled_not_paid"] == ["Gamification"]
-    assert "Push notifications" in d["module_gaps"]["upsell"]
+    assert d["module_gaps"]["enabled_not_paid"] == ["Luck games"]
+    assert "Push" in d["module_gaps"]["upsell"]
+    # Upsell is reported per group: nothing paid in these groups, In-app is covered.
+    assert "In-app campaigns" not in d["module_gaps"]["upsell_groups"]
+    assert {"Outside-app campaigns", "Gamification", "Journeys"} <= set(
+        d["module_gaps"]["upsell_groups"])
+    assert "Core SDK" not in d["module_gaps"]["upsell_groups"]
     assert {"paid_gap", "unpaid_enabled"} <= set(d["flags"])
     # A paid module not yet integrated is expected before the SDK is live.
     rec["stage"] = "sdk"
     assert "paid_gap" not in svc.derive(rec, cfg(), today)["flags"]
+
+
+def test_integration_items_scope_done_and_pending():
+    today = date(2026, 10, 2)
+    rec = {"stage": "sdk", "fields": {"modules_paid": ["Nudges", "Push", "Widgets"]}}
+    d = svc.derive(rec, cfg(), today)
+    # Nothing recorded yet: needed is known, but nothing is reported as pending.
+    assert d["integration"]["tracked"] is False and d["integration"]["pending"] == []
+    assert {"SDK init", "Push credentials (FCM / APNs)", "Widget placeholders"} <= set(
+        d["integration"]["needed"])
+    # Optional core items are only needed when ticked In scope.
+    assert "Backend events API" not in d["integration"]["needed"]
+
+    rec["fields"]["integration_scope"] = ["Backend events API"]
+    rec["fields"]["integration_done"] = ["SDK init", "User identify", "Front-end events",
+                                         "User attributes", "Widget placeholders"]
+    d = svc.derive(rec, cfg(), today)
+    assert d["integration"]["pending"] == ["Backend events API", "Push credentials (FCM / APNs)"]
+    assert d["integration"]["done_count"] == 5
+    assert d["integration"]["module_setup_pending"] == {"Push": ["Push credentials (FCM / APNs)"]}
+    # Open integration work is normal before go-live, and a flag once live.
+    assert "integration_gap" not in d["flags"]
+    rec["stage"] = "live"
+    assert "integration_gap" in svc.derive(rec, cfg(), today)["flags"]
+    rec["stage"] = "handed_over"
+    assert "integration_gap" not in svc.derive(rec, cfg(), today)["flags"]
+
+
+@pytest.mark.asyncio
+async def test_catalogue_groups_items_and_bundles_validate():
+    db = make_db()
+    base = await svc.get_config(db)
+    scope = next(f for f in base["fields"] if f["key"] == "integration_scope")
+    assert scope["options_from"] == "integration_items" and "SDK init" in scope["options"]
+    # Every default module sits in a sellable group and only requires real items.
+    sellable = {g["key"] for g in base["module_groups"] if g["sellable"]}
+    items = {i["key"] for i in base["integration_items"]}
+    assert all(m["group"] in sellable and set(m["requires"]) <= items for m in base["modules"])
+
+    body = copy.deepcopy(base)
+    body["module_groups"].append({"key": "payments", "label": "Payments", "sellable": True})
+    body["integration_items"].append({"key": "pay_sdk", "label": "Payments SDK", "group": "payments"})
+    body["modules"].append({"key": "checkout", "label": "Checkout", "group": "payments",
+                            "requires": ["pay_sdk"]})
+    body["bundles"].append({"key": "pay", "label": "Payments pack", "modules": ["checkout"]})
+    saved, changes = await svc.save_template(db, body, actor="a")
+    assert {"Added module group 'Payments'", "Added integration item 'Payments SDK'",
+            "Added module 'Checkout'", "Added bundle 'Payments pack'"} <= set(changes)
+    rec = await svc.create_record(db, {"name": "X"}, actor="a")
+    _, applied, _ = await svc.apply_changes(
+        db, rec, {"modules_paid": "Checkout", "integration_done": "Payments SDK"}, actor="a")
+    assert len(applied) == 2
+    with pytest.raises(ValueError, match="unknown integration item"):
+        await svc.apply_changes(db, rec, {"integration_done": "Teleporter"}, actor="a")
+
+    bad = copy.deepcopy(saved)
+    bad["modules"].append({"key": "m1", "label": "Lost", "group": "nowhere"})
+    bad["modules"].append({"key": "m2", "label": "In core", "group": "core"})
+    bad["modules"].append({"key": "m3", "label": "A, B", "group": "in_app", "requires": ["ghost"]})
+    bad["bundles"].append({"key": "b1", "label": "Broken", "modules": ["ghost_module"]})
+    with pytest.raises(ValueError) as exc:
+        await svc.save_template(db, bad, actor="a")
+    msg = str(exc.value)
+    assert "unknown group 'nowhere'" in msg and "only holds integration items" in msg
+    assert "cannot contain a comma" in msg and "unknown integration item(s) ghost" in msg
+    assert "unknown module(s) ghost_module" in msg
 
 
 @pytest.mark.asyncio
@@ -205,7 +276,7 @@ async def test_save_template_validates_versions_and_applies():
 
     body = copy.deepcopy(base)
     body["stages"][1]["label"] = "Kickoff call done"
-    body["modules"].append({"key": "voice_ai", "label": "Voice AI"})
+    body["modules"].append({"key": "voice_ai", "label": "Voice AI", "group": "voice_ai"})
     body["fields"].append({"key": "csm", "label": "CSM", "type": "person", "section": "People"})
     body["rules"]["first_campaign_min_users"] = 250
     saved, changes = await svc.save_template(db, body, actor="vamsi@x.com")

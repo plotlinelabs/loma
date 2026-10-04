@@ -19,9 +19,19 @@ Field keys, stage keys, the module catalogue and rule thresholds come from
 `config` (edited by people on the Onboarding > Template page). Each field's
 `source` says who owns it; only fill fields whose source matches yours.
 
-Module layers: modules_paid is ticked by a person from the contract. Sync
-modules_enabled (product shouldEnable* switches), modules_integrated and
-modules_in_use using the module catalogue labels and signals.
+The catalogue has three levels: module_groups -> modules -> integration_items.
+Values are always the catalogue labels.
+
+Module layers: modules_paid is ticked by a person from the contract (bundles in
+`config` list the usual modules per contract bundle). Sync modules_enabled
+(product shouldEnable* switches, and outsideAppChannelsEnabled per channel),
+modules_integrated and modules_in_use using each module's signals.
+
+Integration items are the work the client's team does (SDK init, identify,
+events, listeners, push credentials, placeholders ...). integration_scope is
+what this client agreed to build (person); integration_done is what works on
+prod. Pending is derived: required items + in-scope items + the setup items of
+every paid module, minus done. Do not mark an item done without evidence.
 
 First campaign: set first_campaign_live (campaign start date),
 first_campaign_users and live_campaigns. It only counts once users reach

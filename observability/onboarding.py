@@ -34,9 +34,19 @@ FIELD_SOURCES = ("human", "contract", "product", "hubspot", "billing", "grain")
 MILESTONES = ("sdk_live", "first_campaign", "adopting")
 # The four module layers. Their options always come from the module catalogue.
 MODULE_LAYERS = ("modules_paid", "modules_enabled", "modules_integrated", "modules_in_use")
+# Catalogue lists a multi-select field can take its options from.
+OPTION_SOURCES = {"modules": "module", "integration_items": "integration item"}
 
-_COMPONENTS = ["Basic SDK", "FE events", "Backend API", "PN", "Widgets", "Elements",
-               "Event listener", "Redirect listener", "Deeplinks"]
+
+def _m(key, label, group, enabled="", integrated="", usage="", requires=()) -> dict:
+    """A sellable module: tracked as Paid / Enabled / Integrated / In use."""
+    return {"key": key, "label": label, "group": group, "enabled_signal": enabled,
+            "integrated_signal": integrated, "usage_signal": usage, "requires": list(requires)}
+
+
+def _i(key, label, group, signal="", required=False) -> dict:
+    """An integration item: work the client's team does. Tracked as In scope / Done."""
+    return {"key": key, "label": label, "group": group, "signal": signal, "required": required}
 
 
 def _f(key, label, ftype, section, source="human", **extra) -> dict:
@@ -66,36 +76,131 @@ DEFAULT_CONFIG: dict[str, Any] = {
         {"key": "closed", "label": "Closed - Lost / Churned", "terminal": True,
          "description": "Exited at any stage"},
     ],
+    # Catalogue, three levels: group -> module -> integration items.
+    # A group that is not sellable (Core SDK) only holds integration items.
+    "module_groups": [
+        {"key": "core", "label": "Core SDK", "sellable": False},
+        {"key": "in_app", "label": "In-app campaigns", "sellable": True},
+        {"key": "outside_app", "label": "Outside-app campaigns", "sellable": True},
+        {"key": "gamification", "label": "Gamification", "sellable": True},
+        {"key": "analytics", "label": "Analytics", "sellable": True},
+        {"key": "journeys", "label": "Journeys", "sellable": True},
+        {"key": "voice_ai", "label": "Voice AI / AI Agents", "sellable": True},
+        {"key": "ai_director", "label": "AI Director", "sellable": True},
+    ],
     "modules": [
-        {"key": "nudges", "label": "In-app nudges", "enabled_signal": "shouldEnableFlows",
-         "integrated_signal": "A flow shown on prod", "usage_signal": "flowsTable Type=flow"},
-        {"key": "widgets", "label": "Widgets", "enabled_signal": "shouldEnableWidgets",
-         "integrated_signal": "Widget placeholder renders on prod",
-         "usage_signal": "flowsTable Type=widget"},
-        {"key": "stories", "label": "Stories", "enabled_signal": "shouldEnableStories",
-         "integrated_signal": "Story strip placed on prod", "usage_signal": "flowsTable Type=story"},
-        {"key": "surveys", "label": "Surveys", "enabled_signal": "",
-         "integrated_signal": "A study shown on prod", "usage_signal": "Study responses"},
-        {"key": "gamification", "label": "Gamification",
-         "enabled_signal": "shouldEnableGamification",
-         "integrated_signal": "A game or milestone shown on prod",
-         "usage_signal": "flowsTable Type=gamification / milestone"},
-        {"key": "journeys", "label": "Journeys", "enabled_signal": "shouldEnableJourneys",
-         "integrated_signal": "", "usage_signal": "Active journey with entries"},
-        {"key": "push", "label": "Push notifications",
-         "enabled_signal": "shouldEnableOutsideAppCampaigns",
-         "integrated_signal": "PN tokens registered on prod", "usage_signal": "Push sent"},
-        {"key": "web_push", "label": "Web push", "enabled_signal": "shouldEnableWebPush",
-         "integrated_signal": "WEB_PUSH config with VAPID keys", "usage_signal": "Web push sent"},
-        {"key": "email", "label": "Email", "enabled_signal": "",
-         "integrated_signal": "Email sender configured", "usage_signal": "Email sent"},
-        {"key": "feature_flags", "label": "Feature flags",
-         "enabled_signal": "shouldEnableFeatureFlags",
-         "integrated_signal": "App reads a flag value", "usage_signal": "Active flag"},
-        {"key": "analytics", "label": "Pro Analytics", "enabled_signal": "",
-         "integrated_signal": "", "usage_signal": ""},
-        {"key": "ai_agent", "label": "AI agent", "enabled_signal": "shouldEnableAIAgent",
-         "integrated_signal": "", "usage_signal": ""},
+        # In-app campaigns
+        _m("nudges", "Nudges", "in_app", "shouldEnableFlows", "A flow shown on prod",
+           "flowsTable Type=flow"),
+        _m("widgets", "Widgets", "in_app", "shouldEnableWidgets",
+           "Widget placeholder renders on prod", "flowsTable Type=widget",
+           requires=["widget_placeholder"]),
+        _m("stories", "Stories", "in_app", "shouldEnableStories", "Story strip placed on prod",
+           "flowsTable Type=story", requires=["story_placeholder"]),
+        _m("surveys", "Surveys", "in_app", "Always on (no switch)", "A study shown on prod",
+           "Study responses"),
+        _m("feature_flags", "Feature Flags", "in_app", "shouldEnableFeatureFlags",
+           "App reads a flag value", "Active flag"),
+        _m("ai_decisioning", "AI Decisioning", "in_app", "shouldEnableSmartCampaigns", "",
+           "Active smart campaign"),
+        # Outside-app campaigns: one master switch, then one entry per channel
+        _m("push", "Push", "outside_app",
+           "shouldEnableOutsideAppCampaigns + PUSH in outsideAppChannelsEnabled",
+           "PN tokens registered on prod", "Push sent", requires=["push_credentials"]),
+        _m("web_push", "Web Push", "outside_app", "shouldEnableWebPush",
+           "WEB_PUSH config with VAPID keys", "Web push sent", requires=["vapid_keys"]),
+        _m("notification_center", "Notification Center", "outside_app",
+           "Beta switch + channel enabled", "Inbox rendered in the app", "Inbox messages sent"),
+        _m("email", "Email", "outside_app", "EMAIL in outsideAppChannelsEnabled",
+           "Sender domain verified", "Email sent", requires=["email_sender"]),
+        _m("whatsapp", "WhatsApp", "outside_app", "WHATSAPP in outsideAppChannelsEnabled",
+           "Provider connected", "WhatsApp sent", requires=["whatsapp_provider"]),
+        _m("sms", "SMS", "outside_app", "SMS in outsideAppChannelsEnabled",
+           "Provider connected", "SMS sent", requires=["sms_provider"]),
+        _m("rcs", "RCS", "outside_app", "RCS in outsideAppChannelsEnabled",
+           "Provider connected", "RCS sent", requires=["rcs_provider"]),
+        _m("webhook", "Webhook", "outside_app", "WEBHOOK in outsideAppChannelsEnabled",
+           "Endpoint configured", "Webhook sent"),
+        # Gamification: one switch for the whole group
+        _m("luck_games", "Luck games", "gamification", "shouldEnableGamification",
+           "A game shown on prod", "Gameplays"),
+        _m("skill_games", "Skill games", "gamification",
+           "shouldEnableGamification + beta switch", "A game shown on prod", "Gameplays"),
+        _m("quizzes", "Quizzes", "gamification", "shouldEnableGamification",
+           "A quiz shown on prod", "Quiz responses"),
+        _m("streaks", "Streaks", "gamification", "shouldEnableGamification",
+           "Streak widget renders on prod", "Active streak"),
+        _m("milestones", "Milestones", "gamification", "shouldEnableGamification",
+           "Milestone widget renders on prod", "Active milestone"),
+        _m("rewards", "Rewards", "gamification", "shouldEnableGamification",
+           "Published reward revealed on prod", "Rewards revealed",
+           requires=["reward_fulfilment"]),
+        # Analytics
+        _m("campaign_analytics", "Campaign analytics", "analytics", "Always on (no switch)",
+           "Metric events received", "Campaign reports viewed"),
+        _m("product_analytics", "Product Analytics", "analytics", "shouldEnableProductAnalytics",
+           "Events flowing to analytics", "Insights, funnels or boards created"),
+        _m("session_replays", "Session Replays", "analytics", "shouldEnableProductAnalytics",
+           "Replays recorded on prod", "Replays viewed"),
+        # Journeys
+        _m("journeys", "Journeys", "journeys", "shouldEnableJourneys", "",
+           "Active journey with entries"),
+        # Voice AI / AI Agents
+        _m("voice_agents", "Voice agents", "voice_ai",
+           "shouldEnableAIAgent + VOICE in outsideAppChannelsEnabled", "Agent published",
+           "Calls placed"),
+        _m("in_app_agents", "In-app AI agents", "voice_ai", "shouldEnableAIAgent",
+           "Agent published", "Conversations"),
+        # AI Director
+        _m("ai_director", "AI Director", "ai_director", "shouldEnableAIDirector",
+           "Objective configured", "AI runs"),
+    ],
+    "integration_items": [
+        # Core SDK: needed before any module works
+        _i("sdk_init", "SDK init", "core", "SDK calls from the prod app", required=True),
+        _i("user_identify", "User identify", "core", "Users carry the client's user ID",
+           required=True),
+        _i("fe_events", "Front-end events", "core", "Track calls from the app", required=True),
+        _i("user_attributes", "User attributes", "core", "Attributes set on users",
+           required=True),
+        _i("backend_events", "Backend events API", "core", "Server-side events received"),
+        _i("cohort_sync", "Cohort sync", "core", "Cohorts imported through the API"),
+        _i("event_forwarding", "Event forwarding", "core",
+           "Events forwarded from the client's existing analytics or engagement tool"),
+        _i("deeplink_listener", "Deeplink / redirect listener", "core",
+           "Campaign button redirects open the right screen"),
+        _i("event_listener", "Event listener", "core",
+           "Client receives campaign events in the app"),
+        _i("page_capture", "Page capture", "core", "Screens captured for tooltips and spotlights"),
+        # Per-module setup
+        _i("widget_placeholder", "Widget placeholders", "in_app",
+           "A placeholder is in the app for each placement"),
+        _i("story_placeholder", "Story placeholder", "in_app", "Story strip placed in the app"),
+        _i("push_credentials", "Push credentials (FCM / APNs)", "outside_app",
+           "Keys uploaded and tokens registering"),
+        _i("ios_notification_ext", "iOS notification extension", "outside_app",
+           "Rich push renders on iOS"),
+        _i("vapid_keys", "Web push VAPID keys", "outside_app", "VAPID keys configured"),
+        _i("email_sender", "Email domain / SMTP", "outside_app", "Sender domain verified"),
+        _i("whatsapp_provider", "WhatsApp provider", "outside_app", "Provider credentials added"),
+        _i("sms_provider", "SMS provider", "outside_app", "Provider credentials added"),
+        _i("rcs_provider", "RCS provider", "outside_app", "Provider credentials added"),
+        _i("reward_fulfilment", "Reward fulfilment", "gamification",
+           "Client backend applies the reward to the user"),
+    ],
+    # Contract bundles: one click ticks these modules as Paid. A starting point
+    # only, a person still confirms against the contract.
+    "bundles": [
+        {"key": "in_app_platform", "label": "In-App Platform",
+         "modules": ["nudges", "widgets", "stories", "surveys", "campaign_analytics"]},
+        {"key": "gamification_platform", "label": "In-app Platform (Gamification)",
+         "modules": ["luck_games", "quizzes", "streaks", "milestones", "rewards"]},
+        {"key": "surveys_only", "label": "Surveys", "modules": ["surveys"]},
+        {"key": "off_app_platform", "label": "Off-App Platform",
+         "modules": ["push", "web_push", "email", "whatsapp", "sms", "rcs"]},
+        {"key": "engagement_platform", "label": "Engagement Platform",
+         "modules": ["nudges", "widgets", "stories", "surveys", "campaign_analytics", "push",
+                     "web_push", "email", "whatsapp", "sms", "rcs", "journeys"]},
     ],
     "fields": [
         # Status
@@ -151,10 +256,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         _f("platforms", "Platforms", "multiselect", "Integration", on_card=True,
            options=["Android XML", "Android Compose", "iOS UIKit", "iOS SwiftUI",
                     "React Native", "Flutter", "Flutter Web", "Web", "Unity", "KMP"]),
+        # Integration items: what this client agreed to build, and what is done.
+        # "Pending" is worked out from these two, it is not stored.
         _f("integration_scope", "Integration Scope", "multiselect", "Integration",
-           options=_COMPONENTS),
-        _f("modules_pending", "Integration Pending", "multiselect", "Integration",
-           on_card=True, options=_COMPONENTS),
+           options_from="integration_items"),
+        _f("integration_done", "Integration Done", "multiselect", "Integration", "product",
+           options_from="integration_items"),
         _f("go_live_checklist", "Go-Live Checklist", "multiselect", "Integration",
            options=["Invoice paid", "Contract linked", "Metric events = ALL",
                     "PN verified on prod", "UAT sign-off"]),
@@ -189,7 +296,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "template_min_role": "chatter",
 }
 
-TEMPLATE_KEYS = ("stages", "fields", "modules", "rules", "edit_min_role", "template_min_role")
+TEMPLATE_KEYS = ("stages", "fields", "module_groups", "modules", "integration_items", "bundles",
+                 "rules", "edit_min_role", "template_min_role")
+CATALOGUE_KEYS = ("module_groups", "modules", "integration_items", "bundles")
 # Columns stored on the record itself rather than under `fields`.
 CORE_KEYS = ("name", "account", "stage")
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
@@ -200,10 +309,17 @@ def now() -> datetime:
 
 
 def _resolve_options(cfg: dict) -> dict:
-    labels = [m["label"] for m in cfg.get("modules") or []]
+    groups = [g["key"] for g in cfg.get("module_groups") or []]
+    sellable = [g["key"] for g in cfg.get("module_groups") or [] if g.get("sellable", True)]
+    for coll in ("modules", "integration_items"):
+        for item in cfg.get(coll) or []:
+            # A template saved before groups existed: park its rows in a real group.
+            if item.get("group") not in groups and groups:
+                item["group"] = (sellable or groups)[0]
+    labels = {src: [x["label"] for x in cfg.get(src) or []] for src in OPTION_SOURCES}
     for field in cfg["fields"]:
-        if field.get("options_from") == "modules":
-            field["options"] = labels
+        if field.get("options_from") in labels:
+            field["options"] = labels[field["options_from"]]
     return cfg
 
 
@@ -212,7 +328,8 @@ async def get_config(db) -> dict:
     override = await db.onboarding_settings.find_one({"_id": "config"})
     if override:
         for key in TEMPLATE_KEYS:
-            if override.get(key):
+            # Bundles may be saved empty on purpose; everything else needs a value.
+            if override.get(key) or (key == "bundles" and isinstance(override.get(key), list)):
                 cfg[key] = copy.deepcopy(override[key])
         cfg["rules"] = {**DEFAULT_CONFIG["rules"], **(override.get("rules") or {})}
         cfg["version"] = override.get("version")
@@ -282,25 +399,77 @@ def validate_template(body: dict, stage_counts: dict[str, int]) -> dict:
         if count and key not in seen:
             errors.append(f"Stage '{key}' still has {count} record(s). Move them before removing it")
 
+    def _named(noun: str, i: int, raw: dict, keys: set[str], labels: set[str]) -> tuple[str, str]:
+        key = str(raw.get("key") or "").strip()
+        label = str(raw.get("label") or "").strip()
+        if not _KEY_RE.match(key):
+            errors.append(f"{noun} {i + 1}: key must be lowercase letters, digits or _")
+        elif key in keys:
+            errors.append(f"{noun} key '{key}' is used twice")
+        if not label:
+            errors.append(f"{noun} {i + 1}: label is required")
+        elif label in labels:
+            errors.append(f"{noun} label '{label}' is used twice")
+        elif "," in label:
+            # Values are stored as labels and lists are comma separated.
+            errors.append(f"{noun} '{label}': label cannot contain a comma")
+        keys.add(key)
+        labels.add(label)
+        return key, label
+
+    groups: list[dict] = []
+    gkeys: set[str] = set()
+    glabels: set[str] = set()
+    for i, g in enumerate(body.get("module_groups") or []):
+        key, label = _named("Module group", i, g, gkeys, glabels)
+        groups.append({"key": key, "label": label, "sellable": bool(g.get("sellable", True))})
+    if not groups:
+        errors.append("At least one module group is required")
+    sellable = {g["key"] for g in groups if g["sellable"]}
+
+    items: list[dict] = []
+    ikeys: set[str] = set()
+    ilabels: set[str] = set()
+    for i, it in enumerate(body.get("integration_items") or []):
+        key, label = _named("Integration item", i, it, ikeys, ilabels)
+        group = str(it.get("group") or "").strip()
+        if groups and group not in gkeys:
+            errors.append(f"Integration item '{label or key}': unknown group '{group}'")
+        items.append({"key": key, "label": label, "group": group,
+                      "signal": str(it.get("signal") or "").strip(),
+                      "required": bool(it.get("required"))})
+
     modules: list[dict] = []
     mkeys: set[str] = set()
     mlabels: set[str] = set()
     for i, m in enumerate(body.get("modules") or []):
-        key = str(m.get("key") or "").strip()
-        label = str(m.get("label") or "").strip()
-        if not _KEY_RE.match(key):
-            errors.append(f"Module {i + 1}: key must be lowercase letters, digits or _")
-        elif key in mkeys:
-            errors.append(f"Module key '{key}' is used twice")
-        if not label:
-            errors.append(f"Module {i + 1}: label is required")
-        elif label in mlabels:
-            errors.append(f"Module label '{label}' is used twice")
-        mkeys.add(key)
-        mlabels.add(label)
-        modules.append({"key": key, "label": label,
+        key, label = _named("Module", i, m, mkeys, mlabels)
+        group = str(m.get("group") or "").strip()
+        if groups and group not in gkeys:
+            errors.append(f"Module '{label or key}': unknown group '{group}'")
+        elif groups and group not in sellable:
+            errors.append(f"Module '{label or key}': group '{group}' only holds integration "
+                          "items. Pick a sellable group")
+        requires = _clean_options(m.get("requires"))
+        unknown = [r for r in requires if r not in ikeys]
+        if unknown:
+            errors.append(f"Module '{label or key}': unknown integration item(s) "
+                          f"{', '.join(unknown)}")
+        modules.append({"key": key, "label": label, "group": group,
                         **{k: str(m.get(k) or "").strip()
-                           for k in ("enabled_signal", "integrated_signal", "usage_signal")}})
+                           for k in ("enabled_signal", "integrated_signal", "usage_signal")},
+                        "requires": requires})
+
+    bundles: list[dict] = []
+    bkeys: set[str] = set()
+    blabels: set[str] = set()
+    for i, b in enumerate(body.get("bundles") or []):
+        key, label = _named("Bundle", i, b, bkeys, blabels)
+        mods = _clean_options(b.get("modules"))
+        unknown = [x for x in mods if x not in mkeys]
+        if unknown:
+            errors.append(f"Bundle '{label or key}': unknown module(s) {', '.join(unknown)}")
+        bundles.append({"key": key, "label": label, "modules": mods})
 
     fields: list[dict] = []
     fkeys: set[str] = set()
@@ -335,10 +504,11 @@ def validate_template(body: dict, stage_counts: dict[str, int]) -> dict:
             field["on_card"] = True
         if required_from:
             field["required_from"] = required_from
-        if key in MODULE_LAYERS or f.get("options_from") == "modules":
+        options_from = "modules" if key in MODULE_LAYERS else f.get("options_from")
+        if options_from in OPTION_SOURCES:
             if ftype != "multiselect":
-                errors.append(f"Field '{name}': module fields must be multi-select")
-            field["options_from"] = "modules"
+                errors.append(f"Field '{name}': catalogue fields must be multi-select")
+            field["options_from"] = options_from
         elif ftype in ("select", "multiselect"):
             field["options"] = _clean_options(f.get("options"))
             if not field["options"]:
@@ -357,7 +527,8 @@ def validate_template(body: dict, stage_counts: dict[str, int]) -> dict:
             value = default
         rules[key] = value
 
-    out = {"stages": stages, "modules": modules, "fields": fields, "rules": rules}
+    out = {"stages": stages, "module_groups": groups, "modules": modules,
+           "integration_items": items, "bundles": bundles, "fields": fields, "rules": rules}
     for key in ("edit_min_role", "template_min_role"):
         role = body.get(key) or DEFAULT_CONFIG[key]
         if role not in ROLE_HIERARCHY:
@@ -379,7 +550,9 @@ def _comparable(item: dict) -> dict:
 def _template_diff(old: dict, new: dict) -> list[str]:
     """Short human summary of what a template save changed."""
     out = []
-    for coll, noun in (("stages", "stage"), ("fields", "field"), ("modules", "module")):
+    for coll, noun in (("stages", "stage"), ("fields", "field"), ("module_groups", "module group"),
+                       ("modules", "module"), ("integration_items", "integration item"),
+                       ("bundles", "bundle")):
         before = {x["key"]: x for x in old.get(coll) or []}
         after = {x["key"]: x for x in new.get(coll) or []}
         for x in new.get(coll) or []:
@@ -453,11 +626,12 @@ def coerce(field: dict, value: Any) -> Any:
         if isinstance(value, str):
             value = value.split(",")
         cleaned = _clean_options(value)
-        if field.get("options_from") == "modules":
+        noun = OPTION_SOURCES.get(field.get("options_from"))
+        if noun:
             unknown = [v for v in cleaned if v not in (field.get("options") or [])]
             if unknown:
-                raise ValueError(f"{field['key']}: unknown module(s) {', '.join(unknown)}. "
-                                 "Add them to the module catalogue first")
+                raise ValueError(f"{field['key']}: unknown {noun}(s) {', '.join(unknown)}. "
+                                 "Add them to the catalogue on the Template page first")
         return cleaned or None
     return str(value).strip() or None
 
@@ -504,6 +678,60 @@ def module_gaps(fields: dict, catalogue: list[str]) -> dict[str, list[str]]:
     }
 
 
+def upsell_groups(fields: dict, cfg: dict) -> list[str]:
+    """Sellable groups with no paid module. Empty until Paid is ticked."""
+    paid = set(fields.get("modules_paid") or [])
+    if not paid:
+        return []
+    out = []
+    for group in cfg.get("module_groups") or []:
+        if not group.get("sellable", True):
+            continue
+        labels = {m["label"] for m in cfg.get("modules") or [] if m.get("group") == group["key"]}
+        if labels and not labels & paid:
+            out.append(group["label"])
+    return out
+
+
+def integration_status(fields: dict, cfg: dict) -> dict:
+    """What the client still has to build.
+
+    Needed = items marked required in the template + items ticked In scope on
+    the record + the setup items of every paid module. Pending = needed - done.
+    Nothing is reported until someone recorded scope or done items, so an
+    untouched record never reads as "everything is pending".
+    """
+    items = cfg.get("integration_items") or []
+    label = {i["key"]: i["label"] for i in items}
+    order = {i["label"]: n for n, i in enumerate(items)}
+    scope = set(fields.get("integration_scope") or [])
+    done = set(fields.get("integration_done") or [])
+    paid = set(fields.get("modules_paid") or [])
+    tracked = bool(scope or done)
+
+    needed = scope | {i["label"] for i in items if i.get("required")}
+    module_setup: dict[str, list[str]] = {}
+    for module in cfg.get("modules") or []:
+        if module["label"] not in paid:
+            continue
+        setup = [label[k] for k in module.get("requires") or [] if k in label]
+        needed.update(setup)
+        missing = [x for x in setup if x not in done]
+        if missing and tracked:
+            module_setup[module["label"]] = missing
+
+    def srt(values: set[str]) -> list[str]:
+        return sorted(values, key=lambda v: (order.get(v, 999), v))
+
+    return {
+        "tracked": tracked,
+        "needed": srt(needed),
+        "pending": srt(needed - done) if tracked else [],
+        "done_count": len(needed & done),
+        "module_setup_pending": module_setup,
+    }
+
+
 def derive(record: dict, cfg: dict, today: date | None = None) -> dict:
     """Computed columns: days to live, first-campaign status, module gaps, flags, suggestion."""
     today = today or now().date()
@@ -539,6 +767,8 @@ def derive(record: dict, cfg: dict, today: date | None = None) -> dict:
     updated = _aware(record.get("updated_at"))
     catalogue = [m["label"] for m in cfg.get("modules") or []]
     gaps = module_gaps(f, catalogue)
+    gaps["upsell_groups"] = upsell_groups(f, cfg)
+    integration = integration_status(f, cfg)
     sdk_live_pos = index.get(by_milestone.get("sdk_live", ""), 10**6)
 
     flags = []
@@ -559,6 +789,9 @@ def derive(record: dict, cfg: dict, today: date | None = None) -> dict:
             flags.append("paid_gap")
         if gaps["enabled_not_paid"]:
             flags.append("unpaid_enabled")
+        # Live on prod while agreed integration work is still open.
+        if integration["pending"] and pos >= sdk_live_pos:
+            flags.append("integration_gap")
 
     # Fields the template says must be filled by the current stage.
     missing = []
@@ -592,6 +825,7 @@ def derive(record: dict, cfg: dict, today: date | None = None) -> dict:
         "mtu_usage_pct": (round(current_mtu * 100 / contract_mtu)
                           if contract_mtu and current_mtu is not None else None),
         "module_gaps": gaps,
+        "integration": integration,
         "missing_required": missing,
         "suggested_stage": suggested,
         "flags": flags,
