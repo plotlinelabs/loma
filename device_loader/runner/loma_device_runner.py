@@ -2564,11 +2564,15 @@ async def enroll(server, token, name, cf_access=False):
         headers = cf_access_headers({'server': server, 'cf_access': cf_access}, interactive=True)
     except CfAccessError as exc:
         raise SystemExit(f'Enrollment failed: {exc}')
+    previous = load_config() if CONFIG_PATH.exists() else {}
+    payload = {'token': token, 'name': name, 'hostname': socket.gethostname(),
+               'os': f'{platform.system()} {platform.release()}', 'version': VERSION}
+    if previous.get('server') == server and previous.get('runner_id') and previous.get('secret'):
+        # Same machine, same Loma: keep the existing runner (device ids, sharing) instead of adding one.
+        payload['previous'] = {'runner_id': previous['runner_id'], 'secret': previous['secret']}
     async with aiohttp.ClientSession() as session:
-        async with session.post(server + '/device-runner/enroll', headers=headers, json={
-                'token': token, 'name': name, 'hostname': socket.gethostname(),
-                'os': f'{platform.system()} {platform.release()}', 'version': VERSION},
-                allow_redirects=False) as response:
+        async with session.post(server + '/device-runner/enroll', headers=headers, json=payload,
+                                allow_redirects=False) as response:
             if 300 <= response.status < 400:
                 if not cf_access and behind_cf_access(response.headers):
                     print('Loma is behind Cloudflare Access; using your cloudflared login.', flush=True)
@@ -2581,12 +2585,16 @@ async def enroll(server, token, name, cf_access=False):
             if response.status != 200 or not isinstance(body, dict):
                 error = body.get('error') if isinstance(body, dict) else None
                 raise SystemExit(f'Enrollment failed: {error or response.status}')
-    previous = load_config() if CONFIG_PATH.exists() else {}
     config = {'server': server, 'runner_id': body['runner_id'], 'secret': body['secret'],
               'name': body.get('name', name), 'cf_access': cf_access,
               'policy': previous.get('policy') or default_policy()}
     save_config(config)
-    print(f'Enrolled as {config["runner_id"]} ({config["name"]}).')
+    if body.get('reused'):
+        print(f'Re-enrolled as the same runner {config["runner_id"]} ({config["name"]}).')
+    else:
+        print(f'Enrolled as {config["runner_id"]} ({config["name"]}).')
+    if body.get('replaced'):
+        print(f'Replaced the old offline runner(s) for this machine: {", ".join(body["replaced"])}.')
 
 
 def bootstrap(argv):

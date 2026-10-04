@@ -63,8 +63,43 @@ async def create_enrollment(db, owner_email, name):
     return token, created + ENROLL_TTL
 
 
-async def redeem_enrollment(db, token, details):
-    """Single-use exchange of an enrollment token for a runner id + long-lived secret."""
+async def _same_owner_previous(db, owner_email, previous):
+    """The runner this machine was enrolled as before, if its saved credentials still check out
+    and it belongs to the same owner. Anything else (wrong secret, revoked, other owner) is ignored."""
+    if not isinstance(previous, dict):
+        return None
+    runner = await authenticate_runner(db, previous.get('runner_id'), previous.get('secret'))
+    if runner is None or str(runner.get('owner_email') or '').lower() != str(owner_email or '').lower():
+        return None
+    return runner
+
+
+async def _replace_offline_twins(db, owner_email, name, hostname, is_online, at):
+    """Fallback when the machine lost its old config: revoke the same owner's runners with the same
+    hostname and name that are offline right now. Hostname is client-supplied, so this never touches
+    another owner's runner or a connected one. Returns (replaced ids, their merged sharing list)."""
+    if not hostname:
+        return [], []
+    replaced, shared = [], []
+    async for twin in db.device_runners.find({'owner_email': owner_email, 'hostname': hostname, 'name': name,
+                                              'revoked': {'$ne': True}}):
+        if is_online(twin['runner_id']):
+            continue
+        await db.device_runners.update_one({'runner_id': twin['runner_id']}, {'$set': {
+            'revoked': True, 'revoked_at': at, 'revoked_by': 're-enroll'}})
+        await db.device_leases.delete_many({'_id': {'$regex': '^' + re.escape(twin['runner_id']) + '/'}})
+        replaced.append(twin['runner_id'])
+        shared += [e for e in twin.get('shared_with') or [] if e not in shared]
+    return replaced, shared
+
+
+async def redeem_enrollment(db, token, details, is_online=lambda runner_id: False):
+    """Single-use exchange of an enrollment token for a runner id + long-lived secret.
+
+    Running setup with a new token on an already enrolled machine keeps the same runner: if
+    `details['previous']` holds that machine's current credentials (same owner), the record is
+    updated in place with a fresh secret, so device ids and sharing survive. Without them, the
+    same owner's offline runners with the same hostname and name are replaced."""
     if not isinstance(token, str) or not token.startswith(ENROLL_PREFIX) or len(token) > 200:
         return None
     at = now()
@@ -73,19 +108,28 @@ async def redeem_enrollment(db, token, details):
         {'$set': {'used_at': at}})
     if enrollment is None:
         return None
-    active = await db.device_runners.count_documents({'owner_email': enrollment['owner_email'], 'revoked': {'$ne': True}})
-    if active >= MAX_RUNNERS_PER_USER:
-        return {'error': f'Runner limit reached ({MAX_RUNNERS_PER_USER}); revoke an unused runner first'}
+    owner = enrollment['owner_email']
     secret = SECRET_PREFIX + secrets.token_urlsafe(40)
-    runner = {
-        'runner_id': 'r_' + secrets.token_hex(8), 'owner_email': enrollment['owner_email'],
+    fields = {
         'name': str(details.get('name') or enrollment.get('name') or 'Runner')[:80],
         'hostname': str(details.get('hostname') or '')[:120], 'os': str(details.get('os') or '')[:120],
-        'version': str(details.get('version') or '')[:40], 'secret_hash': digest(secret),
-        'shared_with': [], 'devices': [], 'capabilities': [], 'created_at': at, 'last_seen': None,
+        'version': str(details.get('version') or '')[:40], 'secret_hash': digest(secret)}
+    existing = await _same_owner_previous(db, owner, details.get('previous'))
+    if existing is not None:
+        await db.device_runners.update_one({'runner_id': existing['runner_id']},
+                                           {'$set': {**fields, 're_enrolled_at': at}})
+        return {'runner_id': existing['runner_id'], 'secret': secret, 'name': fields['name'], 'reused': True}
+    replaced, shared = await _replace_offline_twins(db, owner, fields['name'], fields['hostname'], is_online, at)
+    active = await db.device_runners.count_documents({'owner_email': owner, 'revoked': {'$ne': True}})
+    if active >= MAX_RUNNERS_PER_USER:
+        return {'error': f'Runner limit reached ({MAX_RUNNERS_PER_USER}); revoke an unused runner first'}
+    runner = {
+        'runner_id': 'r_' + secrets.token_hex(8), 'owner_email': owner, **fields,
+        'shared_with': shared, 'devices': [], 'capabilities': [], 'created_at': at, 'last_seen': None,
         'revoked': False}
     await db.device_runners.insert_one(runner)
-    return {'runner_id': runner['runner_id'], 'secret': secret, 'name': runner['name']}
+    return {'runner_id': runner['runner_id'], 'secret': secret, 'name': runner['name'],
+            **({'replaced': replaced} if replaced else {})}
 
 
 async def authenticate_runner(db, runner_id, secret):
