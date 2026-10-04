@@ -88,12 +88,16 @@ async def handle_enroll(request):
     body = await _json_object(request)
     if body is None:
         return _error('Invalid JSON')
-    result = await store.redeem_enrollment(db, body.get('token'), body)
+    result = await store.redeem_enrollment(db, body.get('token'), body,
+                                           is_online=lambda runner_id: hub.get(runner_id) is not None)
     if result is None:
         return _error('Enrollment token is invalid, expired or already used', 401)
     if 'error' in result:
         return _error(result['error'], 409)
-    logger.info('Device runner %s enrolled', result['runner_id'])
+    for old in result.get('replaced', []):
+        await hub.revoke(old)  # offline already; just drops any half-open socket
+    logger.info('Device runner %s %s%s', result['runner_id'], 're-enrolled' if result.get('reused') else 'enrolled',
+                f" (replaced {', '.join(result['replaced'])})" if result.get('replaced') else '')
     return web.json_response(result)
 
 

@@ -169,6 +169,11 @@ export default function DevicesPanel() {
       <Card>
         <CardContent className="space-y-3">
           <div className="text-[13px] font-semibold text-foreground">Add a machine</div>
+          <div className="text-xs text-muted-foreground">
+            To update a machine that is already listed, run{" "}
+            <code className="bg-muted rounded px-1">python3 loma_device_runner.py setup</code> on it; no new token is
+            needed. Running setup with a new token on the same machine also keeps its existing entry.
+          </div>
           <div className="flex items-center gap-2">
             <Input
               value={name}
@@ -273,7 +278,7 @@ export default function DevicesPanel() {
                     {runner.update_available && (
                       <div className="text-xs text-amber-600">
                         Update to runner {runner.latest_version}: download loma_device_runner.py again and run{" "}
-                        <code>python3 loma_device_runner.py setup</code> on that machine
+                        <code>python3 loma_device_runner.py setup</code> on that machine (no new token needed)
                       </div>
                     )}
                   </div>
