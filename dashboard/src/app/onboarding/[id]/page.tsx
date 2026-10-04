@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
+  RiArrowDownSLine,
+  RiArrowRightSLine,
   RiChat1Line,
   RiCheckLine,
   RiExternalLinkLine,
@@ -52,7 +54,9 @@ const selectClass =
 const SOURCE_LABEL = Object.fromEntries(
   FIELD_SOURCES.map((s) => [s.key, s.label]),
 );
-const LAYER_KEYS = new Set(MODULE_LAYERS.map((l) => l.key));
+// Shown in the catalogue matrix, not as plain fields.
+const INTEGRATION_KEYS = ["integration_scope", "integration_done"];
+const LAYER_KEYS = new Set([...MODULE_LAYERS.map((l) => l.key), ...INTEGRATION_KEYS]);
 
 function FieldEditor({
   field,
@@ -146,23 +150,91 @@ function sameValue(a: FieldValue, b: FieldValue) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
+function Tick({
+  on,
+  tone = "green",
+  locked,
+  disabled,
+  label,
+  title,
+  onClick,
+}: {
+  on: boolean;
+  tone?: "dark" | "green";
+  locked?: boolean;
+  disabled: boolean;
+  label: string;
+  title?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled || locked}
+      aria-label={label}
+      aria-pressed={on}
+      title={title}
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-5 w-5 items-center justify-center rounded border transition-colors",
+        on
+          ? tone === "dark"
+            ? "border-foreground bg-foreground text-background"
+            : "border-emerald-600 bg-emerald-600 text-white"
+          : "border-border",
+        locked && on && "opacity-50",
+        !disabled && !locked && "hover:border-foreground/50",
+      )}
+    >
+      {on && <RiCheckLine size={12} />}
+    </button>
+  );
+}
+
+/**
+ * The catalogue for one client, three levels deep: group -> module -> setup item.
+ * Module rows carry the four layers (Paid / Enabled / Integrated / In use).
+ * Setup rows are the work the client's team does: In scope and Done.
+ */
 function ModuleMatrix({
   config,
   value,
   onToggle,
+  onSet,
   disabled,
   gaps,
 }: {
   config: OnboardingConfig;
   value: (layer: string) => string[];
-  onToggle: (layer: string, module: string) => void;
+  onToggle: (layer: string, label: string) => void;
+  onSet: (layer: string, labels: string[]) => void;
   disabled: boolean;
   gaps: OnboardingRecord["derived"]["module_gaps"];
 }) {
+  const [openOverride, setOpenOverride] = useState<Record<string, boolean>>({});
   const layers = MODULE_LAYERS.filter((l) =>
     config.fields.some((f) => f.key === l.key),
   );
-  const paidSet = new Set(value("modules_paid"));
+  const hasItems = INTEGRATION_KEYS.every((k) =>
+    config.fields.some((f) => f.key === k),
+  );
+  const paid = value("modules_paid");
+  const paidSet = new Set(paid);
+  const scope = new Set(value("integration_scope"));
+  const done = new Set(value("integration_done"));
+  const tracked = scope.size > 0 || done.size > 0;
+  const itemLabel = Object.fromEntries(
+    config.integration_items.map((i) => [i.key, i.label]),
+  );
+  // Setup item label -> paid modules that need it.
+  const neededBy: Record<string, string[]> = {};
+  for (const m of config.modules) {
+    if (!paidSet.has(m.label)) continue;
+    for (const key of m.requires ?? []) {
+      const label = itemLabel[key];
+      if (label) (neededBy[label] ??= []).push(m.label);
+    }
+  }
   const statusFor = (m: string) => {
     if (gaps.paid_not_integrated.includes(m))
       return { text: "Paid, not integrated", cls: "text-orange-700" };
@@ -170,18 +242,46 @@ function ModuleMatrix({
       return { text: "Enabled, not paid", cls: "text-violet-700" };
     if (gaps.integrated_not_used.includes(m))
       return { text: "Integrated, not used", cls: "text-amber-700" };
-    if (paidSet.size && !paidSet.has(m)) return { text: "Upsell", cls: "text-muted-foreground" };
+    if (paidSet.size && !paidSet.has(m))
+      return { text: "Upsell", cls: "text-muted-foreground" };
     return null;
   };
+  const applyBundle = (key: string) => {
+    const bundle = config.bundles.find((b) => b.key === key);
+    if (!bundle) return;
+    const labels = config.modules
+      .filter((m) => bundle.modules.includes(m.key))
+      .map((m) => m.label);
+    onSet("modules_paid", [...new Set([...paid, ...labels])]);
+  };
+  const cols = layers.length + 2;
+
   return (
     <Card className="p-4 gap-3" data-testid="module-matrix">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-[13px] font-semibold">Modules</h2>
-        <span className="text-[11px] text-muted-foreground">
-          Paid is ticked by a person at kickoff. The other columns are filled
-          from product data
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-[13px] font-semibold">Modules and integration</h2>
+        {!disabled && config.bundles.length > 0 && (
+          <select
+            className="h-7 rounded-md border border-input bg-transparent px-1.5 text-[12px]"
+            value=""
+            aria-label="Tick paid modules from a contract bundle"
+            data-testid="bundle-select"
+            onChange={(e) => applyBundle(e.target.value)}
+          >
+            <option value="">Tick Paid from contract bundle…</option>
+            {config.bundles.map((b) => (
+              <option key={b.key} value={b.key}>
+                {b.label} ({b.modules.length})
+              </option>
+            ))}
+          </select>
+        )}
       </div>
+      <p className="text-[11px] text-muted-foreground">
+        Module rows: Paid is ticked by a person from the contract, the other
+        columns come from product data. Setup rows (↳) are the work the
+        client&apos;s team does: tick In scope, then Done.
+      </p>
       {!paidSet.size && (
         <div className="rounded bg-amber-50 px-2 py-1 text-[12px] text-amber-800">
           Paid modules not ticked yet, so paid vs integrated gaps can&apos;t be
@@ -191,60 +291,180 @@ function ModuleMatrix({
       <div className="overflow-x-auto">
         <table className="w-full text-[12px]">
           <thead>
-            <tr className="text-muted-foreground">
-              <th className="py-1 pr-2 text-left font-normal">Module</th>
+            <tr className="text-muted-foreground align-bottom">
+              <th className="py-1 pr-2 text-left font-normal">Module / setup item</th>
               {layers.map((l) => (
                 <th
                   key={l.key}
-                  className="w-[78px] py-1 text-center font-normal"
+                  className="w-[78px] py-1 text-center font-normal leading-4"
                   title={l.hint}
                 >
                   {l.label}
+                  {hasItems && l.key === "modules_paid" && (
+                    <span className="block text-[10px]">In scope</span>
+                  )}
+                  {hasItems && l.key === "modules_integrated" && (
+                    <span className="block text-[10px]">Done</span>
+                  )}
                 </th>
               ))}
               <th className="py-1 pl-2 text-left font-normal">Status</th>
             </tr>
           </thead>
-          <tbody>
-            {config.modules.map((m) => {
-              const st = statusFor(m.label);
-              return (
-                <tr key={m.key} className="border-t border-border/60">
-                  <td className="py-1 pr-2">{m.label}</td>
-                  {layers.map((l) => {
-                    const on = value(l.key).includes(m.label);
-                    return (
-                      <td key={l.key} className="py-1 text-center">
-                        <button
-                          type="button"
-                          disabled={disabled}
-                          aria-label={`${m.label} ${l.label}`}
-                          aria-pressed={on}
-                          onClick={() => onToggle(l.key, m.label)}
-                          className={cn(
-                            "inline-flex h-5 w-5 items-center justify-center rounded border transition-colors",
-                            on
-                              ? l.key === "modules_paid"
-                                ? "border-foreground bg-foreground text-background"
-                                : "border-emerald-600 bg-emerald-600 text-white"
-                              : "border-border",
-                            !disabled && "hover:border-foreground/50",
-                          )}
-                        >
-                          {on && <RiCheckLine size={12} />}
-                        </button>
-                      </td>
-                    );
-                  })}
-                  <td className={cn("py-1 pl-2 whitespace-nowrap", st?.cls)}>
-                    {st?.text ?? ""}
+          {config.module_groups.map((g) => {
+            const modules = config.modules.filter((m) => m.group === g.key);
+            const items = hasItems
+              ? config.integration_items.filter((i) => i.group === g.key)
+              : [];
+            if (!modules.length && !items.length) return null;
+            const needed = items.filter(
+              (i) => i.required || scope.has(i.label) || neededBy[i.label],
+            );
+            const paidN = modules.filter((m) => paidSet.has(m.label)).length;
+            const integratedN = modules.filter((m) =>
+              value("modules_integrated").includes(m.label),
+            ).length;
+            const doneN = needed.filter((i) => done.has(i.label)).length;
+            const touched =
+              modules.some((m) => layers.some((l) => value(l.key).includes(m.label))) ||
+              items.some((i) => scope.has(i.label) || done.has(i.label));
+            const open = openOverride[g.key] ?? (touched || !g.sellable);
+            const summary = [
+              modules.length
+                ? paidSet.size
+                  ? `${paidN} of ${modules.length} paid`
+                  : `${modules.length} modules`
+                : "",
+              modules.length && integratedN ? `${integratedN} integrated` : "",
+              needed.length ? `setup ${doneN}/${needed.length}` : "",
+            ].filter(Boolean);
+            return (
+              <tbody key={g.key} data-testid={`group-${g.key}`}>
+                <tr className="border-t bg-muted/40">
+                  <td colSpan={cols} className="py-1 pr-2">
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-1 text-left"
+                      aria-expanded={open}
+                      onClick={() =>
+                        setOpenOverride((o) => ({ ...o, [g.key]: !open }))
+                      }
+                    >
+                      {open ? (
+                        <RiArrowDownSLine size={14} />
+                      ) : (
+                        <RiArrowRightSLine size={14} />
+                      )}
+                      <span className="font-medium">{g.label}</span>
+                      {!g.sellable && (
+                        <span className="text-[11px] text-muted-foreground">
+                          every client
+                        </span>
+                      )}
+                      <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
+                        {summary.join(" · ")}
+                      </span>
+                    </button>
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
+                {open &&
+                  modules.map((m) => {
+                    const st = statusFor(m.label);
+                    return (
+                      <tr key={m.key} className="border-t border-border/60">
+                        <td className="py-1 pr-2 pl-5">{m.label}</td>
+                        {layers.map((l) => (
+                          <td key={l.key} className="py-1 text-center">
+                            <Tick
+                              on={value(l.key).includes(m.label)}
+                              tone={l.key === "modules_paid" ? "dark" : "green"}
+                              disabled={disabled}
+                              label={`${m.label} ${l.label}`}
+                              onClick={() => onToggle(l.key, m.label)}
+                            />
+                          </td>
+                        ))}
+                        <td className={cn("py-1 pl-2 whitespace-nowrap", st?.cls)}>
+                          {st?.text ?? ""}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                {open &&
+                  items.map((i) => {
+                    const by = neededBy[i.label];
+                    const auto = !!i.required || !!by;
+                    const inScope = auto || scope.has(i.label);
+                    const isDone = done.has(i.label);
+                    const why = i.required
+                      ? "Needed for every client"
+                      : by
+                        ? `Needed by ${by.join(", ")}`
+                        : "Optional: tick if this client agreed to build it";
+                    return (
+                      <tr
+                        key={i.key}
+                        className="border-t border-border/60 text-muted-foreground"
+                      >
+                        <td className="py-1 pr-2 pl-5" title={i.signal || undefined}>
+                          <span className="mr-1">↳</span>
+                          <span className={cn(inScope && "text-foreground")}>
+                            {i.label}
+                          </span>
+                          {by && !i.required && (
+                            <span className="ml-1 text-[11px]">for {by.join(", ")}</span>
+                          )}
+                        </td>
+                        {layers.map((l) => (
+                          <td key={l.key} className="py-1 text-center">
+                            {l.key === "modules_paid" ? (
+                              <Tick
+                                on={inScope}
+                                tone="dark"
+                                locked={auto}
+                                disabled={disabled}
+                                label={`${i.label} In scope`}
+                                title={why}
+                                onClick={() => onToggle("integration_scope", i.label)}
+                              />
+                            ) : l.key === "modules_integrated" ? (
+                              <Tick
+                                on={isDone}
+                                disabled={disabled}
+                                label={`${i.label} Done`}
+                                title={i.signal || undefined}
+                                onClick={() => onToggle("integration_done", i.label)}
+                              />
+                            ) : null}
+                          </td>
+                        ))}
+                        <td
+                          className={cn(
+                            "py-1 pl-2 whitespace-nowrap",
+                            inScope && !isDone && tracked && "text-orange-700",
+                          )}
+                        >
+                          {isDone
+                            ? "Done"
+                            : !inScope
+                              ? "Not in scope"
+                              : tracked
+                                ? "Pending"
+                                : "Not recorded"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            );
+          })}
         </table>
       </div>
+      {gaps.upsell_groups.length > 0 && (
+        <p className="text-[12px] text-muted-foreground" data-testid="upsell-groups">
+          Nothing paid in: {gaps.upsell_groups.join(", ")}
+        </p>
+      )}
     </Card>
   );
 }
@@ -647,6 +867,7 @@ export default function OnboardingRecordPage() {
             config={config}
             value={layerValue}
             onToggle={toggleModule}
+            onSet={(layer, labels) => set(layer, labels.length ? labels : null)}
             disabled={!canEdit}
             gaps={d.module_gaps}
           />

@@ -61,7 +61,7 @@ export interface OnboardingField {
   label: string;
   type: FieldType;
   options?: string[];
-  options_from?: "modules";
+  options_from?: "modules" | "integration_items";
   section?: string;
   source?: FieldSource;
   on_card?: boolean;
@@ -76,12 +76,40 @@ export interface OnboardingStage {
   milestone?: string | null;
 }
 
+/** Catalogue level 1. A group that is not sellable (Core SDK) only holds integration items. */
+export interface OnboardingModuleGroup {
+  key: string;
+  label: string;
+  sellable: boolean;
+}
+
+/** Catalogue level 2: something sold. Tracked as Paid / Enabled / Integrated / In use. */
 export interface OnboardingModule {
   key: string;
   label: string;
+  group: string;
   enabled_signal?: string;
   integrated_signal?: string;
   usage_signal?: string;
+  /** Keys of the integration items this module needs before it works. */
+  requires?: string[];
+}
+
+/** Catalogue level 3: work the client's team does. Tracked as In scope / Done. */
+export interface OnboardingIntegrationItem {
+  key: string;
+  label: string;
+  group: string;
+  signal?: string;
+  /** Needed for every client, whatever they bought. */
+  required?: boolean;
+}
+
+/** A contract bundle: one click ticks its modules as Paid. */
+export interface OnboardingBundle {
+  key: string;
+  label: string;
+  modules: string[];
 }
 
 export interface OnboardingRules {
@@ -95,7 +123,10 @@ export interface OnboardingRules {
 export interface OnboardingTemplate {
   stages: OnboardingStage[];
   fields: OnboardingField[];
+  module_groups: OnboardingModuleGroup[];
   modules: OnboardingModule[];
+  integration_items: OnboardingIntegrationItem[];
+  bundles: OnboardingBundle[];
   rules: OnboardingRules;
   edit_min_role: string;
   template_min_role: string;
@@ -116,6 +147,17 @@ export interface ModuleGaps {
   enabled_not_paid: string[];
   integrated_not_used: string[];
   upsell: string[];
+  /** Sellable groups with no paid module. */
+  upsell_groups: string[];
+}
+
+export interface IntegrationStatus {
+  /** False until someone recorded scope or done items. */
+  tracked: boolean;
+  needed: string[];
+  pending: string[];
+  done_count: number;
+  module_setup_pending: Record<string, string[]>;
 }
 
 export interface OnboardingRecord {
@@ -137,6 +179,7 @@ export interface OnboardingRecord {
     days_live_without_campaign: number | null;
     mtu_usage_pct: number | null;
     module_gaps: ModuleGaps;
+    integration: IntegrationStatus;
     missing_required: string[];
     suggested_stage: string | null;
     flags: string[];
@@ -246,6 +289,7 @@ export const FLAG_LABELS: Record<string, string> = {
   idle: "Live, no campaign",
   paid_gap: "Paid, not integrated",
   unpaid_enabled: "Enabled, not paid",
+  integration_gap: "Integration pending",
 };
 
 export const FLAG_COLORS: Record<string, string> = {
@@ -254,6 +298,7 @@ export const FLAG_COLORS: Record<string, string> = {
   idle: "bg-red-50 text-red-700 border-red-200",
   blocked: "bg-orange-50 text-orange-700 border-orange-200",
   paid_gap: "bg-orange-50 text-orange-700 border-orange-200",
+  integration_gap: "bg-orange-50 text-orange-700 border-orange-200",
   stale: "bg-amber-50 text-amber-700 border-amber-200",
   unpaid_enabled: "bg-violet-50 text-violet-700 border-violet-200",
   pilot_ending: "bg-blue-50 text-blue-700 border-blue-200",
@@ -265,6 +310,7 @@ export const FLAG_BORDER: Record<string, string> = {
   idle: "border-l-red-500",
   blocked: "border-l-orange-500",
   paid_gap: "border-l-orange-500",
+  integration_gap: "border-l-orange-500",
   stale: "border-l-amber-400",
   unpaid_enabled: "border-l-violet-500",
   pilot_ending: "border-l-blue-500",

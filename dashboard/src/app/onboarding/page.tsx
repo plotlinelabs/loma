@@ -211,28 +211,63 @@ function AdoptionLine({ r, minUsers }: { r: OnboardingRecord; minUsers: number }
   return null;
 }
 
-function ModulesLine({ r }: { r: OnboardingRecord }) {
+function ModulesLine({ r, config }: { r: OnboardingRecord; config: OnboardingConfig }) {
   const f = r.fields;
-  const count = (k: string) => (Array.isArray(f[k]) ? (f[k] as string[]).length : 0);
-  const paid = count("modules_paid");
-  const integrated = count("modules_integrated");
-  const inUse = count("modules_in_use");
-  if (!paid && !integrated && !inUse) return null;
+  const list = (k: string) => (Array.isArray(f[k]) ? (f[k] as string[]) : []);
+  const paid = list("modules_paid");
+  const integrated = list("modules_integrated");
+  const inUse = list("modules_in_use");
+  const integ = r.derived.integration;
+  if (!paid.length && !integrated.length && !inUse.length && !integ.tracked) return null;
   const gaps = r.derived.module_gaps;
+  // One chip per group the client has something in: integrated / paid.
+  const basis = paid.length ? paid : integrated;
+  const groups = config.module_groups
+    .map((g) => {
+      const labels = config.modules.filter((m) => m.group === g.key).map((m) => m.label);
+      const total = labels.filter((l) => basis.includes(l)).length;
+      const done = labels.filter((l) => basis.includes(l) && integrated.includes(l)).length;
+      return { label: g.label.replace(/ campaigns$/, ""), total, done };
+    })
+    .filter((g) => g.total > 0);
   return (
-    <div className="mt-1.5 text-[12px] leading-5">
+    <div className="mt-1.5 text-[12px] leading-5" data-testid="card-modules">
       <div className="flex items-center gap-1.5 tabular-nums">
         <span className="text-muted-foreground w-[104px] shrink-0">Modules</span>
         <span title="Paid / Integrated / In use">
-          <span className={cn(!paid && "text-amber-700")}>
-            {paid ? `${paid} paid` : "paid not set"}
+          <span className={cn(!paid.length && "text-amber-700")}>
+            {paid.length ? `${paid.length} paid` : "paid not set"}
           </span>
           <span className="text-muted-foreground"> · </span>
-          {integrated} integrated
+          {integrated.length} integrated
           <span className="text-muted-foreground"> · </span>
-          {inUse} in use
+          {inUse.length} in use
         </span>
       </div>
+      {groups.length > 0 && (
+        <div
+          className="flex flex-wrap gap-1 py-0.5"
+          title={
+            paid.length
+              ? "Per group: modules integrated / modules paid"
+              : "Per group: modules integrated (paid not ticked yet)"
+          }
+        >
+          {groups.map((g) => (
+            <span
+              key={g.label}
+              className={cn(
+                "rounded border px-1 text-[11px] leading-4 tabular-nums",
+                paid.length && g.done < g.total
+                  ? "border-orange-200 bg-orange-50 text-orange-700"
+                  : "border-border text-muted-foreground",
+              )}
+            >
+              {g.label} {paid.length ? `${g.done}/${g.total}` : g.total}
+            </span>
+          ))}
+        </div>
+      )}
       {gaps.paid_not_integrated.length > 0 && (
         <div className="truncate text-orange-700" title="Paid for, not integrated">
           Not integrated: {gaps.paid_not_integrated.join(", ")}
@@ -242,6 +277,24 @@ function ModulesLine({ r }: { r: OnboardingRecord }) {
         <div className="truncate text-violet-700" title="Switched on, not in contract">
           Enabled, unpaid: {gaps.enabled_not_paid.join(", ")}
         </div>
+      )}
+      {integ.tracked && (
+        <>
+          <div className="flex items-center gap-1.5 tabular-nums">
+            <span className="text-muted-foreground w-[104px] shrink-0">Integration</span>
+            <span title="Integration items done / needed">
+              {integ.done_count}/{integ.needed.length} items done
+            </span>
+          </div>
+          {integ.pending.length > 0 && (
+            <div
+              className="truncate text-orange-700"
+              title={`Still to build: ${integ.pending.join(", ")}`}
+            >
+              Pending: {integ.pending.join(", ")}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -327,7 +380,7 @@ function BoardCard({
           {d.pilot_days_left !== null ? `${d.pilot_days_left}d` : ""}
         </KV>
       </div>
-      <ModulesLine r={r} />
+      <ModulesLine r={r} config={config} />
       <AdoptionLine r={r} minUsers={config.rules.first_campaign_min_users} />
       {(next || nextDue) && (
         <div className="mt-1.5 rounded bg-muted/50 px-2 py-1 text-[12px] leading-snug">

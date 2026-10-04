@@ -36,9 +36,10 @@ import {
   saveOnboardingTemplate,
 } from "@/lib/onboarding-api";
 import type {
+  OnboardingBundle,
   OnboardingConfig,
   OnboardingField,
-  OnboardingModule,
+  OnboardingModuleGroup,
   OnboardingRules,
   OnboardingStage,
   OnboardingTemplate,
@@ -100,6 +101,119 @@ function move<T>(list: T[], i: number, dir: -1 | 1): T[] {
   return next;
 }
 
+type Coll =
+  | "stages"
+  | "fields"
+  | "module_groups"
+  | "modules"
+  | "integration_items"
+  | "bundles";
+
+const NEW_KEY: Record<Coll, string> = {
+  stages: "new_stage",
+  fields: "new_field",
+  module_groups: "new_group",
+  modules: "new_module",
+  integration_items: "new_item",
+  bundles: "new_bundle",
+};
+
+/** Move a row up or down among the rows of its own group. */
+function moveInGroup<T extends { group: string }>(list: T[], i: number, dir: -1 | 1): T[] {
+  let j = i + dir;
+  while (j >= 0 && j < list.length && list[j].group !== list[i].group) j += dir;
+  if (j < 0 || j >= list.length) return list;
+  const next = [...list];
+  [next[i], next[j]] = [next[j], next[i]];
+  return next;
+}
+
+/**
+ * Keep references intact when a catalogue key changes (to = new key) or the
+ * row is removed (to = null): modules point at setup items, bundles point at
+ * modules, and both modules and setup items point at a group.
+ */
+function rekey(
+  t: OnboardingTemplate,
+  coll: Coll,
+  from: string,
+  to: string | null,
+): OnboardingTemplate {
+  const swap = (keys: string[] = []) =>
+    keys.flatMap((k) => (k === from ? (to ? [to] : []) : [k]));
+  if (coll === "integration_items")
+    return { ...t, modules: t.modules.map((m) => ({ ...m, requires: swap(m.requires) })) };
+  if (coll === "modules")
+    return { ...t, bundles: t.bundles.map((b) => ({ ...b, modules: swap(b.modules) })) };
+  if (coll === "module_groups" && to)
+    return {
+      ...t,
+      modules: t.modules.map((m) => (m.group === from ? { ...m, group: to } : m)),
+      integration_items: t.integration_items.map((i) =>
+        i.group === from ? { ...i, group: to } : i,
+      ),
+    };
+  return t;
+}
+
+/** A list of catalogue keys shown as removable chips, with a picker to add one. */
+function KeyChips({
+  keys,
+  options,
+  disabled,
+  addLabel,
+  onChange,
+}: {
+  keys: string[];
+  options: { key: string; label: string }[];
+  disabled: boolean;
+  addLabel: string;
+  onChange: (keys: string[]) => void;
+}) {
+  const labelOf = Object.fromEntries(options.map((o) => [o.key, o.label]));
+  const rest = options.filter((o) => !keys.includes(o.key));
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {keys.map((k) => (
+        <span
+          key={k}
+          className="inline-flex items-center gap-0.5 rounded border bg-muted/50 px-1.5 py-0.5 text-[11px]"
+        >
+          {labelOf[k] || k}
+          {!disabled && (
+            <button
+              type="button"
+              aria-label={`Remove ${labelOf[k] || k}`}
+              className="text-muted-foreground hover:text-red-600"
+              onClick={() => onChange(keys.filter((x) => x !== k))}
+            >
+              <RiCloseLine size={11} />
+            </button>
+          )}
+        </span>
+      ))}
+      {!disabled && rest.length > 0 && (
+        <select
+          className="h-6 max-w-[150px] rounded border border-dashed border-input bg-transparent px-1 text-[11px] text-muted-foreground"
+          value=""
+          aria-label={addLabel}
+          onChange={(e) => e.target.value && onChange([...keys, e.target.value])}
+        >
+          <option value="">+ {addLabel}</option>
+          {rest.map((o) => (
+            <option key={o.key} value={o.key}>
+              {o.label || o.key}
+            </option>
+          ))}
+        </select>
+      )}
+      {disabled && keys.length === 0 && (
+        <span className="text-muted-foreground/60">-</span>
+      )}
+    </div>
+  );
+}
+
 function RowActions({
   index,
   count,
@@ -156,7 +270,10 @@ function toTemplate(c: OnboardingConfig): OnboardingTemplate {
   return {
     stages: c.stages.map((s) => ({ ...s })),
     fields: c.fields.map((f) => ({ ...f })),
-    modules: c.modules.map((m) => ({ ...m })),
+    module_groups: c.module_groups.map((g) => ({ ...g })),
+    modules: c.modules.map((m) => ({ ...m, requires: [...(m.requires ?? [])] })),
+    integration_items: c.integration_items.map((i) => ({ ...i })),
+    bundles: c.bundles.map((b) => ({ ...b, modules: [...b.modules] })),
     rules: { ...c.rules },
     edit_min_role: c.edit_min_role,
     template_min_role: c.template_min_role,
@@ -215,7 +332,7 @@ export default function OnboardingTemplatePage() {
   const stageOptions = tpl.stages;
   const sections = [...new Set(tpl.fields.map((f) => f.section || "Other"))];
 
-  const patch = <K extends "stages" | "fields" | "modules">(
+  const patch = <K extends Coll>(
     coll: K,
     i: number,
     value: Partial<OnboardingTemplate[K][number]>,
@@ -230,18 +347,15 @@ export default function OnboardingTemplatePage() {
           }
         : t,
     );
-  const setList = <K extends "stages" | "fields" | "modules">(
+  const setList = <K extends Coll>(
     coll: K,
     list: OnboardingTemplate[K],
   ) => setTpl((t) => (t ? { ...t, [coll]: list } : t));
 
-  function addItem(coll: "stages" | "fields" | "modules") {
+  function addItem(coll: Coll, group?: string) {
     if (!tpl) return;
     const taken = new Set((tpl[coll] as { key: string }[]).map((x) => x.key));
-    const key = slug(
-      coll === "stages" ? "new_stage" : coll === "modules" ? "new_module" : "new_field",
-      taken,
-    );
+    const key = slug(NEW_KEY[coll], taken);
     setNewKeys((s) => new Set(s).add(`${coll}:${key}`));
     if (coll === "stages") {
       // New stages go before the terminal ones.
@@ -250,8 +364,20 @@ export default function OnboardingTemplatePage() {
       const next = [...tpl.stages];
       next.splice(at, 0, { key, label: "", description: "" });
       setList("stages", next);
+    } else if (coll === "module_groups") {
+      setList("module_groups", [...tpl.module_groups, { key, label: "", sellable: true }]);
     } else if (coll === "modules") {
-      setList("modules", [...tpl.modules, { key, label: "" }]);
+      setList("modules", [
+        ...tpl.modules,
+        { key, label: "", group: group ?? "", requires: [] },
+      ]);
+    } else if (coll === "integration_items") {
+      setList("integration_items", [
+        ...tpl.integration_items,
+        { key, label: "", group: group ?? "", signal: "", required: false },
+      ]);
+    } else if (coll === "bundles") {
+      setList("bundles", [...tpl.bundles, { key, label: "", modules: [] }]);
     } else {
       setList("fields", [
         ...tpl.fields,
@@ -262,7 +388,7 @@ export default function OnboardingTemplatePage() {
 
   // New items get their key from the label; saved keys never change, so
   // stored values stay attached.
-  function relabel(coll: "stages" | "fields" | "modules", i: number, label: string) {
+  function relabel(coll: Coll, i: number, label: string) {
     if (!tpl) return;
     const item = tpl[coll][i] as { key: string };
     const isNew = newKeys.has(`${coll}:${item.key}`);
@@ -277,7 +403,29 @@ export default function OnboardingTemplatePage() {
       next.add(`${coll}:${key}`);
       return next;
     });
-    patch(coll, i, { label, key } as never);
+    setTpl((t) => {
+      if (!t) return t;
+      const renamed = {
+        ...t,
+        [coll]: (t[coll] as { key: string }[]).map((x, j) =>
+          j === i ? { ...x, label, key } : x,
+        ),
+      } as OnboardingTemplate;
+      return rekey(renamed, coll, item.key, key);
+    });
+  }
+
+  // Removing a catalogue row also drops every reference to it.
+  function removeAt(coll: Coll, i: number) {
+    setTpl((t) => {
+      if (!t) return t;
+      const key = (t[coll][i] as { key: string }).key;
+      const without = {
+        ...t,
+        [coll]: (t[coll] as unknown[]).filter((_, j) => j !== i),
+      } as OnboardingTemplate;
+      return rekey(without, coll, key, null);
+    });
   }
 
   async function save() {
@@ -369,7 +517,7 @@ export default function OnboardingTemplatePage() {
           <TabsTrigger value="fields">Fields ({tpl.fields.length})</TabsTrigger>
           <TabsTrigger value="stages">Stages ({tpl.stages.length})</TabsTrigger>
           <TabsTrigger value="modules">
-            Modules ({tpl.modules.length})
+            Modules ({tpl.modules.length} + {tpl.integration_items.length} setup)
           </TabsTrigger>
           <TabsTrigger value="rules">Rules & access</TabsTrigger>
           <TabsTrigger value="history">History ({history.length})</TabsTrigger>
@@ -486,9 +634,11 @@ export default function OnboardingTemplatePage() {
                         />
                       </td>
                       <td className="px-2 py-1.5">
-                        {f.options_from === "modules" ? (
+                        {f.options_from ? (
                           <span className="text-muted-foreground">
-                            From the module catalogue
+                            {f.options_from === "modules"
+                              ? "From the module catalogue"
+                              : "From the setup items in the catalogue"}
                           </span>
                         ) : f.type === "select" || f.type === "multiselect" ? (
                           <Input
@@ -676,82 +826,420 @@ export default function OnboardingTemplatePage() {
         </TabsContent>
 
         <TabsContent value="modules">
-          <Card className="p-0 gap-0 overflow-x-auto">
-            <table className="w-full text-[12px]" data-testid="template-modules">
-              <thead className="bg-muted/40 text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-2 text-left font-normal w-[180px]">Module</th>
-                  <th className="px-2 py-2 text-left font-normal">
-                    Enabled when (dashboard switch)
-                  </th>
-                  <th className="px-2 py-2 text-left font-normal">
-                    Integrated when
-                  </th>
-                  <th className="px-2 py-2 text-left font-normal">In use when</th>
-                  <th className="w-[84px]" />
-                </tr>
-              </thead>
-              <tbody>
-                {tpl.modules.map((m: OnboardingModule, i) => (
-                  <tr key={`${m.key}-${i}`} className="border-t align-top">
-                    <td className="px-2 py-1.5">
-                      <Input
-                        className={cellInput}
-                        value={m.label}
-                        disabled={!canEdit}
-                        placeholder="Label"
-                        onChange={(e) => relabel("modules", i, e.target.value)}
-                      />
-                      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                        {m.key}
+          <div className="space-y-5">
+            <section>
+              <h2 className="mb-1.5 text-[13px] font-semibold">
+                Groups ({tpl.module_groups.length})
+              </h2>
+              <Card className="p-0 gap-0 overflow-x-auto">
+                <table className="w-full text-[12px]" data-testid="template-groups">
+                  <thead className="bg-muted/40 text-muted-foreground">
+                    <tr>
+                      <th className="px-2 py-2 text-left font-normal w-[260px]">Group</th>
+                      <th className="px-2 py-2 text-center font-normal w-[110px]">
+                        Sold to clients
+                      </th>
+                      <th className="px-2 py-2 text-left font-normal">Contains</th>
+                      <th className="w-[84px]" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tpl.module_groups.map((g: OnboardingModuleGroup, i) => {
+                      const mods = tpl.modules.filter((m) => m.group === g.key).length;
+                      const setup = tpl.integration_items.filter(
+                        (x) => x.group === g.key,
+                      ).length;
+                      return (
+                        <tr key={`${g.key}-${i}`} className="border-t align-top">
+                          <td className="px-2 py-1.5">
+                            <Input
+                              className={cellInput}
+                              value={g.label}
+                              disabled={!canEdit}
+                              placeholder="Label"
+                              onChange={(e) => relabel("module_groups", i, e.target.value)}
+                            />
+                            <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                              {g.key}
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 text-center">
+                            <Switch
+                              size="sm"
+                              checked={g.sellable}
+                              disabled={!canEdit || (g.sellable && mods > 0)}
+                              onCheckedChange={(v) =>
+                                patch("module_groups", i, { sellable: v })
+                              }
+                              aria-label={`${g.label} is sold to clients`}
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-muted-foreground">
+                            {g.sellable
+                              ? `${mods} modules · ${setup} setup items`
+                              : `${setup} setup items. Needed before any module works`}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <RowActions
+                              index={i}
+                              count={tpl.module_groups.length}
+                              disabled={!canEdit}
+                              onMove={(dir) =>
+                                setList("module_groups", move(tpl.module_groups, i, dir))
+                              }
+                              onRemove={() => removeAt("module_groups", i)}
+                              removeTitle="Move its modules and setup items to another group first"
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </Card>
+              {canEdit && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => addItem("module_groups")}
+                >
+                  <RiAddLine size={14} /> Add group
+                </Button>
+              )}
+            </section>
+
+            <section data-testid="template-modules">
+              <h2 className="mb-1.5 text-[13px] font-semibold">
+                Modules and setup items by group
+              </h2>
+              <div className="space-y-3">
+                {tpl.module_groups.map((g) => {
+                  const mods = tpl.modules
+                    .map((m, i) => ({ m, i }))
+                    .filter((x) => x.m.group === g.key);
+                  const setup = tpl.integration_items
+                    .map((it, i) => ({ it, i }))
+                    .filter((x) => x.it.group === g.key);
+                  const groupSelect = (value: string, onChange: (v: string) => void, sellableOnly: boolean) => (
+                    <select
+                      className={selectClass}
+                      value={value}
+                      disabled={!canEdit}
+                      aria-label="Group"
+                      onChange={(e) => onChange(e.target.value)}
+                    >
+                      {tpl.module_groups
+                        .filter((x) => !sellableOnly || x.sellable)
+                        .map((x) => (
+                          <option key={x.key} value={x.key}>
+                            {x.label || x.key}
+                          </option>
+                        ))}
+                    </select>
+                  );
+                  return (
+                    <Card
+                      key={g.key}
+                      className="p-0 gap-0 overflow-x-auto"
+                      data-testid={`template-group-${g.key}`}
+                    >
+                      <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-1.5">
+                        <span className="text-[13px] font-medium">
+                          {g.label || g.key}
+                          <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                            {g.sellable
+                              ? `${mods.length} modules · ${setup.length} setup items`
+                              : `${setup.length} setup items · every client`}
+                          </span>
+                        </span>
+                        {canEdit && (
+                          <span className="flex gap-1">
+                            {g.sellable && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-2 text-[12px]"
+                                onClick={() => addItem("modules", g.key)}
+                              >
+                                <RiAddLine size={13} /> Module
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 px-2 text-[12px]"
+                              onClick={() => addItem("integration_items", g.key)}
+                            >
+                              <RiAddLine size={13} /> Setup item
+                            </Button>
+                          </span>
+                        )}
                       </div>
-                    </td>
-                    {(["enabled_signal", "integrated_signal", "usage_signal"] as const).map(
-                      (k) => (
-                        <td key={k} className="px-2 py-1.5">
+                      {mods.length > 0 && (
+                        <table className="w-full text-[12px]">
+                          <thead className="text-muted-foreground">
+                            <tr>
+                              <th className="px-2 py-1.5 text-left font-normal w-[170px]">
+                                Module
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal w-[130px]">
+                                Group
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal">
+                                Enabled when (dashboard switch)
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal">
+                                Integrated when
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal">
+                                In use when
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal w-[190px]">
+                                Needs setup
+                              </th>
+                              <th className="w-[84px]" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {mods.map(({ m, i }, n) => (
+                              <tr key={`${m.key}-${i}`} className="border-t align-top">
+                                <td className="px-2 py-1.5">
+                                  <Input
+                                    className={cellInput}
+                                    value={m.label}
+                                    disabled={!canEdit}
+                                    placeholder="Label"
+                                    onChange={(e) => relabel("modules", i, e.target.value)}
+                                  />
+                                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                                    {m.key}
+                                  </div>
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {groupSelect(m.group, (v) => patch("modules", i, { group: v }), true)}
+                                </td>
+                                {(
+                                  ["enabled_signal", "integrated_signal", "usage_signal"] as const
+                                ).map((k) => (
+                                  <td key={k} className="px-2 py-1.5">
+                                    <Input
+                                      className={cellInput}
+                                      value={m[k] ?? ""}
+                                      disabled={!canEdit}
+                                      onChange={(e) =>
+                                        patch("modules", i, { [k]: e.target.value })
+                                      }
+                                    />
+                                  </td>
+                                ))}
+                                <td className="px-2 py-1.5">
+                                  <KeyChips
+                                    keys={m.requires ?? []}
+                                    options={tpl.integration_items}
+                                    disabled={!canEdit}
+                                    addLabel="setup item"
+                                    onChange={(keys) => patch("modules", i, { requires: keys })}
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <RowActions
+                                    index={n}
+                                    count={mods.length}
+                                    disabled={!canEdit}
+                                    onMove={(dir) =>
+                                      setList("modules", moveInGroup(tpl.modules, i, dir))
+                                    }
+                                    onRemove={() => removeAt("modules", i)}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {setup.length > 0 && (
+                        <table className={cn("w-full text-[12px]", mods.length > 0 && "border-t")}>
+                          <thead className="text-muted-foreground">
+                            <tr>
+                              <th className="px-2 py-1.5 text-left font-normal w-[250px]">
+                                Setup item (client&apos;s team builds this)
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal w-[130px]">
+                                Group
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal">Done when</th>
+                              <th className="px-2 py-1.5 text-center font-normal w-[90px]">
+                                Every client
+                              </th>
+                              <th className="px-2 py-1.5 text-left font-normal w-[170px]">
+                                Needed by
+                              </th>
+                              <th className="w-[84px]" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {setup.map(({ it, i }, n) => {
+                              const usedBy = tpl.modules
+                                .filter((m) => (m.requires ?? []).includes(it.key))
+                                .map((m) => m.label || m.key);
+                              return (
+                                <tr key={`${it.key}-${i}`} className="border-t align-top">
+                                  <td className="px-2 py-1.5">
+                                    <Input
+                                      className={cellInput}
+                                      value={it.label}
+                                      disabled={!canEdit}
+                                      placeholder="Label"
+                                      onChange={(e) =>
+                                        relabel("integration_items", i, e.target.value)
+                                      }
+                                    />
+                                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                                      {it.key}
+                                    </div>
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    {groupSelect(
+                                      it.group,
+                                      (v) => patch("integration_items", i, { group: v }),
+                                      false,
+                                    )}
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <Input
+                                      className={cellInput}
+                                      value={it.signal ?? ""}
+                                      disabled={!canEdit}
+                                      onChange={(e) =>
+                                        patch("integration_items", i, { signal: e.target.value })
+                                      }
+                                    />
+                                  </td>
+                                  <td className="px-2 py-2 text-center">
+                                    <Switch
+                                      size="sm"
+                                      checked={!!it.required}
+                                      disabled={!canEdit}
+                                      onCheckedChange={(v) =>
+                                        patch("integration_items", i, { required: v })
+                                      }
+                                      aria-label={`${it.label} is needed for every client`}
+                                    />
+                                  </td>
+                                  <td className="px-2 py-2 text-muted-foreground">
+                                    {usedBy.length
+                                      ? usedBy.join(", ")
+                                      : it.required
+                                        ? "All clients"
+                                        : "Ticked per client"}
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <RowActions
+                                      index={n}
+                                      count={setup.length}
+                                      disabled={!canEdit}
+                                      onMove={(dir) =>
+                                        setList(
+                                          "integration_items",
+                                          moveInGroup(tpl.integration_items, i, dir),
+                                        )
+                                      }
+                                      onRemove={() => removeAt("integration_items", i)}
+                                    />
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                      {mods.length === 0 && setup.length === 0 && (
+                        <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                          Empty group.
+                        </div>
+                      )}
+                    </Card>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section>
+              <h2 className="mb-1.5 text-[13px] font-semibold">
+                Contract bundles ({tpl.bundles.length})
+              </h2>
+              <Card className="p-0 gap-0 overflow-x-auto">
+                <table className="w-full text-[12px]" data-testid="template-bundles">
+                  <thead className="bg-muted/40 text-muted-foreground">
+                    <tr>
+                      <th className="px-2 py-2 text-left font-normal w-[260px]">
+                        Bundle (as named in the contract)
+                      </th>
+                      <th className="px-2 py-2 text-left font-normal">
+                        Modules ticked as Paid
+                      </th>
+                      <th className="w-[84px]" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tpl.bundles.map((b: OnboardingBundle, i) => (
+                      <tr key={`${b.key}-${i}`} className="border-t align-top">
+                        <td className="px-2 py-1.5">
                           <Input
                             className={cellInput}
-                            value={m[k] ?? ""}
+                            value={b.label}
                             disabled={!canEdit}
-                            onChange={(e) => patch("modules", i, { [k]: e.target.value })}
+                            placeholder="Label"
+                            onChange={(e) => relabel("bundles", i, e.target.value)}
+                          />
+                          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                            {b.key}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2">
+                          <KeyChips
+                            keys={b.modules}
+                            options={tpl.modules}
+                            disabled={!canEdit}
+                            addLabel="module"
+                            onChange={(keys) => patch("bundles", i, { modules: keys })}
                           />
                         </td>
-                      ),
-                    )}
-                    <td className="px-2 py-1.5">
-                      <RowActions
-                        index={i}
-                        count={tpl.modules.length}
-                        disabled={!canEdit}
-                        onMove={(dir) => setList("modules", move(tpl.modules, i, dir))}
-                        onRemove={() =>
-                          setList(
-                            "modules",
-                            tpl.modules.filter((_, j) => j !== i),
-                          )
-                        }
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
-          {canEdit && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-2"
-              onClick={() => addItem("modules")}
-            >
-              <RiAddLine size={14} /> Add module
-            </Button>
-          )}
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            One list drives all four columns on a client page: Paid, Enabled,
-            Integrated and In use. The &quot;when&quot; columns tell the team
-            and the sync agent how each layer is checked. Records store the
-            module label, so rename a module only before it is in use.
+                        <td className="px-2 py-1.5">
+                          <RowActions
+                            index={i}
+                            count={tpl.bundles.length}
+                            disabled={!canEdit}
+                            onMove={(dir) => setList("bundles", move(tpl.bundles, i, dir))}
+                            onRemove={() => removeAt("bundles", i)}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+              {canEdit && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => addItem("bundles")}
+                >
+                  <RiAddLine size={14} /> Add bundle
+                </Button>
+              )}
+            </section>
+          </div>
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            Three levels: group, module, setup item. Modules are what a client
+            pays for and are tracked as Paid, Enabled, Integrated and In use.
+            Setup items are the work the client&apos;s team does and are tracked
+            as In scope and Done. A paid module puts its setup items in scope
+            automatically. Bundles only pre-tick Paid, a person still checks
+            the contract. Records store labels, so rename a module or setup
+            item only before it is in use.
           </p>
         </TabsContent>
 
