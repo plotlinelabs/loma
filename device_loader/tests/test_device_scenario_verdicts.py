@@ -285,6 +285,61 @@ async def test_preflight_policy_public_blocks_private_hosts_and_off_refuses():
     with pytest.raises(ldr.OpError, match='turned off'):
         await preflight_runner(driver, 'off').call('scenario', 'emulator-5554', spec)
     assert await ldr.private_host('8.8.8.8', None) is False and await ldr.private_host('169.254.169.254', 80) is True
+    # CGNAT / Tailscale (incl. MagicDNS 100.100.100.100) and IPv4-mapped loopback are not public either.
+    for host in ('100.64.0.1', '100.100.100.100', '::ffff:127.0.0.1', '0.0.0.0', '224.0.0.1'):
+        assert await ldr.private_host(host, None) is True, host
+
+
+@pytest.mark.asyncio
+async def test_private_host_dns_lookup_has_a_timeout(monkeypatch):
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(5)
+    monkeypatch.setattr(asyncio.get_running_loop(), 'getaddrinfo', slow)
+    with pytest.raises(asyncio.TimeoutError):
+        await ldr.private_host('slow.example.com', 443, timeout=0.05)
+    monkeypatch.setattr(ldr, 'PREFLIGHT_DNS_S', 0.05)
+    result = await preflight_runner(ScenarioDriver(), 'public').call('scenario', 'emulator-5554', {
+        'duration_s': 1, 'preflight': [{'url': 'https://slow.example.com/x'}]})
+    assert result['verdict'] == 'blocked'
+    assert result['preflight'][0]['error'] == 'request failed (TimeoutError): the DNS lookup timed out'
+
+
+@pytest.mark.asyncio
+async def test_preflight_checks_share_one_time_budget(monkeypatch):
+    monkeypatch.setattr(ldr, 'PREFLIGHT_BUDGET_S', 0)
+    driver = ScenarioDriver()
+    result = await preflight_runner(driver).call('scenario', 'emulator-5554', {
+        'duration_s': 1, 'preflight': [{'url': 'http://a.example.com/x'}, {'url': 'http://b.example.com/x'}]})
+    assert result['verdict'] == 'blocked' and driver.calls == []
+    assert all(check['error'].startswith('not checked: ') for check in result['preflight'])
+
+
+@pytest.mark.asyncio
+async def test_preflight_never_uses_the_runner_loma_session():
+    server, base, seen = await config_server()
+    try:
+        runner = preflight_runner(ScenarioDriver())
+        runner.session = object()                     # any use of the runner's own session would raise
+        result = await runner.call('scenario', 'emulator-5554', {
+            'duration_s': 1, 'end_after_steps': True, 'steps': [{'action': 'key', 'key': 'back'}], 'expect': {},
+            'preflight': [{'url': base + '/sdk/init', 'contains': ['"loaderEnabled": true']}]})
+    finally:
+        await server.close()
+    assert result['preflight'][0]['ok'] is True and len(seen) == 1
+
+
+def test_suite_verdict_is_the_worst_outcome_and_counts_are_nested():
+    def rows(*verdicts):
+        return [{'name': f'c{i}', 'verdict': v} for i, v in enumerate(verdicts)]
+    summary = service_module.suite_summary
+    assert summary(rows('pass', 'pass'), [])['verdict'] == 'pass'
+    assert summary(rows('pass'), ['later'])['verdict'] == 'fail'
+    assert summary(rows('blocked', 'blocked'), [])['verdict'] == 'blocked'
+    assert summary(rows('blocked', 'error'), [])['verdict'] == 'error'
+    assert summary(rows('error', 'fail', 'blocked'), [])['verdict'] == 'fail'
+    assert summary([], [])['verdict'] == 'fail'
+    only_error = summary(rows('error'), [])
+    assert only_error['counts'] == {'error': 1} and 'error' not in only_error
 
 
 def test_preflight_is_validated_on_the_runner_and_the_backend():
@@ -423,7 +478,8 @@ async def test_suite_runs_each_case_and_returns_one_summary():
     result = await service.suite(OWNER, 'conv-1', 'r/e', suite_args('login', 'loader', 'config', 'offline',
                                                                    reset='reset_app'))
     assert (result['verdict'], result['total'], result['passed']) == ('fail', 4, 1)
-    assert (result['fail'], result['blocked'], result['error']) == (1, 1, 1) and 'not_run' not in result
+    assert result['counts'] == {'blocked': 1, 'error': 1, 'fail': 1, 'pass': 1} and 'not_run' not in result
+    assert 'error' not in result          # a top-level 'error' key reads as a broker denial in the isolated worker
     assert service.calls == [('reset_app', 'com.example.demo'), ('scenario', 'com.example.demo')] * 4
     login, loader, config, offline = result['cases']
     assert login == {'name': 'login', 'verdict': 'pass', 'ran_ms': 1200, 'app_running': True}  # video of a pass is dropped
@@ -583,7 +639,7 @@ async def test_suite_end_to_end_over_the_runner_websocket(tmp_path, monkeypatch)
                 result = await service.suite(OWNER, 'conv-1', device, suite)
                 print(result['table'])
                 assert [case['verdict'] for case in result['cases']] == ['pass', 'fail', 'pass'], result
-                assert (result['verdict'], result['passed'], result['fail']) == ('fail', 2, 1)
+                assert (result['verdict'], result['passed'], result['counts']) == ('fail', 2, {'fail': 1, 'pass': 2})
                 shown, collapsed, relaunched = result['cases']
                 assert 'mp4' not in shown and collapsed['mp4'] == b'MP4BYTES'  # video only for the failing case
                 [reason] = collapsed['failed']
@@ -602,7 +658,7 @@ async def test_suite_end_to_end_over_the_runner_websocket(tmp_path, monkeypatch)
                     assert denied.status == 401                               # the CLI route keeps its auth
                 blocked = await service.suite(OWNER, 'conv-1', device, {**suite, 'stop_on_fail': True})
                 print(blocked['table'])
-                assert blocked['verdict'] == 'fail' and blocked['blocked'] == 1
+                assert blocked['verdict'] == 'blocked' and blocked['counts'] == {'blocked': 1}
                 assert blocked['not_run'] == ['slot_keeps_height', 'background_foreground']
                 assert blocked['cases'][0]['failed'] == [
                     'preflight sdk init: response does not contain \'"loaderEnabled": true\'']

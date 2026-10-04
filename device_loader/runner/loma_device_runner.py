@@ -167,6 +167,9 @@ HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}\Z")
 MAX_PREFLIGHT = 4
 MAX_PREFLIGHT_BODY = 4096
 MAX_PREFLIGHT_READ = 256 * 1024
+# All preflight checks together, so they cannot push a scenario past the backend's call timeout.
+PREFLIGHT_BUDGET_S = 40
+PREFLIGHT_DNS_S = 5
 # A recording over MAX_MEDIA_BYTES is re-encoded smaller on the runner instead of being dropped.
 VIDEO_PRESETS = ('Preset1280x720', 'Preset960x540', 'Preset640x480')  # macOS avconvert
 REENCODE_SECONDS = 90
@@ -610,18 +613,22 @@ def need_preflight(args, mode='public'):
     return out
 
 
-async def private_host(host, port):
-    """True when host is, or resolves to, a loopback / private / link-local address."""
+async def private_host(host, port, timeout=PREFLIGHT_DNS_S):
+    """True when host is, or resolves to, an address that is not public internet (loopback, private,
+    link-local, CGNAT / Tailscale 100.64.0.0/10, reserved, multicast). Raises TimeoutError when DNS is slow."""
     try:
         addresses = [ipaddress.ip_address(host)]
     except ValueError:
         try:
-            found = await asyncio.get_running_loop().getaddrinfo(host, port or 443, type=socket.SOCK_STREAM)
+            found = await asyncio.wait_for(
+                asyncio.get_running_loop().getaddrinfo(host, port or 443, type=socket.SOCK_STREAM), timeout)
+        except asyncio.TimeoutError:  # an OSError since Python 3.11, so it must come first
+            raise
         except OSError:
             return False  # does not resolve: the request itself reports that
         addresses = [ipaddress.ip_address(item[4][0].split('%')[0]) for item in found]
-    return any(a.is_private or a.is_loopback or a.is_link_local or a.is_reserved or a.is_unspecified
-               for a in addresses)
+    addresses = [getattr(a, 'ipv4_mapped', None) or a for a in addresses]
+    return any(not a.is_global or a.is_multicast for a in addresses)
 
 
 def need_expect(args, has_logs, has_frames, has_app, has_timed=False):
@@ -1896,22 +1903,36 @@ class Runner:
         """Run the HTTP checks; each result is {name, ok, status?, error?} (the response body is never returned)."""
         import aiohttp
         mode, results = self.policy.get('preflight', 'public'), []
-        session = self.session or aiohttp.ClientSession()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + PREFLIGHT_BUDGET_S
+        # Its own session: never the runner's Loma session (cookie jar, connection pool).
+        session = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())
         try:
             for check in checks:
                 entry = {'name': check['name'], 'ok': False}
                 results.append(entry)
-                if mode != 'any' and await private_host(check['host'], check['port']):
-                    entry['error'] = ("host is on a private or local network; the runner owner can allow that "
-                                      "with policy preflight: 'any'")
+                left = deadline - loop.time()
+                if left <= 0:
+                    entry['error'] = f'not checked: the preflight checks together took over {PREFLIGHT_BUDGET_S} s'
                     continue
+                if mode != 'any':
+                    try:
+                        private = await private_host(check['host'], check['port'], min(PREFLIGHT_DNS_S, left))
+                    except asyncio.TimeoutError:
+                        entry['error'] = 'request failed (TimeoutError): the DNS lookup timed out'
+                        continue
+                    if private:
+                        entry['error'] = ("host is on a private or local network; the runner owner can allow that "
+                                          "with policy preflight: 'any'")
+                        continue
+                    left = max(deadline - loop.time(), 0.1)
                 body = check['body']
                 try:
                     async with session.request(
                             check['method'], check['url'], headers=check['headers'], allow_redirects=False,
                             json=body if isinstance(body, dict) else None,
                             data=body if isinstance(body, str) else None,
-                            timeout=aiohttp.ClientTimeout(total=check['timeout_s'])) as response:
+                            timeout=aiohttp.ClientTimeout(total=min(check['timeout_s'], left))) as response:
                         raw = b''
                         async for chunk in response.content.iter_chunked(65536):
                             raw += chunk
@@ -1930,8 +1951,7 @@ class Runner:
                 else:
                     entry['ok'] = True
         finally:
-            if session is not self.session:
-                await session.close()
+            await session.close()
         return results
 
     async def _scenario_window(self, driver, serial, plan, recording, result):

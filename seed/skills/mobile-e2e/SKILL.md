@@ -100,6 +100,8 @@ cheapest test is the one with the fewest calls, so:
     - {name: deep_link, duration_s: 20, end_after_steps: true, steps: [...]}
   ```
   Verdicts: `pass`, `fail`, `blocked` (a preflight check failed), `error` (the case could not run).
+  The suite verdict is `pass` only when every case passed; otherwise `fail` if any case failed, else
+  `error`, else `blocked` (so an all-blocked suite reads as an environment problem). Numbers are in `counts`.
   At most 12 cases and 600 s of `duration_s` in total; videos are kept for cases that did not pass
   (`keep_video: all` keeps every one). Paste the `table` into the PR or the report, and commit the
   suite file next to the test app (for example `e2e/device/suite.yaml`) so the next PR replays it.

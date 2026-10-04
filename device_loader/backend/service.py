@@ -503,8 +503,14 @@ def suite_summary(rows, not_run):
         lines.append(f"| {row['name']} | {row['verdict']} | {row.get('ran_ms', '')} | {reason} |")
     lines += [f'| {name} | not run | | |' for name in not_run]
     passed = counts.get('pass', 0)
-    return {'verdict': 'pass' if passed == len(rows) and not not_run else 'fail', 'total': len(rows) + len(not_run),
-            'passed': passed, **{k: v for k, v in sorted(counts.items()) if k != 'pass'},
+    # pass only when every case passed; otherwise the worst outcome: fail, then error, then blocked.
+    # The counts stay nested: a top-level 'error' key is read as a broker denial by the isolated worker.
+    if rows and passed == len(rows) and not not_run:
+        verdict = 'pass'
+    else:
+        verdict = next((v for v in ('fail', 'error', 'blocked') if counts.get(v)), 'fail')
+    return {'verdict': verdict, 'total': len(rows) + len(not_run), 'passed': passed,
+            'counts': dict(sorted(counts.items())),
             **({'not_run': not_run} if not_run else {}), 'table': '\n'.join(lines)}
 
 
