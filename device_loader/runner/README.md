@@ -62,6 +62,7 @@ runner should stay up while you are logged out.
 | open_url (deep links), tap, swipe, type, key | Read or write files on your machine |
 | screenshot, ui_tree, logs (tag filters, since-cursor) | See physical devices (unless you opt in) |
 | scenario: the same inputs as one test case (in order, or at fixed times), with optional video, screenshots, screen-change sampling, logs and pass/fail rules | |
+| scenario preflight: up to 4 HTTP GET/POST checks before a test, to public hosts only by default. The agent gets the status and a yes/no per expected text, never the response body | Read the response of an HTTP request made from your machine |
 | run_flow (Maestro YAML, screened) | Run Maestro JavaScript (unless you opt in) |
 
 ## Policy (`~/.loma-device-runner/config.json`)
@@ -71,7 +72,8 @@ runner should stay up while you are logged out.
   "allow_physical_devices": false,
   "allowed_app_ids": ["com.example.demo"],
   "allow_maestro_scripts": false,
-  "keep_awake": true
+  "keep_awake": true,
+  "preflight": "public"
 }
 ```
 
@@ -83,11 +85,19 @@ runner should stay up while you are logged out.
   the Mac does not idle-sleep and drop the connection mid-test. It lapses 15 minutes after the last device call.
   A closed lid on battery still sleeps (macOS policy).
 
+- `preflight` (default `"public"`): a scenario may first check the test environment over HTTP (for example "does the
+  backend return this config flag"), so a broken environment is reported as *blocked* instead of as a failed test.
+  `"public"` refuses hosts that are, or resolve to, loopback / private / link-local addresses, so the agent cannot
+  probe your local network; `"any"` allows them (use it when the backend under test runs on this machine or your LAN);
+  `"off"` refuses every preflight. Redirects are not followed and the response body is never sent to Loma.
+
 Run `setup` again after editing the policy to restart the runner.
 
 ## Tips for reliable agent testing
 
 - Use a **dedicated** emulator/simulator for Loma, with no personal Google/Apple account signed in.
 - Runner 1.2.0+ keeps the Mac awake while devices are in use (`keep_awake`); keep the lid open or plug in power.
+- Runner 1.3.0+ re-encodes a recording that is over the 16 MB limit instead of dropping it. It uses `ffmpeg` when
+  installed (`brew install ffmpeg`, best quality for the size) and otherwise the `avconvert` tool that ships with macOS.
 - Emulators can run headless: `emulator -avd loma-test -no-window -no-snapshot-save`.
 - Revoke the runner under **Integrations → Devices** at any time; it stops within seconds.

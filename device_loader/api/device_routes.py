@@ -384,6 +384,9 @@ async def handle_internal_call(request):
         if action == 'call':
             data = await service.call(user_email, scope, body.get('device_id'), body.get('op'), body.get('args') or {})
             return web.json_response(_encode_media(data))
+        if action == 'suite':
+            data = await service.suite(user_email, scope, body.get('device_id'), body.get('args') or {})
+            return web.json_response(_encode_media(data))
     except DeviceError as exc:
         return _error(str(exc), 409)
     return _error('Unknown action')

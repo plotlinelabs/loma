@@ -34,6 +34,7 @@ Commands:
                 [--source auto|system|console]     (every result has a cursor; pass it as --since next time)
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
   device.py ... scenario --device-id ID --spec case.yaml   (timed steps + video + screen changes + logs, one call)
+  device.py ... suite --device-id ID --spec suite.yaml     (many scenario cases, one summary table; exit 1 unless all pass)
 
 Auth: --user-email / --auth-token, or LOMA_USER_EMAIL / LOMA_AUTH_TOKEN in the environment.
 Never write the token into a script or file: it expires after an hour anyway.
@@ -57,6 +58,26 @@ scenario spec (YAML or JSON). The same spec shape covers any test; names below a
   Step actions: tap, tap_text, wait_for, set_text, clear_text, scroll_until_visible, swipe, type, key,
   open_url, screenshot, launch_app, stop_app. stop_on_fail: true ends the steps at the first failure;
   end_after_steps: true returns as soon as the steps are done (duration_s is then only an upper bound).
+  launch_app takes activity / extras / bool_extras like the launch at t0; by default it brings a running
+  app back to the front (background/foreground cases), restart: true stops it first.
+  More expect rules:
+    max_drift_ms: 300            # fail when an at_ms step ran more than this late (drift_ms per step)
+    logs:                        # a number read from the matching lines (the first one after number_after)
+      - {match: "slot", number_after: "height=", after_reaching: 100, value_min: 60}
+        # also value_max, last_min, last_max; the result has logs.values (count/min/max/first/last)
+  preflight:                     # HTTP checks from the runner BEFORE the device is touched
+    - {url: "https://api.example.com/health", contains: ['"ok":true']}       # method/headers/body/status too
+  A failed preflight returns verdict: blocked (the environment is wrong, not the app). scenario and suite
+  exit 1 unless the verdict is pass.
+
+suite spec: the regression file to commit next to the app (e.g. e2e/device/suite.yaml)
+  defaults: {app_id: com.example.app, log_tags: [MyTag], expect: {app_running: true}}
+  reset: reset_app               # optional: clear the app data before each case (Android)
+  cases:                         # each case is a scenario spec with a name, and must have expect
+    - {name: login, duration_s: 30, end_after_steps: true, steps: [...], expect: {logs: [...]}}
+    - {name: deep_link, duration_s: 20, steps: [...], expect: {settled_by_ms: 3000}}
+  The result is a table (case, verdict, first reason) plus one row per case. Videos are kept for cases
+  that did not pass (keep_video: all keeps every one). Max 12 cases and 600 s of duration_s in total.
 
 Files (screenshots, burst frames, recordings, flow screenshots) are written to
 $LOMA_CONVERSATION_DIR/device/ when that is set, else to a per-conversation dir
@@ -254,6 +275,8 @@ def build_body(args):
         return {**call, 'op': 'logs', 'args': log_args}
     if args.command == 'scenario':
         return {**call, 'op': 'scenario', 'args': load_spec(args.spec)}
+    if args.command == 'suite':
+        return {**body, 'action': 'suite', 'device_id': args.device_id, 'args': load_spec(args.spec)}
     if args.command == 'run-flow':
         with open(args.flow_file) as handle:
             flow_args = {'flow': handle.read()}
@@ -264,7 +287,7 @@ def build_body(args):
 
 
 def load_spec(path):
-    """A scenario spec file (YAML or JSON object); the backend and runner validate its contents."""
+    """A scenario or suite spec file (YAML or JSON object); the backend and runner validate its contents."""
     with open(path) as handle:
         text = handle.read()
     try:
@@ -388,6 +411,8 @@ def parser():
     s.add_argument('--since', metavar='CURSOR', help='Only lines after the cursor a previous logs call returned')
     s = with_device('scenario')
     s.add_argument('--spec', required=True, help='YAML/JSON scenario spec (see the module docstring)')
+    s = with_device('suite')
+    s.add_argument('--spec', required=True, help='YAML/JSON suite spec: defaults + cases (see the module docstring)')
     s = with_device('run-flow')
     s.add_argument('--flow-file', required=True)
     s.add_argument('--verbose', action='store_true', help='Full Maestro output and JUnit report')
@@ -467,6 +492,16 @@ def save_media(args, result):
         path = unique_path('recording', '.mp4', scope=scope)
         path.write_bytes(base64.b64decode(result.pop('mp4_base64')))
         result['saved_to'] = str(path)
+    for case in result.get('cases') or []:  # suite: each case's video and screenshots, named after the case
+        if 'mp4_base64' in case:
+            path = unique_path(f"suite-{case.get('name', 'case')}", '.mp4', scope=scope)
+            path.write_bytes(base64.b64decode(case.pop('mp4_base64')))
+            case['saved_to'] = str(path)
+        for shot in case.get('screenshots') or []:
+            if 'png_base64' in shot:
+                path = unique_path(f"suite-{case.get('name', 'case')}-{shot.get('name') or 'shot'}", '.png', scope=scope)
+                path.write_bytes(base64.b64decode(shot.pop('png_base64')))
+                shot['saved_to'] = str(path)
     return result
 
 
@@ -485,10 +520,12 @@ def main(argv=None):
             print(json.dumps(upload))
             return 1
         body['args']['upload_id'] = upload['upload_id']
-    timeout = 1800 + (getattr(args, 'wait', 0) or 0)
+    # A suite is up to 12 scenario calls in one request, so it gets a longer deadline.
+    timeout = (3900 if args.command == 'suite' else 1800) + (getattr(args, 'wait', 0) or 0)
     result = save_media(args, _request('/internal/devices/call', headers, body, timeout=timeout))
     print(json.dumps(result, indent=2))
-    return 1 if 'error' in result or result.get('found') is False else 0
+    # A verdict other than pass (fail, blocked) is a failed run for scripts and CI too.
+    return 1 if 'error' in result or result.get('found') is False or result.get('verdict', 'pass') != 'pass' else 0
 
 
 if __name__ == '__main__':

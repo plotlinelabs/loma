@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 STALE_SECONDS = 60  # no heartbeat for this long => treat as offline
 OP_TIMEOUTS = {'install': 900, 'run_flow': 660, 'logs': 90, 'ui_tree': 90, 'wait_for': 120, 'tap_text': 120,
                'set_text': 90, 'clear_text': 90, 'scroll_until_visible': 300, 'burst': 120, 'record': 90,
-               'scenario': 200}  # scenario: 60 s window + 30 s step grace + video finalise
+               'scenario': 300}  # scenario: 60 s window + 30 s step grace + video finalise / re-encode
 DEFAULT_TIMEOUT = 60
 MAX_PENDING = 32
 
