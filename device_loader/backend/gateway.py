@@ -31,7 +31,7 @@ MAX_SCREENSHOTS = 8  # per run; shares the run's 20-file artifact budget with wo
 WAIT_SECONDS = 90  # below the worker's 120 s per-call RPC timeout
 
 TOOLS = {'device.list', 'device.lease', 'device.release', 'device.install', 'device.app',
-         'device.input', 'device.observe', 'device.run_flow', 'device.scenario'}
+         'device.input', 'device.observe', 'device.run_flow', 'device.scenario', 'device.suite'}
 APP_ACTIONS = {'launch', 'stop', 'reset_app', 'uninstall'}
 INPUT_ACTIONS = {'animations', 'tap', 'swipe', 'type', 'key', 'open_url', 'set_text', 'clear_text', 'tap_text', 'wait_for',
                  'scroll_until_visible'}
@@ -129,6 +129,11 @@ class DeviceTools:
         if tool == 'device.scenario':
             data = await service.call(owner, scope, device_id, 'scenario', args)
             return await self._deliver_flow_screenshots(await self._deliver_video(data))
+        if tool == 'device.suite':
+            data = await service.suite(owner, scope, device_id, args)
+            data['cases'] = [await self._deliver_flow_screenshots(await self._deliver_video(case))
+                             for case in data['cases']]
+            return data
         data = await service.call(owner, scope, device_id, 'run_flow', args)
         return await self._deliver_flow_screenshots(data)
 

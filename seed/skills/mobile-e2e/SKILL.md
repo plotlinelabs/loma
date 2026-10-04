@@ -14,7 +14,7 @@ available while that machine is awake and the runner is running.
 
 | Runtime | How to call it |
 |---|---|
-| Isolated worker (you see `device.*` tools) | `device.list`, `device.lease`, `device.install`, `device.app`, `device.input`, `device.observe`, `device.scenario`, `device.run_flow`, `device.release` |
+| Isolated worker (you see `device.*` tools) | `device.list`, `device.lease`, `device.install`, `device.app`, `device.input`, `device.observe`, `device.scenario`, `device.suite`, `device.run_flow`, `device.release` |
 | Legacy runtime (you have Bash) | `python3 tools/device.py --user-email <E> --auth-token <T> --scope <conversation-id> <command> ...` |
 
 **Never write the auth token into a script or file** (no `dev.sh` wrappers with the token inside).
@@ -59,6 +59,13 @@ cheapest test is the one with the fewest calls, so:
   `scenario --device-id ID --spec case.yaml` (isolated: `device.scenario` with the same fields).
   Read `verdict` and `failed` first; they are usually all you need. Each step also reports
   `ran_ms` / `took_ms` / `ok`, and `app_running` tells you whether the app survived.
+- **Every case has an `expect`.** The runner decides pass/fail; you report its `verdict` and `failed`
+  reasons. A spec without `expect` returns raw data that you would have to judge yourself with scripts,
+  which is slower, costs more and is how wrong passes get reported. If a rule you need does not exist,
+  say so in the report instead of parsing logs or frames yourself.
+- **Find elements by text or id, not by coordinates.** Use `tap_text`, `wait_for`, `set_text` and
+  `scroll_until_visible` steps. Keep `tap` with `x`/`y` for things that are not in the UI tree.
+  Use `after_ms` steps for ordinary flows; use `at_ms` only when the exact time is what you test.
 
   | Need | Add to the spec |
   |---|---|
@@ -68,11 +75,34 @@ cheapest test is the one with the fewest calls, so:
   | Watch one area, or ignore a blinking cursor / clock | `sample_region: [x1, y1, x2, y2]`, `sample_min_change: 0.02` |
   | "Settled within N ms" | `expect: {settled_by_ms: N}` |
   | Log checks | `expect.logs` rules (`min`, `max`, `by_ms`, `after_ms`) and `expect.log_order: [A, B]` |
-  | Background / foreground, kill and relaunch | `key: home`, `stop_app`, `launch_app` steps |
+  | A number in the logs (a height, a count, a duration) | On a log rule: `number_after: "height="` (the text right before the number), then `value_min` / `value_max` (every value), `after_reaching: 100` (only check values from the first one at or above 100), `last_min` / `last_max`. Example, "never drops below 60 after reaching 100": `{match: "slot", number_after: "height=", after_reaching: 100, value_min: 60}`. `logs.values` reports count / min / max / first / last |
+  | Timing must be real | `expect: {max_drift_ms: 300}` fails the case when an `at_ms` step ran later than that. Every `at_ms` step reports `drift_ms`, and the result has `max_drift_ms`. iOS swipes take about 1.2 s each, so space `at_ms` steps after a swipe by at least 1500 ms |
+  | Is the test environment ready (backend up, a config flag on) | `preflight: [{url: "https://api.example.com/config", contains: ['"flag":true']}]` (also `method`, `headers`, `body`, `status`). The runner checks it before touching the device; a failed check returns `verdict: blocked`, which is an environment problem, not a test failure. Report it as blocked and stop, do not retry the test |
+  | Background / foreground, kill and relaunch | `key: home`, `stop_app`, `launch_app` steps. `launch_app` takes `activity`, `extras` and `bool_extras`; it brings the running app back to the front (`restart: true` stops it first) |
   | Video evidence | `record: true` (`video_offset_ms` is where t0 sits in the video) |
 
   On Android, turn animations **on** (`animations --on`) for timing or animation cases, and off
   for ordinary flows. If the video cannot be delivered you still get the rest (`video_error`).
+  A recording over 16 MB is re-encoded smaller on the runner (ffmpeg if installed, else macOS
+  `avconvert`), so long iOS recordings arrive at a lower resolution instead of being lost.
+- **A matrix or a regression run = one `suite` call.** Put the cases in one file and run
+  `suite --device-id ID --spec suite.yaml` (isolated: `device.suite`). You get one table
+  (case, verdict, first reason) and details only for the cases that did not pass.
+  ```yaml
+  defaults:                        # fields every case shares
+    app_id: com.example.app
+    log_tags: [MyTag]
+    preflight: [{url: "https://api.example.com/config", contains: ['"flag":true']}]
+    expect: {app_running: true}    # a case's expect is merged over this one
+  reset: reset_app                 # optional: clear the app data before each case (Android)
+  cases:                           # each case is a scenario spec with a name; every case needs expect
+    - {name: login, duration_s: 30, end_after_steps: true, steps: [...], expect: {logs: [...]}}
+    - {name: deep_link, duration_s: 20, end_after_steps: true, steps: [...]}
+  ```
+  Verdicts: `pass`, `fail`, `blocked` (a preflight check failed), `error` (the case could not run).
+  At most 12 cases and 600 s of `duration_s` in total; videos are kept for cases that did not pass
+  (`keep_video: all` keeps every one). Paste the `table` into the PR or the report, and commit the
+  suite file next to the test app (for example `e2e/device/suite.yaml`) so the next PR replays it.
 - **Logs: tags + cursor, never re-read.** `logs --tag A --tag B` keeps lines with any tag and
   returns `counts`. Every logs result has a `cursor`; pass `--since <cursor>` next time to get
   only newer lines instead of `--clear` + re-reading thousands of lines.
@@ -95,8 +125,10 @@ cheapest test is the one with the fewest calls, so:
 - **Time-sensitive states** (anything that appears or changes within a second or two): use
   `scenario` with `at_ms` steps. `burst` and `record` still exist for a single capture, but
   cannot run steps while capturing.
-- **Never build your own harness** (wrapper scripts, frame-diff scripts, contact sheets): if
+- **Never build your own harness** (wrapper scripts, log parsers, frame-diff scripts, contact sheets): if
   `scenario` cannot express a case, say what is missing in your report.
+- **Clean up media.** Videos and frames land in the conversation work dir under `device/`. Keep the
+  files you attach as evidence and delete the rest when the session ends.
 - **Repeat work goes in a Maestro flow.** Once a path works, run it with `run-flow` in one call,
   and commit the YAML next to the test app so the next PR replays it without exploring.
 - **Keep device work out of long threads.** For a large matrix, run the device loop in a
@@ -186,6 +218,9 @@ explicitly want that.
 | "No devices are registered for you" | The user has not enrolled a machine: point them to Integrations → Devices |
 | "Runner is offline" / "No online … devices" | Machine asleep or runner stopped; ask the user to wake it or start the runner. Runner >= 1.2.0 keeps a Mac awake while devices are in use (`keep_awake` policy); a closed lid on battery still sleeps |
 | "Runner too old for scenario" / "logs with tags" | Ask the user to update the runner: download the new `loma_device_runner.py` from Integrations → Devices and run `python3 loma_device_runner.py setup` |
+| "Runner too old for scenario with preflight / expect.max_drift_ms / number_after / launch_app options" | Those need runner >= 1.3.0: same update as above. Everything else in `scenario` still works on 1.2.0 |
+| `verdict: blocked` | A `preflight` check failed: the test environment is wrong (backend down, config flag off). Fix the environment or tell the user; the app was not tested |
+| "host is on a private or local network" | Preflight only reaches public hosts by default. The runner owner can set `"preflight": "any"` in the runner policy |
 | "leased by another session" | Another chat holds it; pick another device or ask the owner to release it in Integrations → Devices |
 | "not in this runner's allowed_app_ids" | The runner owner restricted apps; use an allowed app id |
 | "uiautomator could not capture the screen" | UI not idle (animation/video); wait a second and retry |
@@ -206,6 +241,7 @@ The steps above use `tools/device.py` spellings. In isolated runs use the `devic
 | `app --action launch --extra K=V` | `device.app action=launch extras={...} bool_extras={...}` |
 | `tap` / `type` / `swipe` / `key` | `device.input action=tap|type|swipe|key` (`tap ref=e3` works too) |
 | `scenario --spec case.yaml` | `device.scenario` with the spec fields as arguments (the video is delivered to the user) |
+| `suite --spec suite.yaml` | `device.suite` with `cases`, `defaults`, `reset`, `stop_on_fail`, `keep_video` |
 | `logs --tag X --since C` | `device.observe what=logs tags=[X] since=C` |
 | `animations --off` | `device.input action=animations enabled=false` |
 | `ui-tree --compact` | `device.observe what=ui_tree compact=true` |

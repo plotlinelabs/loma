@@ -11,6 +11,57 @@ def _tool(name, description, properties, required=None):
 TEXT = {'type': 'string', 'minLength': 1, 'maxLength': 1000}
 PATH = {'type': 'string', 'minLength': 1, 'maxLength': 1000}
 LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 50}
+# device.scenario fields; device.suite reuses them for its cases and defaults.
+SCENARIO_FIELDS = {
+    'app_id': TEXT, 'duration_s': {'type': 'integer', 'minimum': 1, 'maximum': 60},
+    'stop_first': {'type': 'boolean'}, 'stop_on_fail': {'type': 'boolean'}, 'end_after_steps': {'type': 'boolean'},
+    'record': {'type': 'boolean'},
+    'sample_ms': {'type': 'integer', 'minimum': 0, 'maximum': 2000},
+    'sample_region': {'type': 'array', 'minItems': 4, 'maxItems': 4, 'items': {'type': 'integer', 'minimum': 0, 'maximum': 10000}},
+    'sample_min_change': {'type': 'number', 'minimum': 0, 'maximum': 1},
+    'log_tags': {'type': 'array', 'minItems': 1, 'maxItems': 8, 'items': {'type': 'string', 'minLength': 1, 'maxLength': 100}},
+    'log_source': {'type': 'string', 'enum': ['auto', 'system', 'console']},
+    'log_lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000},
+    'extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'string', 'maxLength': 1000}},
+    'bool_extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'boolean'}},
+    'activity': {'type': 'string', 'maxLength': 255}, 'console': {'type': 'boolean'},
+    'steps': {'type': 'array', 'maxItems': 40, 'items': {'type': 'object', 'required': ['action'], 'properties': {
+        'at_ms': {'type': 'integer', 'minimum': 0, 'maximum': 59999},
+        'after_ms': {'type': 'integer', 'minimum': 0, 'maximum': 59999},
+        'action': {'type': 'string', 'enum': ['tap', 'tap_text', 'wait_for', 'set_text', 'clear_text', 'scroll_until_visible',
+                                              'swipe', 'type', 'key', 'open_url', 'screenshot', 'launch_app', 'stop_app']},
+        'x': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'x1': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y1': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'x2': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y2': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
+        'duration_ms': {'type': 'integer', 'minimum': 50, 'maximum': 5000},
+        'match': {'type': 'string', 'minLength': 1, 'maxLength': 200},
+        'by': {'type': 'string', 'enum': ['any', 'text', 'id', 'label']}, 'exact': {'type': 'boolean'},
+        'timeout_s': {'type': 'integer', 'minimum': 0, 'maximum': 30}, 'gone': {'type': 'boolean'},
+        'clear': {'type': 'boolean'}, 'direction': {'type': 'string', 'enum': ['down', 'up']},
+        'max_swipes': {'type': 'integer', 'minimum': 1, 'maximum': 20},
+        'name': {'type': 'string', 'minLength': 1, 'maxLength': 40}, 'app_id': TEXT,
+        'activity': {'type': 'string', 'maxLength': 255}, 'restart': {'type': 'boolean'},
+        'extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'string', 'maxLength': 1000}},
+        'bool_extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'boolean'}},
+        'text': {'type': 'string', 'minLength': 1, 'maxLength': 500}, 'key': {'type': 'string', 'maxLength': 32},
+        'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}}},
+    'expect': {'type': 'object', 'properties': {
+        'steps_ok': {'type': 'boolean'}, 'app_running': {'type': 'boolean'},
+        'settled_by_ms': {'type': 'integer', 'minimum': 0, 'maximum': 60000},
+        'max_drift_ms': {'type': 'integer', 'minimum': 0, 'maximum': 60000},
+        'logs': {'type': 'array', 'maxItems': 12, 'items': {'type': 'object', 'required': ['match'], 'properties': {
+            'match': {'type': 'string', 'minLength': 1, 'maxLength': 200},
+            'min': {'type': 'integer', 'minimum': 0}, 'max': {'type': 'integer', 'minimum': 0},
+            'by_ms': {'type': 'integer', 'minimum': 0}, 'after_ms': {'type': 'integer', 'minimum': 0},
+            'number_after': {'type': 'string', 'minLength': 1, 'maxLength': 100},
+            'value_min': {'type': 'number'}, 'value_max': {'type': 'number'}, 'after_reaching': {'type': 'number'},
+            'last_min': {'type': 'number'}, 'last_max': {'type': 'number'}}}},
+        'log_order': {'type': 'array', 'maxItems': 12, 'items': {'type': 'string', 'minLength': 1, 'maxLength': 200}}}},
+    'preflight': {'type': 'array', 'minItems': 1, 'maxItems': 4, 'items': {'type': 'object', 'required': ['url'], 'properties': {
+        'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}, 'name': {'type': 'string', 'minLength': 1, 'maxLength': 60},
+        'method': {'type': 'string', 'enum': ['GET', 'POST']},
+        'headers': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'string', 'maxLength': 2000}},
+        'body': {'type': 'string', 'maxLength': 4096}, 'status': {'type': 'integer', 'minimum': 100, 'maximum': 599},
+        'contains': {'type': 'array', 'maxItems': 8, 'items': {'type': 'string', 'minLength': 1, 'maxLength': 200}},
+        'timeout_s': {'type': 'integer', 'minimum': 1, 'maximum': 20}}}}}
 DAYS = {'type': 'integer', 'minimum': 1, 'maximum': 90}
 DATE = {'type': 'string', 'pattern': '^\\d{4}-\\d{2}-\\d{2}$'}
 MONTH = {'type': 'string', 'pattern': '^\\d{4}-\\d{2}$'}
@@ -128,43 +179,16 @@ CATALOG = [
     _tool('device.run_flow', 'Run a Maestro YAML flow on the device. Returns pass/fail, test counts and only the failed steps (verbose=true for the full output and JUnit report); takeScreenshot images are delivered to the user. Use for deterministic verification after exploring interactively. Scripts, sub-flows and inline JavaScript are blocked by default.', {
         'device_id': TEXT, 'flow': {'type': 'string', 'minLength': 1, 'maxLength': 65536}, 'verbose': {'type': 'boolean'}},
         ['device_id', 'flow']),
-    _tool('device.scenario', 'Run one whole test case in ONE call, for any kind of test (a functional flow, a timing or animation check, a deep link, a launch). Optionally stops and launches app_id at t0 (launch extras/bool_extras/activity/console as in device.app), then runs steps: tap x,y | tap_text match | wait_for match[,gone] | set_text text[,match] | clear_text | scroll_until_visible match | swipe | type | key | open_url | screenshot [name] (delivered to the user) | launch_app | stop_app. Each step runs after_ms after the previous one finished (default 0: plain sequential flow), or at a fixed at_ms offset from t0 when timing matters. end_after_steps=true returns as soon as the steps are done (duration_s is then an upper bound). Over duration_s (1-60 s) it can also: record=true a video (delivered to the user), sample_ms (150-2000) a screen-change timeline (periods with from_ms/to_ms/box in pixels, last_change_ms; no images; sample_region=[x1,y1,x2,y2] watches one area, sample_min_change ignores small changes), log_tags capture of matching log lines with t_ms, counts and first_ms per tag. expect makes the runner decide pass/fail: steps_ok (default true), app_running, settled_by_ms, logs=[{match,min,max,by_ms,after_ms}], log_order=[...]; the result then has verdict and failed reasons. Returns each step with ran_ms/took_ms/ok, and app_running (false = the app died).', {
-        'device_id': TEXT, 'app_id': TEXT, 'duration_s': {'type': 'integer', 'minimum': 1, 'maximum': 60},
-        'stop_first': {'type': 'boolean'}, 'stop_on_fail': {'type': 'boolean'}, 'end_after_steps': {'type': 'boolean'},
-        'record': {'type': 'boolean'},
-        'sample_ms': {'type': 'integer', 'minimum': 0, 'maximum': 2000},
-        'sample_region': {'type': 'array', 'minItems': 4, 'maxItems': 4, 'items': {'type': 'integer', 'minimum': 0, 'maximum': 10000}},
-        'sample_min_change': {'type': 'number', 'minimum': 0, 'maximum': 1},
-        'log_tags': {'type': 'array', 'minItems': 1, 'maxItems': 8, 'items': {'type': 'string', 'minLength': 1, 'maxLength': 100}},
-        'log_source': {'type': 'string', 'enum': ['auto', 'system', 'console']},
-        'log_lines': {'type': 'integer', 'minimum': 1, 'maximum': 2000},
-        'extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'string', 'maxLength': 1000}},
-        'bool_extras': {'type': 'object', 'maxProperties': 20, 'additionalProperties': {'type': 'boolean'}},
-        'activity': {'type': 'string', 'maxLength': 255}, 'console': {'type': 'boolean'},
-        'steps': {'type': 'array', 'maxItems': 40, 'items': {'type': 'object', 'required': ['action'], 'properties': {
-            'at_ms': {'type': 'integer', 'minimum': 0, 'maximum': 59999},
-            'after_ms': {'type': 'integer', 'minimum': 0, 'maximum': 59999},
-            'action': {'type': 'string', 'enum': ['tap', 'tap_text', 'wait_for', 'set_text', 'clear_text', 'scroll_until_visible',
-                                                  'swipe', 'type', 'key', 'open_url', 'screenshot', 'launch_app', 'stop_app']},
-            'x': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'x1': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y1': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'x2': {'type': 'integer', 'minimum': 0, 'maximum': 10000}, 'y2': {'type': 'integer', 'minimum': 0, 'maximum': 10000},
-            'duration_ms': {'type': 'integer', 'minimum': 50, 'maximum': 5000},
-            'match': {'type': 'string', 'minLength': 1, 'maxLength': 200},
-            'by': {'type': 'string', 'enum': ['any', 'text', 'id', 'label']}, 'exact': {'type': 'boolean'},
-            'timeout_s': {'type': 'integer', 'minimum': 0, 'maximum': 30}, 'gone': {'type': 'boolean'},
-            'clear': {'type': 'boolean'}, 'direction': {'type': 'string', 'enum': ['down', 'up']},
-            'max_swipes': {'type': 'integer', 'minimum': 1, 'maximum': 20},
-            'name': {'type': 'string', 'minLength': 1, 'maxLength': 40}, 'app_id': TEXT,
-            'text': {'type': 'string', 'minLength': 1, 'maxLength': 500}, 'key': {'type': 'string', 'maxLength': 32},
-            'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}}},
-        'expect': {'type': 'object', 'properties': {
-            'steps_ok': {'type': 'boolean'}, 'app_running': {'type': 'boolean'},
-            'settled_by_ms': {'type': 'integer', 'minimum': 0, 'maximum': 60000},
-            'logs': {'type': 'array', 'maxItems': 12, 'items': {'type': 'object', 'required': ['match'], 'properties': {
-                'match': {'type': 'string', 'minLength': 1, 'maxLength': 200},
-                'min': {'type': 'integer', 'minimum': 0}, 'max': {'type': 'integer', 'minimum': 0},
-                'by_ms': {'type': 'integer', 'minimum': 0}, 'after_ms': {'type': 'integer', 'minimum': 0}}}},
-            'log_order': {'type': 'array', 'maxItems': 12, 'items': {'type': 'string', 'minLength': 1, 'maxLength': 200}}}}},
-        ['device_id', 'duration_s']),
+    _tool('device.scenario', 'Run one whole test case in ONE call, for any kind of test (a functional flow, a timing or animation check, a deep link, a launch). Optionally stops and launches app_id at t0 (launch extras/bool_extras/activity/console as in device.app), then runs steps: tap x,y | tap_text match | wait_for match[,gone] | set_text text[,match] | clear_text | scroll_until_visible match | swipe | type | key | open_url | screenshot [name] (delivered to the user) | launch_app [activity, extras, bool_extras, restart=true to stop it first; default brings the running app back to the front] | stop_app. Each step runs after_ms after the previous one finished (default 0: plain sequential flow), or at a fixed at_ms offset from t0 when timing matters. end_after_steps=true returns as soon as the steps are done (duration_s is then an upper bound). Over duration_s (1-60 s) it can also: record=true a video (delivered to the user), sample_ms (150-2000) a screen-change timeline (periods with from_ms/to_ms/box in pixels, last_change_ms; no images; sample_region=[x1,y1,x2,y2] watches one area, sample_min_change ignores small changes), log_tags capture of matching log lines with t_ms, counts and first_ms per tag. ALWAYS pass expect: the runner then decides pass/fail, so you never parse logs or frames yourself: steps_ok (default true), app_running, settled_by_ms, max_drift_ms (fail when an at_ms step ran later than this), logs=[{match,min,max,by_ms,after_ms}], log_order=[...]. A log rule can check a number in the matching lines: number_after is the text right before the number (e.g. "height="), then value_min / value_max (every value), after_reaching (only check values from the first one at or above this), last_min / last_max; logs.values reports count/min/max/first/last. The result then has verdict and failed reasons. preflight=[{url, method GET|POST, headers, body (text; set a Content-Type header), status (default 200), contains:[...]}] makes the runner check the test environment over HTTP first: if a check fails the device is not touched and verdict is blocked (an environment problem, not a test failure). Returns each step with ran_ms/took_ms/ok (drift_ms for at_ms steps, and max_drift_ms), and app_running (false = the app died).', {'device_id': TEXT, **SCENARIO_FIELDS},
+          ['device_id', 'duration_s']),
+    _tool('device.suite', 'Run several device.scenario cases in ONE call and get one summary: verdict, counts and a markdown table (case, verdict, first reason). Use it for a test matrix or a regression run instead of one scenario call per case. cases=[{name, ...scenario fields}]; defaults holds the fields the cases share (app_id, log_tags, preflight, expect; a case expect is merged over the default one). Every case needs expect. reset=reset_app clears the app data before each case (Android); stop_on_fail ends the suite at the first case that does not pass; keep_video=all keeps the videos of passing cases too (default: only cases that did not pass). At most 12 cases and 600 s of duration_s in total. Verdicts: pass, fail, blocked (a preflight check failed), error (the case could not run).', {
+        'device_id': TEXT,
+        'cases': {'type': 'array', 'minItems': 1, 'maxItems': 12, 'items': {
+            'type': 'object', 'required': ['name'], 'properties': {
+                'name': {'type': 'string', 'pattern': '^[A-Za-z0-9_.-]{1,60}$'}, **SCENARIO_FIELDS}}},
+        'defaults': {'type': 'object', 'properties': {k: v for k, v in SCENARIO_FIELDS.items() if k != 'steps'}},
+        'reset': {'type': 'string', 'enum': ['none', 'reset_app']}, 'stop_on_fail': {'type': 'boolean'},
+        'keep_video': {'type': 'string', 'enum': ['failed', 'all']}}, ['device_id', 'cases']),
     _tool('workspace.list', 'List files in this disposable worker workspace, including staged attachments.', {}),
     _tool('workspace.import', 'Import a newly granted artifact, such as a skill asset, into this workspace.', {'artifact_id': TEXT}),
     _tool('workspace.read', 'Read a UTF-8 file relative to this private workspace.', {'path': PATH}),

@@ -39,6 +39,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -59,7 +60,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = '1.2.0'  # the backend gates newer ops/arguments on this (device_loader/backend/service.py RUNNER_GATES)
+VERSION = '1.3.0'  # the backend gates newer ops/arguments on this (device_loader/backend/service.py RUNNER_GATES)
 PROTOCOL = 1
 CONFIG_DIR = Path(os.environ.get('LOMA_DEVICE_RUNNER_HOME', Path.home() / '.loma-device-runner'))
 CONFIG_PATH = CONFIG_DIR / 'config.json'
@@ -140,7 +141,8 @@ SCENARIO_STEPS = {'tap': ({'x', 'y'}, set()), 'swipe': ({'x1', 'y1', 'x2', 'y2'}
                   'set_text': ({'text'}, {'match', 'by', 'exact', 'clear'}),
                   'clear_text': (set(), {'match', 'by', 'exact'}),
                   'scroll_until_visible': ({'match'}, {'by', 'exact', 'direction', 'max_swipes'}),
-                  'screenshot': (set(), {'name'}), 'launch_app': (set(), {'app_id'}),
+                  'screenshot': (set(), {'name'}),
+                  'launch_app': (set(), {'app_id', 'activity', 'extras', 'bool_extras', 'restart'}),
                   'stop_app': (set(), {'app_id'})}
 STEP_TIMING = {'at_ms', 'after_ms'}
 MAX_SCENARIO_STEPS = 40
@@ -149,8 +151,25 @@ MAX_SCENARIO_SHOTS = 6
 MAX_STEP_WAIT = 30
 END_TAIL = 0.7  # end_after_steps: keep capturing this long after the last step, to catch its effect
 SHOT_NAME = re.compile(r'[A-Za-z0-9_-]{1,40}\Z')
-EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'logs', 'log_order'}
-LOG_EXPECT_KEYS = {'match', 'min', 'max', 'by_ms', 'after_ms'}
+EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'max_drift_ms', 'logs', 'log_order'}
+# A log rule can also read a number out of each matching line (the first number after the
+# literal text number_after; no regular expressions from the agent) and check it.
+VALUE_KEYS = ('value_min', 'value_max', 'after_reaching', 'last_min', 'last_max')
+LOG_EXPECT_KEYS = {'match', 'min', 'max', 'by_ms', 'after_ms', 'number_after', *VALUE_KEYS}
+NUMBER = re.compile(r'\s*[:=]?\s*([-+]?[0-9]+(?:\.[0-9]+)?)')
+MAX_VALUE = 10 ** 12
+# preflight: HTTP checks made from the runner before the device is touched, so a broken test
+# environment (backend down, a config flag wiped) is reported as "blocked", not as a test failure.
+# Only the status and which `contains` texts were missing are returned, never the response body.
+PREFLIGHT_KEYS = {'url', 'name', 'method', 'headers', 'body', 'status', 'contains', 'timeout_s'}
+PREFLIGHT_MODES = ('public', 'any', 'off')
+HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}\Z")
+MAX_PREFLIGHT = 4
+MAX_PREFLIGHT_BODY = 4096
+MAX_PREFLIGHT_READ = 256 * 1024
+# A recording over MAX_MEDIA_BYTES is re-encoded smaller on the runner instead of being dropped.
+VIDEO_PRESETS = ('Preset1280x720', 'Preset960x540', 'Preset640x480')  # macOS avconvert
+REENCODE_SECONDS = 90
 MAX_LOG_EXPECTS = 12
 SCENARIO_GRACE = 30  # steps still running at the end of the window get this long, then are cancelled
 MIN_SAMPLE_MS = 150
@@ -205,7 +224,7 @@ def normalize_server(value, allow_http=False):
 
 def default_policy():
     return {'allow_physical_devices': False, 'allowed_app_ids': [], 'allow_maestro_scripts': False,
-            'keep_awake': True}
+            'keep_awake': True, 'preflight': 'public'}
 
 
 class KeepAwake:
@@ -283,13 +302,46 @@ async def run(args, *, timeout=60, check=True, keep='head', cwd=None, limit=None
     return proc.returncode, out, err_text
 
 
-def read_media(path, what):
-    """Read a captured media file, refusing (not truncating) anything over MAX_MEDIA_BYTES."""
-    size = path.stat().st_size
-    if size > MAX_MEDIA_BYTES:
-        raise OpError(f'{what} is {size // (1024 * 1024)} MB, over the {MAX_MEDIA_BYTES // (1024 * 1024)} MB limit; '
-                      'use a shorter duration')
-    return path.read_bytes()
+def reencode_commands(source, target, seconds):
+    """Commands that write a smaller copy of a recording, best first: ffmpeg, then macOS avconvert."""
+    commands = []
+    if shutil.which('ffmpeg'):
+        kbps = max(300, int(MAX_MEDIA_BYTES * 8 * 0.85 / max(seconds, 1) / 1000))
+        commands.append(['ffmpeg', '-y', '-loglevel', 'error', '-i', str(source), '-an',
+                         '-vf', 'scale=-2:min(1280\\,ih)', '-c:v', 'libx264', '-preset', 'veryfast',
+                         '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{2 * kbps}k',
+                         '-movflags', '+faststart', str(target)])
+    if shutil.which('avconvert'):
+        commands += [['avconvert', '--preset', preset, '--source', str(source), '--output', str(target), '--replace']
+                     for preset in VIDEO_PRESETS]
+    return commands
+
+
+async def fit_media(path, what, seconds=60):
+    """Read a captured recording. One over MAX_MEDIA_BYTES is re-encoded smaller (never truncated);
+    if no encoder is installed, or it is still too large, the call fails with what to do about it."""
+    size, megabyte = path.stat().st_size, 1024 * 1024
+    if size <= MAX_MEDIA_BYTES:
+        return path.read_bytes()
+    small = path.with_name('reencoded.mp4')
+    commands = reencode_commands(path, small, seconds)
+    deadline = time.monotonic() + REENCODE_SECONDS
+    for argv in commands:
+        left = deadline - time.monotonic()
+        if left < 5:
+            break
+        try:
+            code, _, _ = await run(argv, timeout=left, check=False)
+        except OpError:
+            code = 1
+        if code == 0 and small.exists() and 0 < small.stat().st_size <= MAX_MEDIA_BYTES:
+            return small.read_bytes()
+        if small.exists():
+            small.unlink()
+    raise OpError(f'{what} is {size // megabyte} MB, over the {MAX_MEDIA_BYTES // megabyte} MB limit'
+                  + (' and could not be re-encoded smaller' if commands else
+                     ' (install ffmpeg on the runner machine to have long recordings re-encoded)')
+                  + '; use a shorter duration')
 
 
 def png_size(data):
@@ -507,11 +559,72 @@ def need_steps(args, window_ms, app_id=None, allowed_apps=()):
             if allowed_apps and target not in allowed_apps:
                 raise OpError(f"steps[{index}]: app {target} is not in this runner's allowed_app_ids")
             item['app_id'] = target
+            if action == 'launch_app':
+                # restart=false (default) brings a running app back to the front (background/foreground
+                # cases); restart=true stops it first, like the launch at the start of the scenario.
+                item['launch'] = {**need_launch({k: step[k] for k in ('activity', 'extras', 'bool_extras')
+                                                 if k in step}), 'restart': need_bool(step, 'restart')}
         checked.append(item)
     return checked
 
 
-def need_expect(args, has_logs, has_frames, has_app):
+def need_preflight(args, mode='public'):
+    """Optional HTTP checks run before the scenario: [{url, method, headers, body, status, contains, timeout_s}]."""
+    checks = args.get('preflight')
+    if checks is None:
+        return []
+    if mode == 'off':
+        raise OpError("preflight is turned off on this runner (policy preflight: 'off')")
+    if not isinstance(checks, list) or not 1 <= len(checks) <= MAX_PREFLIGHT:
+        raise OpError(f'preflight must be a list of 1-{MAX_PREFLIGHT} checks')
+    out = []
+    for index, check in enumerate(checks, 1):
+        where = f'preflight[{index}]'
+        if not isinstance(check, dict) or not {'url'} <= set(check) <= PREFLIGHT_KEYS:
+            raise OpError(f'{where}: needs url, may take ' + ', '.join(sorted(PREFLIGHT_KEYS - {'url'})))
+        url = need_str(check, 'url', max_len=2000)
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or any(c.isspace() for c in url):
+            raise OpError(f'{where}: url must be an http(s) URL')
+        method = check.get('method', 'GET')
+        if method not in ('GET', 'POST'):
+            raise OpError(f'{where}: method must be GET or POST')
+        headers = check.get('headers') or {}
+        if (not isinstance(headers, dict) or len(headers) > MAX_EXTRAS or not all(
+                isinstance(k, str) and HEADER_NAME.fullmatch(k) and isinstance(v, str) and len(v) <= 2000
+                and not set(v) & set('\r\n\x00') for k, v in headers.items())):
+            raise OpError(f'{where}: headers must be an object of at most {MAX_EXTRAS} name: value strings')
+        body = check.get('body')
+        if body is not None and (method != 'POST' or not isinstance(body, (str, dict))
+                                 or len(body if isinstance(body, str) else json.dumps(body)) > MAX_PREFLIGHT_BODY):
+            raise OpError(f'{where}: body needs method POST and is text or a JSON object (max {MAX_PREFLIGHT_BODY} chars)')
+        contains = check.get('contains') or []
+        if (not isinstance(contains, list) or len(contains) > 8
+                or not all(isinstance(text, str) and 0 < len(text) <= 200 for text in contains)):
+            raise OpError(f'{where}: contains must be a list of at most 8 strings')
+        out.append({'url': url, 'host': parsed.hostname, 'port': parsed.port, 'method': method, 'headers': headers,
+                    'body': body, 'contains': contains,
+                    'name': need_str(check, 'name', max_len=60, optional=True) or f'{method} {parsed.hostname}{parsed.path}'[:60],
+                    'status': need_int(check, 'status', 100, 599, default=200),
+                    'timeout_s': need_int(check, 'timeout_s', 1, 20, default=10)})
+    return out
+
+
+async def private_host(host, port):
+    """True when host is, or resolves to, a loopback / private / link-local address."""
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            found = await asyncio.get_running_loop().getaddrinfo(host, port or 443, type=socket.SOCK_STREAM)
+        except OSError:
+            return False  # does not resolve: the request itself reports that
+        addresses = [ipaddress.ip_address(item[4][0].split('%')[0]) for item in found]
+    return any(a.is_private or a.is_loopback or a.is_link_local or a.is_reserved or a.is_unspecified
+               for a in addresses)
+
+
+def need_expect(args, has_logs, has_frames, has_app, has_timed=False):
     """Optional pass/fail rules, checked on the runner so the model reads a verdict, not raw data."""
     expect = args.get('expect')
     if expect is None:
@@ -527,6 +640,10 @@ def need_expect(args, has_logs, has_frames, has_app):
         if not has_frames:
             raise OpError('expect.settled_by_ms needs sample_ms (the screen-change timeline)')
         out['settled_by_ms'] = need_int(expect, 'settled_by_ms', 0, MAX_SCENARIO_SECONDS * 1000)
+    if 'max_drift_ms' in expect:
+        if not has_timed:
+            raise OpError('expect.max_drift_ms needs at least one at_ms step (drift is how late such a step ran)')
+        out['max_drift_ms'] = need_int(expect, 'max_drift_ms', 0, MAX_SCENARIO_SECONDS * 1000)
     rules, order = expect.get('logs') or [], expect.get('log_order') or []
     if (rules or order) and not has_logs:
         raise OpError('expect.logs / expect.log_order need log_tags (which log lines to capture)')
@@ -535,8 +652,16 @@ def need_expect(args, has_logs, has_frames, has_app):
     out['logs'] = []
     for index, rule in enumerate(rules, 1):
         if not isinstance(rule, dict) or not {'match'} <= set(rule) <= LOG_EXPECT_KEYS:
-            raise OpError(f'expect.logs[{index}]: needs match, may take min, max, by_ms, after_ms')
+            raise OpError(f'expect.logs[{index}]: needs match, may take min, max, by_ms, after_ms, number_after '
+                          'with ' + ', '.join(VALUE_KEYS))
         item = {'match': need_str(rule, 'match', max_len=200)}
+        if 'number_after' in rule:
+            item['number_after'] = need_str(rule, 'number_after', max_len=100)
+        for key in VALUE_KEYS:
+            if key in rule:
+                if 'number_after' not in rule:
+                    raise OpError(f'expect.logs[{index}]: {key} needs number_after (the text right before the number)')
+                item[key] = need_number(rule, key, -MAX_VALUE, MAX_VALUE, None)
         for key, high in (('min', 100000), ('max', 100000), ('by_ms', MAX_SCENARIO_SECONDS * 1000),
                           ('after_ms', MAX_SCENARIO_SECONDS * 1000)):
             if key in rule:
@@ -548,6 +673,57 @@ def need_expect(args, has_logs, has_frames, has_app):
         raise OpError(f'expect.log_order must be a list of at most {MAX_LOG_EXPECTS} strings')
     out['log_order'] = order
     return out
+
+
+def log_values(rule, entries):
+    """[(t_ms, number)]: the first number after rule['number_after'] in each line matching rule['match']."""
+    match, marker = rule['match'].lower(), rule['number_after'].lower()
+    values = []
+    for at, line in entries:
+        low = line.lower()
+        index = low.find(marker) if match in low else -1
+        found = NUMBER.match(low, index + len(marker)) if index >= 0 else None
+        if found:
+            values.append((at, float(found.group(1))))
+    return values
+
+
+def value_stats(expect, entries):
+    """Per number_after rule: how many values were read and their min / max / first / last."""
+    stats = {}
+    for rule in expect['logs']:
+        if 'number_after' in rule:
+            numbers = [value for _, value in log_values(rule, entries)]
+            stats[rule['match']] = ({'count': len(numbers), 'min': min(numbers), 'max': max(numbers),
+                                     'first': numbers[0], 'last': numbers[-1]} if numbers else {'count': 0})
+    return stats
+
+
+def judge_values(rule, entries, name):
+    """Failures of one rule's number checks (value_min / value_max / after_reaching / last_min / last_max)."""
+    values = log_values(rule, entries)
+    if not values:
+        return [f"log {name}: no number found after {rule['number_after']!r}"]
+    failed, checked = [], values
+    if 'after_reaching' in rule:  # only values from the first one at or above this level are range-checked
+        start = next((i for i, (_, value) in enumerate(values) if value >= rule['after_reaching']), None)
+        if start is None:
+            return [f"log {name}: never reached {rule['after_reaching']:g} "
+                    f"(highest value {max(value for _, value in values):g})"]
+        checked = values[start:]
+    for key, bad, word in (('value_min', lambda v, limit: v < limit, 'below'),
+                           ('value_max', lambda v, limit: v > limit, 'above')):
+        if key in rule:
+            wrong = [(at, value) for at, value in checked if bad(value, rule[key])]
+            if wrong:
+                failed.append(f'log {name}: value {wrong[0][1]:g} at {wrong[0][0]} ms is {word} {rule[key]:g}'
+                              + (f' ({len(wrong)} such values)' if len(wrong) > 1 else ''))
+    last = values[-1][1]
+    if 'last_min' in rule and last < rule['last_min']:
+        failed.append(f"log {name}: last value {last:g} is below {rule['last_min']:g}")
+    if 'last_max' in rule and last > rule['last_max']:
+        failed.append(f"log {name}: last value {last:g} is above {rule['last_max']:g}")
+    return failed
 
 
 def judge(expect, result, entries):
@@ -572,6 +748,11 @@ def judge(expect, result, entries):
             failed.append('no screen samples were captured, so settled_by_ms cannot be checked')
         elif last is not None and last > expect['settled_by_ms']:
             failed.append(f"screen still changing at {last} ms (expected settled by {expect['settled_by_ms']} ms)")
+    if 'max_drift_ms' in expect:  # a timed step that ran late means the timing under test was not the one asked for
+        for step in result.get('steps') or []:
+            if step.get('drift_ms', 0) > expect['max_drift_ms']:
+                failed.append(f"step {step['i']} ({step['action']}) ran {step['drift_ms']} ms late (at_ms "
+                              f"{step['at_ms']}, ran at {step['ran_ms']} ms; expected at most {expect['max_drift_ms']} ms)")
 
     def hits(match):
         return [at for at, line in entries if match.lower() in line.lower()]
@@ -585,6 +766,8 @@ def judge(expect, result, entries):
             failed.append(f"log {name}: first at {found[0]} ms (expected by {rule['by_ms']} ms)")
         if found and 'after_ms' in rule and found[0] < rule['after_ms']:
             failed.append(f"log {name}: first at {found[0]} ms (expected after {rule['after_ms']} ms)")
+        if found and 'number_after' in rule:
+            failed += judge_values(rule, entries, name)
     previous = None
     for match in expect['log_order']:
         found = hits(match)
@@ -879,15 +1062,23 @@ class Android:
         await run([self.adb, '-s', serial, 'uninstall', app_id], timeout=60)
         return {'uninstalled': app_id}
 
-    async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False):
+    async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False,
+                     restart=None):
+        # restart: True stops the app first, False never does (a running app comes to the front),
+        # None keeps the long-standing default (a launch with extras/activity restarts the app).
         extras, bool_extras = extras or {}, bool_extras or {}
         if not (extras or bool_extras or activity):
+            if restart:
+                await self.stop(serial, app_id)
             await run(self._sh(serial, 'monkey', '-p', app_id, '-c', 'android.intent.category.LAUNCHER', '1'),
                       timeout=30)
             return {'launched': app_id}
         component = f'{app_id}/{activity or await self._launcher_activity(serial, app_id)}'
         # adb joins shell args into one device-side shell string: every value is quoted as one word.
-        argv = ['am', 'start', '-W', '-S', '-n', shlex.quote(component)]
+        argv = ['am', 'start', '-W'] + ([] if restart is False else ['-S'])
+        if restart is False and not activity:  # the launcher's own intent: resumes the task, no second activity
+            argv += ['-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']
+        argv += ['-n', shlex.quote(component)]
         for key, value in extras.items():
             argv += ['--es', key, shlex.quote(value)]
         for key, value in bool_extras.items():
@@ -1008,7 +1199,7 @@ class Android:
             with tempfile.TemporaryDirectory(prefix='loma-rec-') as tmp:
                 target = Path(tmp) / 'rec.mp4'
                 await run([self.adb, '-s', serial, 'pull', path, str(target)], timeout=60)
-                return read_media(target, 'Recording')
+                return await fit_media(target, 'Recording', seconds)
         except BaseException:
             # A failed launch callback (or a cancelled call) must not leave screenrecord running on the device.
             task.cancel()
@@ -1162,10 +1353,12 @@ class IOS:
             argv += ['-' + key, 'YES' if value else 'NO']
         return argv
 
-    async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False):
+    async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False,
+                     restart=None):
+        # restart=False on a running app only brings it to the front: iOS then ignores the launch arguments.
         args = self.launch_arguments(extras, bool_extras)
         await self._stop_console(serial)
-        restart = ['--terminate-running-process'] if args or console else []
+        restart = ['--terminate-running-process'] if restart or (restart is None and (args or console)) else []
         if not console:
             await run(['xcrun', 'simctl', 'launch', *restart, serial, app_id, *args], timeout=60)
             return {'launched': app_id, **({'extras': sorted(extras or {}) + sorted(bool_extras or {})} if args else {})}
@@ -1241,7 +1434,7 @@ class IOS:
                 raise
             if not target.exists():
                 raise OpError('simctl recordVideo produced no file')
-            return read_media(target, 'Recording')
+            return await fit_media(target, 'Recording', seconds)
 
     async def ui_tree(self, serial):
         _, out, _ = await run([self._idb(), 'ui', 'describe-all', '--udid', serial, '--json'], timeout=30)
@@ -1644,9 +1837,11 @@ class Runner:
         tags = need_tags(args, 'log_tags')
         if not app_id and {'extras', 'bool_extras', 'activity', 'console'} & set(args):
             raise OpError('extras / activity / console need app_id')
+        steps = need_steps(args, duration * 1000, app_id, self.allowed_apps)
+        checks = need_preflight(args, self.policy.get('preflight', 'public'))
         plan = {
             'app_id': app_id, 'duration': duration, 'sample_ms': sample_ms, 'tags': tags,
-            'steps': need_steps(args, duration * 1000, app_id, self.allowed_apps),
+            'steps': steps,
             'region': need_region(args, 'sample_region'),
             'min_change': need_number(args, 'sample_min_change', 0, 1, 0),
             'source': need_log_source(args, 'log_source'),
@@ -1655,10 +1850,15 @@ class Runner:
             'end_after_steps': need_bool(args, 'end_after_steps'),
             'stop_recording': asyncio.Event(),
             'launch': need_launch(args) if app_id else None,
-            'expect': need_expect(args, bool(tags), bool(sample_ms), bool(app_id)),
+            'expect': need_expect(args, bool(tags), bool(sample_ms), bool(app_id),
+                                  any('at_ms' in step for step in steps)),
         }
         stop_first = need_bool(args, 'stop_first', default=True)
         loop = asyncio.get_running_loop()
+        checked = await self.preflight(checks) if checks else []
+        blocked = [f"preflight {check['name']}: {check['error']}" for check in checked if not check['ok']]
+        if blocked:  # the environment is not ready: the device is not touched and nothing is judged
+            return {'duration_s': duration, 'verdict': 'blocked', 'failed': blocked, 'preflight': checked}
         if app_id and stop_first:
             await driver.stop(serial, app_id)
         if tags:
@@ -1670,7 +1870,7 @@ class Runner:
 
         async def mark_started():
             started.set()
-        recording, result = None, {'duration_s': duration}
+        recording, result = None, {'duration_s': duration, **({'preflight': checked} if checked else {})}
         if record:  # recording first, so the launch is on video; t0 is when frames start flowing
             began = loop.time()
             # Longer windows record at a lower bitrate so the file stays under the media limit.
@@ -1691,6 +1891,48 @@ class Runner:
                 recording.cancel()
                 await asyncio.gather(recording, return_exceptions=True)
             raise
+
+    async def preflight(self, checks):
+        """Run the HTTP checks; each result is {name, ok, status?, error?} (the response body is never returned)."""
+        import aiohttp
+        mode, results = self.policy.get('preflight', 'public'), []
+        session = self.session or aiohttp.ClientSession()
+        try:
+            for check in checks:
+                entry = {'name': check['name'], 'ok': False}
+                results.append(entry)
+                if mode != 'any' and await private_host(check['host'], check['port']):
+                    entry['error'] = ("host is on a private or local network; the runner owner can allow that "
+                                      "with policy preflight: 'any'")
+                    continue
+                body = check['body']
+                try:
+                    async with session.request(
+                            check['method'], check['url'], headers=check['headers'], allow_redirects=False,
+                            json=body if isinstance(body, dict) else None,
+                            data=body if isinstance(body, str) else None,
+                            timeout=aiohttp.ClientTimeout(total=check['timeout_s'])) as response:
+                        raw = b''
+                        async for chunk in response.content.iter_chunked(65536):
+                            raw += chunk
+                            if len(raw) >= MAX_PREFLIGHT_READ:
+                                break
+                        entry['status'] = response.status
+                except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                    entry['error'] = f'request failed ({type(exc).__name__}): {str(exc)[:200]}'
+                    continue
+                text = raw[:MAX_PREFLIGHT_READ].decode('utf-8', 'replace')
+                missing = [needle for needle in check['contains'] if needle not in text]
+                if entry['status'] != check['status']:
+                    entry['error'] = f"status {entry['status']} (expected {check['status']})"
+                elif missing:
+                    entry['error'] = 'response does not contain ' + ', '.join(repr(needle) for needle in missing)
+                else:
+                    entry['ok'] = True
+        finally:
+            if session is not self.session:
+                await session.close()
+        return results
 
     async def _scenario_window(self, driver, serial, plan, recording, result):
         loop = asyncio.get_running_loop()
@@ -1739,6 +1981,9 @@ class Runner:
             step_results.append({**skipped, 'at_ms': step['at_ms']} if 'at_ms' in step else skipped)
         if steps:
             result['steps'] = step_results
+            drifts = [entry['drift_ms'] for entry in step_results if 'drift_ms' in entry]
+            if drifts:  # how late the at_ms steps ran: a large value means the timing was not the one asked for
+                result['max_drift_ms'] = max(drifts)
         if app_id:
             try:
                 result['app_running'] = await driver.is_running(serial, app_id)
@@ -1756,6 +2001,9 @@ class Runner:
             result['logs'], entries = await self._scenario_logs(driver, serial, plan['source'], tags, wall,
                                                                 console if use_console else None, plan['log_lines'])
         if plan['expect'] is not None:
+            values = value_stats(plan['expect'], entries)
+            if values:
+                result['logs']['values'] = values
             failed = judge(plan['expect'], result, entries)
             result.update(verdict='fail' if failed else 'pass', **({'failed': failed[:20]} if failed else {}))
         budget = MAX_MEDIA_BYTES - sum(len(shot['png_base64']) * 3 // 4 for shot in shots)
@@ -1763,7 +2011,7 @@ class Runner:
             result['screenshots'] = shots
         if recording is not None:  # a video that cannot be delivered never loses the rest of the result
             try:
-                data = await asyncio.wait_for(recording, duration + 40)
+                data = await asyncio.wait_for(recording, duration + 40 + REENCODE_SECONDS)
                 if len(data) > budget:
                     result['video_error'] = (f'recording is {len(data) // (1024 * 1024)} MB, over the media limit; '
                                              'use a shorter duration_s or fewer screenshot steps')
@@ -1790,7 +2038,7 @@ class Runner:
             began = loop.time()
             entry = {'i': index, 'action': step['action'], 'ran_ms': int((began - start) * 1000)}
             if 'at_ms' in step:
-                entry['at_ms'] = step['at_ms']
+                entry.update(at_ms=step['at_ms'], drift_ms=entry['ran_ms'] - step['at_ms'])
             results.append(entry)
             try:
                 entry.update(await self._scenario_step(driver, serial, step, entry['ran_ms'], shots), ok=True)
@@ -1835,7 +2083,7 @@ class Runner:
             shots.append({'name': step['name'], 'at_ms': ran_ms, 'png_base64': base64.b64encode(data).decode()})
             return {'name': step['name']}
         if action == 'launch_app':
-            await driver.launch(serial, step['app_id'])
+            await driver.launch(serial, step['app_id'], **step['launch'])
             return {}
         if action == 'stop_app':
             await driver.stop(serial, step['app_id'])
