@@ -28,7 +28,7 @@ says whose task it is: it drives the "Assigned to me" filter and alerts.
 
 Stars are private bookmarks (`task_stars` collection, see api/task_stars.py):
 a starred shared-board task also shows on the starrer's own board, with a
-lane and done state that only they see.
+lane, done state, tags, priority and deadline that only they see.
 
 Card boards: a shared board created with `card_mode` shows *cards* (a deal, a
 candidate, a project...) in its lanes instead of tasks. Cards live in the
@@ -1042,7 +1042,9 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
     if board["shared"]:
         await task_stars.flag_starred(db, user_email, views)
     else:
-        views += await task_stars.starred_views(db, user_email, lane_ids, query.get("$or"))
+        views += await task_stars.starred_views(
+            db, user_email, lane_ids, query.get("$or"),
+            tag_ids=[tag["id"] for tag in board["config"]["tags"]])
 
     # Every column orders by effective rank (manual rank, or recency fallback
     # baked in by _task_view) — so all columns are manually reorderable.
@@ -1582,6 +1584,10 @@ async def handle_delete_tag(request: web.Request) -> web.Response:
     collection, store_filter = target["store"]
     await collection.update_one(store_filter, {"$pull": {"task_board.tags": {"id": tag_id}}})
     await db.conversations.update_many(target["task_filter"], {"$pull": {"task_tag_ids": tag_id}})
+    if not target["shared"]:
+        # Personal tags also label the owner's starred cards.
+        await db.task_stars.update_many(
+            {"user_email": target["owner"], "tag_ids": tag_id}, {"$pull": {"tag_ids": tag_id}})
     return web.json_response({"deleted": True})
 
 

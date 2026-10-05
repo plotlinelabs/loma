@@ -4,7 +4,13 @@ Starring a task makes it also show on the starrer's personal board ("My
 tasks"). There it has its own lane, order and done state, kept in the
 `task_stars` collection, one doc per (person, task):
 
-  {user_email, conversation_id, lane, done, rank, starred_at, done_at}
+  {user_email, conversation_id, lane, done, rank, starred_at, done_at,
+   tag_ids, priority, deadline}
+
+`tag_ids`, `priority` and `deadline` are the person's own: tags come from
+their personal board, and all three start blank and never sync with the
+shared task's values, so they can sort and filter starred cards like their
+own tasks.
 
 Nothing is written on the task itself, so nobody else can tell a task was
 starred, and moving or ticking off the starred card never changes the shared
@@ -16,7 +22,7 @@ when its task is deleted, leaves its shared board, or the person loses access
 to that board.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from aiohttp import web
 
@@ -27,6 +33,28 @@ MAX_STARS_PER_USER = 500
 
 def _lane_or_first(lane, lane_ids: list[str]) -> str:
     return lane if lane in lane_ids else (lane_ids[0] if lane_ids else "todo")
+
+
+def _check_tag_ids(tag_ids, allowed: set[str]) -> str | None:
+    """Error text for a bad personal tag list, None if fine."""
+    if (not isinstance(tag_ids, list) or len(tag_ids) > task_routes.MAX_TAGS_PER_TASK
+            or len(tag_ids) != len(set(map(str, tag_ids)))):
+        return f"Use at most {task_routes.MAX_TAGS_PER_TASK} unique tags"
+    if any(not isinstance(tag_id, str) or tag_id not in allowed for tag_id in tag_ids):
+        return "Unknown tag"
+    return None
+
+
+def _check_deadline(deadline) -> str | None:
+    if deadline is None:
+        return None
+    if not isinstance(deadline, str) or not task_routes.DEADLINE_RE.match(deadline):
+        return "deadline must be a YYYY-MM-DD date or null"
+    try:
+        date.fromisoformat(deadline)
+    except ValueError:
+        return "deadline must be a valid calendar date"
+    return None
 
 
 async def flag_starred(db, user_email: str, views: list[dict]) -> None:
@@ -44,11 +72,14 @@ async def flag_starred(db, user_email: str, views: list[dict]) -> None:
 
 
 async def starred_views(db, user_email: str, lane_ids: list[str],
-                        search_or: list | None = None) -> list[dict]:
+                        search_or: list | None = None,
+                        tag_ids: list[str] | None = None) -> list[dict]:
     """The caller's starred tasks, shaped as cards for their personal board.
 
     Each view is the real task with the caller's private placement on top:
-    `column` / `task_lane` / `task_rank` come from the star, and `star`
+    `column` / `task_lane` / `task_rank`, and the tags, priority and deadline,
+    come from the star (`tag_ids` is the personal board's tag list, so tags
+    deleted there drop off). `star`
     carries where the task really is (board, card, real column) plus the
     caller's role there. Stars whose task is gone or out of reach are dropped.
     """
@@ -104,8 +135,12 @@ async def starred_views(db, user_email: str, lane_ids: list[str],
             "column": "done" if done else lane,
             "task_lane": lane,
             "task_rank": star.get("rank") if star.get("rank") is not None else 0.0,
-            # The source board's tags mean nothing on the personal board.
-            "task_tag_ids": [],
+            # Your own tags, priority and deadline, never the shared task's:
+            # the source board's tags mean nothing on the personal board.
+            "task_tag_ids": [tag_id for tag_id in (star.get("tag_ids") or [])
+                             if tag_ids is None or tag_id in tag_ids],
+            "task_priority": star.get("priority") or None,
+            "task_deadline": star.get("deadline") or None,
         })
         views.append(view)
 
@@ -158,6 +193,8 @@ async def handle_star_task(request: web.Request) -> web.Response:
             **key, "lane": lanes[0]["id"], "done": False,
             # Newest first, same scale as task ranks.
             "rank": -now.timestamp(), "starred_at": now, "done_at": None,
+            # Start blank: these are yours, not copies of the shared task's.
+            "tag_ids": [], "priority": None, "deadline": None,
         }}, upsert=True)
     return web.json_response({"starred": True, "conversation_id": cid})
 
@@ -181,8 +218,9 @@ async def handle_unstar_task(request: web.Request) -> web.Response:
 
 async def handle_update_star(request: web.Request) -> web.Response:
     """PATCH /api/tasks/{conversation_id}/star — place a starred task on your
-    own board. Accepts any of: lane (one of your lanes), done, rank. Never
-    touches the task itself.
+    own board. Accepts any of: lane (one of your lanes), done, rank, and your
+    own tag_ids (tags of your board), priority and deadline (YYYY-MM-DD).
+    Never touches the task itself.
     """
     db, user_email, conversation, error = await _star_context(request)
     if error:
@@ -197,9 +235,15 @@ async def handle_update_star(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
+    if not isinstance(body, dict):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
     updates: dict = {}
+    config = None
+    if "lane" in body or "tag_ids" in body:
+        config = await task_routes._get_board_config_for(db, user_email)
     if "lane" in body:
-        lanes = (await task_routes._get_board_config_for(db, user_email))["lanes"]
+        lanes = config["lanes"]
         if body["lane"] not in [lane["id"] for lane in lanes]:
             return web.json_response({"error": "Unknown lane"}, status=400)
         updates["lane"] = body["lane"]
@@ -214,12 +258,29 @@ async def handle_update_star(request: web.Request) -> web.Response:
             updates["rank"] = float(body["rank"])
         except (TypeError, ValueError):
             return web.json_response({"error": "rank must be a number"}, status=400)
+    if "tag_ids" in body:
+        problem = _check_tag_ids(body["tag_ids"], {tag["id"] for tag in config["tags"]})
+        if problem:
+            return web.json_response({"error": problem}, status=400)
+        updates["tag_ids"] = body["tag_ids"]
+    if "priority" in body:
+        if body["priority"] is not None and body["priority"] not in task_routes.TASK_PRIORITIES:
+            return web.json_response(
+                {"error": "priority must be low, medium, high, urgent or null"}, status=400)
+        updates["priority"] = body["priority"]
+    if "deadline" in body:
+        problem = _check_deadline(body["deadline"])
+        if problem:
+            return web.json_response({"error": problem}, status=400)
+        updates["deadline"] = body["deadline"]
     if not updates:
         return web.json_response({"error": "Nothing to update"}, status=400)
     await db.task_stars.update_one(key, {"$set": updates})
     merged = {**star, **updates}
     return web.json_response({"star": {
         "lane": merged.get("lane"), "done": bool(merged.get("done")), "rank": merged.get("rank"),
+        "tag_ids": merged.get("tag_ids") or [], "priority": merged.get("priority") or None,
+        "deadline": merged.get("deadline") or None,
     }})
 
 

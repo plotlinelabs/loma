@@ -74,7 +74,8 @@ export function TaskCard({
       {...listeners}
       onClick={() => onOpen(task)}
       onContextMenu={(event) => {
-        if (readOnly || isStar) return;
+        // Your starred cards always get the menu: it only edits your copy.
+        if (readOnly && !isStar) return;
         event.preventDefault();
         setMenuOpen(true);
       }}
@@ -97,11 +98,11 @@ export function TaskCard({
             {task.status === "queued" && <span>{DEPLOY_QUEUED_LABEL}</span>}
           </div>
           )}
-          <div className="mt-1 flex items-center gap-1 overflow-hidden pr-12">
+          <div className="mt-1 flex flex-wrap items-center gap-1 pr-12">
             {task.starred && !isStar && <RiStarFill aria-label="Starred" className="h-3 w-3 shrink-0 text-amber-500" />}
             {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
-            {/* Priority belongs to the shared task, so a starred card doesn't offer to change it. */}
-            {!isStar && <TaskPriorityTag task={task} onSetPriority={onSetPriority} />}
+            {/* On a starred card this is your own priority, not the shared task's. */}
+            <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
             <TaskDeadlineBadge task={task} />
             {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag.name}</span>)}
             {assignedTags.length > 2 && <span className="text-[10px] text-muted-foreground">+{assignedTags.length - 2}</span>}
@@ -124,6 +125,18 @@ export function TaskCard({
               <RiCheckLine className="h-3.5 w-3.5" />
             </Button>
           ))}
+          {isStar && (
+            <TaskCardMenu task={task} lanes={lanes} tags={tags} models={models}
+              open={menuOpen} onOpenChange={setMenuOpen}
+              onMoveToLane={onMoveToLane} onReopen={onReopen} onMarkDone={onMarkDone}
+              onRemoveFromBoard={onRemoveFromBoard} onDeleteDraft={onDeleteDraft}
+              onFork={onFork}
+              onSetModel={onSetModel} onSetPriority={onSetPriority} onSetDeadline={onSetDeadline} onSetTags={onSetTags} onCreateTag={onCreateTag}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Organize starred task">
+                <RiMoreLine className="h-3.5 w-3.5" />
+              </Button>
+            </TaskCardMenu>
+          )}
           {!isStar && !readOnly && <>
           {isDraft && !!task.prompt.trim() && (
             <Button

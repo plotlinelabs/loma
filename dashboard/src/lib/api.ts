@@ -1222,8 +1222,10 @@ export interface Task {
   star?: TaskStar | null;
 }
 
-/** Your private placement of a starred task on your own board. Moving the card
- * or ticking it off changes only this, never the task on its shared board. */
+/** Your private placement of a starred task on your own board. Moving the card,
+ * ticking it off or setting its tags, priority or deadline changes only this,
+ * never the task on its shared board. On a starred card, `task_tag_ids`,
+ * `task_priority` and `task_deadline` are your own values (blank at first). */
 export interface TaskStar {
   /** Your lane for it. */
   lane: string;
@@ -1559,11 +1561,25 @@ export function unstarTask(conversationId: string): Promise<{ starred: boolean }
   return starRequest(conversationId, "DELETE");
 }
 
-/** Place a starred task on your own board. Never changes the task itself. */
+/** Your private changes to a starred task on your own board. */
+export interface TaskStarUpdate {
+  lane?: string;
+  done?: boolean;
+  rank?: number;
+  /** Tags of your own board. */
+  tag_ids?: string[];
+  priority?: TaskPriority | null;
+  /** YYYY-MM-DD. */
+  deadline?: string | null;
+}
+
+/** Place, tag or prioritize a starred task on your own board. Never changes
+ * the task itself: its tags, priority and deadline here are yours only. */
 export function updateTaskStar(
   conversationId: string,
-  updates: { lane?: string; done?: boolean; rank?: number },
-): Promise<{ star: { lane: string; done: boolean; rank: number } }> {
+  updates: TaskStarUpdate,
+): Promise<{ star: { lane: string; done: boolean; rank: number; tag_ids: string[];
+  priority: TaskPriority | null; deadline: string | null } }> {
   return starRequest(conversationId, "PATCH", updates);
 }
 

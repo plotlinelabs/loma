@@ -71,6 +71,14 @@ class Collection:
         for key in update.get("$unset") or {}:
             doc.pop(key, None)
 
+    async def update_many(self, query, update):
+        for doc in self.docs:
+            if not _matches(doc, {k: v for k, v in query.items() if not isinstance(doc.get(k), list)}):
+                continue
+            for key, value in (update.get("$pull") or {}).items():
+                if isinstance(doc.get(key), list):
+                    doc[key] = [item for item in doc[key] if item != value]
+
     async def delete_one(self, query):
         doc = next((d for d in self.docs if _matches(d, query)), None)
         if doc is not None:
@@ -268,3 +276,89 @@ async def test_editor_cannot_stop_a_teammates_personal_run(monkeypatch):
         client.interrupt.assert_not_awaited()
     finally:
         await active_streams.unregister("c1", stream)
+
+
+MY_TAGS = [{"id": "t-mine", "name": "Follow up", "color": "blue"},
+           {"id": "t-two", "name": "Waiting", "color": "red"}]
+
+
+def _db_with_my_tags(**kwargs):
+    db = _db(**kwargs)
+    db.users = SimpleNamespace(
+        find_one=AsyncMock(return_value={"task_board": {"lanes": PERSONAL_LANES, "tags": list(MY_TAGS)}}),
+        update_one=AsyncMock(),
+    )
+    return db
+
+
+@pytest.mark.asyncio
+async def test_my_tags_priority_and_deadline_start_blank_and_stay_mine(monkeypatch):
+    shared_values = {"task_priority": "urgent", "task_deadline": "2026-10-10", "task_tag_ids": ["t-shared"]}
+    db = _db_with_my_tags(tasks=[_task(**shared_values)])
+    _as(monkeypatch, db, EDITOR)
+    await task_stars.handle_star_task(_req("PUT"))
+
+    # Starts blank, not copied from the shared task.
+    card = (await _board())["tasks"][0]
+    assert (card["task_tag_ids"], card["task_priority"], card["task_deadline"]) == ([], None, None)
+
+    body = {"tag_ids": ["t-mine"], "priority": "high", "deadline": "2026-10-20"}
+    response = await task_stars.handle_update_star(_req("PATCH", body))
+    assert response.status == 200
+    assert json.loads(response.body)["star"]["priority"] == "high"
+    card = (await _board())["tasks"][0]
+    assert (card["task_tag_ids"], card["task_priority"], card["task_deadline"]) == (["t-mine"], "high", "2026-10-20")
+
+    # The shared task keeps its own values, and the shared board shows those.
+    for key, value in shared_values.items():
+        assert db.conversations.docs[0][key] == value
+    shared = (await _board("deals1"))["tasks"][0]
+    assert (shared["task_priority"], shared["task_deadline"]) == ("urgent", "2026-10-10")
+
+    # Later changes on the shared task don't sync into my copy.
+    db.conversations.docs[0].update({"task_priority": "low", "task_deadline": "2026-12-01"})
+    card = (await _board())["tasks"][0]
+    assert (card["task_priority"], card["task_deadline"]) == ("high", "2026-10-20")
+
+    # Clearing works too.
+    body = {"tag_ids": [], "priority": None, "deadline": None}
+    assert (await task_stars.handle_update_star(_req("PATCH", body))).status == 200
+    card = (await _board())["tasks"][0]
+    assert (card["task_tag_ids"], card["task_priority"], card["task_deadline"]) == ([], None, None)
+
+
+@pytest.mark.asyncio
+async def test_bad_star_tags_priority_or_deadline_are_rejected(monkeypatch):
+    db = _db_with_my_tags()
+    _as(monkeypatch, db, VIEWER)
+    await task_stars.handle_star_task(_req("PUT"))
+    for body in (
+        {"tag_ids": ["t-shared"]},           # the shared board's tag, not mine
+        {"tag_ids": ["t-mine", "t-mine"]},   # duplicate
+        {"tag_ids": "t-mine"},               # not a list
+        {"priority": "asap"},
+        {"deadline": "20/10/2026"},
+        {"deadline": "2026-02-30"},
+    ):
+        response = await task_stars.handle_update_star(_req("PATCH", body))
+        assert response.status == 400, body
+    assert db.task_stars.docs[0]["tag_ids"] == [] and db.task_stars.docs[0]["priority"] is None
+    # A viewer of the shared board can still label their own copy.
+    assert (await task_stars.handle_update_star(_req("PATCH", {"tag_ids": ["t-two"]}))).status == 200
+
+
+@pytest.mark.asyncio
+async def test_deleting_my_tag_drops_it_from_my_stars(monkeypatch):
+    db = _db_with_my_tags()
+    _as(monkeypatch, db, EDITOR)
+    await task_stars.handle_star_task(_req("PUT"))
+    await task_stars.handle_update_star(_req("PATCH", {"tag_ids": ["t-mine", "t-two"]}))
+
+    request = FakeRequest(match_info={"tag_id": "t-mine"})
+    response = await task_routes.handle_delete_tag(request)
+    assert response.status == 200
+    assert db.task_stars.docs[0]["tag_ids"] == ["t-two"]
+
+    # A tag missing from my board never shows on the card, even if a star still lists it.
+    db.task_stars.docs[0]["tag_ids"] = ["t-gone", "t-two"]
+    assert (await _board())["tasks"][0]["task_tag_ids"] == ["t-two"]
