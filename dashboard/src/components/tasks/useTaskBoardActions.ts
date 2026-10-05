@@ -14,6 +14,7 @@ import {
   type BoardLane,
   type Task,
   type TaskPriority,
+  type TaskStarUpdate,
   type TasksBoardResponse,
 } from "@/lib/api";
 import { useBoardExtras } from "./boardExtras";
@@ -101,7 +102,7 @@ export function useTaskBoardActions({
 
   // Starred cards (your own board) are private bookmarks: every move below
   // changes only your star, never the task on its shared board.
-  const patchStar = (task: Task, changes: Partial<Task>, star: { lane?: string; done?: boolean; rank?: number }) =>
+  const patchStar = (task: Task, changes: Partial<Task>, star: TaskStarUpdate) =>
     mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id && t.star
@@ -201,20 +202,25 @@ export function useTaskBoardActions({
       () => updateTask(task.conversation_id, { model }),
     );
 
-  const setTaskPriority = (task: Task, task_priority: TaskPriority | null) =>
-    mutate(
+  // On a starred card, tags, priority and deadline are your own (kept on the
+  // star), so setting them never changes the shared task.
+  const setTaskPriority = (task: Task, task_priority: TaskPriority | null) => task.star
+    ? patchStar(task, { task_priority }, { priority: task_priority })
+    : mutate(
       (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_priority } : t),
       () => updateTask(task.conversation_id, { task_priority }),
     );
 
-  const setTaskDeadline = (task: Task, task_deadline: string | null) =>
-    mutate(
+  const setTaskDeadline = (task: Task, task_deadline: string | null) => task.star
+    ? patchStar(task, { task_deadline }, { deadline: task_deadline })
+    : mutate(
       (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_deadline } : t),
       () => updateTask(task.conversation_id, { task_deadline }),
     );
 
-  const setTaskTags = (task: Task, task_tag_ids: string[]) =>
-    mutate(
+  const setTaskTags = (task: Task, task_tag_ids: string[]) => task.star
+    ? patchStar(task, { task_tag_ids }, { tag_ids: task_tag_ids })
+    : mutate(
       (tasks) => tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_tag_ids } : t),
       () => updateTask(task.conversation_id, { task_tag_ids }),
     );
@@ -228,7 +234,9 @@ export function useTaskBoardActions({
         ...board, tags: [...board.tags, tag],
         tasks: board.tasks.map((t) => t.conversation_id === task.conversation_id ? { ...t, task_tag_ids: nextIds } : t),
       });
-      await updateTask(task.conversation_id, { task_tag_ids: nextIds });
+      await (task.star
+        ? updateTaskStar(task.conversation_id, { tag_ids: nextIds })
+        : updateTask(task.conversation_id, { task_tag_ids: nextIds }));
       onRefresh();
     } catch (e) {
       onBoardChange(snapshot);

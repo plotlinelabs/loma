@@ -92,9 +92,10 @@ export function MobileTaskCard({
             {task.status === "queued" && <span>{DEPLOY_QUEUED_LABEL}</span>}
           </div>
           )}
-          <div className="mt-1 flex items-center gap-1 overflow-hidden">
+          <div className="mt-1 flex flex-wrap items-center gap-1">
             {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
-            {!isStar && <TaskPriorityTag task={task} onSetPriority={onSetPriority} />}
+            {/* On a starred card this is your own priority, not the shared task's. */}
+            <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
             <TaskDeadlineBadge task={task} />
           </div>
         </div>
@@ -122,6 +123,31 @@ export function MobileTaskCard({
                     Move to {lane.name}
                   </DropdownMenuItem>
                 ))}
+                {/* Your own priority and deadline, never the shared task's. */}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <span className="flex-1">Priority</span>
+                    <span className="text-xs text-muted-foreground">{priorityDisplay(task.task_priority)?.label ?? "None"}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-40">
+                    <PriorityMenuItems task={task} onSetPriority={onSetPriority} />
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <span className="flex-1">Deadline</span>
+                    <span className="text-xs text-muted-foreground">{deadlineDisplay(task.task_deadline)?.dateLabel ?? "None"}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DeadlineMenuItems task={task} onSetDeadline={onSetDeadline} />
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                {task.column === "done" && (
+                  <DropdownMenuItem onClick={() => onReopen(task)}>
+                    <RiArrowGoBackLine className="h-3.5 w-3.5" />
+                    Not done (for me)
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}

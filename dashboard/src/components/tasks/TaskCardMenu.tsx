@@ -9,6 +9,7 @@ import {
   RiGitBranchLine,
   RiInboxArchiveLine,
   RiPriceTag3Line,
+  RiStarOffLine,
 } from "@remixicon/react";
 import { Input } from "@/components/ui/input";
 import {
@@ -35,22 +36,30 @@ export interface TaskCardMenuProps {
   onSetDeadline: (task: Task, deadline: string | null) => void;
   onSetTags: (task: Task, tagIds: string[]) => void;
   onCreateTag: (task: Task, name: string) => void;
+  /** Starred cards (your own board) only: done for you only. */
+  onMarkDone?: (task: Task) => void;
   children: React.ReactNode;
 }
 
 /** One task actions menu shared by the overflow button and card right-click. */
 export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft, onFork,
-  onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
+  onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag, onMarkDone, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
   const { onMoveToBoard } = useBoardExtras();
   // Any owner or editor can move a task to another board they can edit (its
   // chat becomes visible there). View-only members never see this menu.
-  const canMoveToBoard = !!onMoveToBoard && !task.task_card_id;
+  // A starred card (your own board) is your private copy: its menu only
+  // organizes it (your lane, tags, priority, deadline, done), so the actions
+  // that would change the shared task are left out.
+  const isStar = !!task.star;
+  const canMoveToBoard = !isStar && !!onMoveToBoard && !task.task_card_id;
   const isDraft = isDraftTask(task);
   const isStaged = isStagedTask(task);
   const currentTags = task.task_tag_ids || [];
-  const targetLanes = isStaged
+  const targetLanes = isStar
+    ? lanes.filter((lane) => task.column === "done" || lane.id !== task.column)
+    : isStaged
     ? lanes.filter((lane) => lane.id !== task.task_lane)
     : task.column === "needs_input" || task.column === "done" ? lanes : [];
   const matching = tags.filter((tag) => tag.name.toLowerCase().includes(query.trim().toLowerCase()));
@@ -58,7 +67,7 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   const toggleTag = (id: string) => onSetTags(task,
     currentTags.includes(id) ? currentTags.filter((tagId) => tagId !== id) : [...currentTags, id]);
 
-  if (task.human_task) return null;
+  if (task.human_task && !isStar) return null;
 
   return (
     <DropdownMenu open={open} onOpenChange={(nextOpen) => {
@@ -79,7 +88,7 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}
-        <DropdownMenuSub>
+        {!isStar && <DropdownMenuSub>
           <DropdownMenuSubTrigger disabled={task.status === "running"} title={task.status === "running" ? "Model cannot change while running" : undefined}>Model</DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="max-h-72 w-64 overflow-y-auto">
             {models.map((model) => (
@@ -88,7 +97,7 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
               </DropdownMenuItem>
             ))}
           </DropdownMenuSubContent>
-        </DropdownMenuSub>
+        </DropdownMenuSub>}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <span className="flex-1">Priority</span>
@@ -125,25 +134,34 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        {task.column === "done" && (
-          <DropdownMenuItem onClick={() => onReopen(task)}>
-            <RiArrowGoBackLine className="h-3.5 w-3.5" /> Reopen
+        {isStar && task.column !== "done" && onMarkDone && (
+          <DropdownMenuItem onClick={() => onMarkDone(task)}>
+            <RiCheckLine className="h-3.5 w-3.5" /> Mark done (for me)
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onClick={() => onFork(task)}>
+        {task.column === "done" && (
+          <DropdownMenuItem onClick={() => onReopen(task)}>
+            <RiArrowGoBackLine className="h-3.5 w-3.5" /> {isStar ? "Not done (for me)" : "Reopen"}
+          </DropdownMenuItem>
+        )}
+        {!isStar && <DropdownMenuItem onClick={() => onFork(task)}>
           <RiGitBranchLine className="h-3.5 w-3.5" /> Fork
-        </DropdownMenuItem>
+        </DropdownMenuItem>}
         {canMoveToBoard && (
           <DropdownMenuItem onClick={() => onMoveToBoard?.(task)}>
             <RiInboxArchiveLine className="h-3.5 w-3.5" /> Move to board...
           </DropdownMenuItem>
         )}
-        {!isDraft && (
+        {isStar ? (
+          <DropdownMenuItem onClick={() => onRemoveFromBoard(task)}>
+            <RiStarOffLine className="h-3.5 w-3.5" /> Remove star
+          </DropdownMenuItem>
+        ) : !isDraft && (
           <DropdownMenuItem onClick={() => onRemoveFromBoard(task)}>
             <RiLogoutBoxRLine className="h-3.5 w-3.5" /> Remove from board
           </DropdownMenuItem>
         )}
-        {isDraft && (
+        {isDraft && !isStar && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onClick={() => onDeleteDraft(task)}>
