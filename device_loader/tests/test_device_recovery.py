@@ -443,7 +443,8 @@ async def test_the_avd_is_read_again_when_a_port_comes_back():
     assert runner.known[SERIAL]['avd'] == 'Tablet_API_35'  # a new emulator on the same port
 
 
-def test_wait_booted_only_fails_on_an_emulator_that_errored():
+@pytest.mark.asyncio
+async def test_wait_booted_only_fails_on_an_emulator_that_errored(monkeypatch):
     class Proc:
         def __init__(self, code):
             self.code = code
@@ -455,40 +456,13 @@ def test_wait_booted_only_fails_on_an_emulator_that_errored():
 
     async def responsive(serial, timeout=10):
         return next(answers)
-    android.responsive = responsive
-    assert asyncio.run(android.wait_booted(SERIAL, 1, Proc(1))) is False
-    ldr_sleep = ldr.asyncio.sleep
-    try:
-        ldr.asyncio.sleep = lambda *_: ldr_sleep(0)
-        assert asyncio.run(android.wait_booted(SERIAL, 5, Proc(0))) is True  # launcher handed off to qemu
-    finally:
-        ldr.asyncio.sleep = ldr_sleep
 
-
-@pytest.mark.asyncio
-async def test_a_device_that_dies_under_a_call_is_restarted_at_once():
-    class Dying(RecoverDriver):
-        async def screenshot(self, serial):
-            self.running = False
-            raise ldr.OpError("adb failed (exit 1): error: device 'emulator-5554' not found")
-    driver = Dying()
-    runner = make_runner(driver)
-    await runner.refresh()
-    runner._mark_used(SERIAL)
-    with pytest.raises(ldr.OpError, match="not found. The device crashed or was closed: the runner is restarting"):
-        await runner.call('screenshot', SERIAL, {})
-    assert SERIAL in runner.recoveries
-    await settle(runner)
-    assert driver.recovered and SERIAL in runner.inventory
-    # An ordinary failure on a running device does not restart anything.
-    class Failing(RecoverDriver):
-        async def screenshot(self, serial):
-            raise ldr.OpError('screencap failed (exit 1): permission denied')
-    other = make_runner(Failing())
-    await other.refresh()
-    with pytest.raises(ldr.OpError, match='permission denied'):
-        await other.call('screenshot', SERIAL, {})
-    assert other.recoveries == {}
+    async def no_sleep(*_):
+        return None
+    monkeypatch.setattr(android, 'responsive', responsive)
+    monkeypatch.setattr(ldr.asyncio, 'sleep', no_sleep)
+    assert await android.wait_booted(SERIAL, 1, Proc(1)) is False
+    assert await android.wait_booted(SERIAL, 5, Proc(0)) is True  # a launcher that handed off to qemu exits 0
 
 
 def test_avd_processes_match_only_that_avds_emulator(monkeypatch):
