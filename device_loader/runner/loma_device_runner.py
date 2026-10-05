@@ -60,7 +60,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = '1.3.0'  # the backend gates newer ops/arguments on this (device_loader/backend/service.py RUNNER_GATES)
+VERSION = '1.4.0'  # the backend gates newer ops/arguments on this (device_loader/backend/service.py RUNNER_GATES)
 PROTOCOL = 1
 CONFIG_DIR = Path(os.environ.get('LOMA_DEVICE_RUNNER_HOME', Path.home() / '.loma-device-runner'))
 CONFIG_PATH = CONFIG_DIR / 'config.json'
@@ -141,7 +141,7 @@ SCENARIO_STEPS = {'tap': ({'x', 'y'}, set()), 'swipe': ({'x1', 'y1', 'x2', 'y2'}
                   'set_text': ({'text'}, {'match', 'by', 'exact', 'clear'}),
                   'clear_text': (set(), {'match', 'by', 'exact'}),
                   'scroll_until_visible': ({'match'}, {'by', 'exact', 'direction', 'max_swipes'}),
-                  'screenshot': (set(), {'name'}),
+                  'screenshot': (set(), {'name', 'fingerprint', 'region'}),
                   'launch_app': (set(), {'app_id', 'activity', 'extras', 'bool_extras', 'restart'}),
                   'stop_app': (set(), {'app_id'})}
 STEP_TIMING = {'at_ms', 'after_ms'}
@@ -151,7 +151,9 @@ MAX_SCENARIO_SHOTS = 6
 MAX_STEP_WAIT = 30
 END_TAIL = 0.7  # end_after_steps: keep capturing this long after the last step, to catch its effect
 SHOT_NAME = re.compile(r'[A-Za-z0-9_-]{1,40}\Z')
-EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'max_drift_ms', 'logs', 'log_order'}
+EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'max_drift_ms', 'logs', 'log_order', 'screens'}
+SCREEN_EXPECT_KEYS = {'shot', 'like', 'unlike', 'max_diff'}
+FINGERPRINT = re.compile(r'v1:[0-9]{1,5}x[0-9]{1,5}:[0-9]{1,5},[0-9]{1,5},[0-9]{1,5},[0-9]{1,5}:[0-9a-f]{288}\Z')
 # A log rule can also read a number out of each matching line (the first number after the
 # literal text number_after; no regular expressions from the agent) and check it.
 VALUE_KEYS = ('value_min', 'value_max', 'after_reaching', 'last_min', 'last_max')
@@ -178,6 +180,12 @@ SCENARIO_GRACE = 30  # steps still running at the end of the window get this lon
 MIN_SAMPLE_MS = 150
 MAX_RAW_FRAME = 64 * 1024 * 1024  # an uncompressed screencap (1440x3200 RGBA is ~18 MB)
 LOG_LINE_CHARS = 300
+# health: a device this slow times out scenarios (screenshots of 11 s, 3 frame samples in 25 s), so the
+# backend reports it as blocked before a test runs instead of failing the test.
+HEALTH_SCREENSHOT_MS = 5000
+HEALTH_UI_TREE_MS = 10000
+# screenshot steps can return a fingerprint (the screen-change grid) to compare against a known-good one.
+MAX_FINGERPRINT_DIFF = 1.0
 # Screen-change sampling: a small grey grid per frame instead of images, so the model gets
 # "the screen changed at 1050 ms in this box" rather than frames it must look at.
 GRID_COLS, GRID_ROWS = 24, 48
@@ -555,6 +563,8 @@ def need_steps(args, window_ms, app_id=None, allowed_apps=()):
             if shots > MAX_SCENARIO_SHOTS:
                 raise OpError(f'At most {MAX_SCENARIO_SHOTS} screenshot steps per scenario')
             item['name'] = need_str(step, 'name', SHOT_NAME, 40, optional=True) or f'step{index}'
+            item['fingerprint'] = need_bool(step, 'fingerprint') or 'region' in step
+            item['region'] = need_region(step, 'region')
         else:  # launch_app / stop_app: the scenario's app unless the step names another one
             target = need_str(step, 'app_id', APP_ID, 255, optional=True) or app_id
             if not target:
@@ -563,10 +573,14 @@ def need_steps(args, window_ms, app_id=None, allowed_apps=()):
                 raise OpError(f"steps[{index}]: app {target} is not in this runner's allowed_app_ids")
             item['app_id'] = target
             if action == 'launch_app':
-                # restart=false (default) brings a running app back to the front (background/foreground
-                # cases); restart=true stops it first, like the launch at the start of the scenario.
+                # restart unset (auto): a launch with extras / bool_extras / activity restarts the app, since
+                # a running iOS app ignores new launch arguments; a plain launch_app brings it back to the
+                # front (background/foreground cases). restart=true / false forces either behaviour.
+                restart = step.get('restart')
+                if restart is not None and type(restart) is not bool:
+                    raise OpError(f'steps[{index}]: restart must be true or false')
                 item['launch'] = {**need_launch({k: step[k] for k in ('activity', 'extras', 'bool_extras')
-                                                 if k in step}), 'restart': need_bool(step, 'restart')}
+                                                 if k in step}), 'restart': restart}
         checked.append(item)
     return checked
 
@@ -631,7 +645,7 @@ async def private_host(host, port, timeout=PREFLIGHT_DNS_S):
     return any(not a.is_global or a.is_multicast for a in addresses)
 
 
-def need_expect(args, has_logs, has_frames, has_app, has_timed=False):
+def need_expect(args, has_logs, has_frames, has_app, has_timed=False, fingerprinted=()):
     """Optional pass/fail rules, checked on the runner so the model reads a verdict, not raw data."""
     expect = args.get('expect')
     if expect is None:
@@ -679,7 +693,72 @@ def need_expect(args, has_logs, has_frames, has_app, has_timed=False):
             or not all(isinstance(m, str) and 0 < len(m) <= 200 for m in order)):
         raise OpError(f'expect.log_order must be a list of at most {MAX_LOG_EXPECTS} strings')
     out['log_order'] = order
+    screens = expect.get('screens') or []
+    if not isinstance(screens, list) or len(screens) > MAX_SCENARIO_SHOTS:
+        raise OpError(f'expect.screens must be a list of at most {MAX_SCENARIO_SHOTS} rules')
+    out['screens'] = []
+    for index, rule in enumerate(screens, 1):
+        where = f'expect.screens[{index}]'
+        if not isinstance(rule, dict) or not {'shot'} <= set(rule) <= SCREEN_EXPECT_KEYS:
+            raise OpError(f'{where}: needs shot, may take like, unlike, max_diff')
+        shot = need_str(rule, 'shot', SHOT_NAME, 40)
+        if shot not in fingerprinted:
+            raise OpError(f'{where}: no screenshot step named {shot} with fingerprint: true')
+        item = {'shot': shot, 'max_diff': need_number(rule, 'max_diff', 0, MAX_FINGERPRINT_DIFF, 0.1)}
+        for key in ('like', 'unlike'):
+            if key in rule:
+                item[key] = need_str(rule, key, FINGERPRINT, 400)
+        if 'like' not in item and 'unlike' not in item:
+            raise OpError(f'{where}: needs like (a known-good fingerprint) and/or unlike (a known-bad one)')
+        out['screens'].append(item)
     return out
+
+
+# ── Screen fingerprints: a coarse grey grid of one screenshot, to compare against a known-good run ──
+
+
+def fingerprint(signature):
+    """'v1:WxH:x1,y1,x2,y2:<288 hex>': the 24x48 change grid averaged to 12x24 cells, 16 grey levels each."""
+    cells = signature['cells']
+    levels = []
+    for row in range(0, GRID_ROWS, 2):
+        for col in range(0, GRID_COLS, 2):
+            block = [cells[(row + dy) * GRID_COLS + col + dx] for dy in (0, 1) for dx in (0, 1)]
+            levels.append(min(15, sum(block) // 4 // 16))
+    area = ','.join(str(v) for v in signature['area'])
+    return f"v1:{signature['width']}x{signature['height']}:{area}:" + ''.join('%x' % v for v in levels)
+
+
+def fingerprint_diff(a, b):
+    """Fraction of cells that differ by 2+ grey levels (0 = same picture), or None if the screens differ in size."""
+    head_a, _, cells_a = a.rpartition(':')
+    head_b, _, cells_b = b.rpartition(':')
+    if head_a != head_b or len(cells_a) != len(cells_b) or not cells_a:
+        return None
+    changed = sum(1 for x, y in zip(cells_a, cells_b) if abs(int(x, 16) - int(y, 16)) >= 2)
+    return round(changed / len(cells_a), 3)
+
+
+def judge_screens(rules, steps):
+    shots = {step.get('name'): step.get('fingerprint') for step in steps or [] if step.get('action') == 'screenshot'}
+    failed = []
+    for rule in rules:
+        current = shots.get(rule['shot'])
+        if not current:
+            failed.append(f"screen {rule['shot']}: no fingerprint (the screenshot step did not run)")
+            continue
+        if 'like' in rule:
+            diff = fingerprint_diff(rule['like'], current)
+            if diff is None:
+                failed.append(f"screen {rule['shot']}: screen size or region differs from the like fingerprint")
+            elif diff > rule['max_diff']:
+                failed.append(f"screen {rule['shot']}: {diff:.0%} of it differs from the known-good fingerprint "
+                              f"(max {rule['max_diff']:.0%})")
+        if 'unlike' in rule:
+            diff = fingerprint_diff(rule['unlike'], current)
+            if diff is not None and diff <= rule['max_diff']:
+                failed.append(f"screen {rule['shot']}: matches the known-bad fingerprint ({diff:.0%} differs)")
+    return failed
 
 
 def log_values(rule, entries):
@@ -775,6 +854,7 @@ def judge(expect, result, entries):
             failed.append(f"log {name}: first at {found[0]} ms (expected after {rule['after_ms']} ms)")
         if found and 'number_after' in rule:
             failed += judge_values(rule, entries, name)
+    failed += judge_screens(expect.get('screens') or [], result.get('steps'))
     previous = None
     for match in expect['log_order']:
         found = hits(match)
@@ -1070,7 +1150,7 @@ class Android:
         return {'uninstalled': app_id}
 
     async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False,
-                     restart=None):
+                     restart=None, append=False):
         # restart: True stops the app first, False never does (a running app comes to the front),
         # None keeps the long-standing default (a launch with extras/activity restarts the app).
         extras, bool_extras = extras or {}, bool_extras or {}
@@ -1361,20 +1441,36 @@ class IOS:
         return argv
 
     async def launch(self, serial, app_id, extras=None, bool_extras=None, activity=None, console=False,
-                     restart=None):
-        # restart=False on a running app only brings it to the front: iOS then ignores the launch arguments.
+                     restart=None, append=False):
+        # restart=False on a running app only brings it to the front: iOS then ignores the launch arguments,
+        # so that combination is reported (ignored_extras) instead of silently testing the old settings.
         args = self.launch_arguments(extras, bool_extras)
+        ignored = bool(args) and restart is False and await self.is_running(serial, app_id) is True
+        proc, _ = self.consoles.get(serial, (None, None))
+        if (console and append and not (restart or (restart is None and args)) and proc is not None
+                and proc.returncode is None):
+            # A resume inside a scenario (background -> foreground): the console capture attached at
+            # the scenario's launch is still running, so only bring the app back to the front.
+            await run(['xcrun', 'simctl', 'launch', serial, app_id], timeout=60)
+            return {'launched': app_id, 'console': True, 'resumed': True}
         await self._stop_console(serial)
         restart = ['--terminate-running-process'] if restart or (restart is None and (args or console)) else []
+        note = ({'ignored_extras': True, 'note': 'The app was already running and restart=false, so iOS kept its '
+                                                 'old launch arguments; use restart=true (or leave it unset)'}
+                if ignored else {})
         if not console:
             await run(['xcrun', 'simctl', 'launch', *restart, serial, app_id, *args], timeout=60)
-            return {'launched': app_id, **({'extras': sorted(extras or {}) + sorted(bool_extras or {})} if args else {})}
+            return {'launched': app_id, **({'extras': sorted(extras or {}) + sorted(bool_extras or {})} if args else {}),
+                    **note}
         # --console-pty keeps simctl attached to the app's stdout/stderr through a pty, so Swift
         # `print` is line-buffered and lands in this file as it happens; `logs` reads it back.
+        # append=True (a relaunch inside a scenario) keeps the earlier output, so the scenario's
+        # console tail carries on across the relaunch instead of losing everything after it.
         folder = Path(tempfile.gettempdir()) / f'loma-console-{os.getuid()}'
         folder.mkdir(mode=0o700, exist_ok=True)
         path = folder / f'{serial}.log'
-        path.write_bytes(b'')
+        if not (append and path.exists()):
+            path.write_bytes(b'')
         with open(path, 'ab') as handle:  # O_APPEND: `logs clear` can truncate it while the app writes
             proc = await asyncio.create_subprocess_exec(
                 'xcrun', 'simctl', 'launch', '--console-pty', *restart, serial, app_id, *args,
@@ -1384,7 +1480,7 @@ class IOS:
         if proc.returncode not in (None, 0):
             raise OpError('simctl launch failed: ' + path.read_text(errors='replace')[-500:])
         return {'launched': app_id, 'console': True, **({'extras': sorted(extras or {}) + sorted(bool_extras or {})}
-                                                          if args else {})}
+                                                          if args else {}), **note}
 
     async def _stop_console(self, serial):
         proc, _ = self.consoles.get(serial, (None, None))
@@ -1401,7 +1497,30 @@ class IOS:
         return {'stopped': app_id}
 
     async def reset_app(self, serial, app_id):
-        raise OpError("iOS simulators cannot clear one app's data; reinstall it with install instead")
+        """Clear the app's data container (Documents, Library, tmp) and its UserDefaults, like `pm clear`.
+
+        The Runner prefers reinstalling the cached build (Runner.reset_ios), which also drops privacy
+        grants; this is the fallback when no build of the app is cached. The keychain is reset separately.
+        """
+        await self.stop(serial, app_id)
+        code, out, _ = await run(['xcrun', 'simctl', 'get_app_container', serial, app_id, 'data'],
+                                 timeout=30, check=False)
+        container = Path(out.decode('utf-8', 'replace').strip()) if code == 0 else None
+        if container is None or not container.is_dir():
+            raise OpError(f'{app_id} is not installed on this simulator')
+        # Only ever delete inside this simulator's app data containers.
+        expected = f'/CoreSimulator/Devices/{serial}/data/Containers/Data/Application/'
+        if expected not in str(container.resolve()) + '/':
+            raise OpError('Unexpected app data container path; not clearing it')
+        # Through cfprefsd first: it caches UserDefaults in memory and would write them back.
+        await run(['xcrun', 'simctl', 'spawn', serial, 'defaults', 'delete', app_id], timeout=30, check=False)
+        await asyncio.to_thread(wipe_container, container)
+        return {'cleared': app_id, 'method': 'wipe'}
+
+    async def reset_keychain(self, serial):
+        """Keychain items survive an uninstall on iOS (SDK install ids, tokens): reset the simulator's keychain."""
+        code, _, _ = await run(['xcrun', 'simctl', 'keychain', serial, 'reset'], timeout=30, check=False)
+        return code == 0
 
     async def open_url(self, serial, url):
         await run(['xcrun', 'simctl', 'openurl', serial, url], timeout=30)
@@ -1576,6 +1695,17 @@ class IOS:
                 entries.append((at, line.strip()))
         return entries
 
+def wipe_container(container):
+    """Empty an iOS app data container and recreate the folders an app expects to exist."""
+    for child in container.iterdir():
+        if child.is_symlink() or not child.is_dir():
+            child.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(child, ignore_errors=True)
+    for name in ('Documents', 'Library/Preferences', 'Library/Caches', 'Library/Application Support', 'tmp'):
+        (container / name).mkdir(parents=True, exist_ok=True)
+
+
 def collect_screenshots(folder):
     """takeScreenshot outputs, read before the flow's temp dir is deleted (16 MB budget)."""
     shots, total = [], 0
@@ -1671,7 +1801,7 @@ class Runner:
     OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
            'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow',
            'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record',
-           'animations', 'scenario'}
+           'animations', 'scenario', 'health'}
     APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
     LAUNCHING_OPS = {'burst', 'record', 'scenario'}  # may launch app_id right before capturing
     CACHE_KEEP = 4
@@ -1687,6 +1817,7 @@ class Runner:
         self.send_lock = None  # created per connection: on 3.9 a Lock binds to the loop current at creation
         self.cf_headers = {}
         self.installed = {}  # (serial, package) -> (build sha256, install stamp) of builds this runner installed
+        self.granted = {}  # (serial, package) -> iOS privacy services granted at install (re-granted after a reset)
         self.cache_dir = Path(config.get('cache_dir') or CONFIG_DIR / 'build-cache')
         self.keep_awake = KeepAwake(self.policy.get('keep_awake', True))
 
@@ -1733,8 +1864,13 @@ class Runner:
             return await self.install(driver, serial, args, app_id)
         if op == 'launch':
             return await driver.launch(serial, app_id, **need_launch(args))
-        if op in ('uninstall', 'stop', 'reset_app'):
+        if op == 'reset_app':
+            return await (self.reset_ios(driver, serial, app_id) if driver.platform == 'ios'
+                          else driver.reset_app(serial, app_id))
+        if op in ('uninstall', 'stop'):
             return await getattr(driver, op)(serial, app_id)
+        if op == 'health':
+            return await self.health(driver, serial)
         if op in ('set_text', 'clear_text'):
             return await self.set_text(driver, serial, args, op == 'set_text')
         if op in ('wait_for', 'tap_text'):
@@ -1858,8 +1994,21 @@ class Runner:
             'stop_recording': asyncio.Event(),
             'launch': need_launch(args) if app_id else None,
             'expect': need_expect(args, bool(tags), bool(sample_ms), bool(app_id),
-                                  any('at_ms' in step for step in steps)),
+                                  any('at_ms' in step for step in steps),
+                                  {step['name'] for step in steps if step.get('fingerprint')}),
         }
+        for step in steps:
+            if step['action'] != 'launch_app':
+                continue
+            if driver.platform != 'ios' and step['launch']['restart'] is None:
+                # Android delivers new extras to a running app (am start without -S), so a launch_app
+                # step resumes it unless restart: true. iOS ignores launch arguments of a running app,
+                # so there an unset restart restarts the app when extras / bool_extras are given.
+                step['launch'] = {**step['launch'], 'restart': False}
+            elif driver.platform == 'ios' and app_id and step['app_id'] == app_id and plan['launch'].get('console'):
+                # A relaunch inside the scenario keeps capturing into the same console file, so lines
+                # written after it are still read (the capture used to stop at the first relaunch).
+                step['launch'] = {**step['launch'], 'console': True, 'append': True}
         stop_first = need_bool(args, 'stop_first', default=True)
         loop = asyncio.get_running_loop()
         checked = await self.preflight(checks) if checks else []
@@ -2101,10 +2250,12 @@ class Runner:
             if sum(len(shot['png_base64']) for shot in shots) * 3 // 4 + len(data) > MAX_MEDIA_BYTES // 2:
                 raise OpError('Screenshot budget for this scenario is used up')
             shots.append({'name': step['name'], 'at_ms': ran_ms, 'png_base64': base64.b64encode(data).decode()})
+            if step.get('fingerprint'):
+                return {'name': step['name'], 'fingerprint': fingerprint(await driver.frame(serial, step['region']))}
             return {'name': step['name']}
         if action == 'launch_app':
-            await driver.launch(serial, step['app_id'], **step['launch'])
-            return {}
+            launched = await driver.launch(serial, step['app_id'], **step['launch'])
+            return {k: launched[k] for k in ('ignored_extras', 'note') if k in (launched or {})}
         if action == 'stop_app':
             await driver.stop(serial, step['app_id'])
             return {}
@@ -2306,6 +2457,57 @@ class Runner:
             if not package:
                 raise OpError('Granting permissions needs app_id')
             result.update(await driver.grant(serial, package, appops, privacy))
+            if privacy:
+                self.granted[(serial, package)] = list(privacy)
+        return result
+
+    # ── iOS reset and device health ──
+
+    async def reset_ios(self, driver, serial, app_id):
+        """A fresh-user state on a simulator: reinstall the cached build (clears data, UserDefaults and
+        privacy grants, like a first install), else wipe the data container; then reset the keychain,
+        which an uninstall does not clear."""
+        entry = self.installed.get((serial, app_id))
+        cached = self._cached(entry[0]) if entry else None
+        result = None
+        if cached is not None:
+            await driver.stop(serial, app_id)
+            with tempfile.TemporaryDirectory(prefix='loma-build-') as tmp:
+                path = Path(tmp) / 'build.zip'
+                if await asyncio.to_thread(self._copy_verified, cached, path, entry[0]):
+                    await run(['xcrun', 'simctl', 'uninstall', serial, app_id], timeout=60, check=False)
+                    await driver.install(serial, path, app_id, self.allowed_apps)
+                    self.installed[(serial, app_id)] = (entry[0], await driver.install_stamp(serial, app_id))
+                    privacy = self.granted.get((serial, app_id)) or []
+                    if privacy:
+                        await driver.grant(serial, app_id, (), privacy)
+                    result = {'cleared': app_id, 'method': 'reinstall', **({'regranted': privacy} if privacy else {})}
+        if result is None:
+            result = await driver.reset_app(serial, app_id)
+        result['keychain_reset'] = await driver.reset_keychain(serial)
+        return result
+
+    async def health(self, driver, serial):
+        """Is this device fast enough to test on? Times one screenshot and one UI tree read."""
+        loop = asyncio.get_running_loop()
+        result, reasons = {'platform': driver.platform}, []
+        began = loop.time()
+        try:
+            await driver.screenshot(serial)
+            result['screenshot_ms'] = int((loop.time() - began) * 1000)
+            if result['screenshot_ms'] > HEALTH_SCREENSHOT_MS:
+                reasons.append(f"a screenshot took {result['screenshot_ms']} ms (limit {HEALTH_SCREENSHOT_MS} ms)")
+        except OpError as exc:
+            reasons.append(f'screenshot failed: {str(exc)[:200]}')
+        began = loop.time()
+        try:
+            await driver.ui_tree(serial)
+            result['ui_tree_ms'] = int((loop.time() - began) * 1000)
+            if result['ui_tree_ms'] > HEALTH_UI_TREE_MS:
+                reasons.append(f"reading the UI tree took {result['ui_tree_ms']} ms (limit {HEALTH_UI_TREE_MS} ms)")
+        except OpError as exc:  # UI not idle or no idb: not a speed problem, so only noted
+            result['ui_tree_error'] = str(exc)[:200]
+        result.update(ok=not reasons, **({'reasons': reasons} if reasons else {}))
         return result
 
     def _cached(self, sha256):

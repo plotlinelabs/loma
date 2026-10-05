@@ -384,11 +384,17 @@ async def handle_internal_call(request):
         if action == 'lease':
             return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform')))
         if action == 'release':
+            if body.get('all') is True:
+                return web.json_response(await service.release_all(user_email, scope))
             return web.json_response(await service.release(user_email, scope, body.get('device_id')))
         if action == 'call':
             data = await service.call(user_email, scope, body.get('device_id'), body.get('op'), body.get('args') or {})
             return web.json_response(_encode_media(data))
         if action == 'suite':
+            if body.get('device_ids') is not None:
+                data = await service.matrix(user_email, scope, body.get('device_ids'), body.get('args') or {})
+                data['devices'] = [_encode_media(device) for device in data['devices']]
+                return web.json_response(data)
             data = await service.suite(user_email, scope, body.get('device_id'), body.get('args') or {})
             return web.json_response(_encode_media(data))
     except DeviceError as exc:

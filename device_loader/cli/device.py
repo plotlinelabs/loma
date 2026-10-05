@@ -9,7 +9,8 @@ users are always isolated); isolated workers bind the scope server-side.
 Commands:
   device.py --user-email E --auth-token T --scope CONVERSATION_ID list
   device.py ... lease [--platform android|ios] [--device-id ID]
-  device.py ... release --device-id ID
+  device.py ... release --device-id ID | --all          (--all: every device this conversation holds)
+  device.py ... cleanup [--keep PATH ...]                 (delete this conversation's device media except --keep)
   device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N]
                 [--wait SECONDS] [--dispatch-workflow FILE.yml] | --file PATH) [--app-id PKG]
                 [--grant-appop OP ...] [--grant-privacy SERVICE ...] [--force]
@@ -33,8 +34,13 @@ Commands:
   device.py ... logs --device-id ID [--lines N] [--filter TEXT] [--tag TAG ...] [--since CURSOR] [--clear]
                 [--source auto|system|console]     (every result has a cursor; pass it as --since next time)
   device.py ... run-flow --device-id ID --flow-file flow.yaml [--verbose]
-  device.py ... scenario --device-id ID --spec case.yaml   (timed steps + video + screen changes + logs, one call)
-  device.py ... suite --device-id ID --spec suite.yaml     (many scenario cases, one summary table; exit 1 unless all pass)
+  device.py ... scenario --device-id ID --spec case.yaml [--var KEY=VALUE ...]   (timed steps + video + logs, one call)
+  device.py ... suite --device-id ID [--device-id ID2 ...] --spec suite.yaml [--var KEY=VALUE ...] [--junit PATH]
+                (many scenario cases, one summary table; several --device-id run the same suite on each device
+                at once; exit 1 unless all pass)
+
+Secrets never go in spec files: write ${NAME} in the spec and pass --var NAME=VALUE, or export E2E_NAME=VALUE
+(only E2E_* environment variables are substituted, so other secrets in the environment cannot leak into a spec).
 
 Auth: --user-email / --auth-token, or LOMA_USER_EMAIL / LOMA_AUTH_TOKEN in the environment.
 Never write the token into a script or file: it expires after an hour anyway.
@@ -76,8 +82,14 @@ suite spec: the regression file to commit next to the app (e.g. e2e/device/suite
   cases:                         # each case is a scenario spec with a name, and must have expect
     - {name: login, duration_s: 30, end_after_steps: true, steps: [...], expect: {logs: [...]}}
     - {name: deep_link, duration_s: 20, steps: [...], expect: {settled_by_ms: 3000}}
-  The result is a table (case, verdict, first reason) plus one row per case. Videos are kept for cases
-  that did not pass (keep_video: all keeps every one). Max 12 cases and 600 s of duration_s in total.
+  platform_defaults: {ios: {app_id: com.example.ios}}   # per-platform overrides; a case can say only: [android]
+  setup: [{action: key, key: wakeup}, {action: animations, enabled: false}, {action: logs, clear: true}]
+  teardown: [{action: animations, enabled: true}]
+  retries: 1                     # re-run a failed case once; a pass on the retry is reported as flaky
+  The device health is checked first (health_check: false skips it): a device too slow to test on reports
+  every case as not run, verdict blocked (device_slow). The result is a table (case, verdict, first reason)
+  plus one row per case and a JUnit XML file. Videos are kept for cases that did not pass (keep_video: all
+  keeps every one). Max 20 cases and 900 s of duration_s in total, retries included.
 
 Files (screenshots, burst frames, recordings, flow screenshots) are written to
 $LOMA_CONVERSATION_DIR/device/ when that is set, else to a per-conversation dir
@@ -89,6 +101,7 @@ import base64
 import itertools
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -167,7 +180,14 @@ def build_body(args):
     if args.command == 'lease':
         return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform}
     if args.command == 'release':
-        return {**body, 'action': 'release', 'device_id': args.device_id}
+        if args.all == bool(args.device_id):
+            raise SystemExit('release takes --device-id or --all')
+        return {**body, 'action': 'release', **({'all': True} if args.all else {'device_id': args.device_id})}
+    if args.command == 'suite':
+        spec = load_spec(args.spec, parse_vars(args.var))
+        if len(args.device_id) > 1:
+            return {**body, 'action': 'suite', 'device_ids': args.device_id, 'args': spec}
+        return {**body, 'action': 'suite', 'device_id': args.device_id[0], 'args': spec}
     call = {**body, 'action': 'call', 'device_id': args.device_id}
     if args.command == 'install':
         call_args = {}
@@ -274,9 +294,7 @@ def build_body(args):
             log_args['since'] = args.since
         return {**call, 'op': 'logs', 'args': log_args}
     if args.command == 'scenario':
-        return {**call, 'op': 'scenario', 'args': load_spec(args.spec)}
-    if args.command == 'suite':
-        return {**body, 'action': 'suite', 'device_id': args.device_id, 'args': load_spec(args.spec)}
+        return {**call, 'op': 'scenario', 'args': load_spec(args.spec, parse_vars(args.var))}
     if args.command == 'run-flow':
         with open(args.flow_file) as handle:
             flow_args = {'flow': handle.read()}
@@ -286,8 +304,43 @@ def build_body(args):
     raise SystemExit('Unknown command')
 
 
-def load_spec(path):
-    """A scenario or suite spec file (YAML or JSON object); the backend and runner validate its contents."""
+VAR_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}\Z')
+VAR_REF = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]{0,63})\}')
+
+
+def parse_vars(items):
+    """--var KEY=VALUE pairs plus E2E_* environment variables (never the rest of the environment)."""
+    found = {name: value for name, value in os.environ.items() if name.startswith('E2E_')}
+    for item in items or []:
+        name, sep, value = item.partition('=')
+        if not sep or not VAR_NAME.fullmatch(name):
+            raise SystemExit(f'--var must be KEY=VALUE (got {item.split("=")[0][:40]!r})')
+        found[name] = value
+    return found
+
+
+def substitute(value, variables, missing):
+    """${NAME} in any string of the spec -> its value; unknown names are collected in missing."""
+    if isinstance(value, str):
+        def lookup(match):
+            if match.group(1) not in variables:
+                missing.add(match.group(1))
+                return match.group(0)
+            return variables[match.group(1)]
+        return VAR_REF.sub(lookup, value)
+    if isinstance(value, dict):
+        return {key: substitute(item, variables, missing) for key, item in value.items()}
+    if isinstance(value, list):
+        return [substitute(item, variables, missing) for item in value]
+    return value
+
+
+def load_spec(path, variables=None):
+    """A scenario or suite spec file (YAML or JSON object); the backend and runner validate its contents.
+
+    ${NAME} placeholders are filled from variables (--var / E2E_* env), so API keys and tokens never
+    have to be written into a spec file that is committed or left in a shared work dir.
+    """
     with open(path) as handle:
         text = handle.read()
     try:
@@ -300,6 +353,10 @@ def load_spec(path):
             raise SystemExit(f'--spec is not valid YAML/JSON: {str(exc)[:300]}')
     if not isinstance(spec, dict):
         raise SystemExit('--spec must be a mapping (duration_s, steps, ...)')
+    missing = set()
+    spec = substitute(spec, variables or {}, missing)
+    if missing:
+        raise SystemExit('--spec uses ${' + '}, ${'.join(sorted(missing)) + '}: pass --var NAME=VALUE or export E2E_NAME')
     return spec
 
 
@@ -332,7 +389,11 @@ def parser():
         cmd.add_argument('--by', choices=['any', 'text', 'id', 'label'], default='any')
         cmd.add_argument('--exact', action='store_true', help='Whole-value match (case-insensitive)')
 
-    with_device('release')
+    s = sub.add_parser('release')
+    s.add_argument('--device-id')
+    s.add_argument('--all', action='store_true', help='Release every device this conversation holds')
+    s = sub.add_parser('cleanup')
+    s.add_argument('--keep', action='append', metavar='PATH', help='A media file to keep (evidence you attached)')
     s = with_device('install')
     s.add_argument('--repo')
     s.add_argument('--artifact-name')
@@ -411,8 +472,13 @@ def parser():
     s.add_argument('--since', metavar='CURSOR', help='Only lines after the cursor a previous logs call returned')
     s = with_device('scenario')
     s.add_argument('--spec', required=True, help='YAML/JSON scenario spec (see the module docstring)')
-    s = with_device('suite')
+    s.add_argument('--var', action='append', metavar='KEY=VALUE', help='Fills ${KEY} in the spec (keep secrets out of files)')
+    s = sub.add_parser('suite')
+    s.add_argument('--device-id', required=True, action='append',
+                   help='Device to run on; repeat (2-4) to run the same suite on each device at once')
     s.add_argument('--spec', required=True, help='YAML/JSON suite spec: defaults + cases (see the module docstring)')
+    s.add_argument('--var', action='append', metavar='KEY=VALUE', help='Fills ${KEY} in the spec (keep secrets out of files)')
+    s.add_argument('--junit', metavar='PATH', help='Write the JUnit XML here (default: next to the media)')
     s = with_device('run-flow')
     s.add_argument('--flow-file', required=True)
     s.add_argument('--verbose', action='store_true', help='Full Maestro output and JUnit report')
@@ -465,7 +531,7 @@ def write_preview(png_path, max_side=PREVIEW_MAX):
         return None
 
 
-def save_media(args, result):
+def save_media(args, result, prefix=''):
     """Write media returned as base64 to unique files and replace it with paths."""
     preview = getattr(args, 'preview', False)
     scope = getattr(args, 'scope', None)
@@ -492,22 +558,45 @@ def save_media(args, result):
         path = unique_path('recording', '.mp4', scope=scope)
         path.write_bytes(base64.b64decode(result.pop('mp4_base64')))
         result['saved_to'] = str(path)
+    for device in result.get('devices') or []:  # matrix: one suite result per device, files named after it
+        serial = str(device.get('device_id', 'device')).rsplit('/', 1)[-1]
+        save_media(args, device, prefix=''.join(c for c in serial if c.isalnum() or c in '-_.')[:20] + '-')
+    if isinstance(result.get('junit'), str):
+        path = unique_path(f'suite-{prefix}junit', '.xml', None if prefix else getattr(args, 'junit', None),
+                           scope=scope)
+        path.write_text(result.pop('junit'))
+        result['junit_saved_to'] = str(path)
     for case in result.get('cases') or []:  # suite: each case's video and screenshots, named after the case
         if 'mp4_base64' in case:
-            path = unique_path(f"suite-{case.get('name', 'case')}", '.mp4', scope=scope)
+            path = unique_path(f"suite-{prefix}{case.get('name', 'case')}", '.mp4', scope=scope)
             path.write_bytes(base64.b64decode(case.pop('mp4_base64')))
             case['saved_to'] = str(path)
         for shot in case.get('screenshots') or []:
             if 'png_base64' in shot:
-                path = unique_path(f"suite-{case.get('name', 'case')}-{shot.get('name') or 'shot'}", '.png', scope=scope)
+                path = unique_path(f"suite-{prefix}{case.get('name', 'case')}-{shot.get('name') or 'shot'}", '.png',
+                                   scope=scope)
                 path.write_bytes(base64.b64decode(shot.pop('png_base64')))
                 shot['saved_to'] = str(path)
     return result
 
 
+def cleanup(scope, keep):
+    """Delete this conversation's device media (screenshots, frames, videos, JUnit files) except keep."""
+    folder, kept = output_dir(scope), {Path(path).resolve() for path in keep or []}
+    removed = []
+    for path in folder.iterdir():
+        if path.is_file() and path.suffix in ('.png', '.jpg', '.mp4', '.xml') and path.resolve() not in kept:
+            path.unlink()
+            removed.append(path.name)
+    return {'folder': str(folder), 'removed': len(removed), 'kept': sorted(str(p) for p in kept if p.exists())}
+
+
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
+    if args.command == 'cleanup':  # local files only: no backend call, no credentials needed
+        print(json.dumps(cleanup(args.scope, args.keep), indent=2))
+        return 0
     if not args.user_email or not args.auth_token:
         p.error('--user-email and --auth-token are required (or set LOMA_USER_EMAIL / LOMA_AUTH_TOKEN)')
     body = build_body(args)
@@ -520,8 +609,9 @@ def main(argv=None):
             print(json.dumps(upload))
             return 1
         body['args']['upload_id'] = upload['upload_id']
-    # A suite is up to 12 scenario calls in one request, so it gets a longer deadline.
-    timeout = (3900 if args.command == 'suite' else 1800) + (getattr(args, 'wait', 0) or 0)
+    # A suite is up to 20 scenario calls in one request. The backend stops starting cases after 3300 s;
+    # the last one can still take a reset (420 s) and a scenario (300 s).
+    timeout = (4200 if args.command == 'suite' else 1800) + (getattr(args, 'wait', 0) or 0)
     result = save_media(args, _request('/internal/devices/call', headers, body, timeout=timeout))
     print(json.dumps(result, indent=2))
     # A verdict other than pass (fail, blocked) is a failed run for scripts and CI too.

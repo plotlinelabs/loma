@@ -100,4 +100,10 @@ Run `setup` again after editing the policy to restart the runner.
 - Runner 1.3.0+ re-encodes a recording that is over the 16 MB limit instead of dropping it. It uses `ffmpeg` when
   installed (`brew install ffmpeg`, best quality for the size) and otherwise the `avconvert` tool that ships with macOS.
 - Emulators can run headless: `emulator -avd loma-test -no-window -no-snapshot-save`.
+- Runner 1.4.0+ checks device speed (`health`) when a device is leased and before a suite: an emulator that takes
+  over 5 s per screenshot or 10 s per UI tree is reported as *blocked (device_slow)* instead of timing out tests.
+  Give the emulator more RAM/cores, close other emulators, or use a hardware-accelerated image.
+- Runner 1.4.0+ can reset an iOS app (`reset_app`): it reinstalls the last build it installed (or empties the app's
+  data container) and resets the simulator keychain. The keychain is shared by every app on that simulator, which
+  is one more reason to use a dedicated simulator.
 - Revoke the runner under **Integrations → Devices** at any time; it stops within seconds.
