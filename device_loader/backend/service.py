@@ -45,7 +45,9 @@ MAX_STEP_WAIT = 30
 MAX_SCENARIO_SECONDS = 60
 MAX_SCENARIO_SHOTS = 6
 SHOT_NAME = re.compile(r'[A-Za-z0-9_-]{1,40}\Z')
-EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'max_drift_ms', 'logs', 'log_order'}
+EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'max_drift_ms', 'logs', 'log_order', 'screens'}
+# expect.screens: compare a screenshot step's fingerprint with a known-good (like) / known-bad (unlike) one.
+FINGERPRINT = re.compile(r'v1:[0-9]{1,5}x[0-9]{1,5}:[0-9]{1,5},[0-9]{1,5},[0-9]{1,5},[0-9]{1,5}:[0-9a-f]{288}\Z')
 LOG_EXPECT_INTS = {'min': 100000, 'max': 100000, 'by_ms': MAX_SCENARIO_SECONDS * 1000,
                    'after_ms': MAX_SCENARIO_SECONDS * 1000}
 # Number checks on a log rule: the first number after the literal text number_after in each matching line.
@@ -58,10 +60,19 @@ HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}\Z")
 MAX_PREFLIGHT = 4
 MAX_PREFLIGHT_BODY = 4096
 # suite: several scenario cases in one call (the backend runs them one after the other), one summary.
-SUITE_KEYS = {'cases', 'defaults', 'reset', 'stop_on_fail', 'keep_video'}
+SUITE_KEYS = {'cases', 'defaults', 'platform_defaults', 'reset', 'stop_on_fail', 'keep_video', 'setup', 'teardown',
+              'retries', 'health_check'}
 CASE_NAME = re.compile(r'[A-Za-z0-9_.-]{1,60}\Z')
-MAX_SUITE_CASES = 12
-MAX_SUITE_SECONDS = 600
+MAX_SUITE_CASES = 20
+MAX_SUITE_SECONDS = 900  # duration_s of every case, counting its retries
+MAX_RETRIES = 2
+# Stop starting new cases after this long, so a suite always answers before the CLI's 4200 s deadline
+# (a case already running can still take a reset, 420 s, and a scenario, 300 s).
+SUITE_DEADLINE_S = 3300
+# setup / teardown: plain device ops run once around the cases (wake, animations, clear logs, reset, ...).
+SUITE_SETUP_OPS = {'key', 'animations', 'logs', 'reset_app', 'stop', 'launch', 'open_url', 'uninstall'}
+MAX_SETUP_STEPS = 8
+MAX_MATRIX_DEVICES = 4
 MAX_SUITE_MEDIA = 64 * 1024 * 1024  # videos + screenshots kept across the whole suite
 
 SELECTOR = {'by', 'exact'}
@@ -91,6 +102,7 @@ OPS = {
     'burst': ({'count'}, {'interval_ms', 'app_id'} | LAUNCH),
     'record': ({'duration_s'}, {'app_id'} | LAUNCH),
     'animations': ({'enabled'}, set()),
+    'health': (set(), set()),
     'scenario': ({'duration_s'}, {'app_id', 'steps', 'record', 'sample_ms', 'sample_region', 'sample_min_change',
                                   'log_tags', 'log_source', 'log_lines', 'stop_first', 'stop_on_fail', 'end_after_steps',
                                   'console',
@@ -132,8 +144,10 @@ NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
 # (minimum runner version, ops, op -> arguments) for each runner release after 1.0.0.
 RUNNER_GATES = ((NEEDS_RUNNER, NEW_RUNNER_OPS, NEW_RUNNER_ARGS),
                 ((1, 2, 0), {'scenario'}, {'logs': {'tags', 'since'}}),
-                ((1, 3, 0), set(), {'scenario': {'preflight'}}))
+                ((1, 3, 0), set(), {'scenario': {'preflight'}}),
+                ((1, 4, 0), {'health'}, {}))
 SCENARIO_1_3 = (1, 3, 0)
+SCENARIO_1_4 = (1, 4, 0)
 
 
 def _newer_scenario_parts(args):
@@ -147,6 +161,16 @@ def _newer_scenario_parts(args):
     if any(isinstance(step, dict) and step.get('action') == 'launch_app' and set(step) & (LAUNCH_STEP - {'app_id'})
            for step in args.get('steps') or []):
         parts.append('launch_app options')
+    return parts
+
+
+def _scenario_1_4_parts(args):
+    """Scenario features that need runner 1.4.0."""
+    expect = args.get('expect') if isinstance(args.get('expect'), dict) else {}
+    parts = ['expect.screens'] if expect.get('screens') else []
+    if any(isinstance(step, dict) and step.get('action') == 'screenshot' and {'fingerprint', 'region'} & set(step)
+           for step in args.get('steps') or []):
+        parts.append('screenshot fingerprint')
     return parts
 
 
@@ -177,6 +201,10 @@ def _check_runner_version(conn, op, args):
         parts = _newer_scenario_parts(args)
         if parts:
             raise _too_old(version, 'scenario with ' + ', '.join(parts), SCENARIO_1_3)
+    if op == 'scenario' and _version(version) < SCENARIO_1_4:
+        parts = _scenario_1_4_parts(args)
+        if parts:
+            raise _too_old(version, 'scenario with ' + ', '.join(parts), SCENARIO_1_4)
 
 
 def _validate(op, args):
@@ -275,11 +303,8 @@ def _validate_scenario(args):
         raise DeviceError('sample_ms must be 0 (off) or 150-2000')
     if not sampling and {'sample_region', 'sample_min_change'} & set(args):
         raise DeviceError('sample_region / sample_min_change need sample_ms')
-    region = args.get('sample_region')
-    if region is not None and (not isinstance(region, list) or len(region) != 4
-                               or not all(type(v) is int and 0 <= v <= 10000 for v in region)
-                               or region[2] <= region[0] or region[3] <= region[1]):
-        raise DeviceError('sample_region must be [x1, y1, x2, y2] in screen pixels')
+    if args.get('sample_region') is not None:
+        _validate_region(args['sample_region'], 'sample_region')
     floor = args.get('sample_min_change', 0)
     if type(floor) not in (int, float) or not 0 <= floor <= 1:
         raise DeviceError('sample_min_change must be a fraction from 0 to 1')
@@ -291,7 +316,7 @@ def _validate_scenario(args):
     steps = args.get('steps', [])
     if not isinstance(steps, list) or len(steps) > MAX_STEPS:
         raise DeviceError(f'steps must be a list of at most {MAX_STEPS} steps')
-    window, last, shots = args['duration_s'] * 1000, 0, 0
+    window, last, shots, fingerprinted = args['duration_s'] * 1000, 0, 0, set()
     for index, step in enumerate(steps, 1):
         if not isinstance(step, dict) or step.get('action') not in STEP_ACTIONS:
             raise DeviceError(f'steps[{index}]: action must be one of ' + ', '.join(sorted(STEP_ACTIONS)))
@@ -313,9 +338,17 @@ def _validate_scenario(args):
         try:
             if action == 'screenshot':
                 shots += 1
-                if set(rest) - {'name'} or ('name' in rest and not (isinstance(rest['name'], str)
-                                                                    and SHOT_NAME.fullmatch(rest['name']))):
-                    raise DeviceError('takes only name (letters, digits, - and _)')
+                if set(rest) - {'name', 'fingerprint', 'region'} or ('name' in rest and not (
+                        isinstance(rest['name'], str) and SHOT_NAME.fullmatch(rest['name']))):
+                    raise DeviceError('takes only name (letters, digits, - and _), fingerprint, region')
+                if 'fingerprint' in rest and type(rest['fingerprint']) is not bool:
+                    raise DeviceError('fingerprint must be true or false')
+                if 'region' in rest:
+                    _validate_region(rest['region'], 'region')
+                if rest.get('fingerprint') or 'region' in rest:
+                    if 'name' not in rest:
+                        raise DeviceError('a fingerprinted screenshot needs a name (expect.screens refers to it)')
+                    fingerprinted.add(rest['name'])
                 if shots > MAX_SCENARIO_SHOTS:
                     raise DeviceError(f'at most {MAX_SCENARIO_SHOTS} screenshot steps per scenario')
             elif action in ('launch_app', 'stop_app'):
@@ -338,7 +371,13 @@ def _validate_scenario(args):
     if 'preflight' in args:
         _validate_preflight(args['preflight'])
     if 'expect' in args:
-        _validate_expect(args)
+        _validate_expect(args, fingerprinted)
+
+
+def _validate_region(region, name):
+    if (not isinstance(region, list) or len(region) != 4 or not all(type(v) is int and 0 <= v <= 10000 for v in region)
+            or region[2] <= region[0] or region[3] <= region[1]):
+        raise DeviceError(f'{name} must be [x1, y1, x2, y2] in screen pixels')
 
 
 def _validate_preflight(checks):
@@ -377,7 +416,7 @@ def _validate_preflight(checks):
             raise DeviceError(f'{where}: name must be text (max 60 chars)')
 
 
-def _validate_expect(args):
+def _validate_expect(args, fingerprinted=frozenset()):
     expect = args['expect']
     if not isinstance(expect, dict) or not set(expect) <= EXPECT_KEYS:
         raise DeviceError('expect may contain: ' + ', '.join(sorted(EXPECT_KEYS)))
@@ -421,9 +460,42 @@ def _validate_expect(args):
     if (not isinstance(order, list) or len(order) > MAX_LOG_EXPECTS
             or not all(isinstance(m, str) and 0 < len(m) <= 200 for m in order)):
         raise DeviceError(f'expect.log_order must be a list of at most {MAX_LOG_EXPECTS} strings')
+    screens = expect.get('screens', [])
+    if not isinstance(screens, list) or len(screens) > MAX_SCENARIO_SHOTS:
+        raise DeviceError(f'expect.screens must be a list of at most {MAX_SCENARIO_SHOTS} rules')
+    for index, rule in enumerate(screens, 1):
+        where = f'expect.screens[{index}]'
+        if not isinstance(rule, dict) or not {'shot'} <= set(rule) <= {'shot', 'like', 'unlike', 'max_diff'}:
+            raise DeviceError(f'{where}: needs shot, may take like, unlike, max_diff')
+        if rule['shot'] not in fingerprinted:
+            raise DeviceError(f'{where}: no screenshot step named {rule["shot"]!r} with fingerprint: true')
+        if not {'like', 'unlike'} & set(rule):
+            raise DeviceError(f'{where}: needs like (a known-good fingerprint) and/or unlike (a known-bad one)')
+        for key in ('like', 'unlike'):
+            if key in rule and not (isinstance(rule[key], str) and FINGERPRINT.fullmatch(rule[key])):
+                raise DeviceError(f'{where}: {key} must be a fingerprint returned by a screenshot step')
+        if 'max_diff' in rule and (type(rule['max_diff']) not in (int, float) or not 0 <= rule['max_diff'] <= 1):
+            raise DeviceError(f'{where}: max_diff is a fraction from 0 to 1')
 
 
-def suite_plan(args):
+def _setup_plan(name, steps):
+    """suite setup / teardown: [{action: op, ...op args}] run once around the cases."""
+    if not isinstance(steps, list) or len(steps) > MAX_SETUP_STEPS:
+        raise DeviceError(f'{name} must be a list of at most {MAX_SETUP_STEPS} steps')
+    plan = []
+    for index, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or step.get('action') not in SUITE_SETUP_OPS:
+            raise DeviceError(f'{name}[{index}]: action must be one of ' + ', '.join(sorted(SUITE_SETUP_OPS)))
+        op, args = step['action'], {k: v for k, v in step.items() if k != 'action'}
+        try:
+            _validate(op, args)
+        except DeviceError as exc:
+            raise DeviceError(f'{name}[{index}] ({op}): {exc}') from None
+        plan.append((op, args))
+    return plan
+
+
+def suite_plan(args, platform=None):
     """Validated suite: ([(name, scenario args)], reset, stop_on_fail, keep_video).
 
     Each case is `defaults` overlaid with the case (expect is merged key by key), and must carry
@@ -434,23 +506,42 @@ def suite_plan(args):
     defaults, cases = args.get('defaults', {}), args['cases']
     if not isinstance(defaults, dict) or 'name' in defaults or 'steps' in defaults:
         raise DeviceError('defaults must be an object of scenario fields shared by the cases (not name or steps)')
+    by_platform = args.get('platform_defaults', {})
+    if (not isinstance(by_platform, dict) or not set(by_platform) <= {'android', 'ios'}
+            or not all(isinstance(v, dict) and not {'name', 'steps'} & set(v) for v in by_platform.values())):
+        raise DeviceError('platform_defaults must be {android: {...}, ios: {...}} with scenario fields (not name or steps)')
+    if platform is not None:
+        defaults = {**defaults, **by_platform.get(platform, {})}
     reset, keep_video = args.get('reset', 'none'), args.get('keep_video', 'failed')
     if reset not in ('none', 'reset_app'):
-        raise DeviceError('reset must be none or reset_app (clear the app data before each case; Android)')
+        raise DeviceError('reset must be none or reset_app (clear the app data before each case)')
+    retries = args.get('retries', 0)
+    if type(retries) is not int or not 0 <= retries <= MAX_RETRIES:
+        raise DeviceError(f'retries must be an integer from 0 to {MAX_RETRIES}')
+    if type(args.get('health_check', True)) is not bool:
+        raise DeviceError('health_check must be true or false')
     if keep_video not in ('failed', 'all'):
         raise DeviceError('keep_video must be failed (default) or all')
     if type(args.get('stop_on_fail', False)) is not bool:
         raise DeviceError('stop_on_fail must be true or false')
     if not isinstance(cases, list) or not 1 <= len(cases) <= MAX_SUITE_CASES:
         raise DeviceError(f'cases must be a list of 1-{MAX_SUITE_CASES} cases')
-    plan, seconds = [], 0
+    _setup_plan('setup', args.get('setup', []))
+    _setup_plan('teardown', args.get('teardown', []))
+    plan, seconds, names = [], 0, set()
     for index, case in enumerate(cases, 1):
         name = case.get('name') if isinstance(case, dict) else None
         if not isinstance(name, str) or not CASE_NAME.fullmatch(name):
             raise DeviceError(f'cases[{index}]: needs a name (letters, digits, . - _; max 60 chars)')
-        if name in {done for done, _ in plan}:
+        if name in names:
             raise DeviceError(f'cases[{index}]: the name {name} is used twice')
-        spec = {**defaults, **{k: v for k, v in case.items() if k != 'name'}}
+        names.add(name)
+        only = case.get('only')
+        if only is not None and (not isinstance(only, list) or not only or not set(only) <= {'android', 'ios'}):
+            raise DeviceError(f'cases[{index}] ({name}): only must be a list of platforms (android, ios)')
+        if only is not None and platform is not None and platform not in only:
+            continue  # this case does not apply to this device's platform
+        spec = {**defaults, **{k: v for k, v in case.items() if k not in ('name', 'only')}}
         if isinstance(defaults.get('expect'), dict) and isinstance(case.get('expect'), dict):
             spec['expect'] = {**defaults['expect'], **case['expect']}
         try:
@@ -461,18 +552,27 @@ def suite_plan(args):
             _validate('scenario', spec)
         except DeviceError as exc:
             raise DeviceError(f'cases[{index}] ({name}): {exc}') from None
-        seconds += spec['duration_s']
+        seconds += spec['duration_s'] * (1 + retries)
         plan.append((name, spec))
     if seconds > MAX_SUITE_SECONDS:
-        raise DeviceError(f'The cases add up to {seconds} s of duration_s; a suite is at most {MAX_SUITE_SECONDS} s '
-                          '(use end_after_steps and smaller duration_s, or split the suite)')
+        raise DeviceError(f'The cases add up to {seconds} s of duration_s (retries included); a suite is at most '
+                          f'{MAX_SUITE_SECONDS} s (use end_after_steps and smaller duration_s, fewer retries, '
+                          'or split the suite)')
     return plan, reset, args.get('stop_on_fail', False), keep_video
+
+
+def suite_options(args):
+    """(setup, teardown, retries, health_check); suite_plan validated the rest."""
+    return (_setup_plan('setup', args.get('setup', [])), _setup_plan('teardown', args.get('teardown', [])),
+            args.get('retries', 0), args.get('health_check', True))
 
 
 def _case_row(name, data, keep_video, budget):
     """One suite row: the verdict and, for a case that did not pass, what is needed to see why."""
     verdict = data.get('verdict', 'fail')
     row = {'name': name, 'verdict': verdict}
+    if data.get('attempts', 1) > 1:
+        row['attempts'] = data['attempts']
     row.update({k: data[k] for k in ('failed', 'ran_ms', 'max_drift_ms', 'app_running', 'video_error') if k in data})
     if verdict != 'pass':
         row.update({k: data[k] for k in ('preflight', 'launch') if k in data})
@@ -482,7 +582,7 @@ def _case_row(name, data, keep_video, budget):
         logs = data.get('logs') or {}
         if logs:
             row['logs'] = {k: logs[k] for k in ('counts', 'first_ms', 'values') if k in logs}
-    media = [('mp4', data['mp4'])] if 'mp4' in data and (keep_video == 'all' or verdict != 'pass') else []
+    media = [('mp4', data['mp4'])] if 'mp4' in data and (keep_video == 'all' or verdict not in ('pass',)) else []
     shots = data.get('screenshots') or []
     size = sum(len(blob) for _, blob in media) + sum(len(shot['png']) for shot in shots)
     if size > budget:
@@ -492,26 +592,60 @@ def _case_row(name, data, keep_video, budget):
     return row, size
 
 
-def suite_summary(rows, not_run):
-    """Counts per verdict, the overall verdict and a markdown table (ready for a PR or a report)."""
+def suite_summary(rows, not_run, reason=None):
+    """Counts per verdict, the overall verdict and a markdown table (ready for a PR or a report).
+
+    not_run: names of cases that never started; reason says why (stop_on_fail, the suite deadline,
+    a failed setup or health check), so a half-finished matrix is visible as such in the table.
+    """
     counts = {}
     for row in rows:
         counts[row['verdict']] = counts.get(row['verdict'], 0) + 1
     lines = ['| Case | Verdict | Ran (ms) | First reason |', '|---|---|---|---|']
     for row in rows:
-        reason = (row.get('failed') or [''])[0].replace('|', '/').replace('\n', ' ')[:140]
-        lines.append(f"| {row['name']} | {row['verdict']} | {row.get('ran_ms', '')} | {reason} |")
-    lines += [f'| {name} | not run | | |' for name in not_run]
+        first = (row.get('failed') or [''])[0]
+        if row['verdict'] == 'flaky':
+            first = f"passed on attempt {row.get('attempts')}; " + first
+        first = first.replace('|', '/').replace('\n', ' ')[:140]
+        lines.append(f"| {row['name']} | {row['verdict']} | {row.get('ran_ms', '')} | {first} |")
+    why = (reason or '').replace('|', '/').replace('\n', ' ')[:140]
+    lines += [f'| {name} | not run | | {why} |' for name in not_run]
     passed = counts.get('pass', 0)
-    # pass only when every case passed; otherwise the worst outcome: fail, then error, then blocked.
-    # The counts stay nested: a top-level 'error' key is read as a broker denial by the isolated worker.
+    # pass only when every case passed; otherwise the worst outcome: fail, error, blocked, then flaky
+    # (passed only on a retry). The counts stay nested: a top-level 'error' key is read as a broker
+    # denial by the isolated worker.
     if rows and passed == len(rows) and not not_run:
         verdict = 'pass'
+    elif not_run and not rows:
+        verdict = 'blocked' if reason else 'fail'
     else:
-        verdict = next((v for v in ('fail', 'error', 'blocked') if counts.get(v)), 'fail')
+        verdict = next((v for v in ('fail', 'error', 'blocked', 'flaky') if counts.get(v)), 'fail')
     return {'verdict': verdict, 'total': len(rows) + len(not_run), 'passed': passed,
             'counts': dict(sorted(counts.items())),
-            **({'not_run': not_run} if not_run else {}), 'table': '\n'.join(lines)}
+            **({'not_run': not_run} if not_run else {}), **({'not_run_reason': reason} if not_run and reason else {}),
+            'table': '\n'.join(lines)}
+
+
+def suite_junit(rows, not_run, reason=None, suite_name='loma-device-suite'):
+    """JUnit XML of a suite result, for CI dashboards and PR checks."""
+    root = ET.Element('testsuite', name=suite_name, tests=str(len(rows) + len(not_run)),
+                      failures=str(sum(1 for r in rows if r['verdict'] == 'fail')),
+                      errors=str(sum(1 for r in rows if r['verdict'] in ('error', 'blocked'))),
+                      skipped=str(len(not_run)))
+    for row in rows:
+        case = ET.SubElement(root, 'testcase', name=row['name'], classname=suite_name,
+                             time=f"{row.get('ran_ms', 0) / 1000:.3f}")
+        message = '; '.join(row.get('failed') or [])[:2000]
+        if row['verdict'] == 'fail':
+            ET.SubElement(case, 'failure', message=message[:500]).text = message
+        elif row['verdict'] in ('error', 'blocked'):
+            ET.SubElement(case, 'error', message=f"{row['verdict']}: {message[:500]}").text = message
+        elif row['verdict'] == 'flaky':
+            ET.SubElement(case, 'system-out').text = f"flaky: passed on attempt {row.get('attempts')}. {message}"
+    for name in not_run:
+        ET.SubElement(ET.SubElement(root, 'testcase', name=name, classname=suite_name), 'skipped',
+                      message=reason or 'not run')
+    return ET.tostring(root, encoding='unicode')
 
 
 def _validate_extras(name, extras):
@@ -711,8 +845,15 @@ class DeviceService:
             lease = await self._acquire(candidate, user_email, scope)
             if lease is not None:
                 await self._audit(user_email, scope, candidate, 'lease', True)
-                return {'device_id': candidate, 'expires_at': store.aware(lease['expires_at']).isoformat(),
-                        'note': 'Lease renews on every call and expires after 15 idle minutes. Release it when done.'}
+                result = {'device_id': candidate, 'expires_at': store.aware(lease['expires_at']).isoformat(),
+                          'note': 'Lease renews on every call and expires after 15 idle minutes. Release it when done.'}
+                health = await self.health(user_email, scope, candidate)
+                if health is not None:
+                    result['health'] = health
+                    if not health.get('ok'):
+                        result['note'] += (' This device is too slow or unresponsive to test on right now (see '
+                                           'health.reasons): restart the emulator/simulator, or lease another device.')
+                return result
             busy.append(candidate)
         raise DeviceError('All matching devices are leased by another session: ' + ', '.join(busy))
 
@@ -730,6 +871,28 @@ class DeviceService:
         result = await self.db.device_leases.delete_one({'_id': device_id, 'owner_email': user_email, 'scope': scope})
         await self._audit(user_email, scope, device_id, 'release', True)
         return {'released': bool(result.deleted_count)}
+
+    async def release_all(self, user_email, scope):
+        """Release every device this user's scope (one conversation) holds; used when a run ends."""
+        self._check_scope(scope)
+        held = await self.db.device_leases.find({'owner_email': user_email, 'scope': scope}).to_list(length=50)
+        released = []
+        for lease in held:
+            result = await self.db.device_leases.delete_one({'_id': lease['_id'], 'owner_email': user_email,
+                                                             'scope': scope})
+            if result.deleted_count:
+                released.append(lease['_id'])
+                await self._audit(user_email, scope, lease['_id'], 'release', True)
+        return {'released': released}
+
+    async def health(self, user_email, scope, device_id):
+        """The runner's speed check, or None when the runner is too old or the check could not run."""
+        try:
+            return await self.call(user_email, scope, device_id, 'health', {})
+        except DeviceError as exc:
+            if 'too old' in str(exc) or 'Unsupported' in str(exc):
+                return None
+            return {'ok': False, 'reasons': [str(exc)[:300]]}
 
     async def force_release(self, user_email, device_id):
         runner, _ = await self._resolve(user_email, device_id)
@@ -801,29 +964,112 @@ class DeviceService:
         await self._audit(user_email, scope, device_id, op, True, None, started)
         return data
 
-    async def suite(self, user_email, scope, device_id, args):
+    async def suite(self, user_email, scope, device_id, args, platform=None):
         """Run several scenario cases one after the other and return one summary.
 
         Each case is an ordinary scenario call (same validation, lease, audit); a case that cannot
         run (runner error, timeout) is reported as verdict 'error' and the suite carries on.
+        Before the cases: a device health check (a slow device is reported as blocked, not as failed
+        tests) and the setup ops; after them, the teardown ops (best effort). A case that fails or
+        errors is re-run up to `retries` times; one that passes on a retry is reported as flaky.
         """
         self._check_scope(scope)
-        plan, reset, stop_on_fail, keep_video = suite_plan(args)
-        rows, budget = [], MAX_SUITE_MEDIA
-        for name, spec in plan:
+        if platform is None:
+            platform = await self._platform(user_email, device_id)
+        plan, reset, stop_on_fail, keep_video = suite_plan(args, platform)
+        setup, teardown, retries, health_check = suite_options(args)
+        names = [name for name, _ in plan]
+        extra = {**({'platform': platform} if platform else {})}
+        if not plan:  # every case is `only` for another platform
+            return {**self._suite_result([], [], None, extra), 'verdict': 'pass',
+                    'note': f'No case applies to {platform}'}
+        if health_check:
+            health = await self.health(user_email, scope, device_id)
+            if health is not None:
+                extra['health'] = health
+                if not health.get('ok'):
+                    reason = 'device_slow: ' + '; '.join(health.get('reasons') or ['health check failed'])
+                    return self._suite_result([], names, reason, extra)
+        for index, (op, op_args) in enumerate(setup, 1):
             try:
-                if reset == 'reset_app':
-                    await self.call(user_email, scope, device_id, 'reset_app', {'app_id': spec['app_id']})
-                data = await self.call(user_email, scope, device_id, 'scenario', dict(spec))
+                await self.call(user_email, scope, device_id, op, dict(op_args))
             except DeviceError as exc:
-                row, used = {'name': name, 'verdict': 'error', 'failed': [str(exc)[:300]]}, 0
-            else:
+                return self._suite_result([], names, f'setup[{index}] ({op}) failed: {str(exc)[:200]}', extra)
+        loop = asyncio.get_running_loop()
+        deadline, rows, budget, reason = loop.time() + SUITE_DEADLINE_S, [], MAX_SUITE_MEDIA, None
+        try:
+            for name, spec in plan:
+                if loop.time() > deadline:
+                    reason = f'the suite ran past its {SUITE_DEADLINE_S} s deadline; split it'
+                    break
+                data, attempts = None, 0
+                while True:
+                    attempts += 1
+                    try:
+                        if reset == 'reset_app':
+                            await self.call(user_email, scope, device_id, 'reset_app', {'app_id': spec['app_id']})
+                        data = await self.call(user_email, scope, device_id, 'scenario', dict(spec))
+                    except DeviceError as exc:
+                        data = {'verdict': 'error', 'failed': [str(exc)[:300]]}
+                    if data.get('verdict') not in ('fail', 'error') or attempts > retries or loop.time() > deadline:
+                        break
+                if attempts > 1:
+                    data = {**data, 'attempts': attempts}
+                    if data.get('verdict') == 'pass':
+                        data['verdict'] = 'flaky'
                 row, used = _case_row(name, data, keep_video, budget)
-            budget -= used
-            rows.append(row)
-            if stop_on_fail and row['verdict'] != 'pass':
-                break
-        return {**suite_summary(rows, [name for name, _ in plan[len(rows):]]), 'cases': rows}
+                budget -= used
+                rows.append(row)
+                if stop_on_fail and row['verdict'] not in ('pass', 'flaky'):
+                    reason = 'stop_on_fail: an earlier case did not pass'
+                    break
+        finally:
+            for op, op_args in teardown:  # best effort: restore the device even when a case raised
+                try:
+                    await self.call(user_email, scope, device_id, op, dict(op_args))
+                except DeviceError:
+                    pass
+        return self._suite_result(rows, names[len(rows):], reason, extra)
+
+    @staticmethod
+    def _suite_result(rows, not_run, reason, extra):
+        return {**suite_summary(rows, not_run, reason if not_run else None), **extra, 'cases': rows,
+                'junit': suite_junit(rows, not_run, reason)}
+
+    async def _platform(self, user_email, device_id):
+        """android / ios for platform_defaults and only, from the runner's device list (None if unknown)."""
+        try:
+            runner, serial = await self._resolve(user_email, device_id)
+        except DeviceError:
+            return None
+        conn = self.hub.get(runner['runner_id'])
+        listed = conn.devices if conn is not None else (runner.get('devices') or [])
+        return next((d.get('platform') for d in listed if d.get('serial') == serial), None)
+
+    async def matrix(self, user_email, scope, device_ids, args):
+        """The same suite on several devices at once (one per platform/OS), one combined table."""
+        self._check_scope(scope)
+        if (not isinstance(device_ids, list) or not 2 <= len(device_ids) <= MAX_MATRIX_DEVICES
+                or len(set(device_ids)) != len(device_ids) or not all(isinstance(d, str) for d in device_ids)):
+            raise DeviceError(f'device_ids must be a list of 2-{MAX_MATRIX_DEVICES} different devices')
+        suite_plan(args)  # fail fast on a bad spec, before any device is touched
+
+        async def one(device_id):
+            try:
+                return await self.suite(user_email, scope, device_id, args)
+            except DeviceError as exc:
+                return {'verdict': 'error', 'counts': {'error': 1}, 'cases': [], 'failed': [str(exc)[:300]]}
+        results = await asyncio.gather(*(one(device_id) for device_id in device_ids))
+        lines = ['| Device | Platform | Verdict | Passed | Counts |', '|---|---|---|---|---|']
+        for device_id, result in zip(device_ids, results):
+            counts = ', '.join(f'{k} {v}' for k, v in sorted((result.get('counts') or {}).items()))
+            lines.append(f"| {device_id} | {result.get('platform', '')} | {result['verdict']} | "
+                         f"{result.get('passed', 0)}/{result.get('total', 0)} | {counts} |")
+        verdicts = [result['verdict'] for result in results]
+        verdict = 'pass' if all(v == 'pass' for v in verdicts) else next(
+            (v for v in ('fail', 'error', 'blocked', 'flaky') if v in verdicts), 'fail')
+        return {'verdict': verdict, 'table': '\n'.join(lines),
+                'devices': [{'device_id': device_id, **result} for device_id, result in zip(device_ids, results)]}
 
     @staticmethod
     def _shape(op, data, local):

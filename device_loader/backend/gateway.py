@@ -68,6 +68,18 @@ class DeviceTools:
         self.screenshots = 0
         self.service = service or DeviceService(db)
         self.pending = {}  # device_id -> (tool, task) still running past WAIT_SECONDS
+        self.owner = authority.user_email
+
+    async def close(self):
+        """At the end of the run: release every device this conversation still holds, so a finished or
+        failed run never leaves a device leased (the agent's own release call is easy to skip)."""
+        for _, task in list(self.pending.values()):
+            task.cancel()
+        try:
+            return await self.service.release_all(self.owner, self.scope)
+        except Exception:
+            logger.exception('Releasing devices at the end of the run failed')
+            return None
 
     async def __call__(self, authority, tool, arguments):
         if authority != self.authority or tool not in TOOLS or not isinstance(arguments, dict):
@@ -105,6 +117,16 @@ class DeviceTools:
         if tool == 'device.lease':
             picked = _pick(args, set(), {'platform', 'device_id'}, tool)
             return await service.lease(owner, scope, picked.get('device_id'), picked.get('platform'))
+        if tool == 'device.release' and args.get('all') is True and 'device_id' not in args:
+            _pick(args, {'all'}, set(), tool)
+            return await service.release_all(owner, scope)
+        if tool == 'device.suite' and 'device_ids' in args and 'device_id' not in args:
+            device_ids = args.pop('device_ids')
+            data = await service.matrix(owner, scope, device_ids, args)
+            for device in data['devices']:
+                device['cases'] = [await self._deliver_flow_screenshots(await self._deliver_video(case))
+                                   for case in device.get('cases') or []]
+            return data
         device_id = args.pop('device_id', None)
         if not isinstance(device_id, str):
             raise DeviceError('device_id is required; get one from device.list or device.lease')
