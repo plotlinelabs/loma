@@ -24,6 +24,8 @@ import {
   createTask,
   deleteConversation,
   deleteTaskCard,
+  starTask,
+  unstarTask,
   updateTask,
   updateTaskCard,
   type BoardField,
@@ -34,6 +36,7 @@ import {
 } from "@/lib/api";
 import { DEPLOY_QUEUED_LABEL, isDraft, isParked } from "./taskDisplay";
 import { AssigneeBadge } from "./boardExtras";
+import { StarButton } from "./TaskStar";
 import { AddExistingTaskDialog } from "./MoveTaskDialogs";
 import { rankBetween } from "./transitions";
 
@@ -271,6 +274,12 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
       () => updateTask(task.conversation_id, { task_rank: rank }), "Could not reorder task");
   };
 
+  // Private star: the task also shows on your own board. Viewers can star too.
+  const toggleStar = (task: Task) =>
+    void run(patchTask(task.conversation_id, { starred: !task.starred }),
+      () => (task.starred ? unstarTask(task.conversation_id) : starTask(task.conversation_id)),
+      "Could not update star");
+
   const removeTask = (task: Task) =>
     void run(
       { ...board, tasks: board.tasks.filter((t) => t.conversation_id !== task.conversation_id) },
@@ -404,7 +413,9 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
                     <span className="shrink-0 text-[11px] text-muted-foreground">{shortName(task.owner)}</span>
                   )}
                   {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
-                  {!readOnly && mine && (
+                  <StarButton task={task} onToggle={toggleStar}
+                    className={cn("h-5 w-5", !task.starred && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100")} />
+                  {!readOnly && (
                     <button
                       type="button"
                       onClick={() => removeTask(task)}

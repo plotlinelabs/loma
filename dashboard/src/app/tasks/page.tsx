@@ -401,9 +401,11 @@ export default function TasksPage() {
   const liveCard = board?.cards?.find((c) => c.card_id === panelCard?.card_id) ?? panelCard;
   const canShare = !!currentBoard?.shared && currentBoard.role === "owner";
   const myEmail = session?.user?.email ?? null;
-  // Only a task's creator or its assignee can message it; each run uses the
-  // sender's accounts. Everyone else on the board reads the chat.
-  const chatReadOnly = !!chatTask?.owner && !!myEmail && !canRunTask(chatTask, myEmail, currentBoard?.role);
+  // A task's creator and its board's owners/editors can message it; each run
+  // uses the sender's accounts. View-only members read the chat. A starred
+  // card on your own board follows your role on the board it comes from.
+  const chatRole = chatTask?.star ? chatTask.star.role : currentBoard?.role;
+  const chatReadOnly = !!chatTask?.owner && !!myEmail && !canRunTask(chatTask, myEmail, chatRole);
   const assignable = assignablePeople(currentBoard);
   const assignedFilterOn = assignedToMe && !!currentBoard?.shared;
 
@@ -974,7 +976,7 @@ export default function TasksPage() {
       <TaskChatDrawer
         task={chatTask}
         readOnly={chatReadOnly}
-        canRename={!readOnly}
+        canRename={chatTask?.star ? chatTask.star.role !== "viewer" : !readOnly}
         open={chatDrawerOpen}
         onOpenChange={(open) => {
           setChatDrawerOpen(open);

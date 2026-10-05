@@ -75,8 +75,19 @@ def _db(task_board=SHARED, conversation=None, users_find=None, card=None):
         count_documents=AsyncMock(return_value=0),
     )
     task_board_views = SimpleNamespace(delete_many=AsyncMock())
+    stars_cursor = MagicMock()
+    stars_cursor.to_list = AsyncMock(return_value=[])
+    task_stars = SimpleNamespace(
+        find=MagicMock(return_value=stars_cursor),
+        find_one=AsyncMock(return_value=None),
+        update_one=AsyncMock(),
+        delete_one=AsyncMock(),
+        delete_many=AsyncMock(),
+        count_documents=AsyncMock(return_value=0),
+    )
     return SimpleNamespace(task_boards=task_boards, conversations=conversations, users=users,
-                           task_cards=task_cards, task_board_views=task_board_views)
+                           task_cards=task_cards, task_board_views=task_board_views,
+                           task_stars=task_stars)
 
 
 def _as(monkeypatch, db, email):
@@ -126,16 +137,31 @@ async def test_stranger_cannot_list_shared_board(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_editor_can_annotate_but_not_change_what_runs(monkeypatch):
+async def test_editor_has_full_rights_on_a_teammates_task(monkeypatch):
     task = {"conversation_id": "c1", "metadata": {"user_name": OWNER}, "task_board_id": "deals1",
             "task_status": "todo", "task_lane": "lead", "status": None}
     db = _db(conversation=task)
     monkeypatch.setattr("api.routes._check_conversation_access", lambda conv, email, role: email == OWNER)
     _as(monkeypatch, db, EDITOR)
 
-    blocked = await task_routes.handle_update_task(
-        FakeRequest({"prompt": "do something else"}, match_info={"conversation_id": "c1"}))
-    assert blocked.status == 403
+    # Editors can change what runs: the prompt, model and tools.
+    edited = await task_routes.handle_update_task(
+        FakeRequest({"prompt": "do something else", "model": "anthropic/x"},
+                    match_info={"conversation_id": "c1"}))
+    assert edited.status == 200
+    saved = db.conversations.update_one.await_args.args[1]["$set"]
+    assert saved["prompt"] == "do something else" and saved["model"] == "anthropic/x"
+
+    # ...and remove the task from the board.
+    removed = await task_routes.handle_update_task(
+        FakeRequest({"task_status": None}, match_info={"conversation_id": "c1"}))
+    assert removed.status == 200
+    assert "task_board_id" in db.conversations.update_one.await_args.args[1]["$unset"]
+
+    # Only the creator can pull it onto their own personal board.
+    to_personal = await task_routes.handle_update_task(
+        FakeRequest({"task_board_id": "personal"}, match_info={"conversation_id": "c1"}))
+    assert to_personal.status == 403
 
     allowed = await task_routes.handle_update_task(
         FakeRequest({"task_lane": "won", "task_tag_ids": ["hot"]}, match_info={"conversation_id": "c1"}))
@@ -150,9 +176,10 @@ async def test_viewer_cannot_move_tasks(monkeypatch):
     db = _db(conversation=task)
     monkeypatch.setattr("api.routes._check_conversation_access", lambda conv, email, role: email == OWNER)
     _as(monkeypatch, db, VIEWER)
-    response = await task_routes.handle_update_task(
-        FakeRequest({"task_lane": "won"}, match_info={"conversation_id": "c1"}))
-    assert response.status == 403
+    for body in ({"task_lane": "won"}, {"prompt": "x"}, {"model": "anthropic/x"}, {"task_status": None}):
+        response = await task_routes.handle_update_task(
+            FakeRequest(body, match_info={"conversation_id": "c1"}))
+        assert response.status == 403
 
 
 @pytest.mark.asyncio

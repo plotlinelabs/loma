@@ -201,6 +201,13 @@ def supports_injection(stream: ActiveStream) -> bool:
     )
 
 
+async def get_stream(conversation_id: str) -> ActiveStream | None:
+    """The live handle whoever started it. The caller must have checked that
+    the user may act on the conversation (e.g. stop a shared-board task)."""
+    async with _lock:
+        return _streams.get(conversation_id)
+
+
 async def get_for_user(conversation_id: str, user_email: str) -> ActiveStream | None:
     async with _lock:
         stream = _streams.get(conversation_id)

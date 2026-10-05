@@ -16,6 +16,9 @@ import type { Task } from "@/lib/api";
  * | done         | yes (=park)      | no                 | yes (=reopen) | —           |
  */
 export function canMove(task: Task, from: string, to: string, laneIds: string[]): boolean {
+  // A starred card is your own bookmark: it moves freely between your lanes
+  // and Done. Working / Needs input belong to the real task on its board.
+  if (task.star) return from === to || to === "done" || laneIds.includes(to);
   if (task.human_task) return false;
   if (from === to) return true; // reorder within any column
   const fromStaged = laneIds.includes(from);

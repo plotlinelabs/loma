@@ -12,6 +12,7 @@ import type { Task, TaskCardItem, TasksBoardResponse } from "@/lib/api";
 import { priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
 import { TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
+import { StarButton } from "./TaskStar";
 import { matchesFilters } from "./cardFilters";
 import { canMove } from "./transitions";
 import { useTaskBoardActions } from "./useTaskBoardActions";
@@ -73,11 +74,12 @@ interface CardTasksViewProps {
   excludedTagIds?: string[];
 }
 
-function TaskRow({ task, card, onOpenTask, onOpenCard, me, draggable }: {
+function TaskRow({ task, card, onOpenTask, onOpenCard, onToggleStar, me, draggable }: {
   task: Task;
   card: TaskCardItem | undefined;
   onOpenTask: (task: Task) => void;
   onOpenCard: (card: TaskCardItem) => void;
+  onToggleStar: (task: Task) => void;
   me: string | null;
   draggable: boolean;
 }) {
@@ -97,15 +99,19 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, me, draggable }: {
       }}
       data-task-id={task.conversation_id}
       className={cn(
-        "rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-input transition-colors touch-none",
+        "group rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-input transition-colors touch-none",
         isDragging && "opacity-40",
       )}
     >
       <div className="flex items-start gap-2">
         {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-words text-[14px] font-medium leading-5">
-            {task.title || task.prompt || "New task"}
+          <div className="flex items-start gap-1">
+            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[14px] font-medium leading-5">
+              {task.title || task.prompt || "New task"}
+            </div>
+            <StarButton task={task} onToggle={onToggleStar}
+              className={cn("h-5 w-5", !task.starred && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100")} />
           </div>
           {card && (
             <button
@@ -140,7 +146,7 @@ export function CardTasksView({
 }: CardTasksViewProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const { laneIds, markDone, reopen, moveToLane } = useTaskBoardActions({
+  const { laneIds, markDone, reopen, moveToLane, toggleStar } = useTaskBoardActions({
     board, onBoardChange, onRefresh, onError, onEditDraft: () => {}, onOpenChat: onOpenTask,
   });
 
@@ -209,6 +215,7 @@ export function CardTasksView({
                 card={task.task_card_id ? cardsById.get(task.task_card_id) : undefined}
                 onOpenTask={onOpenTask}
                 onOpenCard={onOpenCard}
+                onToggleStar={toggleStar}
                 me={myEmail}
                 draggable={!readOnly && !task.human_task}
               />

@@ -965,19 +965,30 @@ async def handle_interrupt_agent(request: web.Request) -> web.Response:
 
     stream = await get_for_user(cid, user_email)
     if not stream:
-        # The run may still be warming up (OpenCode server/session, Codex
-        # worker) and not have registered yet. If the caller owns a running
-        # conversation, park the stop so register() applies it.
         db = request.app["db"]
         conversation = await db.conversations.find_one(
             {"conversation_id": cid, "deleted": {"$ne": True}},
-            {"status": 1, "metadata.user_name": 1},
+            {"status": 1, "metadata": 1, "source": 1, "human_task": 1,
+             "task_status": 1, "task_board_id": 1},
         ) if db is not None else None
         owner = ((conversation or {}).get("metadata") or {}).get("user_name", "")
+        may_stop = bool(conversation) and (owner == user_email or get_system_role(request) == "admin")
+        if conversation and not may_stop and conversation.get("task_board_id"):
+            # Shared-board task: any owner or editor of the board can stop a
+            # run, whoever started it (they can all message the task).
+            from api.task_routes import is_board_editor
+            may_stop = await is_board_editor(db, conversation, user_email)
+            if may_stop:
+                from agent.active_streams import get_stream
+                stream = await get_stream(cid)
+    if not stream:
+        # The run may still be warming up (OpenCode server/session, Codex
+        # worker) and not have registered yet. If the caller may stop a
+        # running conversation, park the stop so register() applies it.
         if (
             conversation
             and conversation.get("status") == "running"
-            and (owner == user_email or get_system_role(request) == "admin")
+            and may_stop
         ):
             from agent.active_streams import request_pending_stop
             await request_pending_stop(cid)
@@ -985,7 +996,7 @@ async def handle_interrupt_agent(request: web.Request) -> web.Response:
         if (
             conversation
             and conversation.get("status") == "queued"
-            and (owner == user_email or get_system_role(request) == "admin")
+            and may_stop
         ):
             # Waiting for a deploy to finish: drop it before it starts.
             from api.pending_runs import cancel_conversation
@@ -1181,15 +1192,15 @@ async def handle_chat(request: web.Request) -> web.Response:
                 if existing and not _check_conversation_access(
                     existing, user_email, get_system_role(request)
                 ):
-                    # A shared-board task's assignee can run it too; the run
-                    # uses the sender's own accounts (user_email below).
+                    # Owners and editors of a shared board can run its tasks;
+                    # the run uses the sender's own accounts (user_email below).
                     from api.task_routes import can_run_task, task_access
                     if not await can_run_task(db, existing, user_email, get_system_role(request)):
                         can_view, _, _ = await task_access(
                             db, existing, user_email, get_system_role(request))
                         if can_view:
                             return web.json_response(
-                                {"error": "Only the task's creator or assignee can message it"},
+                                {"error": "Viewers can read this task but can't message it"},
                                 status=403)
                         return web.json_response({"error": "Not found"}, status=404)
                 if existing and existing.get("human_task"):
@@ -2434,7 +2445,16 @@ async def handle_delete_conversation(request: web.Request) -> web.Response:
 
     system_role = get_system_role(request)
     if not _check_conversation_manage_access(conversation, user_email, system_role):
-        return web.json_response({"error": "Not found"}, status=404)
+        # Owners and editors of a shared board can delete its unstarted
+        # drafts (nothing has run, so there is no chat to lose).
+        is_board_draft = (
+            conversation.get("task_board_id")
+            and conversation.get("task_status") == "todo"
+            and conversation.get("status") is None
+        )
+        from api.task_routes import is_board_editor
+        if not is_board_draft or not await is_board_editor(db, conversation, user_email):
+            return web.json_response({"error": "Not found"}, status=404)
 
     now = datetime.now(timezone.utc)
 

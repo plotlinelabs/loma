@@ -11,8 +11,9 @@ import { HumanTaskPanel } from "./HumanTaskPanel";
 import ChatWithArtifacts from "@/components/ChatWithArtifacts";
 import { rebuildItemsFromConversation, type ChatItem } from "@/components/ChatPanel";
 import type { Artifact } from "@/components/ArtifactViewer";
-import { basePath, fetchConversation, updateTask, type ChatFile, type Task } from "@/lib/api";
+import { basePath, fetchConversation, starTask, unstarTask, updateTask, type ChatFile, type Task } from "@/lib/api";
 import { AssigneeSelect, useBoardExtras } from "./boardExtras";
+import { StarButton } from "./TaskStar";
 
 /** Loads and renders one conversation inside the drawer. Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
@@ -133,7 +134,7 @@ export function TaskChatDrawer({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onTaskChange?: (task: Task) => void;
-  /** A teammate's task on a shared board: transcript only, no composer. */
+  /** View-only member of the task's board: transcript only, no composer. */
   readOnly?: boolean;
   /** False for view-only board members. */
   canRename?: boolean;
@@ -173,7 +174,7 @@ export function TaskChatDrawer({
   const petSettingsOpen = usePetSettingsOpen();
   const { myEmail, role, assignable } = useBoardExtras();
   const [assignError, setAssignError] = useState<string | null>(null);
-  // Shared-board tasks can be assigned to an owner/editor, who can then run it.
+  // Shared-board tasks can be assigned to an owner/editor: it marks whose task it is.
   const showAssignee = !!task?.task_board_id && assignable.length > 0;
   const canAssign = role === "owner" || role === "editor";
   const assign = async (email: string | null) => {
@@ -184,6 +185,19 @@ export function TaskChatDrawer({
       if (updated) onTaskChange?.(updated);
     } catch (e) {
       setAssignError(e instanceof Error ? e.message : "Could not assign task");
+    }
+  };
+
+  // Private star: the task also shows on your own board.
+  const toggleStar = async (target: Task) => {
+    setAssignError(null);
+    const starred = !target.starred;
+    onTaskChange?.({ ...target, starred });
+    try {
+      await (starred ? starTask(target.conversation_id) : unstarTask(target.conversation_id));
+    } catch (e) {
+      onTaskChange?.({ ...target, starred: !starred });
+      setAssignError(e instanceof Error ? e.message : "Could not update star");
     }
   };
 
@@ -214,7 +228,10 @@ export function TaskChatDrawer({
           )}
           {task && readOnly && task.owner && (
             <span className="shrink-0 truncate text-xs text-muted-foreground"
-              title="Only the task's creator or its assignee can message it">by {task.owner}</span>
+              title="You have view-only access to this board, so you can read this task but not message it">by {task.owner}</span>
+          )}
+          {task && !task.human_task && !!task.task_board_id && (
+            <StarButton task={task} onToggle={(t) => void toggleStar(t)} className="h-7 w-7" iconClassName="h-4 w-4" />
           )}
           {task && showAssignee && (
             <div className="flex shrink-0 items-center gap-1.5">

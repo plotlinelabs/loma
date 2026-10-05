@@ -96,7 +96,7 @@ async def test_move_personal_task_into_card(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_move_into_card_needs_creator_and_edit_access(monkeypatch):
+async def test_move_into_card_needs_edit_access(monkeypatch):
     monkeypatch.setattr("api.routes._check_conversation_access", lambda conv, email, role: email == VIEWER)
     db = _db(task_board=CARD_BOARD, conversation={**PERSONAL_TASK, "metadata": {"user_name": VIEWER}}, card=CARD)
     _as(monkeypatch, db, VIEWER)  # viewer on the target board
@@ -104,7 +104,7 @@ async def test_move_into_card_needs_creator_and_edit_access(monkeypatch):
         _patch({"task_board_id": "deals1", "task_card_id": "card1"}, conversation_id="p1"))
     assert response.status == 403
 
-    # A teammate's task on the board can't be moved by an editor.
+    # An editor can move a teammate's task to another card on the board.
     shared_task = {**PERSONAL_TASK, "metadata": {"user_name": OWNER}, "task_board_id": "deals1",
                    "task_card_id": "card1"}
     monkeypatch.setattr("api.routes._check_conversation_access", lambda conv, email, role: email == OWNER)
@@ -112,7 +112,8 @@ async def test_move_into_card_needs_creator_and_edit_access(monkeypatch):
     _as(monkeypatch, db, EDITOR)
     response = await task_routes.handle_update_task(
         _patch({"task_card_id": "card2"}, conversation_id="p1"))
-    assert response.status == 403
+    assert response.status == 200
+    assert db.conversations.update_one.await_args.args[1]["$set"]["task_card_id"] == "card2"
 
 
 # ── Assignees ───────────────────────────────────────────────────────────────
@@ -158,27 +159,28 @@ async def test_viewer_cannot_assign_and_personal_tasks_have_no_assignee(monkeypa
 async def test_who_can_run_a_task(monkeypatch):
     monkeypatch.setattr("api.routes._check_conversation_access", lambda conv, email, role: email == OWNER)
     db = _db()
-    task = {**BOARD_TASK, "task_assignee": EDITOR}
-    assert await task_routes.can_run_task(db, task, OWNER, "member")  # creator keeps access
-    assert await task_routes.can_run_task(db, task, EDITOR, "member")  # assignee
-    assert not await task_routes.can_run_task(db, task, VIEWER, "member")
-    # An assignee who was made view-only can no longer run it.
+    assert await task_routes.can_run_task(db, BOARD_TASK, OWNER, "member")  # creator
+    # Any owner or editor of the board can run it, assigned or not.
+    assert await task_routes.can_run_task(db, BOARD_TASK, EDITOR, "member")
+    assert await task_routes.can_run_task(db, {**BOARD_TASK, "task_assignee": OWNER}, EDITOR, "member")
+    assert not await task_routes.can_run_task(db, BOARD_TASK, VIEWER, "member")
+    assert not await task_routes.can_run_task(db, BOARD_TASK, STRANGER, "member")
+    # A teammate's personal task stays private.
+    assert not await task_routes.can_run_task(db, {**BOARD_TASK, "task_board_id": None}, EDITOR, "member")
+    # An editor who was made view-only can no longer run it, even as assignee.
     db = _db(task_board={**SHARED, "members": [{"email": EDITOR, "role": "viewer"}]})
-    assert not await task_routes.can_run_task(db, task, EDITOR, "member")
+    assert not await task_routes.can_run_task(db, {**BOARD_TASK, "task_assignee": EDITOR}, EDITOR, "member")
 
 
 @pytest.mark.asyncio
-async def test_assignee_can_pick_model_but_not_prompt(monkeypatch):
+async def test_any_editor_can_pick_the_model(monkeypatch):
     monkeypatch.setattr("api.routes._check_conversation_access", lambda conv, email, role: email == OWNER)
-    db = _db(conversation={**BOARD_TASK, "task_assignee": EDITOR})
+    db = _db(conversation=BOARD_TASK)  # not assigned to anyone
     _as(monkeypatch, db, EDITOR)
     assert (await task_routes.handle_update_task(
         _patch({"model": "anthropic/x"}, conversation_id="c1"))).status == 200
-    assert (await task_routes.handle_update_task(
-        _patch({"prompt": "other"}, conversation_id="c1"))).status == 403
 
-    db = _db(conversation=BOARD_TASK)  # not assigned
-    _as(monkeypatch, db, EDITOR)
+    _as(monkeypatch, db, VIEWER)
     assert (await task_routes.handle_update_task(
         _patch({"model": "anthropic/x"}, conversation_id="c1"))).status == 403
 
