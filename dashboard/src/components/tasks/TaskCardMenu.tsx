@@ -43,9 +43,10 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
   onMoveToLane, onReopen, onRemoveFromBoard, onDeleteDraft, onFork,
   onSetModel, onSetPriority, onSetDeadline, onSetTags, onCreateTag, children }: TaskCardMenuProps) {
   const [query, setQuery] = useState("");
-  const { myEmail, onMoveToBoard } = useBoardExtras();
-  // Only a task's creator can move it to another board (its chat becomes visible there).
-  const canMoveToBoard = !!onMoveToBoard && !task.task_card_id && (!task.owner || task.owner === myEmail);
+  const { onMoveToBoard } = useBoardExtras();
+  // Any owner or editor can move a task to another board they can edit (its
+  // chat becomes visible there). View-only members never see this menu.
+  const canMoveToBoard = !!onMoveToBoard && !task.task_card_id;
   const isDraft = isDraftTask(task);
   const isStaged = isStagedTask(task);
   const currentTags = task.task_tag_ids || [];

@@ -112,7 +112,7 @@ class ConversationObserver:
                     "content": prompt,
                     "timestamp": self.start_time,
                 }
-                # Shared-board tasks can be run by their creator or assignee:
+                # Shared-board tasks can be run by any owner or editor:
                 # record who sent each dashboard message (and so whose
                 # accounts that run used).
                 sender = self.metadata.get("user_name")

@@ -149,7 +149,7 @@ export function ManageBoardDialog({ open, onOpenChange, board, onSaved, onDelete
         <DialogHeader>
           <DialogTitle>{board ? "Share board" : "New board"}</DialogTitle>
           <DialogDescription>
-            Each board has its own columns, tags and context. A task runs with the accounts of whoever sends it a message: its creator or its assignee.
+            Each board has its own columns, tags and context. Owners and editors can message, edit and move any task; viewers only read. A task runs with the accounts of whoever sends it a message.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">

@@ -13,6 +13,7 @@ import {
   fetchTaskBoards, fetchTasksBoard, PERSONAL_BOARD_ID, updateTask,
   type Task, type TaskBoardSummary, type TaskCardItem,
 } from "@/lib/api";
+import { useBoardExtras } from "./boardExtras";
 
 const RESET_NOTE = "Its column, tags and assignee are reset; the chat and status are kept.";
 const PRIVACY_NOTE =
@@ -33,7 +34,10 @@ export function MoveToBoardDialog({ task, open, onOpenChange, onMoved }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const { myEmail } = useBoardExtras();
   const currentBoardId = task?.task_board_id || PERSONAL_BOARD_ID;
+  // Only its creator can pull a task onto a personal board (that hides it from everyone else).
+  const isCreator = !task?.owner || task.owner === myEmail;
   const target = boards?.find((b) => b.id === boardId);
   const needsCard = !!target?.card_mode;
 
@@ -41,9 +45,10 @@ export function MoveToBoardDialog({ task, open, onOpenChange, onMoved }: {
     if (!open) return;
     setBoardId(""); setCards(null); setCardId(""); setError(null); setBoards(null);
     fetchTaskBoards()
-      .then(({ boards: all }) => setBoards(all.filter((b) => b.role !== "viewer" && b.id !== currentBoardId)))
+      .then(({ boards: all }) => setBoards(all.filter((b) =>
+        b.role !== "viewer" && b.id !== currentBoardId && (isCreator || b.id !== PERSONAL_BOARD_ID))))
       .catch(() => setError("Could not load boards"));
-  }, [open, currentBoardId]);
+  }, [open, currentBoardId, isCreator]);
 
   useEffect(() => {
     setCards(null); setCardId("");

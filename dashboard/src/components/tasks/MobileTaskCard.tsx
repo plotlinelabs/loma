@@ -27,6 +27,7 @@ import { DEPLOY_QUEUED_LABEL, deadlineDisplay, isDraft as isDraftTask, isStaged 
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
+import { StarButton, StarSource } from "./TaskStar";
 
 interface MobileTaskCardProps {
   task: Task;
@@ -43,14 +44,18 @@ interface MobileTaskCardProps {
   onFork: (task: Task) => void;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
   onSetDeadline: (task: Task, deadline: string | null) => void;
+  onToggleStar: (task: Task) => void;
 }
 
 /** Touch-first card for the mobile inbox: no drag, actions always visible,
  * larger tap targets. Menus replace drag for moves. */
 export function MobileTaskCard({
   task, lanes, readOnly = false, onOpen, onStart, onMarkDone, onReopen,
-  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onFork, onSetPriority, onSetDeadline,
+  onMoveToLane, onRemoveFromBoard, onDeleteDraft, onFork, onSetPriority, onSetDeadline, onToggleStar,
 }: MobileTaskCardProps) {
+  // On your own board: a task you starred on a shared board (private copy).
+  const isStar = !!task.star;
+  const canStar = isStar || !!task.task_board_id;
   const isStaged = isStagedTask(task);
   const isDraft = isDraftTask(task);
   const isParked = isStaged && !isDraft;
@@ -59,12 +64,15 @@ export function MobileTaskCard({
 
   // Same lane targets as the desktop card: staged cards move between other
   // lanes; needs-input and done cards park into any lane.
-  const targetLanes = isStaged
+  const targetLanes = isStar
+    ? lanes.filter((lane) => task.column === "done" || lane.id !== task.column)
+    : isStaged
     ? lanes.filter((lane) => lane.id !== task.task_lane)
     : task.column === "needs_input" || task.column === "done" ? lanes : [];
 
   const { myEmail, onMoveToBoard } = useBoardExtras();
-  const canMoveToBoard = !!onMoveToBoard && !task.task_card_id && (!task.owner || task.owner === myEmail);
+  // Any owner or editor can move a task to another board (view-only hides this menu).
+  const canMoveToBoard = !!onMoveToBoard && !task.task_card_id;
 
   return (
     <div
@@ -77,22 +85,47 @@ export function MobileTaskCard({
           <div className="line-clamp-2 break-words text-[13px]">
             {task.title || task.prompt || "New task"}
           </div>
+          {isStar ? <div className="mt-1"><StarSource task={task} /></div> : (
           <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
             <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
             {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
             {task.status === "queued" && <span>{DEPLOY_QUEUED_LABEL}</span>}
           </div>
+          )}
           <div className="mt-1 flex items-center gap-1 overflow-hidden">
             {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
-            <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
+            {!isStar && <TaskPriorityTag task={task} onSetPriority={onSetPriority} />}
             <TaskDeadlineBadge task={task} />
           </div>
         </div>
-        {!readOnly && <div
+        {(!readOnly || canStar) && <div
           className="flex shrink-0 items-center"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
+          {canStar && <StarButton task={task} onToggle={onToggleStar} className="h-8 w-8" iconClassName="h-4 w-4" />}
+          {isStar && task.column !== "done" && (
+            <Button variant="ghost" size="icon" className="h-8 w-8" title="Mark done (for me only)" onClick={() => onMarkDone(task)}>
+              <RiCheckLine className="h-4 w-4" />
+            </Button>
+          )}
+          {isStar && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Move starred task">
+                  <RiMoreLine className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {targetLanes.map((lane) => (
+                  <DropdownMenuItem key={lane.id} onClick={() => onMoveToLane(task, lane.id)}>
+                    Move to {lane.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {!isStar && !readOnly && <>
           {isDraft && !!task.prompt.trim() && (
             <Button
               variant="ghost" size="icon" className="h-8 w-8"
@@ -178,6 +211,7 @@ export function MobileTaskCard({
               )}
             </DropdownMenuContent>
           </DropdownMenu>}
+          </>}
         </div>}
       </div>
     </div>

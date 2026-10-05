@@ -22,8 +22,13 @@ A shared board doc keeps the same `task_board` config shape (prompt, lanes,
 tags); its tasks carry `task_board_id`. Tasks without `task_board_id` stay on
 their creator's personal board, so existing data needs no migration.
 Agent runs use the identity and connections of whoever sends the message.
-Members of a shared board can see a task's chat; only its creator and its
-assignee (`task_assignee`, an owner or editor of the board) can message it.
+Members of a shared board can see a task's chat; its owners and editors can
+also message it, edit it and move it. `task_assignee` (an owner or editor)
+says whose task it is: it drives the "Assigned to me" filter and alerts.
+
+Stars are private bookmarks (`task_stars` collection, see api/task_stars.py):
+a starred shared-board task also shows on the starrer's own board, with a
+lane and done state that only they see.
 
 Card boards: a shared board created with `card_mode` shows *cards* (a deal, a
 candidate, a project...) in its lanes instead of tasks. Cards live in the
@@ -570,9 +575,9 @@ async def task_access(db, conversation: dict, user_email: str,
     """(can_view, can_edit, full) for a task conversation.
 
     `full` is the existing per-conversation access (creator, admin, ...).
-    Members of the task's shared board can view it; editors can also move
-    and annotate it, but never change what the agent runs (prompt, model,
-    tools) since runs use the creator's identity.
+    Members of the task's shared board can view it; its owners and editors
+    can also edit it (move, annotate, change the prompt, model and tools).
+    Each run uses the accounts of whoever sent the message.
     """
     from api.routes import _check_conversation_access
     if _check_conversation_access(conversation, user_email, system_role):
@@ -589,15 +594,22 @@ async def task_access(db, conversation: dict, user_email: str,
 async def can_run_task(db, conversation: dict, user_email: str, system_role: str) -> bool:
     """Whether the caller may message (run) a task.
 
-    Its creator always can. On a shared board its assignee can too, while
-    they are still an owner or editor there. Runs use the sender's accounts.
+    Its creator always can. On a shared board every owner and editor can
+    too; viewers only read. Runs use the sender's accounts.
     """
-    from api.routes import _check_conversation_access
-    if _check_conversation_access(conversation, user_email, system_role):
-        return True
-    if not conversation.get("task_board_id") or conversation.get("task_assignee") != user_email:
+    _, can_edit, _ = await task_access(db, conversation, user_email, system_role)
+    return can_edit
+
+
+async def is_board_editor(db, conversation: dict, user_email: str) -> bool:
+    """Whether the caller is an owner or editor of the shared board a task
+    sits on. Stricter than can_run_task: link sharing and system roles don't
+    count, so use it for actions on a teammate's task (stop a run, delete a
+    draft)."""
+    board_id = conversation.get("task_board_id")
+    if not board_id or not conversation.get("task_status"):
         return False
-    board = await resolve_board(db, user_email, conversation["task_board_id"])
+    board = await resolve_board(db, user_email, board_id)
     return bool(board) and board["role"] in EDIT_ROLES
 
 
@@ -666,8 +678,8 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "forked_from_conversation_id": task.get("forked_from_conversation_id") or None,
         "task_board_id": task.get("task_board_id") or None,
         "task_card_id": task.get("task_card_id") or None,
-        # The creator and the assignee can message the task; each run uses
-        # the accounts of whoever sent the message.
+        # The creator and the board's owners/editors can message the task;
+        # each run uses the accounts of whoever sent the message.
         "owner": (task.get("metadata") or {}).get("user_name") or None,
         "assignee": task.get("task_assignee") or None,
     }
@@ -1023,12 +1035,18 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
     )
     tasks = active_tasks + done_tasks
 
+    # Stars are private to the caller: shared boards flag the caller's own
+    # stars, and the personal board also lists the tasks they starred.
+    from api import task_stars
+    views = [_task_view(t, lane_ids) for t in tasks]
+    if board["shared"]:
+        await task_stars.flag_starred(db, user_email, views)
+    else:
+        views += await task_stars.starred_views(db, user_email, lane_ids, query.get("$or"))
+
     # Every column orders by effective rank (manual rank, or recency fallback
     # baked in by _task_view) — so all columns are manually reorderable.
-    ordered = sorted(
-        (_task_view(t, lane_ids) for t in tasks),
-        key=lambda view: view["task_rank"],
-    )
+    ordered = sorted(views, key=lambda view: view["task_rank"])
 
     counts: dict[str, int] = {lane_id: 0 for lane_id in lane_ids}
     counts.update({"working": 0, "needs_input": 0, "done": 0})
@@ -1107,7 +1125,7 @@ async def handle_update_task(request: web.Request) -> web.Response:
     if not conversation:
         return web.json_response({"error": "Not found"}, status=404)
 
-    can_view, can_edit, full = await task_access(db, conversation, user_email, system_role)
+    can_view, can_edit, _ = await task_access(db, conversation, user_email, system_role)
     if not can_view:
         return web.json_response({"error": "Not found"}, status=404)
     if not can_edit:
@@ -1119,19 +1137,10 @@ async def handle_update_task(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     creator = (conversation.get("metadata") or {}).get("user_name") or user_email
-    # Board editors can move and annotate a teammate's task. Its prompt and
-    # where it lives stay with the creator; the assignee also runs it, so
-    # they may pick its model and tools.
-    if not full and (
-        {"prompt", "task_board_id", "task_card_id"} & set(body)
-        or ("task_status" in body and body["task_status"] is None)
-    ):
-        return web.json_response(
-            {"error": "Only the task's creator can change that"}, status=403)
-    if not full and {"model", "tool_config"} & set(body) and not await can_run_task(
-            db, conversation, user_email, system_role):
-        return web.json_response(
-            {"error": "Only the task's creator or assignee can change that"}, status=403)
+    # Owners and editors of the task's board have full rights on it: prompt,
+    # model, tools, card, board and removal. Only moving a task to a personal
+    # board stays with its creator (checked below), since that hides it from
+    # everyone else.
 
     now = datetime.now(timezone.utc)
     current = conversation.get("task_status")
@@ -2253,4 +2262,6 @@ def setup_task_routes(app: web.Application):
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_get("/api/tasks", handle_list_tasks)
     app.router.add_post("/api/tasks/{conversation_id}/fork", handle_fork_task)
+    from api.task_stars import setup_star_routes
+    setup_star_routes(app)
     app.router.add_patch("/api/tasks/{conversation_id}", handle_update_task)

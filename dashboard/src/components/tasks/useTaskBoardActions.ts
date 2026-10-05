@@ -6,7 +6,10 @@ import {
   basePath,
   deleteConversation,
   forkTask as forkTaskRequest,
+  starTask,
+  unstarTask,
   updateTask,
+  updateTaskStar,
   createTaskTag,
   type BoardLane,
   type Task,
@@ -96,8 +99,29 @@ export function useTaskBoardActions({
     }
   };
 
-  const markDone = (task: Task) =>
+  // Starred cards (your own board) are private bookmarks: every move below
+  // changes only your star, never the task on its shared board.
+  const patchStar = (task: Task, changes: Partial<Task>, star: { lane?: string; done?: boolean; rank?: number }) =>
     mutate(
+      (tasks) => tasks.map((t) =>
+        t.conversation_id === task.conversation_id && t.star
+          ? { ...t, ...changes, star: { ...t.star, ...(star.lane ? { lane: star.lane } : {}), ...(star.done !== undefined ? { done: star.done } : {}) } }
+          : t),
+      () => updateTaskStar(task.conversation_id, star),
+    );
+
+  const toggleStar = (task: Task) =>
+    mutate(
+      // Unstarring on your own board takes the card off it.
+      (tasks) => task.star
+        ? tasks.filter((t) => t.conversation_id !== task.conversation_id)
+        : tasks.map((t) => (t.conversation_id === task.conversation_id ? { ...t, starred: !task.starred } : t)),
+      () => (task.starred ? unstarTask(task.conversation_id) : starTask(task.conversation_id)),
+    );
+
+  const markDone = (task: Task) => task.star
+    ? patchStar(task, { column: "done" }, { done: true })
+    : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
           ? { ...t, task_status: "done" as const, column: "done" }
@@ -105,8 +129,9 @@ export function useTaskBoardActions({
       () => updateTask(task.conversation_id, { task_status: "done" }),
     );
 
-  const reopen = (task: Task) =>
-    mutate(
+  const reopen = (task: Task) => task.star
+    ? patchStar(task, { column: task.star.lane, task_lane: task.star.lane }, { done: false })
+    : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
           ? { ...t, task_status: "active" as const, column: t.status === "running" ? "working" : "needs_input" }
@@ -116,8 +141,10 @@ export function useTaskBoardActions({
 
   // Moving into a staging lane also *parks* active tasks (todo + lane) so a
   // needs-input chat can be shelved and recontinued later.
-  const moveToLane = (task: Task, laneId: string, rank?: number) =>
-    mutate(
+  const moveToLane = (task: Task, laneId: string, rank?: number) => task.star
+    ? patchStar(task, { column: laneId, task_lane: laneId, task_rank: rank ?? task.task_rank },
+      { lane: laneId, done: false, ...(rank !== undefined ? { rank } : {}) })
+    : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
           ? {
@@ -135,15 +162,17 @@ export function useTaskBoardActions({
       }),
     );
 
-  const reorderInColumn = (task: Task, rank: number) =>
-    mutate(
+  const reorderInColumn = (task: Task, rank: number) => task.star
+    ? patchStar(task, { task_rank: rank }, { rank })
+    : mutate(
       (tasks) => tasks
         .map((t) => (t.conversation_id === task.conversation_id ? { ...t, task_rank: rank } : t)),
       () => updateTask(task.conversation_id, { task_rank: rank }),
     );
 
-  const removeFromBoard = (task: Task) =>
-    mutate(
+  const removeFromBoard = (task: Task) => task.star
+    ? toggleStar(task)
+    : mutate(
       (tasks) => tasks.filter((t) => t.conversation_id !== task.conversation_id),
       () => updateTask(task.conversation_id, { task_status: null }),
     );
@@ -210,7 +239,9 @@ export function useTaskBoardActions({
   const openTask = (task: Task) => {
     // Only unstarted drafts open the details editor; anything with history
     // (including chats parked in a lane) opens the conversation.
-    if (task.task_status === "todo" && !task.status) {
+    // A starred card always opens the real chat: its details belong to the
+    // shared board, not to this one.
+    if (task.task_status === "todo" && !task.status && !task.star) {
       onEditDraft(task);
       return;
     }
@@ -248,6 +279,7 @@ export function useTaskBoardActions({
     setTaskDeadline,
     setTaskTags,
     createAndAssignTag,
+    toggleStar,
     openTask,
   };
 }

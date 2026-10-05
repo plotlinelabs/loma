@@ -66,8 +66,9 @@ def _patch(monkeypatch, docs):
     users = SimpleNamespace(find_one=AsyncMock(return_value={
         "task_board": {"lanes": [{"id": "todo", "name": "Todo", "order": 0}], "tags": []},
     }))
+    stars = SimpleNamespace(find=lambda *_a, **_k: FakeCursor([]))
     monkeypatch.setattr(task_routes, "get_db", lambda: SimpleNamespace(
-        conversations=conversations, users=users,
+        conversations=conversations, users=users, task_stars=stars,
     ))
     monkeypatch.setattr(task_routes, "get_user_email", lambda _r: "owner@example.com")
     return conversations

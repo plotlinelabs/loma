@@ -587,7 +587,7 @@ function FileAttachmentCard({ file }: { file: FileAttachment }) {
 function ReadOnlyComposerNotice() {
   return (
     <p className="mx-auto max-w-3xl rounded-xl border border-dashed border-border px-3 py-2.5 text-center text-xs text-muted-foreground">
-      View only. Only this task&apos;s creator or its assignee can message it. Each run uses the accounts of whoever sends the message.
+      View only. Owners and editors of this board can message this task. Each run uses the accounts of whoever sends the message.
     </p>
   );
 }

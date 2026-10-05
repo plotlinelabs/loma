@@ -1212,18 +1212,40 @@ export interface Task {
   task_board_id?: string | null;
   /** Card the task lives in (card boards only). */
   task_card_id?: string | null;
-  /** Creator's email. The creator and the assignee can message the task. */
+  /** Creator's email. The creator and the board's owners/editors can message the task. */
   owner?: string | null;
   /** Shared boards: the owner/editor this task is assigned to. Each run uses the sender's accounts. */
   assignee?: string | null;
+  /** Shared boards: you starred this task. Private: nobody else sees it. */
+  starred?: boolean;
+  /** Your own board only: this card is a task you starred on a shared board. */
+  star?: TaskStar | null;
 }
 
-/** Whether `me` can message (run) a task: its creator, or its assignee while they can edit the board. */
-export function canRunTask(task: Pick<Task, "owner" | "assignee"> | null | undefined, me: string | null | undefined,
+/** Your private placement of a starred task on your own board. Moving the card
+ * or ticking it off changes only this, never the task on its shared board. */
+export interface TaskStar {
+  /** Your lane for it. */
+  lane: string;
+  /** Done for you (the task may still be open on its board). */
+  done: boolean;
+  /** Your role on the board the task lives on. */
+  role: TaskBoardRole;
+  board_id: string;
+  board_name: string;
+  board_emoji?: string;
+  /** Card the task sits in (card boards). */
+  card_title?: string | null;
+  /** Where the task really is on its board: a lane id, "working", "needs_input" or "done". */
+  source_column: string;
+}
+
+/** Whether `me` can message (run) a task: its creator, or an owner/editor of the shared board it sits on. */
+export function canRunTask(task: Pick<Task, "owner" | "task_board_id"> | null | undefined, me: string | null | undefined,
   boardRole?: TaskBoardRole | null): boolean {
   if (!task || !me) return false;
   if (task.owner === me) return true;
-  return !!task.assignee && task.assignee === me && (boardRole === "owner" || boardRole === "editor");
+  return !!task.task_board_id && (boardRole === "owner" || boardRole === "editor");
 }
 
 export type TaskBoardRole = "owner" | "editor" | "viewer";
@@ -1513,6 +1535,36 @@ export async function updateTask(
     throw new Error(body.error || `Failed to update task: ${res.status}`);
   }
   return res.json();
+}
+
+async function starRequest<T>(conversationId: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/tasks/${conversationId}/star`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Could not update star: ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Star a shared-board task: it also shows on your own board. Private to you. */
+export function starTask(conversationId: string): Promise<{ starred: boolean }> {
+  return starRequest(conversationId, "PUT");
+}
+
+export function unstarTask(conversationId: string): Promise<{ starred: boolean }> {
+  return starRequest(conversationId, "DELETE");
+}
+
+/** Place a starred task on your own board. Never changes the task itself. */
+export function updateTaskStar(
+  conversationId: string,
+  updates: { lane?: string; done?: boolean; rank?: number },
+): Promise<{ star: { lane: string; done: boolean; rank: number } }> {
+  return starRequest(conversationId, "PATCH", updates);
 }
 
 export async function forkTask(

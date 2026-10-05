@@ -131,6 +131,8 @@ async def init_observability():
     await _db.task_board_views.create_index("view_id", unique=True)
     await _db.task_board_views.create_index([("board_id", 1), ("owner", 1)])
     await _db.conversations.create_index("task_card_id", sparse=True)
+    # Private stars: one row per (person, task).
+    await _db.task_stars.create_index([("user_email", 1), ("conversation_id", 1)], unique=True)
 
     # Web push subscriptions (tasks board attention) — one doc per browser
     await _db.push_subscriptions.create_index("subscription.endpoint", unique=True)
