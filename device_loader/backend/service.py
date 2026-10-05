@@ -21,6 +21,11 @@ from device_loader.backend.builds import GITHUB_FETCH_TIMEOUT, blobs as default_
 from device_loader.backend.hub import DEFAULT_TIMEOUT, OP_TIMEOUTS, DeviceError, hub as default_hub
 
 LEASE_TTL = timedelta(minutes=15)
+# A runner error meaning the device itself went away mid-run (crashed / closed emulator), not a test failure:
+# the suite restarts the device once and re-runs the case.
+DEVICE_GONE = re.compile(r"not connected to this runner|is restarting|restarting it now|device '?[^ ]*'? not found|device offline"
+                         r"|no devices/emulators|Unable to lookup in current state|Invalid device state", re.IGNORECASE)
+MAX_SUITE_RECOVERIES = 2
 APP_ID = re.compile(r'[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*\Z')
 KEYS = {'back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up', 'volume_down', 'power',
         'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup'}
@@ -103,6 +108,7 @@ OPS = {
     'record': ({'duration_s'}, {'app_id'} | LAUNCH),
     'animations': ({'enabled'}, set()),
     'health': (set(), set()),
+    'recover': (set(), {'cold'}),
     'scenario': ({'duration_s'}, {'app_id', 'steps', 'record', 'sample_ms', 'sample_region', 'sample_min_change',
                                   'log_tags', 'log_source', 'log_lines', 'stop_first', 'stop_on_fail', 'end_after_steps',
                                   'console',
@@ -115,7 +121,7 @@ INTS = {'x': (0, 10000), 'y': (0, 10000), 'x1': (0, 10000), 'y1': (0, 10000), 'x
         'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 60),
         'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 60),
         'wait_s': (0, MAX_WAIT), 'sample_ms': (0, 2000), 'log_lines': (1, 2000)}
-BOOLS = {'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled', 'record',
+BOOLS = {'cold', 'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled', 'record',
          'stop_first', 'stop_on_fail', 'end_after_steps'}
 ENUMS = {'by': {'any', 'text', 'id', 'label'}, 'direction': {'down', 'up'}, 'source': {'auto', 'system', 'console'},
          'log_source': {'auto', 'system', 'console'}}
@@ -132,7 +138,7 @@ _REFS = {}
 # the op is sent, so a failed or timed-out attempt (e.g. a half-done install) also invalidates them.
 REF_RESET_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'tap', 'tap_text', 'swipe',
                  'type', 'key', 'set_text', 'clear_text', 'scroll_until_visible', 'run_flow', 'record', 'burst',
-                 'scenario'}
+                 'scenario', 'recover'}
 
 # Runner features newer than 1.0.0: an older runner rejects the op or silently ignores the argument,
 # so the backend refuses them up front with an upgrade hint (the runner reports VERSION in its hello).
@@ -145,7 +151,7 @@ NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
 RUNNER_GATES = ((NEEDS_RUNNER, NEW_RUNNER_OPS, NEW_RUNNER_ARGS),
                 ((1, 2, 0), {'scenario'}, {'logs': {'tags', 'since'}}),
                 ((1, 3, 0), set(), {'scenario': {'preflight'}}),
-                ((1, 4, 0), {'health'}, {}))
+                ((1, 4, 0), {'health', 'recover'}, {}))
 SCENARIO_1_3 = (1, 3, 0)
 SCENARIO_1_4 = (1, 4, 0)
 
@@ -793,6 +799,9 @@ class DeviceService:
                     'os_version': device.get('os_version'), 'virtual': device.get('virtual', True),
                     'runner': runner.get('name'), 'owner': runner.get('owner_email'),
                     'online': conn is not None,
+                    # ok | recovering (the runner is restarting it) | down (crashed/closed, restart failed or not tried)
+                    'state': device.get('state', 'ok') if conn is not None else 'offline',
+                    **({'error': str(device['error'])[:300]} if device.get('error') else {}),
                     'leased_by': ({'owner': lease['owner_email'], 'scope': lease['scope'],
                                    'expires_at': store.aware(lease['expires_at']).isoformat()} if held else None)})
         return devices
@@ -825,8 +834,11 @@ class DeviceService:
                 continue
         return None
 
-    async def lease(self, user_email, scope, device_id=None, platform=None):
+    async def lease(self, user_email, scope, device_id=None, platform=None, recover=False, cold=False):
+        """recover=True: restart the (crashed / hung) device after leasing it and wait for it."""
         self._check_scope(scope)
+        if recover and device_id is None:
+            raise DeviceError('recover needs a device_id')
         if device_id is not None:
             runner, serial = await self._resolve(user_email, device_id)
             if self.hub.get(runner['runner_id']) is None:
@@ -836,8 +848,9 @@ class DeviceService:
             if platform not in (None, 'android', 'ios'):
                 raise DeviceError('platform must be android or ios')
             devices = await self.list_devices(user_email)
-            candidates = [d['device_id'] for d in devices if d['online']
-                          and (platform is None or d['platform'] == platform)]
+            matching = [d for d in devices if d['online'] and (platform is None or d['platform'] == platform)]
+            # Running devices first; a down/recovering one is still a candidate (the lease then restarts it).
+            candidates = [d['device_id'] for d in sorted(matching, key=lambda d: d.get('state', 'ok') != 'ok')]
             if not candidates:
                 raise DeviceError(self._no_device_message(devices, platform))
         busy = []
@@ -847,12 +860,19 @@ class DeviceService:
                 await self._audit(user_email, scope, candidate, 'lease', True)
                 result = {'device_id': candidate, 'expires_at': store.aware(lease['expires_at']).isoformat(),
                           'note': 'Lease renews on every call and expires after 15 idle minutes. Release it when done.'}
-                health = await self.health(user_email, scope, candidate)
+                health = None if recover else await self.health(user_email, scope, candidate)
+                if recover or (health is not None and not health.get('ok')):
+                    recovery = await self.heal(user_email, scope, candidate, cold)
+                    if recovery is not None:
+                        result['recovery'] = recovery
+                        if recovery.get('recovered'):
+                            health = recovery.get('health') or await self.health(user_email, scope, candidate)
                 if health is not None:
                     result['health'] = health
                     if not health.get('ok'):
                         result['note'] += (' This device is too slow or unresponsive to test on right now (see '
-                                           'health.reasons): restart the emulator/simulator, or lease another device.')
+                                           'health.reasons and recovery): lease another device, or ask the user to '
+                                           'check the runner machine.')
                 return result
             busy.append(candidate)
         raise DeviceError('All matching devices are leased by another session: ' + ', '.join(busy))
@@ -893,6 +913,16 @@ class DeviceService:
             if 'too old' in str(exc) or 'Unsupported' in str(exc):
                 return None
             return {'ok': False, 'reasons': [str(exc)[:300]]}
+
+    async def heal(self, user_email, scope, device_id, cold=False):
+        """Ask the runner to restart a crashed / hung emulator or simulator and wait for it. None when the
+        runner is too old to do it; otherwise the runner's result, or {'recovered': False, 'error'}."""
+        try:
+            return await self.call(user_email, scope, device_id, 'recover', {'cold': True} if cold else {})
+        except DeviceError as exc:
+            if 'too old' in str(exc) or 'Unsupported' in str(exc):
+                return None
+            return {'recovered': False, 'error': str(exc)[:500]}
 
     async def force_release(self, user_email, device_id):
         runner, _ = await self._resolve(user_email, device_id)
@@ -983,13 +1013,25 @@ class DeviceService:
         if not plan:  # every case is `only` for another platform
             return {**self._suite_result([], [], None, extra), 'verdict': 'pass',
                     'note': f'No case applies to {platform}'}
+        recoveries = []
         if health_check:
             health = await self.health(user_email, scope, device_id)
+            if health is not None and not health.get('ok'):  # crashed, hung or slow: restart it once first
+                recovery = await self.heal(user_email, scope, device_id)
+                if recovery is not None:
+                    recoveries.append({'before': 'cases', **recovery})
+                    if recovery.get('recovered'):
+                        health = recovery.get('health') or await self.health(user_email, scope, device_id)
             if health is not None:
                 extra['health'] = health
                 if not health.get('ok'):
                     reason = 'device_slow: ' + '; '.join(health.get('reasons') or ['health check failed'])
+                    if recoveries and recoveries[-1].get('error'):
+                        reason += f"; restart failed: {recoveries[-1].get('error', '')[:200]}"
+                    extra['recoveries'] = recoveries
                     return self._suite_result([], names, reason, extra)
+        if recoveries:
+            extra['recoveries'] = recoveries
         for index, (op, op_args) in enumerate(setup, 1):
             try:
                 await self.call(user_email, scope, device_id, op, dict(op_args))
@@ -1002,7 +1044,7 @@ class DeviceService:
                 if loop.time() > deadline:
                     reason = f'the suite ran past its {SUITE_DEADLINE_S} s deadline; split it'
                     break
-                data, attempts = None, 0
+                data, attempts, healed = None, 0, False
                 while True:
                     attempts += 1
                     try:
@@ -1011,8 +1053,21 @@ class DeviceService:
                         data = await self.call(user_email, scope, device_id, 'scenario', dict(spec))
                     except DeviceError as exc:
                         data = {'verdict': 'error', 'failed': [str(exc)[:300]]}
+                        # The device died under this case: restart it and re-run the case (not a retry).
+                        if (DEVICE_GONE.search(str(exc)) and not healed and len(recoveries) < MAX_SUITE_RECOVERIES
+                                and loop.time() < deadline):
+                            recovery = await self.heal(user_email, scope, device_id)
+                            if recovery is not None:
+                                recoveries.append({'before': name, **recovery})
+                                extra['recoveries'] = recoveries
+                                if recovery.get('recovered'):
+                                    healed = True
+                                    attempts -= 1
+                                    continue
                     if data.get('verdict') not in ('fail', 'error') or attempts > retries or loop.time() > deadline:
                         break
+                if healed:
+                    data = {**data, 'device_restarted': True}
                 if attempts > 1:
                     data = {**data, 'attempts': attempts}
                     if data.get('verdict') == 'pass':

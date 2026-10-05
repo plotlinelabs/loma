@@ -31,6 +31,9 @@ export interface DeviceRecord {
   runner: string;
   owner: string;
   online: boolean;
+  /** ok | recovering (the runner is restarting it) | down (crashed or closed) | offline (runner offline) */
+  state?: "ok" | "recovering" | "down" | "offline";
+  error?: string;
   leased_by: { owner: string; scope: string; expires_at: string } | null;
 }
 

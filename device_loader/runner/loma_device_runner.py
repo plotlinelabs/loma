@@ -184,6 +184,19 @@ LOG_LINE_CHARS = 300
 # backend reports it as blocked before a test runs instead of failing the test.
 HEALTH_SCREENSHOT_MS = 5000
 HEALTH_UI_TREE_MS = 10000
+# Auto-recovery: restart an emulator/simulator that crashed, closed or hung, so a test run is not lost.
+RECOVER_BOOT_S = 180  # one cold boot; a second try with the software GPU gets the same again (op timeout 420 s)
+RECOVER_AUTO_MAX = 3  # automatic restarts per device per RECOVER_WINDOW_S; more means a boot loop: stop and report
+RECOVER_WINDOW_S = 1800
+RECOVER_WATCH_S = 1800  # only devices used in the last 30 min are restarted automatically (not ones closed on purpose)
+RECOVER_GRACE_S = 25  # missing this long (about two heartbeats) before an automatic restart
+KNOWN_PATH = CONFIG_DIR / 'known-devices.json'
+# adb / simctl errors that mean the device itself went away (crashed or closed), not that the op failed.
+DEVICE_GONE = re.compile(r"device '?[^ ']*'? not found|device offline|no devices/emulators|Unable to lookup in current "
+                         r"state|Invalid device state|device is not booted", re.IGNORECASE)
+EMULATOR_SERIAL = re.compile(r'emulator-([0-9]{4,5})\Z')
+AVD_NAME = re.compile(r'[A-Za-z0-9._-]{1,128}\Z')
+EMULATOR_ARG = re.compile(r'-[a-z][a-z0-9-]{0,40}\Z|[A-Za-z0-9._:,=/-]{1,200}\Z')
 # screenshot steps can return a fingerprint (the screen-change grid) to compare against a known-good one.
 MAX_FINGERPRINT_DIFF = 1.0
 # Screen-change sampling: a small grey grid per frame instead of images, so the model gets
@@ -235,7 +248,124 @@ def normalize_server(value, allow_http=False):
 
 def default_policy():
     return {'allow_physical_devices': False, 'allowed_app_ids': [], 'allow_maestro_scripts': False,
-            'keep_awake': True, 'preflight': 'public'}
+            'keep_awake': True, 'preflight': 'public', 'auto_recover': True, 'emulator_args': []}
+
+
+def android_sdk():
+    return Path(os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT') or
+                Path.home() / ('Library/Android/sdk' if sys.platform == 'darwin' else 'Android/Sdk'))
+
+
+def emulator_binary():
+    """The SDK emulator (not the legacy tools/emulator a PATH lookup may find first)."""
+    candidate = android_sdk() / 'emulator' / 'emulator'
+    return str(candidate) if candidate.is_file() else shutil.which('emulator')
+
+
+def avd_dir(name):
+    if os.environ.get('ANDROID_AVD_HOME'):
+        home = Path(os.environ['ANDROID_AVD_HOME'])
+    elif os.environ.get('ANDROID_EMULATOR_HOME'):
+        home = Path(os.environ['ANDROID_EMULATOR_HOME']) / 'avd'
+    else:
+        home = Path.home() / '.android' / 'avd'
+    return home / f'{name}.avd'
+
+
+def clear_avd_locks(name):
+    """A crashed emulator leaves *.lock files/dirs behind, and the next start of that AVD then exits
+    at once ("Running multiple emulators with the same AVD"). Only called once no process uses the AVD."""
+    removed, folder = [], avd_dir(name)
+    if not folder.is_dir():
+        return removed
+    for path in folder.glob('*.lock'):
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            removed.append(path.name)
+        except OSError:
+            pass
+    return removed
+
+
+def emulator_args(policy):
+    """Extra emulator flags from the runner policy (e.g. ["-memory", "4096"]); format-checked only."""
+    extra = policy.get('emulator_args') or []
+    if not isinstance(extra, list) or len(extra) > 20 or not all(
+            isinstance(arg, str) and EMULATOR_ARG.fullmatch(arg) for arg in extra):
+        raise OpError('policy.emulator_args must be a list of up to 20 simple emulator flags/values')
+    if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY') and sys.platform.startswith('linux') \
+            and '-no-window' not in extra:
+        extra = [*extra, '-no-window']  # a headless Linux service has no screen to open the window on
+    return extra
+
+
+def avd_processes(name):
+    """PIDs of emulator / qemu processes running this AVD."""
+    try:
+        out = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, timeout=10, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    wanted = re.compile(r'(?:^|\s)(?:-avd\s+|@)' + re.escape(name) + r'(?:\s|$)')
+    pids = []
+    for line in out.decode('utf-8', 'replace').splitlines():
+        pid, _, command = line.strip().partition(' ')
+        if pid.isdigit() and int(pid) != os.getpid() and wanted.search(command) and (
+                'emulator' in command or 'qemu-system' in command):
+            pids.append(int(pid))
+    return pids
+
+
+async def kill_avd(name):
+    """Stop every process of this AVD: TERM, then KILL whatever is still there after 5 s."""
+    pids = avd_processes(name)
+    for sig in (15, 9):
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        for _ in range(10):
+            pids = [pid for pid in pids if pid in avd_processes(name)]
+            if not pids:
+                return
+            await asyncio.sleep(0.5)
+
+
+def start_detached(argv, log_path):
+    """Start a process that outlives the runner (own session), output to a log file."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, 'ab') as log:
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+
+
+def log_tail(path, chars=600):
+    try:
+        return path.read_bytes()[-chars:].decode('utf-8', 'replace').strip()
+    except OSError:
+        return ''
+
+
+def load_known():
+    try:
+        data = json.loads(KNOWN_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {serial: info for serial, info in data.items()
+            if isinstance(info, dict) and SERIAL.fullmatch(serial)} if isinstance(data, dict) else {}
+
+
+def save_known(known):
+    try:
+        KNOWN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = KNOWN_PATH.with_suffix('.tmp')
+        tmp.write_text(json.dumps(known))
+        os.replace(tmp, KNOWN_PATH)
+    except OSError:
+        pass
 
 
 class KeepAwake:
@@ -1089,6 +1219,108 @@ class Android:
     def _sh(self, serial, *argv):
         return [self.adb, '-s', serial, 'shell', *argv]
 
+    # ── Recovery ──
+
+    async def raw_states(self):
+        """serial -> adb state (device, offline, unauthorized, ...), unlike list() which keeps only usable ones."""
+        _, out, _ = await run([self.adb, 'devices'], timeout=10)
+        states = {}
+        for line in out.decode('utf-8', 'replace').splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 2:
+                states[parts[0]] = parts[1]
+        return states
+
+    async def identity(self, serial):
+        """AVD name and console port of a running emulator: what is needed to start it again later."""
+        port = EMULATOR_SERIAL.fullmatch(serial)
+        if not port:
+            return {}
+        code, out, _ = await run([self.adb, '-s', serial, 'emu', 'avd', 'name'], timeout=10, check=False)
+        lines = out.decode('utf-8', 'replace').split()
+        name = lines[0] if code == 0 and lines else ''
+        if not AVD_NAME.fullmatch(name) or name == 'OK':
+            name = ''
+            for prop in ('ro.boot.qemu.avd_name', 'ro.kernel.qemu.avd_name'):
+                code, out, _ = await run(self._sh(serial, 'getprop', prop), timeout=10, check=False)
+                candidate = out.decode('utf-8', 'replace').strip()
+                if code == 0 and AVD_NAME.fullmatch(candidate):
+                    name = candidate
+                    break
+        return {'avd': name, 'port': int(port.group(1))} if name else {}
+
+    async def responsive(self, serial, timeout=10):
+        """Booted and answering adb shell."""
+        try:
+            code, out, _ = await run(self._sh(serial, 'getprop', 'sys.boot_completed'), timeout=timeout, check=False)
+        except OpError:
+            return False
+        return code == 0 and out.strip() == b'1'
+
+    async def wait_booted(self, serial, seconds, proc=None):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + seconds
+        while loop.time() < deadline:
+            if proc is not None and proc.poll() not in (None, 0):
+                return False  # the emulator failed during boot (a launcher that hands off to qemu exits 0)
+            if await self.responsive(serial):
+                return True
+            await asyncio.sleep(3)
+        return False
+
+    async def recover(self, serial, known, restart=False, allow_global=True, extra_args=()):
+        """Escalating: adb server restart (adb hung) -> reconnect (offline) -> kill the AVD and cold boot it
+        on the same port (same serial, so the same Loma device_id) -> once more with the software GPU."""
+        steps = []
+        if not restart:
+            try:
+                states = await self.raw_states()
+            except OpError:
+                if not allow_global:
+                    raise OpError('adb is not answering, and restarting it would cut off other devices '
+                                  'that are in use on this runner; retry when they are idle') from None
+                steps.append('adb_restart')
+                await run([self.adb, 'kill-server'], timeout=15, check=False)
+                await run([self.adb, 'start-server'], timeout=30, check=False)
+                states = {}
+                try:
+                    states = await self.raw_states()
+                except OpError:
+                    pass
+            if states.get(serial) == 'device' and await self.responsive(serial):
+                return {'method': steps[-1] if steps else 'none', 'steps': steps}
+            if states.get(serial) == 'offline' or steps:
+                steps.append('reconnect')
+                await run([self.adb, 'reconnect', 'offline'], timeout=15, check=False)
+                if await self.wait_booted(serial, 20):
+                    return {'method': 'reconnect', 'steps': steps}
+        name, port = known.get('avd'), known.get('port')
+        if not name or not port:
+            raise OpError('Cannot restart this emulator: its AVD name is unknown (the runner never saw it running). '
+                          'Start it from Android Studio or `emulator -avd NAME`.')
+        binary = emulator_binary()
+        if binary is None:
+            raise OpError(f'Cannot restart {name}: the Android emulator binary was not found '
+                          f'(looked in {android_sdk() / "emulator"}; set ANDROID_HOME)')
+        log = CONFIG_DIR / 'logs' / f'emulator-{name}.log'
+        for gpu in (None, 'swiftshader_indirect'):  # a GPU/driver crash is the usual reason for a second failure
+            steps.append('kill')
+            await run([self.adb, '-s', serial, 'emu', 'kill'], timeout=10, check=False)
+            await kill_avd(name)
+            removed = clear_avd_locks(name)
+            if removed:
+                steps.append('cleared_locks')
+            argv = [binary, '-avd', name, '-port', str(port), '-no-snapshot-load', '-no-boot-anim', '-no-audio',
+                    *extra_args, *(['-gpu', gpu] if gpu else [])]
+            steps.append('cold_boot' + ('_software_gpu' if gpu else ''))
+            proc = start_detached(argv, log)
+            if await self.wait_booted(serial, RECOVER_BOOT_S, proc):
+                await run(self._sh(serial, ANDROID_WAKEUP), timeout=15, check=False)
+                return {'method': steps[-1], 'steps': steps, 'avd': name}
+        await kill_avd(name)
+        raise OpError(f'Emulator {name} did not boot after {len(steps)} steps ({", ".join(steps)}). '
+                      f'Emulator log ({log}): {log_tail(log)}')
+
     async def packages(self, serial):
         _, out, _ = await run(self._sh(serial, 'pm', 'list', 'packages'), timeout=30)
         return {line[8:].strip() for line in out.decode('utf-8', 'replace').splitlines() if line.startswith('package:')}
@@ -1389,6 +1621,61 @@ class IOS:
                     devices.append({'serial': item['udid'], 'platform': 'ios', 'virtual': True,
                                     'name': item.get('name', 'Simulator'), 'os_version': version})
         return devices
+
+    # ── Recovery ──
+
+    async def sim_state(self, udid):
+        _, out, _ = await run(['xcrun', 'simctl', 'list', 'devices', '--json'], timeout=20)
+        for items in json.loads(out or b'{}').get('devices', {}).values():
+            for item in items:
+                if item.get('udid') == udid:
+                    return item.get('state')
+        return None
+
+    async def responsive(self, udid):
+        try:
+            code, _, _ = await run(['xcrun', 'simctl', 'getenv', udid, 'HOME'], timeout=15, check=False)
+        except OpError:
+            return False
+        return code == 0
+
+    async def recover(self, udid, known, restart=False, allow_global=True, extra_args=()):
+        """Boot a simulator that shut down; shut down and boot one that hung; restart CoreSimulatorService
+        when simctl itself is wedged (only when no other simulator is in use)."""
+        steps, wedged = [], False
+        await self._stop_console(udid)
+        self.consoles.pop(udid, None)
+        try:
+            state = await self.sim_state(udid)
+        except (OpError, ValueError):
+            state, wedged = 'unknown', True
+        if state is None:
+            raise OpError('This simulator no longer exists (deleted, or Xcode removed its runtime)')
+        if state == 'Booted' and not restart and await self.responsive(udid):
+            return {'method': 'none', 'steps': steps}
+        if state in ('Booted', 'Booting', 'Shutting Down'):
+            steps.append('shutdown')
+            try:
+                await run(['xcrun', 'simctl', 'shutdown', udid], timeout=60, check=False)
+                state = await self.sim_state(udid)
+            except (OpError, ValueError):
+                wedged = True
+            wedged = wedged or state != 'Shutdown'
+        if wedged:
+            if not allow_global:
+                raise OpError('The simulator service is stuck, and restarting it would disturb other simulators '
+                              'in use on this runner; retry when they are idle')
+            steps.append('restart_coresimulator')
+            await run(['killall', '-9', 'com.apple.CoreSimulator.CoreSimulatorService'], timeout=15, check=False)
+            await asyncio.sleep(3)
+            await run(['xcrun', 'simctl', 'shutdown', udid], timeout=60, check=False)
+        steps.append('boot')
+        await run(['xcrun', 'simctl', 'boot', udid], timeout=120, check=False)  # "already booted" is fine
+        await run(['xcrun', 'simctl', 'bootstatus', udid, '-b'], timeout=RECOVER_BOOT_S)
+        if not await self.responsive(udid):
+            raise OpError(f'Simulator {udid} booted but does not answer simctl (steps: {", ".join(steps)})')
+        self.log_start.pop(udid, None)
+        return {'method': steps[-2] if wedged else ('restart' if 'shutdown' in steps else 'boot'), 'steps': steps}
 
     def _idb(self):
         if shutil.which('idb') is None:
@@ -1801,7 +2088,7 @@ class Runner:
     OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
            'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow',
            'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record',
-           'animations', 'scenario', 'health'}
+           'animations', 'scenario', 'health', 'recover'}
     APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
     LAUNCHING_OPS = {'burst', 'record', 'scenario'}  # may launch app_id right before capturing
     CACHE_KEEP = 4
@@ -1820,6 +2107,16 @@ class Runner:
         self.granted = {}  # (serial, package) -> iOS privacy services granted at install (re-granted after a reset)
         self.cache_dir = Path(config.get('cache_dir') or CONFIG_DIR / 'build-cache')
         self.keep_awake = KeepAwake(self.policy.get('keep_awake', True))
+        # Auto-recovery state. known: serial -> how to start the device again (persisted, so a runner
+        # restart while an emulator is down still brings it back).
+        self.persist_known = drivers is None  # tests inject drivers and must not touch the real runner home
+        self.known = load_known() if self.persist_known else {}
+        self.recoveries = {}  # serial -> running recovery task
+        self.recovery_state = {}  # serial -> {'state': 'recovering'|'down', 'since', 'error'?}
+        self.auto_attempts = {}  # serial -> times of automatic restarts (boot-loop guard)
+        self.missing_since = {}  # serial -> time a known device was first seen missing
+        self.identified = set()  # serials whose AVD was read since they (re)appeared: a port can be reused
+        self._known_saved = 0.0
 
     def capabilities(self):
         caps = [d.platform for d in self.drivers]
@@ -1837,17 +2134,192 @@ class Runner:
                 if device['virtual'] or self.policy['allow_physical_devices']:
                     inventory[device['serial']] = (driver, device)
         self.inventory = inventory
-        return [device for _, device in inventory.values()]
+        await self._track(inventory)
+        return self._listing()
+
+    # ── Auto-recovery ──
+
+    async def _track(self, inventory):
+        """Remember how to restart each emulator/simulator, and since when a known one is missing."""
+        now, changed = time.time(), False
+        for serial, (driver, device) in inventory.items():
+            self.missing_since.pop(serial, None)
+            info = self.known.get(serial)
+            if not device['virtual']:
+                continue
+            if info is None or serial not in self.identified or (driver.platform == 'android' and not info.get('avd')):
+                self.identified.add(serial)
+                ident = {}
+                if hasattr(driver, 'identity'):
+                    try:
+                        ident = await driver.identity(serial)
+                    except OpError:
+                        pass
+                self.known[serial] = {**(info or {}), 'platform': driver.platform, 'name': device.get('name', serial),
+                                      'os_version': device.get('os_version', ''), 'virtual': True, **ident,
+                                      'last_used': (info or {}).get('last_used', 0)}
+                changed = True
+        for serial in self.known:
+            if serial not in inventory:
+                self.missing_since.setdefault(serial, now)
+                self.identified.discard(serial)
+        if changed:
+            self._save_known()
+
+    def _recent(self, serial):
+        return time.time() - (self.known.get(serial) or {}).get('last_used', 0) < RECOVER_WATCH_S
+
+    def _listing(self):
+        """Devices for the backend: running ones (state ok, or recovering while a restart is under way), plus
+        recently used ones that are down, so a lease explains the restart instead of 'device not found'."""
+        devices = []
+        for serial, (_, device) in self.inventory.items():
+            state = 'recovering' if serial in self.recoveries else 'ok'
+            devices.append({**device, 'state': state})
+        for serial, info in self.known.items():
+            if serial in self.inventory:
+                continue
+            status = self.recovery_state.get(serial)
+            if status is None and not self._recent(serial):
+                continue
+            entry = {'serial': serial, 'platform': info.get('platform'), 'virtual': True,
+                     'name': info.get('name', serial), 'os_version': info.get('os_version', ''),
+                     'state': (status or {}).get('state', 'down')}
+            if status and status.get('error'):
+                entry['error'] = status['error'][:300]
+            devices.append(entry)
+        return devices
+
+    def _mark_used(self, serial):
+        info = self.known.get(serial)
+        if info is None:
+            return
+        info['last_used'] = time.time()
+        if info['last_used'] - self._known_saved > 60:
+            self._known_saved = info['last_used']
+            self._save_known()
+
+    def _save_known(self):
+        if self.persist_known:
+            save_known(self.known)
+
+    def _can_auto(self, serial):
+        if not self.policy.get('auto_recover', True) or serial in self.recoveries:
+            return False
+        info = self.known.get(serial)
+        if not info or not info.get('virtual') or not self._recent(serial):
+            return False
+        if info.get('platform') == 'android' and not info.get('avd'):
+            return False
+        recent = [t for t in self.auto_attempts.get(serial, []) if time.time() - t < RECOVER_WINDOW_S]
+        self.auto_attempts[serial] = recent
+        return len(recent) < RECOVER_AUTO_MAX
+
+    def watch(self):
+        """Heartbeat hook: restart a recently used emulator/simulator that has been missing for a while."""
+        now = time.time()
+        for serial, since in list(self.missing_since.items()):
+            if now - since >= RECOVER_GRACE_S and self._can_auto(serial):
+                self._start_recovery(serial, auto=True)
+
+    def _start_recovery(self, serial, cold=False, auto=False):
+        if auto:
+            self.auto_attempts.setdefault(serial, []).append(time.time())
+        self.recovery_state[serial] = {'state': 'recovering', 'since': time.time(), 'auto': auto}
+        task = asyncio.ensure_future(self._recover(serial, cold))
+        self.recoveries[serial] = task
+
+        def done(finished):
+            if self.recoveries.get(serial) is finished:
+                del self.recoveries[serial]
+            if serial not in self.known:
+                self.recovery_state.pop(serial, None)
+            elif not finished.cancelled() and finished.exception() is not None:
+                error = finished.exception()
+                self.recovery_state[serial] = {'state': 'down', 'since': time.time(),
+                                               'error': str(error)[:500] if isinstance(error, OpError)
+                                               else f'Runner error: {type(error).__name__}'}
+                print(f'Recovery of {serial} failed: {self.recovery_state[serial]["error"]}', flush=True)
+        task.add_done_callback(done)
+        print(f'Restarting {serial} ({"automatic" if auto else "requested"})', flush=True)
+        return task
+
+    async def recover(self, serial, cold=False):
+        """The recover op: join a running restart or start one, and wait for it. Shielded, so the call's own
+        timeout never leaves an emulator half-started."""
+        task = self.recoveries.get(serial) or self._start_recovery(serial, cold)
+        return await asyncio.shield(task)
+
+    async def _recover(self, serial, cold):
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        info = dict(self.known.get(serial) or {})
+        present = self.inventory.get(serial)
+        platform = present[1]['platform'] if present else info.get('platform')
+        driver = next((d for d in self.drivers if d.platform == platform), None)
+        if driver is None:
+            raise OpError('Unknown device: this runner never saw it running, so it cannot restart it')
+        if (present and not present[1]['virtual']) or info.get('virtual') is False:
+            raise OpError('Physical devices are never restarted by the runner: check the cable / adb authorisation')
+        lock = self.locks.setdefault(serial, asyncio.Lock())
+        try:  # a call hung on the dead device holds the lock until its deadline: do not wait that long
+            await asyncio.wait_for(lock.acquire(), 20)
+            locked = True
+        except asyncio.TimeoutError:
+            locked = False
+        try:
+            if present and not cold:
+                health = await self.health(driver, serial)
+                if health['ok']:
+                    self.recovery_state.pop(serial, None)
+                    return {'recovered': True, 'serial': serial, 'method': 'none', 'health': health,
+                            'note': 'The device was running and healthy; nothing was restarted.'}
+                if health.get('hint') and all('took' in reason for reason in health.get('reasons', [])):
+                    self.recovery_state.pop(serial, None)  # slow, not broken: a cold boot would only add load
+                    raise OpError(health['hint'] + ' Not restarting the device (cold=true forces it).')
+            busy = any(other != serial and other_lock.locked() and other in self.inventory
+                       and self.inventory[other][0] is driver for other, other_lock in self.locks.items())
+            result = await driver.recover(serial, info, restart=bool(present) or cold, allow_global=not busy,
+                                          extra_args=emulator_args(self.policy) if platform == 'android' else ())
+        finally:
+            if locked:
+                lock.release()
+        await self.refresh()
+        if serial not in self.inventory:
+            raise OpError(f'{serial} was restarted ({result["method"]}) but the runner still cannot see it')
+        health = await self.health(self.inventory[serial][0], serial)
+        self.recovery_state.pop(serial, None)
+        self.missing_since.pop(serial, None)
+        self._mark_used(serial)
+        return {'recovered': True, 'serial': serial, **result, 'took_s': int(loop.time() - began), 'health': health,
+                'note': 'Cold boot: app data and installed builds are kept, but the app is not running and '
+                        'any logged-in state held only in memory is gone.' if 'cold_boot' in result['method']
+                        or result['method'] in ('boot', 'restart', 'restart_coresimulator') else ''}
 
     async def call(self, op, serial, args):
         if op not in self.OPS:
             raise OpError('Unsupported operation')
         if not isinstance(serial, str) or not SERIAL.fullmatch(serial) or not isinstance(args, dict):
             raise OpError('Invalid device or arguments')
+        if op == 'recover':
+            self._mark_used(serial)
+            return await self.recover(serial, need_bool(args, 'cold'))
         if serial not in self.inventory:
             await self.refresh()
         if serial not in self.inventory:
-            raise OpError('Device is not connected to this runner (is the emulator/simulator running?)')
+            self._mark_used(serial)
+            if serial in self.recoveries:
+                since = int(time.time() - self.recovery_state.get(serial, {}).get('since', time.time()))
+                raise OpError(f'Device is restarting (automatic recovery, {since}s so far). Call recover to wait '
+                              'for it, or retry in 1-3 minutes.')
+            if self._can_auto(serial):
+                self._start_recovery(serial, auto=True)
+                raise OpError('Device is not connected to this runner (it crashed or was closed); the runner is '
+                              'restarting it now. Call recover to wait for it, or retry in 1-3 minutes.')
+            down = self.recovery_state.get(serial, {}).get('error')
+            raise OpError('Device is not connected to this runner (is the emulator/simulator running?)'
+                          + (f'. The last restart failed: {down}' if down else ''))
+        self._mark_used(serial)
         driver, _ = self.inventory[serial]
         app_id = None
         if op in self.APP_OPS or op in self.LAUNCHING_OPS:
@@ -1856,8 +2328,22 @@ class Runner:
                 raise OpError(f"App {app_id} is not in this runner's allowed_app_ids (install needs app_id)")
         self.keep_awake.touch()
         lock = self.locks.setdefault(serial, asyncio.Lock())
-        async with lock:
-            return await self._dispatch(driver, op, serial, args, app_id)
+        try:
+            async with lock:
+                return await self._dispatch(driver, op, serial, args, app_id)
+        except OpError as exc:
+            # The device died under this call (the inventory is up to 15 s old): restart it now, not after
+            # the next heartbeat, and say so, so the caller waits instead of failing the test.
+            if not DEVICE_GONE.search(str(exc)) or serial in self.recoveries:
+                raise
+            self.missing_since.setdefault(serial, time.time())
+            self.identified.discard(serial)
+            if not self._can_auto(serial):
+                raise
+            self.inventory.pop(serial, None)
+            self._start_recovery(serial, auto=True)
+            raise OpError(f'{str(exc)[:300]}. The device crashed or was closed: the runner is restarting it now. '
+                          'Call recover to wait for it, or retry in 1-3 minutes.') from None
 
     async def _dispatch(self, driver, op, serial, args, app_id):
         if op == 'install':
@@ -2507,7 +2993,14 @@ class Runner:
                 reasons.append(f"reading the UI tree took {result['ui_tree_ms']} ms (limit {HEALTH_UI_TREE_MS} ms)")
         except OpError as exc:  # UI not idle or no idb: not a speed problem, so only noted
             result['ui_tree_error'] = str(exc)[:200]
+        try:  # an overloaded machine is the usual cause of a slow emulator: report it, do not fail on it
+            result['host_load_per_cpu'] = round(os.getloadavg()[0] / (os.cpu_count() or 1), 2)
+        except (OSError, AttributeError):
+            pass
         result.update(ok=not reasons, **({'reasons': reasons} if reasons else {}))
+        if reasons and result.get('host_load_per_cpu', 0) > 1.5:
+            result['hint'] = ('The runner machine is overloaded (load per CPU core '
+                              f"{result['host_load_per_cpu']}): close other emulators/apps; a restart alone may not help.")
         return result
 
     def _cached(self, sha256):
@@ -2628,7 +3121,11 @@ class Runner:
             try:
                 devices = await asyncio.wait_for(self.refresh(), HEARTBEAT_SECONDS * 2)
             except Exception:  # slow or failing scan: still heartbeat with the last inventory
-                devices = [device for _, device in self.inventory.values()]
+                devices = self._listing()
+            try:
+                self.watch()
+            except Exception as exc:  # noqa: BLE001  never let the watchdog stop the heartbeat
+                print(f'Device watchdog error: {type(exc).__name__}', flush=True)
             await self.send(ws, {'type': 'devices', 'devices': devices})
 
     async def connect_once(self):
@@ -2877,7 +3374,8 @@ def install_service():
         path.write_bytes(plistlib.dumps({
             'Label': LABEL, 'ProgramArguments': [sys.executable, str(INSTALLED_SCRIPT), 'run'],
             'EnvironmentVariables': env, 'RunAtLoad': True, 'KeepAlive': {'SuccessfulExit': False},
-            'StandardOutPath': str(log), 'StandardErrorPath': str(log)}))
+            'StandardOutPath': str(log), 'StandardErrorPath': str(log),
+            'AbandonProcessGroup': True}))  # emulators the runner restarted survive a runner restart
         domain = f'gui/{os.getuid()}'
         subprocess.run(['launchctl', 'bootout', f'{domain}/{LABEL}'], capture_output=True)  # fine if not loaded
         commands, logs = [['launchctl', 'bootstrap', domain, str(path)]], f'Logs: {log}'
@@ -2886,7 +3384,9 @@ def install_service():
         environment = ' '.join(f'"{key}={value}"' for key, value in env.items())
         path.write_text(f'[Unit]\nDescription=Loma Device Runner\nAfter=network-online.target\n\n'
                         f'[Service]\nEnvironment={environment}\nExecStart={foreground}\n'
-                        f'Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n')
+                        f'Restart=on-failure\nRestartSec=5\n'
+                        f'KillMode=process\n'  # emulators the runner restarted survive a runner restart
+                        f'\n[Install]\nWantedBy=default.target\n')
         commands = [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', SERVICE_NAME],
                     ['systemctl', '--user', 'restart', SERVICE_NAME]]
         logs = f'Logs: journalctl --user -u {SERVICE_NAME} -f'
