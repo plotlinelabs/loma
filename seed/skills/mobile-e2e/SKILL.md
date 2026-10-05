@@ -46,8 +46,9 @@ installing or writing specs, and stop with a clear "blocked" message if one is m
 3. **Every app under test can be configured at launch** (user id, locale, endpoint, cache reset) through
    launch extras / UserDefaults. If one platform's test app has no such hook, say so before you start:
    that platform's fresh-state or locale cases cannot run, and that is a gap in the app, not a test result.
-4. **The device is healthy.** `lease` returns `health`; if `health.ok` is false (`device_slow`), restart the
-   emulator or pick another device instead of running tests that will time out.
+4. **The device is healthy.** `lease` returns `health`. If the check fails, the lease restarts the device once
+   by itself (`recovery` in the result). If `health.ok` is still false, lease another device instead of running
+   tests that will time out. Never restart an emulator by hand or ask the user to, before trying `recover`.
 
 ## Cost rules (read first)
 
@@ -266,7 +267,10 @@ explicitly want that.
 | "Runner too old for scenario" / "logs with tags" | Ask the user to update the runner: download the new `loma_device_runner.py` from Integrations → Devices and run `python3 loma_device_runner.py setup` |
 | "Runner too old for scenario with preflight / expect.max_drift_ms / number_after / launch_app options" | Those need runner >= 1.3.0: same update as above. Everything else in `scenario` still works on 1.2.0 |
 | "Runner too old for health / scenario with expect.screens / screenshot fingerprint" | Those need runner >= 1.4.0 (also iOS `reset_app` and iOS console across relaunch): same update as above. A suite on an older runner skips the health check |
-| `health.ok: false` / `not run: device_slow` | The emulator is too slow (screenshots over 5 s, UI tree over 10 s). Restart it, close other emulators, or lease another device; do not run the suite on it |
+| `health.ok: false` / `not run: device_slow` | The emulator is too slow (screenshots over 5 s, UI tree over 10 s) even after the automatic restart. If `health.hint` says the machine is overloaded, a restart will not help: lease another device or ask the user to close other emulators |
+| "Device is not connected to this runner … the runner is restarting it" / "Device is restarting" / `state: recovering` | The emulator/simulator crashed or was closed, and runner >= 1.4.0 is restarting it (cold boot, same `device_id`). Run `recover --device-id ID` (isolated: `device.lease device_id=ID recover=true`) to wait for it, then re-launch the app: it is installed but not running. Do not re-install. A suite does this by itself and re-runs the case (`device_restarted: true`) |
+| `state: down` in `list`, or "The last restart failed: …" | The automatic restart failed (or the device was idle for over 30 min, so it was not restarted). Run `recover` once. If it fails again, the error has the emulator log tail (e.g. low disk, no hypervisor): tell the user, and lease another device |
+| "would cut off other devices" / "would disturb other simulators" | Restarting adb or CoreSimulatorService needs every other device on that runner to be idle; retry when your other device calls are done |
 | Step result `ignored_extras: true` (iOS) | The app was running and `restart: false`, so iOS kept its old launch arguments. Leave `restart` unset or set it to true |
 | `verdict: blocked` | A `preflight` check failed: the test environment is wrong (backend down, config flag off). Fix the environment or tell the user; the app was not tested |
 | "host is on a private or local network" | Preflight only reaches public hosts by default. The runner owner can set `"preflight": "any"` in the runner policy |
@@ -293,6 +297,7 @@ The steps above use `tools/device.py` spellings. In isolated runs use the `devic
 | `suite --spec suite.yaml` | `device.suite` with `cases`, `defaults`, `platform_defaults`, `setup`, `teardown`, `reset`, `retries`, `stop_on_fail`, `keep_video` |
 | `suite --device-id A --device-id B` | `device.suite device_ids=[A, B]` |
 | `release --all` | `device.release all=true` (also automatic when an isolated run ends) |
+| `recover --device-id ID [--cold]` | `device.lease device_id=ID recover=true [cold=true]` (restart a crashed / closed / hung device and wait) |
 | `logs --tag X --since C` | `device.observe what=logs tags=[X] since=C` |
 | `animations --off` | `device.input action=animations enabled=false` |
 | `ui-tree --compact` | `device.observe what=ui_tree compact=true` |

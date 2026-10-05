@@ -326,7 +326,7 @@ async def test_a_slow_device_blocks_the_suite_before_any_case():
     result = await service.suite(OWNER, 'conv-1', 'r/e', suite('a', 'b', setup=[{'action': 'key', 'key': 'wakeup'}]))
     assert result['verdict'] == 'blocked' and result['not_run'] == ['a', 'b'] and result['cases'] == []
     assert result['not_run_reason'].startswith('device_slow: a screenshot took 11000 ms')
-    assert service.calls == ['health']                                   # nothing else touched the device
+    assert service.calls == ['health', 'recover']             # one restart attempt, then no case touched it
     assert '| a | not run | | device_slow' in result['table'] and result['junit'].count('<skipped') == 2
     # An older runner has no health op: the suite simply runs.
     older = await Suite({'a': PASS, 'b': PASS}).suite(OWNER, 'conv-1', 'r/e', suite('a', 'b'))

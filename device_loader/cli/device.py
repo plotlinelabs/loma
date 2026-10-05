@@ -10,6 +10,7 @@ Commands:
   device.py --user-email E --auth-token T --scope CONVERSATION_ID list
   device.py ... lease [--platform android|ios] [--device-id ID]
   device.py ... release --device-id ID | --all          (--all: every device this conversation holds)
+  device.py ... recover --device-id ID [--cold]        (restart a crashed/closed/hung emulator or simulator)
   device.py ... cleanup [--keep PATH ...]                 (delete this conversation's device media except --keep)
   device.py ... install --device-id ID (--repo OWNER/NAME --artifact-name NAME [--pr N | --run-id N]
                 [--wait SECONDS] [--dispatch-workflow FILE.yml] | --file PATH) [--app-id PKG]
@@ -179,6 +180,9 @@ def build_body(args):
         return {**body, 'action': 'list'}
     if args.command == 'lease':
         return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform}
+    if args.command == 'recover':  # a lease that restarts the device and waits for it
+        return {**body, 'action': 'lease', 'device_id': args.device_id, 'recover': True,
+                **({'cold': True} if args.cold else {})}
     if args.command == 'release':
         if args.all == bool(args.device_id):
             raise SystemExit('release takes --device-id or --all')
@@ -392,6 +396,9 @@ def parser():
     s = sub.add_parser('release')
     s.add_argument('--device-id')
     s.add_argument('--all', action='store_true', help='Release every device this conversation holds')
+    s = sub.add_parser('recover', help='Restart a crashed / closed / hung emulator or simulator and wait for it')
+    s.add_argument('--device-id', required=True)
+    s.add_argument('--cold', action='store_true', help='Restart even if the device looks healthy')
     s = sub.add_parser('cleanup')
     s.add_argument('--keep', action='append', metavar='PATH', help='A media file to keep (evidence you attached)')
     s = with_device('install')

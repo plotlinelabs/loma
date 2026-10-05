@@ -115,7 +115,12 @@ class DeviceTools:
             _pick(args, set(), set(), tool)
             return {'devices': await service.list_devices(owner)}
         if tool == 'device.lease':
-            picked = _pick(args, set(), {'platform', 'device_id'}, tool)
+            picked = _pick(args, set(), {'platform', 'device_id', 'recover', 'cold'}, tool)
+            if picked.get('recover') is True or picked.get('cold') is True:
+                if not isinstance(picked.get('device_id'), str):
+                    raise DeviceError('recover needs the device_id to restart (see device.list)')
+                return await service.lease(owner, scope, picked['device_id'], recover=True,
+                                           cold=picked.get('cold') is True)
             return await service.lease(owner, scope, picked.get('device_id'), picked.get('platform'))
         if tool == 'device.release' and args.get('all') is True and 'device_id' not in args:
             _pick(args, {'all'}, set(), tool)
