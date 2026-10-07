@@ -119,6 +119,13 @@ export function DataRoomLogo({ className }: { className?: string }) {
   );
 }
 
+export function FigmaLogo({ className }: { className?: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/figma.png" alt="Figma" className={className} style={{ objectFit: "contain" }} />
+  );
+}
+
 // Lookup map: server/tool name → logo component
 export const TOOL_LOGOS: Record<string, React.FC<{ className?: string }>> = {
   "docs": GitBookLogo,
@@ -136,4 +143,5 @@ export const TOOL_LOGOS: Record<string, React.FC<{ className?: string }>> = {
   pylon: PylonLogo,
   grain: GrainLogo,
   dataroom: DataRoomLogo,
+  figma: FigmaLogo,
 };

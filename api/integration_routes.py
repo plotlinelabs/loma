@@ -10,14 +10,30 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import aiohttp as _aiohttp
 from aiohttp import web
 
-from api.auth_helpers import require_admin, get_user_email
-from api.oauth_helpers import encrypt_token, decrypt_token, register_oauth_client
-from integrations.registry import PROVIDER_CATALOG, list_providers, get_provider, server_configured
+from api.auth_helpers import require_admin, get_user_email, get_system_role
+from api.oauth_helpers import (
+    _exchange_oauth_code,
+    create_oauth_state,
+    decrypt_token,
+    encrypt_token,
+    extract_code_verifier,
+    generate_pkce_pair,
+    register_oauth_client,
+    store_org_oauth_tokens,
+    verify_oauth_state,
+)
+from integrations.registry import (
+    PROVIDER_CATALOG,
+    get_provider,
+    is_shared_oauth,
+    list_providers,
+    server_configured,
+)
 from observability.db import get_db
 
 logger = logging.getLogger(__name__)
@@ -42,6 +58,7 @@ async def _list_integrations(request: web.Request) -> web.Response:
     if db is not None:
         async for doc in db.integrations.find({"status": "active"}):
             connected[doc["provider"]] = {
+                "oauth_status": doc.get("oauth_status"),
                 "connected_by": doc.get("connected_by"),
                 "connected_at": doc.get("connected_at", "").isoformat() if doc.get("connected_at") else None,
                 "has_webhook_secret": bool(doc.get("webhook_secret_encrypted")),
@@ -128,6 +145,11 @@ async def _connect_integration(request: web.Request) -> web.Response:
     catalog_entry = get_provider(provider)
     if catalog_entry is None:
         return web.json_response({"error": f"Unknown provider: {provider}"}, status=400)
+    if is_shared_oauth(provider):
+        return web.json_response(
+            {"error": f"{catalog_entry['display_name']} connects with a login, not an API key"},
+            status=400,
+        )
 
     # Get user email from auth context (set by auth_middleware)
     user_email = request.get("user_email", "unknown")
@@ -170,6 +192,9 @@ async def _disconnect_integration(request: web.Request) -> web.Response:
     catalog_entry = get_provider(provider)
     if catalog_entry is None:
         return web.json_response({"error": f"Unknown provider: {provider}"}, status=400)
+    if is_shared_oauth(provider):
+        # The shared login acts for everyone, so only admins may remove it.
+        require_admin(request)
 
     result = await db.integrations.delete_one({"provider": provider})
     if result.deleted_count == 0:
@@ -551,6 +576,172 @@ async def _update_integration_sharing(request: web.Request) -> web.Response:
     return web.json_response({"status": "updated", "shared_with": shared_with})
 
 
+# ── Org-shared OAuth (e.g. Figma): one admin logs in, everyone uses it ────
+
+
+def _org_oauth_redirect_uri(request: web.Request, provider: str) -> str:
+    from api.oauth_routes import _oauth_redirect_uri
+    return _oauth_redirect_uri(request, f"org/{provider}")
+
+
+async def _discover_shared_oauth_metadata(mcp_url: str) -> dict | None:
+    """Discover the auth server for a known MCP URL (RFC 9728, then same-origin)."""
+    parsed = urlparse(mcp_url)
+    resource_metadata_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/oauth-protected-resource"
+    return await _discover_oauth_metadata(mcp_url, resource_metadata_url)
+
+
+async def _org_oauth_authorize(request: web.Request) -> web.Response:
+    """GET /api/integrations/{provider}/oauth/authorize — start the org-wide login (admin-only)."""
+    require_admin(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "Database not available"}, status=503)
+
+    provider = request.match_info["provider"]
+    catalog_entry = get_provider(provider)
+    if catalog_entry is None or not is_shared_oauth(provider):
+        return web.json_response({"error": f"{provider} does not support org login"}, status=400)
+
+    email = get_user_email(request)
+    if not email:
+        return web.json_response({"error": "User not authenticated"}, status=401)
+
+    oauth_spec = catalog_entry["oauth"]
+    metadata = await _discover_shared_oauth_metadata(oauth_spec["mcp_url"])
+    if not metadata or not metadata.get("authorization_endpoint") or not metadata.get("token_endpoint"):
+        return web.json_response(
+            {"error": f"Could not discover {catalog_entry['display_name']} OAuth settings"}, status=502,
+        )
+
+    redirect_uri = _org_oauth_redirect_uri(request, provider)
+    doc = await db.integrations.find_one({"provider": provider}) or {}
+
+    # Reuse an earlier registration for the same redirect URI; otherwise
+    # register a new client. The new client stays "pending" until the login
+    # finishes, so a live connection keeps refreshing with its own client.
+    reusable = None
+    for key in ("pending_oauth_config", "oauth_config"):
+        cfg = doc.get(key) or {}
+        if cfg.get("client_id_encrypted") and cfg.get("redirect_uri") == redirect_uri:
+            reusable = cfg
+            break
+
+    if reusable is None:
+        if not metadata.get("registration_endpoint"):
+            return web.json_response(
+                {"error": f"{catalog_entry['display_name']} does not offer client registration"}, status=502,
+            )
+        reg = await register_oauth_client(
+            registration_endpoint=metadata["registration_endpoint"],
+            redirect_uri=redirect_uri,
+            client_name=oauth_spec.get("client_name", "Loma"),
+        )
+        if reg is None or "error" in reg:
+            detail = (reg or {}).get("error", "network error")
+            return web.json_response(
+                {"error": f"{catalog_entry['display_name']} client registration failed: {detail}"}, status=502,
+            )
+        reusable = {
+            "client_id_encrypted": encrypt_token(reg["client_id"]),
+            "client_secret_encrypted": encrypt_token(reg["client_secret"]) if reg.get("client_secret") else None,
+            "token_endpoint_auth_method": reg.get("token_endpoint_auth_method", "client_secret_post"),
+        }
+
+    pending = {
+        **reusable,
+        "authorization_endpoint": metadata["authorization_endpoint"],
+        "token_endpoint": metadata["token_endpoint"],
+        "registration_endpoint": metadata.get("registration_endpoint"),
+        "scopes": metadata.get("scopes_supported") or [],
+        "redirect_uri": redirect_uri,
+    }
+    now = datetime.now(timezone.utc)
+    await db.integrations.update_one(
+        {"provider": provider},
+        {
+            "$set": {"pending_oauth_config": pending, "updated_at": now},
+            "$setOnInsert": {"integration_id": str(uuid.uuid4()), "status": "pending"},
+        },
+        upsert=True,
+    )
+
+    code_verifier, code_challenge = generate_pkce_pair()
+    params = {
+        "client_id": decrypt_token(pending["client_id_encrypted"]),
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "state": create_oauth_state(email, code_verifier=code_verifier),
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+    if pending["scopes"]:
+        params["scope"] = " ".join(pending["scopes"])
+    return web.json_response({"authorize_url": f"{pending['authorization_endpoint']}?{urlencode(params)}"})
+
+
+async def _org_oauth_callback(request: web.Request) -> web.Response:
+    """GET /api/oauth/org/{provider}/callback — finish the org-wide login."""
+    from api.oauth_routes import _callback_error, _callback_success_generic
+
+    provider = request.match_info["provider"]
+    catalog_entry = get_provider(provider)
+    if catalog_entry is None or not is_shared_oauth(provider):
+        # Never echo an unvalidated path segment into the callback page.
+        return _callback_error("Unknown provider", provider="org")
+    db = get_db()
+    if db is None:
+        return _callback_error("Database not available", provider=provider)
+
+    if request.query.get("error"):
+        logger.warning("Org OAuth error for %s: %s", provider, request.query.get("error")[:100])
+        return _callback_error("Authorization was denied or failed", provider=provider)
+    code = request.query.get("code")
+    state = request.query.get("state")
+    if not code or not state:
+        return _callback_error("Missing authorization code or state", provider=provider)
+
+    email = verify_oauth_state(state)
+    if email is None:
+        return _callback_error("Invalid or expired authorization state", provider=provider)
+    # The browser session must belong to the admin who started the login.
+    session_email = get_user_email(request)
+    if session_email and session_email != email:
+        return _callback_error("Signed-in user does not match the user who started the login", provider=provider)
+    if get_system_role(request) != "admin":
+        return _callback_error("Admin access required", provider=provider)
+
+    doc = await db.integrations.find_one({"provider": provider}) or {}
+    pending = doc.get("pending_oauth_config")
+    if not pending:
+        return _callback_error("No login in progress; click Connect again", provider=provider)
+
+    client_id = decrypt_token(pending["client_id_encrypted"])
+    client_secret = (
+        decrypt_token(pending["client_secret_encrypted"]) if pending.get("client_secret_encrypted") else ""
+    )
+    token_data = await _exchange_oauth_code(
+        token_endpoint=pending["token_endpoint"],
+        code=code,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=pending["redirect_uri"],
+        auth_method=pending.get("token_endpoint_auth_method", "client_secret_post"),
+        code_verifier=extract_code_verifier(state),
+    )
+    if not token_data or not token_data.get("access_token"):
+        return _callback_error("Failed to exchange authorization code", provider=provider)
+
+    # Promote the client used for this login before storing its tokens.
+    await db.integrations.update_one(
+        {"provider": provider},
+        {"$set": {"oauth_config": pending}, "$unset": {"pending_oauth_config": ""}},
+    )
+    await store_org_oauth_tokens(db, provider, token_data, connected_by=email)
+    logger.info("[INTEGRATIONS] Org-shared login completed for %s (by %s)", provider, email)
+    return _callback_success_generic(provider=provider, display_name=catalog_entry["display_name"])
+
+
 def setup_integration_routes(app: web.Application):
     """Register integration API routes."""
     app.router.add_get("/api/integrations", _list_integrations)
@@ -561,3 +752,5 @@ def setup_integration_routes(app: web.Application):
     app.router.add_delete("/api/integrations/{provider}", _disconnect_integration)
     app.router.add_get("/api/integrations/{provider}/webhook-url", _get_webhook_url)
     app.router.add_patch("/api/integrations/{provider}/sharing", _update_integration_sharing)
+    app.router.add_get("/api/integrations/{provider}/oauth/authorize", _org_oauth_authorize)
+    app.router.add_get("/api/oauth/org/{provider}/callback", _org_oauth_callback)

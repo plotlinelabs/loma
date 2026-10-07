@@ -39,6 +39,7 @@ import {
   addCustomConnector,
   removeCustomConnector,
   getWebhookUrl,
+  getOrgOAuthAuthorizeUrl,
   probeCustomConnector,
   updateIntegrationSharing,
   type Integration,
@@ -458,6 +459,7 @@ export default function IntegrationsPage() {
   const [probing, setProbing] = useState(false);
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
   const [connectingCustomOAuth, setConnectingCustomOAuth] = useState<string | null>(null);
+  const [connectingOrgOAuth, setConnectingOrgOAuth] = useState<string | null>(null);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
   const [disconnectingProvider, setDisconnectingProvider] = useState<string | null>(null);
 
@@ -580,6 +582,9 @@ export default function IntegrationsPage() {
 
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
+      if (event.data?.type === "oauth-complete" || event.data?.type === "oauth-error") {
+        setConnectingOrgOAuth(null);
+      }
       if (event.data?.type === "oauth-complete") {
         const prov = event.data.provider;
         if (prov === "slack") setConnectingSlack(false);
@@ -814,6 +819,26 @@ export default function IntegrationsPage() {
     }
   };
 
+  // Org-shared OAuth (e.g. Figma): an admin logs in once for the whole org.
+  const handleConnectOrgOAuth = async (provider: string) => {
+    setError(null);
+    setConnectingOrgOAuth(provider);
+    try {
+      const url = await getOrgOAuthAuthorizeUrl(provider);
+      const w = 500, h = 650;
+      const left = window.screenX + (window.outerWidth - w) / 2;
+      const top = window.screenY + (window.outerHeight - h) / 2;
+      const popup = window.open(url, `org-oauth-${provider}`, `width=${w},height=${h},left=${left},top=${top},popup=yes`);
+      if (!popup) {
+        setError("Popup blocked. Please allow popups and try again.");
+        setConnectingOrgOAuth(null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start login");
+      setConnectingOrgOAuth(null);
+    }
+  };
+
   const handleOrgConnected = async () => {
     setConnectModalTarget(null);
     await loadConnections();
@@ -959,6 +984,7 @@ export default function IntegrationsPage() {
     hubspot: () => <img src="/hubspot.png" alt="HubSpot" className="w-8 h-8 rounded" />,
     notion: () => <img src="/notion.png" alt="Notion" className="w-8 h-8 rounded" />,
     linear: () => <LinearLogo />,
+    figma: () => <img src="/figma.png" alt="Figma" className="w-8 h-8 rounded" />,
     sentry: () => <img src="/sentry.png" alt="Sentry" className="w-8 h-8 rounded" />,
   };
 
@@ -1218,6 +1244,8 @@ export default function IntegrationsPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
               {userManagedIntegrations.map((integ) => {
                 const isOrgConnected = integ.status === "connected";
+                const isSharedOAuth = integ.auth_type === "oauth_shared";
+                const isOrgExpired = isSharedOAuth && isOrgConnected && integ.oauth_status === "expired";
                 const Logo = PROVIDER_LOGOS[integ.provider];
                 return (
                   <Card key={integ.provider}>
@@ -1240,8 +1268,20 @@ export default function IntegrationsPage() {
                         </div>
                       </div>
                       <div className="flex items-center justify-between mt-2">
-                        <StatusBadge status={integ.status} />
-                        {isOrgConnected ? (
+                        <StatusBadge status={isOrgExpired ? "expired" : integ.status} />
+                        {isSharedOAuth && (!isOrgConnected || isOrgExpired) ? (
+                          isAdmin ? (
+                            <Button
+                              size="xs"
+                              onClick={() => handleConnectOrgOAuth(integ.provider)}
+                              disabled={connectingOrgOAuth === integ.provider}
+                            >
+                              {connectingOrgOAuth === integ.provider ? "..." : isOrgExpired ? "Reconnect" : "Connect"}
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Admin connects</span>
+                          )
+                        ) : isSharedOAuth && !isAdmin ? null : isOrgConnected ? (
                           <Button
                             variant="destructive"
                             size="xs"
@@ -1299,6 +1339,11 @@ export default function IntegrationsPage() {
                                   Personal auth available
                                 </Badge>
                               )}
+                              {isSharedOAuth && (
+                                <Badge variant="secondary">
+                                  Shared login
+                                </Badge>
+                              )}
                             </div>
 
                             {integ.has_webhook && webhookUrls[integ.provider] && (
@@ -1325,7 +1370,30 @@ export default function IntegrationsPage() {
                         </>
                       )}
 
-                      {!isOrgConnected && (
+                      {isSharedOAuth && isOrgConnected && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Everyone it is shared with acts as this {integ.display_name} account.
+                        </p>
+                      )}
+
+                      {!isOrgConnected && isSharedOAuth && (
+                        <>
+                          <Separator className="my-5" />
+                          <p className="text-[13px] text-muted-foreground">
+                            An admin logs in to {integ.display_name} once and everyone in the org can use it.
+                            All actions run as that {integ.display_name} account, so use a shared account.
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {["MCP tools", "Shared login"].map((cap) => (
+                              <Badge key={cap} variant="secondary">
+                                {cap}
+                              </Badge>
+                            ))}
+                          </div>
+                        </>
+                      )}
+
+                      {!isOrgConnected && !isSharedOAuth && (
                         <>
                           <Separator className="my-5" />
                           <p className="text-[13px] text-muted-foreground">

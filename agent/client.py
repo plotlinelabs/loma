@@ -165,6 +165,10 @@ async def merge_db_integrations(config: dict) -> dict:
             catalog_entry = PROVIDER_CATALOG.get(provider)
             if not catalog_entry:
                 continue
+            # Org-shared OAuth (e.g. Figma): the token expires and is refreshed
+            # on demand, so it is injected per run by build_user_mcp_overrides.
+            if catalog_entry.get("auth_type") == "oauth_shared":
+                continue
             # CLI-tool integrations have no MCP template — they store
             # credentials in the DB and tools read them via _integration_key.
             if not catalog_entry.get("mcp_config_template"):
@@ -238,17 +242,24 @@ async def get_excluded_integrations_for_user(user_email: str) -> set[str]:
 async def build_user_mcp_overrides(user_email: str) -> dict:
     """Build per-user MCP server config for OAuth-requiring connectors.
 
-    Covers two cases:
+    Covers three cases:
     1. Custom MCP connectors with auth_mode "oauth" (existing)
     2. Catalog providers that support per-user OAuth (hubspot, notion, grain)
        — the user's personal token overrides the org-level shared key.
+    3. Org-shared OAuth providers (e.g. Figma) — one admin's login, refreshed
+       on demand, given to every user. Sharing rules still apply afterwards
+       via get_excluded_integrations_for_user.
 
     Returns a dict of MCP server configs keyed by server name.
     """
     try:
         from observability.db import get_db
-        from api.oauth_helpers import get_valid_custom_mcp_token, get_valid_provider_token
-        from integrations.registry import PROVIDER_CATALOG
+        from api.oauth_helpers import (
+            get_valid_custom_mcp_token,
+            get_valid_org_oauth_token,
+            get_valid_provider_token,
+        )
+        from integrations.registry import PROVIDER_CATALOG, shared_oauth_providers
 
         db = get_db()
         if db is None:
@@ -285,6 +296,17 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
             server_name = catalog["mcp_server_name"]
             overrides[server_name] = mcp_cfg
             logger.info("Built per-user %s MCP config for %s", provider, user_email)
+
+        # 3. Org-shared OAuth providers (one login for the whole org)
+        for provider in shared_oauth_providers():
+            token = await get_valid_org_oauth_token(provider, db=db)
+            if not token:
+                continue
+            catalog = PROVIDER_CATALOG[provider]
+            overrides[catalog["mcp_server_name"]] = _resolve_mcp_template(
+                catalog["mcp_config_template"], token, {},
+            )
+            logger.info("Built org-shared %s MCP config for %s", provider, user_email)
 
         return overrides
     except Exception:
