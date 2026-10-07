@@ -1006,7 +1006,7 @@ async def get_valid_org_oauth_token(provider: str, db=None) -> str | None:
     if db is None:
         return None
 
-    doc = await db.integrations.find_one({"provider": provider, "status": "active"})
+    doc = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
     tokens = (doc or {}).get("oauth_tokens") or {}
     if not tokens.get("access_token") or doc.get("oauth_status") == "expired":
         return None
@@ -1019,7 +1019,7 @@ async def get_valid_org_oauth_token(provider: str, db=None) -> str | None:
 
     async with _org_refresh_lock(provider):
         # Another run may have refreshed while we waited for the lock.
-        doc = await db.integrations.find_one({"provider": provider, "status": "active"})
+        doc = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
         tokens = (doc or {}).get("oauth_tokens") or {}
         if not tokens.get("access_token"):
             return None
@@ -1056,7 +1056,7 @@ async def get_valid_org_oauth_token(provider: str, db=None) -> str | None:
         )
         if not new_token or not new_token.get("access_token"):
             # A different process may have rotated the refresh token first.
-            latest = await db.integrations.find_one({"provider": provider, "status": "active"})
+            latest = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
             latest_tokens = (latest or {}).get("oauth_tokens") or {}
             if latest_tokens.get("refresh_token") not in (None, old_refresh_enc) and _org_token_is_fresh(latest_tokens):
                 return decrypt_token(latest_tokens["access_token"])
@@ -1070,7 +1070,7 @@ async def get_valid_org_oauth_token(provider: str, db=None) -> str | None:
             {"$set": _org_tokens_update(new_token)},
         )
         if result.matched_count == 0:
-            latest = await db.integrations.find_one({"provider": provider, "status": "active"})
+            latest = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
             latest_tokens = (latest or {}).get("oauth_tokens") or {}
             if latest_tokens.get("access_token"):
                 return decrypt_token(latest_tokens["access_token"])

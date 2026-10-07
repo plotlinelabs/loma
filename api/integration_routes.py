@@ -192,11 +192,13 @@ async def _disconnect_integration(request: web.Request) -> web.Response:
     catalog_entry = get_provider(provider)
     if catalog_entry is None:
         return web.json_response({"error": f"Unknown provider: {provider}"}, status=400)
+    query: dict = {"provider": provider}
     if is_shared_oauth(provider):
         # The shared login acts for everyone, so only admins may remove it.
         require_admin(request)
+        query["is_custom"] = {"$ne": True}
 
-    result = await db.integrations.delete_one({"provider": provider})
+    result = await db.integrations.delete_one(query)
     if result.deleted_count == 0:
         return web.json_response({"error": "Integration not found"}, status=404)
 
@@ -616,6 +618,12 @@ async def _org_oauth_authorize(request: web.Request) -> web.Response:
 
     redirect_uri = _org_oauth_redirect_uri(request, provider)
     doc = await db.integrations.find_one({"provider": provider}) or {}
+    if doc.get("is_custom"):
+        # An older custom connector already owns this provider key.
+        return web.json_response(
+            {"error": f"Remove the custom '{provider}' connector before connecting the built-in one"},
+            status=409,
+        )
 
     # Reuse an earlier registration for the same redirect URI; otherwise
     # register a new client. The new client stays "pending" until the login
@@ -711,7 +719,7 @@ async def _org_oauth_callback(request: web.Request) -> web.Response:
     if get_system_role(request) != "admin":
         return _callback_error("Admin access required", provider=provider)
 
-    doc = await db.integrations.find_one({"provider": provider}) or {}
+    doc = await db.integrations.find_one({"provider": provider, "is_custom": {"$ne": True}}) or {}
     pending = doc.get("pending_oauth_config")
     if not pending:
         return _callback_error("No login in progress; click Connect again", provider=provider)

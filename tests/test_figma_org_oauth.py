@@ -374,3 +374,24 @@ async def test_list_shows_figma_card_with_oauth_status(db, monkeypatch):
     figma = next(i for i in json.loads(resp.body) if i["provider"] == "figma")
     assert figma["status"] == "connected"
     assert figma["oauth_status"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_legacy_custom_figma_connector_is_never_touched(db, monkeypatch):
+    await db.integrations.insert_one({
+        "provider": "figma", "is_custom": True, "status": "active",
+        "mcp_url": "https://mcp.figma.com/mcp", "auth_mode": "oauth",
+    })
+    register = AsyncMock()
+    monkeypatch.setattr(integration_routes, "register_oauth_client", register)
+    monkeypatch.setattr(integration_routes, "_reload_pool", AsyncMock())
+
+    resp = await integration_routes._org_oauth_authorize(FakeRequest())
+    assert resp.status == 409
+    register.assert_not_awaited()
+
+    resp = await integration_routes._disconnect_integration(FakeRequest())
+    assert resp.status == 404
+    doc = await db.integrations.find_one({"provider": "figma"})
+    assert doc["is_custom"] is True and "pending_oauth_config" not in doc
+    assert await oauth_helpers.get_valid_org_oauth_token("figma", db=db) is None
