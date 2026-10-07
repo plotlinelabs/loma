@@ -35,6 +35,7 @@ import {
   RiLoader4Line,
   RiShareLine,
   RiFileCopyLine,
+  RiGitBranchLine,
 } from "@remixicon/react";
 import { basePath, setConversationShared, updateTask } from "@/lib/api";
 
@@ -55,6 +56,8 @@ interface ChatContextMenuProps {
   canShare?: boolean;
   isShared?: boolean;
   onSharingChange?: (shared: boolean) => void;
+  /** Copy this chat into a new task on the caller's "My tasks" board. */
+  onFork?: () => void;
   triggerClassName?: string;
 }
 
@@ -74,6 +77,7 @@ export default function ChatContextMenu({
   canShare = false,
   isShared = false,
   onSharingChange,
+  onFork,
   triggerClassName,
 }: ChatContextMenuProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -268,6 +272,19 @@ export default function ChatContextMenu({
             >
               <RiShareLine size={16} className="text-muted-foreground" />
               {shared ? "Manage sharing" : "Share conversation"}
+            </DropdownMenuItem>
+          )}
+
+          {onFork && (
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                setDropdownOpen(false);
+                onFork();
+              }}
+            >
+              <RiGitBranchLine size={16} className="text-muted-foreground" />
+              Fork to my tasks
             </DropdownMenuItem>
           )}
 

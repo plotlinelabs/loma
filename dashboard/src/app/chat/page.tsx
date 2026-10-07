@@ -8,6 +8,7 @@ import {
   RiLoader4Line,
   RiPushpinFill,
   RiPushpinLine,
+  RiGitBranchLine,
 } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +24,7 @@ import ChatContextMenu from "../../components/ChatContextMenu";
 import { CostChip } from "../../components/CostChip";
 import { HumanTaskPanel } from "@/components/tasks/HumanTaskPanel";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
-import { fetchConversation, fetchFlow, basePath } from "../../lib/api";
+import { fetchConversation, fetchFlow, forkTask, basePath } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
 import { MobileTopBarActions, MobileTopBarTitle, useHideBottomNav } from "@/components/mobile/MobileChrome";
 
@@ -61,6 +62,11 @@ function ChatPageContent() {
   const [taskStatus, setTaskStatus] = useState<"todo" | "active" | "done" | null>(null);
   const [conversationOwner, setConversationOwner] = useState<string | null>(null);
   const [conversationShared, setConversationShared] = useState(false);
+  // False when the caller can read but not message this chat (share-link
+  // viewers): the composer becomes a "Fork to continue" notice.
+  const [canMessage, setCanMessage] = useState(true);
+  const [forkedFrom, setForkedFrom] = useState<string | null>(null);
+  const [forking, setForking] = useState(false);
   const [humanTaskId, setHumanTaskId] = useState<string | null>(null);
   const humanTask = !!continueId && humanTaskId === continueId;
 
@@ -134,6 +140,8 @@ function ChatPageContent() {
         setHumanTaskId(data.conversation.human_task ? continueId : null);
         setConversationOwner(data.conversation.metadata?.user_name || null);
         setConversationShared(data.conversation.metadata?.visibility === "shared");
+        setCanMessage(data.can_message !== false);
+        setForkedFrom(data.conversation.forked_from_conversation_id || null);
         setPinnedAgentId(data.conversation.metadata?.agent_id || null);
         setTaskStatus(data.conversation.task_status || null);
         if (data.conversation.task_status === "todo" && !data.conversation.status) {
@@ -181,6 +189,22 @@ function ChatPageContent() {
       }
     }
   }, [continueId, flowId, taskId]);
+
+  // Copy this chat into a new active task on the caller's "My tasks" board
+  // and open it, so they can keep chatting from where it left off.
+  const handleFork = useCallback(async () => {
+    if (!activeConversationId || forking) return;
+    setForking(true);
+    setError(null);
+    try {
+      const { task } = await forkTask(activeConversationId, { start: true });
+      // Full navigation: the chat panel keeps its own state per conversation.
+      window.location.assign(`${basePath}/chat?continue=${task.conversation_id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not fork this chat");
+      setForking(false);
+    }
+  }, [activeConversationId, forking]);
 
   // Derive the display title for the header
   const headerTitle = flowId
@@ -252,6 +276,7 @@ function ChatPageContent() {
             canShare={!!user?.email && user.email === conversationOwner}
             isShared={conversationShared}
             onSharingChange={setConversationShared}
+            onFork={handleFork}
             triggerClassName="size-10 flex items-center justify-center rounded-full text-muted-foreground press-scale [&_svg]:size-5"
           />
         </MobileTopBarActions>
@@ -383,6 +408,7 @@ function ChatPageContent() {
                 canShare={!!user?.email && user.email === conversationOwner}
                 isShared={conversationShared}
                 onSharingChange={setConversationShared}
+                onFork={handleFork}
                 triggerClassName="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               />}
 
@@ -440,6 +466,14 @@ function ChatPageContent() {
         </div>
       )}
 
+      {forkedFrom && (
+        <div className="px-3 lg:px-4 py-1.5 border-b border-border text-xs text-muted-foreground flex items-center gap-1.5">
+          <RiGitBranchLine size={14} />
+          Forked from{" "}
+          <a href={`${basePath}/chat?continue=${forkedFrom}`} className="underline hover:text-foreground">another chat</a>
+        </div>
+      )}
+
       {/* Split pane content area — uses shared ChatWithArtifacts wrapper */}
       {humanTask && activeConversationId ? <HumanTaskPanel conversationId={activeConversationId} /> : <ChatWithArtifacts
         initialItems={initialItems}
@@ -456,7 +490,30 @@ function ChatPageContent() {
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
         onStreamComplete={handleStreamComplete}
+        readOnly={!!activeConversationId && !canMessage}
+        readOnlyNotice={
+          <ForkToContinueNotice owner={conversationOwner} forking={forking} onFork={handleFork} />
+        }
       />}
+    </div>
+  );
+}
+
+function ForkToContinueNotice({ owner, forking, onFork }: {
+  owner: string | null;
+  forking: boolean;
+  onFork: () => void;
+}) {
+  return (
+    <div className="mx-auto max-w-3xl flex items-center justify-between gap-3 rounded-xl border border-dashed border-border px-4 py-3 max-md:flex-col max-md:text-center">
+      <p className="text-xs text-muted-foreground">
+        {owner ? <>Shared by <span className="font-medium text-foreground">{owner}</span>. </> : null}
+        Fork it to your tasks to continue the conversation.
+      </p>
+      <Button size="sm" onClick={onFork} disabled={forking} className="shrink-0">
+        {forking ? <RiLoader4Line size={14} className="animate-spin" /> : <RiGitBranchLine size={14} />}
+        Fork to my tasks
+      </Button>
     </div>
   );
 }

@@ -577,17 +577,19 @@ async def task_access(db, conversation: dict, user_email: str,
     `full` is the existing per-conversation access (creator, admin, ...).
     Members of the task's shared board can view it; its owners and editors
     can also edit it (move, annotate, change the prompt, model and tools).
-    Each run uses the accounts of whoever sent the message.
+    Each run uses the accounts of whoever sent the message. A share link
+    only grants view access: link viewers fork the chat to continue it.
     """
-    from api.routes import _check_conversation_access
-    if _check_conversation_access(conversation, user_email, system_role):
+    from api.routes import _check_conversation_access, _without_link_share
+    if _check_conversation_access(_without_link_share(conversation), user_email, system_role):
         return True, True, True
+    link_view = bool(user_email) and (conversation.get("metadata") or {}).get("visibility") == "shared"
     board_id = conversation.get("task_board_id")
     if not board_id or not conversation.get("task_status"):
-        return False, False, False
+        return link_view, False, False
     board = await resolve_board(db, user_email, board_id)
     if not board:
-        return False, False, False
+        return link_view, False, False
     return True, board["role"] in EDIT_ROLES, False
 
 
@@ -884,8 +886,40 @@ def _new_task_doc(user_email: str, prompt: str, title: str | None, model: str, l
     }
 
 
+# Credentials that can end up in a chat transcript: the per-run auth token the
+# runtime injects, CLI flags that carry it, and well-known API key shapes.
+_FORK_SECRET_PATTERNS = [
+    (re.compile(r"(\[Personal Tools Auth Token:\s*)[^\]]+(\])"), r"\1[REDACTED]\2"),
+    (re.compile(r"(--auth-token[ =]+)[\"']?[^\s`\"']+[\"']?"), r"\1[REDACTED]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+){0,2}={0,2}"), "[REDACTED]"),
+    (re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{10,}"
+                r"|github_pat_[A-Za-z0-9_]{10,}|xox[abprs]-[A-Za-z0-9-]+|AKIA[A-Z0-9]{16})\b"),
+     "[REDACTED]"),
+]
+
+
+def _scrub_secrets(value):
+    """A deep copy of `value` with credential-looking strings redacted."""
+    if isinstance(value, str):
+        for pattern, replacement in _FORK_SECRET_PATTERNS:
+            value = pattern.sub(replacement, value)
+        return value
+    if isinstance(value, dict):
+        return {k: _scrub_secrets(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrub_secrets(v) for v in value]
+    return copy.deepcopy(value)
+
+
 async def handle_fork_task(request: web.Request) -> web.Response:
-    """POST /api/tasks/{conversation_id}/fork — copy a task as an independent draft."""
+    """POST /api/tasks/{conversation_id}/fork — copy a task as an independent draft.
+
+    Anyone who can view the chat can fork it: its owner, board members and,
+    once the owner turns on link sharing, anyone with the link. Forking
+    someone else's chat copies only the transcript (with credentials
+    scrubbed), never the owner's settings, agent or staged files. Pass
+    `start: true` to open the fork as an active chat instead of a draft.
+    """
     db = get_db()
     if db is None:
         return web.json_response({"error": "Observability not configured"}, status=503)
@@ -932,6 +966,9 @@ async def handle_fork_task(request: web.Request) -> web.Response:
     if board["card_mode"] and not fork_card_id:
         return web.json_response({"error": "Pick a card for this task"}, status=400)
 
+    # Someone else's chat: copy the conversation, not its owner's settings.
+    foreign = source_owner != user_email
+    start = bool(body.get("start"))
     source_title = source.get("title") or None
     title = (body.get("title") or "").strip() if "title" in body else (
         f"{source_title} (fork)" if source_title else None
@@ -947,12 +984,18 @@ async def handle_fork_task(request: web.Request) -> web.Response:
         "finished_at": source.get("finished_at"),
         "duration_ms": None,
         "status": "interrupted" if source.get("status") == "running" else source.get("status"),
-        "metadata": {**copy.deepcopy(source.get("metadata") or {}), "user_name": user_email},
-        "prompt": source.get("prompt") or "",
+        # A fork starts private, whatever the source's sharing setting.
+        "metadata": {"user_name": user_email} if foreign else {
+            **{k: v for k, v in copy.deepcopy(source.get("metadata") or {}).items() if k != "visibility"},
+            "user_name": user_email,
+        },
+        "prompt": _scrub_secrets(source.get("prompt") or "") if foreign else source.get("prompt") or "",
         "model": source.get("model") or "",
         "total_turns": source.get("total_turns", 0),
-        "final_response": source.get("final_response") or "",
-        "messages": copy.deepcopy(source.get("messages") or []),
+        "final_response": _scrub_secrets(source.get("final_response") or "") if foreign
+        else source.get("final_response") or "",
+        "messages": _scrub_secrets(source.get("messages") or []) if foreign
+        else copy.deepcopy(source.get("messages") or []),
         "confidence": None,
         "cost": None,
         "savings": None,
@@ -961,12 +1004,12 @@ async def handle_fork_task(request: web.Request) -> web.Response:
         "deleted": False,
         "title": title,
         "title_edited": bool(title),
-        "task_status": "todo",
+        "task_status": "active" if start else "todo",
         "task_lane": lane,
         "task_rank": -now.timestamp(),
         "task_created_at": now,
         "task_staged_at": now,
-        "task_started_at": None,
+        "task_started_at": now if start else None,
         "task_done_at": None,
         "task_tag_ids": copy.deepcopy(source.get("task_tag_ids") or [])
         if same_board else [],
@@ -977,7 +1020,7 @@ async def handle_fork_task(request: web.Request) -> web.Response:
         "forked_from_conversation_id": cid,
         "forked_at": now,
         **({"draft_files": copy.deepcopy(source["draft_files"])}
-           if source.get("draft_files") else {}),
+           if source.get("draft_files") and not foreign else {}),
     }
     await db.conversations.insert_one(doc)
     return web.json_response({"task": _task_view(doc, lane_ids)}, status=201)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import ChatPanel from "./ChatPanel";
 import type { ChatItem } from "./ChatPanel";
 import type { ChatFile } from "../lib/api";
@@ -90,6 +90,7 @@ export default function ChatWithArtifacts({
   onStreamComplete,
   draftStorageKey,
   readOnly,
+  readOnlyNotice,
 }: {
   initialItems?: ChatItem[];
   initialArtifacts?: Artifact[];
@@ -108,6 +109,7 @@ export default function ChatWithArtifacts({
   draftStorageKey?: string;
   /** Transcript only, no composer (see ChatPanel) */
   readOnly?: boolean;
+  readOnlyNotice?: ReactNode;
 }) {
   // ── Artifact state ──────────────────────────────────────────────────────
   const [artifacts, setArtifacts] = useState<Artifact[]>(initialArtifacts || []);
@@ -214,6 +216,7 @@ export default function ChatWithArtifacts({
           onConversationCreated={onConversationCreated}
           onStreamComplete={onStreamComplete}
           readOnly={readOnly}
+          readOnlyNotice={readOnlyNotice}
         />
       </div>
 
