@@ -17,6 +17,11 @@ starred, and moving or ticking off the starred card never changes the shared
 board. It is only for organizing your own work: the card still opens the real
 chat, and who can message it follows the task's board as usual.
 
+While the real task is running or waiting for a reply on its board, the
+starred card follows it into Working / Needs input on your board too; once
+the task is done, staged or parked there, the card goes back to your lane.
+Ticking the star off as done always wins.
+
 Anyone who can see a task can star it, viewers included. A star is dropped
 when its task is deleted, leaves its shared board, or the person loses access
 to that board.
@@ -29,6 +34,9 @@ from aiohttp import web
 from api import task_routes
 
 MAX_STARS_PER_USER = 500
+
+# Real-task columns a starred card mirrors on your board.
+LIVE_COLUMNS = ("working", "needs_input")
 
 
 def _lane_or_first(lane, lane_ids: list[str]) -> str:
@@ -119,6 +127,7 @@ async def starred_views(db, user_email: str, lane_ids: list[str],
         view = task_routes._task_view(task, source_lanes)
         done = bool(star.get("done"))
         lane = _lane_or_first(star.get("lane"), lane_ids)
+        live = view["column"] if view["column"] in LIVE_COLUMNS else None
         view.update({
             "starred": True,
             "star": {
@@ -132,9 +141,13 @@ async def starred_views(db, user_email: str, lane_ids: list[str],
                 # Where the task really is on its board.
                 "source_column": view["column"],
             },
-            "column": "done" if done else lane,
+            # Follow the real task while it runs or needs input; otherwise
+            # your own lane. The lane is kept, so the card returns there.
+            "column": "done" if done else (live or lane),
             "task_lane": lane,
-            "task_rank": star.get("rank") if star.get("rank") is not None else 0.0,
+            # In a live column, sort with the real task's rank (recency).
+            "task_rank": view["task_rank"] if live and not done
+            else (star.get("rank") if star.get("rank") is not None else 0.0),
             # Your own tags, priority and deadline, never the shared task's:
             # the source board's tags mean nothing on the personal board.
             "task_tag_ids": [tag_id for tag_id in (star.get("tag_ids") or [])

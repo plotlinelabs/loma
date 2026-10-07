@@ -17,8 +17,12 @@ import type { Task } from "@/lib/api";
  */
 export function canMove(task: Task, from: string, to: string, laneIds: string[]): boolean {
   // A starred card is your own bookmark: it moves freely between your lanes
-  // and Done. Working / Needs input belong to the real task on its board.
-  if (task.star) return from === to || to === "done" || laneIds.includes(to);
+  // and Done. It sits in Working / Needs input only while the real task does
+  // (see starLiveColumn); from there it can only be ticked off as done.
+  if (task.star) {
+    if (!laneIds.includes(from) && from !== "done") return to === "done";
+    return from === to || to === "done" || laneIds.includes(to);
+  }
   if (task.human_task) return false;
   if (from === to) return true; // reorder within any column
   const fromStaged = laneIds.includes(from);
@@ -37,6 +41,12 @@ export function canMove(task: Task, from: string, to: string, laneIds: string[])
   if (from === "working") return to === "done";
   if (from === "done") return to === "needs_input" || toStaged; // reopen or park back
   return false;
+}
+
+/** The real-task column a starred card follows on your board, if any. */
+export function starLiveColumn(task: Task): "working" | "needs_input" | null {
+  const source = task.star?.source_column;
+  return source === "working" || source === "needs_input" ? source : null;
 }
 
 /** Midpoint rank for dropping between two neighbors in a column. */
