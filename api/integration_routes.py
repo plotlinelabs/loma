@@ -391,6 +391,12 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
             reg_result = await register_oauth_client(
                 registration_endpoint=oauth_config["registration_endpoint"],
                 redirect_uri=redirect_uri,
+                # Temporary Figma-approved compatibility name for MCP registration.
+                client_name=(
+                    "Claude Code"
+                    if url.rstrip("/") == "https://mcp.figma.com/mcp"
+                    else "Loma"
+                ),
             )
             if reg_result is None:
                 return web.json_response(
