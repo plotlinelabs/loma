@@ -133,12 +133,13 @@ async def test_viewer_stars_a_task_into_their_own_board(monkeypatch):
     mine = await _board()
     [card] = mine["tasks"]
     assert card["conversation_id"] == "c1" and card["starred"] is True
-    assert card["column"] == "today"  # first personal lane, not the shared board's column
+    # Follows the real task while it needs input; the lane is still the first personal one.
+    assert card["column"] == "needs_input" and card["task_lane"] == "today"
     assert card["star"] == {
         "lane": "today", "done": False, "role": "viewer", "board_id": "deals1", "board_name": "Deals",
         "board_emoji": card["star"]["board_emoji"], "card_title": "ACME", "source_column": "needs_input",
     }
-    assert mine["counts"]["today"] == 1
+    assert mine["counts"]["needs_input"] == 1 and mine["counts"]["today"] == 0
 
 
 @pytest.mark.asyncio
@@ -149,7 +150,8 @@ async def test_star_moves_and_done_never_touch_the_shared_task(monkeypatch):
     before = dict(db.conversations.docs[0])
 
     assert (await task_stars.handle_update_star(_req("PATCH", {"lane": "later", "rank": 3}))).status == 200
-    assert (await _board())["tasks"][0]["column"] == "later"
+    card = (await _board())["tasks"][0]
+    assert card["column"] == "needs_input" and card["task_lane"] == "later"
     assert (await task_stars.handle_update_star(_req("PATCH", {"done": True}))).status == 200
     card = (await _board())["tasks"][0]
     assert card["column"] == "done" and card["star"]["done"] is True
@@ -172,6 +174,23 @@ async def test_done_on_the_board_leaves_my_card_where_i_put_it(monkeypatch):
     db.conversations.docs[0].update({"task_status": "done", "task_done_at": datetime.now(timezone.utc)})
     card = (await _board())["tasks"][0]
     assert card["column"] == "today" and card["star"]["source_column"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_my_card_follows_the_task_while_live_then_returns_to_my_lane(monkeypatch):
+    db = _db(tasks=[_task(status="running")])
+    _as(monkeypatch, db, EDITOR)
+    await task_stars.handle_star_task(_req("PUT"))
+    assert (await task_stars.handle_update_star(_req("PATCH", {"lane": "later"}))).status == 200
+    assert (await _board())["tasks"][0]["column"] == "working"
+    db.conversations.docs[0]["status"] = "completed"
+    assert (await _board())["tasks"][0]["column"] == "needs_input"
+    # Parked back to a staging lane on its board: my card is back in my lane.
+    db.conversations.docs[0].update({"task_status": "todo", "task_lane": "lead"})
+    card = (await _board())["tasks"][0]
+    assert card["column"] == "later" and card["star"]["source_column"] != "needs_input"
+    db.conversations.docs[0].update({"task_status": "done", "task_done_at": datetime.now(timezone.utc)})
+    assert (await _board())["tasks"][0]["column"] == "later"
 
 
 @pytest.mark.asyncio

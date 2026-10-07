@@ -18,6 +18,7 @@ import {
   type TasksBoardResponse,
 } from "@/lib/api";
 import { useBoardExtras } from "./boardExtras";
+import { starLiveColumn } from "./transitions";
 
 export const SYSTEM_COLUMNS = [
   { id: "working", name: "Working" },
@@ -131,7 +132,7 @@ export function useTaskBoardActions({
     );
 
   const reopen = (task: Task) => task.star
-    ? patchStar(task, { column: task.star.lane, task_lane: task.star.lane }, { done: false })
+    ? patchStar(task, { column: starLiveColumn(task) ?? task.star.lane, task_lane: task.star.lane }, { done: false })
     : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
@@ -143,7 +144,9 @@ export function useTaskBoardActions({
   // Moving into a staging lane also *parks* active tasks (todo + lane) so a
   // needs-input chat can be shelved and recontinued later.
   const moveToLane = (task: Task, laneId: string, rank?: number) => task.star
-    ? patchStar(task, { column: laneId, task_lane: laneId, task_rank: rank ?? task.task_rank },
+    // While the real task runs or needs input the card stays there; the lane
+    // is where it goes back to afterwards.
+    ? patchStar(task, { column: starLiveColumn(task) ?? laneId, task_lane: laneId, task_rank: rank ?? task.task_rank },
       { lane: laneId, done: false, ...(rank !== undefined ? { rank } : {}) })
     : mutate(
       (tasks) => tasks.map((t) =>
