@@ -105,6 +105,13 @@ const TOOL_META: Record<string, ToolMeta> = {
     bgColor: "#FFF4EE",
     supportsOAuth: false,
   },
+  figma: {
+    displayName: "Figma",
+    authMethod: "OAuth 2.0 (shared)",
+    color: "#A259FF",
+    bgColor: "#F5EEFF",
+    supportsOAuth: true,
+  },
   dataroom: {
     displayName: "DataRoom",
     authMethod: "API Key",
@@ -147,6 +154,7 @@ export const CATEGORIES: Category[] = [
   { name: "Engineering", keys: ["github", "linear"] },
   { name: "CRM & Outreach", keys: ["hubspot", "apollo", "phantombuster"] },
   { name: "Docs & Knowledge", keys: ["docs", "notion"] },
+  { name: "Design", keys: ["figma"] },
   { name: "Operations", keys: ["pylon", "grain", "dataroom"] },
   { name: "Personal", keys: ["google-personal"] },
 ];

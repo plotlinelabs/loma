@@ -388,6 +388,29 @@ PROVIDER_CATALOG = {
         "webhook": None,
         "ingestion_module": None,
     },
+    # Figma: org-wide OAuth. One admin logs in once; the token is stored on the
+    # org integration record and injected for every user per run (refreshed on
+    # demand). Every user acts as the connecting Figma account.
+    "figma": {
+        "display_name": "Figma",
+        "description": "Read and edit Figma designs through Figma's MCP server",
+        "auth_type": "oauth_shared",
+        "auth_label": "Figma login",
+        "auth_help_url": "https://developers.figma.com/docs/figma-mcp-server/",
+        "oauth": {
+            "mcp_url": "https://mcp.figma.com/mcp",
+            # Temporary Figma-approved compatibility name (see PR #257).
+            "client_name": "Claude Code",
+        },
+        "mcp_config_template": {
+            "type": "http",
+            "url_template": "https://mcp.figma.com/mcp",
+            "headers_template": {"Authorization": "Bearer {{API_KEY}}"},
+        },
+        "mcp_server_name": "figma",
+        "webhook": None,
+        "ingestion_module": None,
+    },
     "slack_bot": {
         "display_name": "Slack (Bot)",
         "description": "Bot-level Slack access — channel history, messages, and search",
@@ -436,6 +459,17 @@ def server_configured(provider: str, environ=None) -> bool:
 def get_provider(provider: str) -> dict | None:
     """Look up a provider in the catalog. Returns None if not found."""
     return PROVIDER_CATALOG.get(provider)
+
+
+def is_shared_oauth(provider: str) -> bool:
+    """True for catalog providers connected once via OAuth and shared org-wide."""
+    entry = PROVIDER_CATALOG.get(provider)
+    return bool(entry and entry.get("auth_type") == "oauth_shared")
+
+
+def shared_oauth_providers() -> list[str]:
+    """Catalog providers whose org token comes from a shared OAuth login."""
+    return [p for p in PROVIDER_CATALOG if is_shared_oauth(p)]
 
 
 def list_providers() -> list[dict]:

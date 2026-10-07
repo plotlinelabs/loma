@@ -34,6 +34,8 @@ export interface Integration {
   auth_mode?: "none" | "static" | "oauth";
   user_oauth_status?: "connected" | "not_connected" | "expired";
   shared_with?: { mode: "everyone" | "specific"; users?: string[]; teams?: string[] };
+  // Org-shared OAuth providers (auth_type "oauth_shared", e.g. Figma)
+  oauth_status?: "connected" | "expired" | null;
 }
 
 export interface ProbeResult {
@@ -165,4 +167,15 @@ export async function updateIntegrationSharing(
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Failed to update sharing: ${res.status}`);
   }
+}
+
+/** Start the org-wide login for an "oauth_shared" provider (admin-only). */
+export async function getOrgOAuthAuthorizeUrl(provider: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/integrations/${provider}/oauth/authorize`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to start login: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.authorize_url;
 }
