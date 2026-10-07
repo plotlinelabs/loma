@@ -63,6 +63,7 @@ export interface Conversation {
   title_edited?: boolean;
   deleted?: boolean;
   task_status?: "todo" | "active" | "done" | null;
+  forked_from_conversation_id?: string | null;
   /** Attachments staged with a board-task draft (cleared once started) */
   draft_files?: ChatFile[];
   tool_config?: ToolConfig | null;
@@ -123,6 +124,8 @@ export interface ConversationDetailResponse {
   conversation: Conversation;
   turns: Turn[];
   artifacts?: PersistedArtifact[];
+  /** False for read-only viewers (share-link viewers, view-only board members). */
+  can_message?: boolean;
 }
 
 export interface StatsResponse {
@@ -1585,7 +1588,8 @@ export function updateTaskStar(
 
 export async function forkTask(
   conversationId: string,
-  options: { lane?: string; title?: string; board?: string } = {},
+  /** start: open the fork as an active chat rather than a draft. */
+  options: { lane?: string; title?: string; board?: string; start?: boolean } = {},
 ): Promise<{ task: Task }> {
   const res = await fetch(`${API_BASE}/api/tasks/${conversationId}/fork`, {
     method: "POST",

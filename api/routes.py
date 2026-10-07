@@ -621,12 +621,12 @@ async def handle_get_conversation(request: web.Request) -> web.Response:
     system_role = get_system_role(request)
     if not user_email:
         return web.json_response({"error": "Not found"}, status=404)
-    if not _check_conversation_access(conversation, user_email, system_role):
-        # Members of a shared task board can read (not message) its tasks.
-        from api.task_routes import task_access
-        can_view, _, _ = await task_access(db, conversation, user_email, system_role)
-        if not can_view:
-            return web.json_response({"error": "Not found"}, status=404)
+    # Share-link viewers and members of a shared task board can read (not
+    # message) it; can_message tells the dashboard which composer to show.
+    from api.task_routes import task_access
+    can_view, can_message, _ = await task_access(db, conversation, user_email, system_role)
+    if not can_view:
+        return web.json_response({"error": "Not found"}, status=404)
 
     turns = await db.turns.find({"conversation_id": cid}) \
         .sort("turn_number", 1) \
@@ -639,6 +639,7 @@ async def handle_get_conversation(request: web.Request) -> web.Response:
         "conversation": _serialize(conversation),
         "turns": _serialize(turns),
         "artifacts": _serialize(artifacts),
+        "can_message": can_message,
     })
 
 
@@ -1190,7 +1191,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                      "task_board_id": 1, "task_card_id": 1, "task_assignee": 1, "human_task": 1},
                 )
                 if existing and not _check_conversation_access(
-                    existing, user_email, get_system_role(request)
+                    _without_link_share(existing), user_email, get_system_role(request)
                 ):
                     # Owners and editors of a shared board can run its tasks;
                     # the run uses the sender's own accounts (user_email below).
@@ -1199,8 +1200,10 @@ async def handle_chat(request: web.Request) -> web.Response:
                         can_view, _, _ = await task_access(
                             db, existing, user_email, get_system_role(request))
                         if can_view:
+                            shared_link = (existing.get("metadata") or {}).get("visibility") == "shared"
                             return web.json_response(
-                                {"error": "Viewers can read this task but can't message it"},
+                                {"error": "This chat is shared with you as read-only. Fork it to continue."
+                                 if shared_link else "Viewers can read this task but can't message it"},
                                 status=403)
                         return web.json_response({"error": "Not found"}, status=404)
                 if existing and existing.get("human_task"):
@@ -2264,6 +2267,19 @@ def _check_conversation_access(conversation: dict, user_email: str, system_role:
             return visibility != "private"
         return conv_source == "task_step"
     return owner == user_email
+
+
+def _without_link_share(conversation: dict) -> dict:
+    """The conversation as seen without its share link.
+
+    A share link grants read access only: anyone holding it can open the chat
+    and fork it, but not message the owner's thread. Pass the result to
+    _check_conversation_access to ask "can this user write here?".
+    """
+    metadata = conversation.get("metadata") or {}
+    if metadata.get("visibility") != "shared":
+        return conversation
+    return {**conversation, "metadata": {k: v for k, v in metadata.items() if k != "visibility"}}
 
 
 def _check_conversation_manage_access(conversation: dict, user_email: str, system_role: str) -> bool:

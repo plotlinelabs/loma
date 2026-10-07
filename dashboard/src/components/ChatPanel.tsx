@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { withTerminalStatus, STOPPED_BY_USER_MESSAGE } from "../lib/terminal-status";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
@@ -612,6 +612,7 @@ export default function ChatPanel({
   onConversationCreated,
   onStreamComplete,
   readOnly = false,
+  readOnlyNotice,
 }: {
   initialItems?: ChatItem[];
   /** Artifacts restored from history (persisted in MongoDB) */
@@ -646,6 +647,8 @@ export default function ChatPanel({
   onStreamComplete?: (conversationId: string) => void;
   /** Show the transcript without a composer (e.g. a teammate's task on a shared board). */
   readOnly?: boolean;
+  /** Replaces the default view-only notice when readOnly (e.g. "Fork to continue"). */
+  readOnlyNotice?: ReactNode;
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
@@ -1578,7 +1581,7 @@ export default function ChatPanel({
           </div>
 
           <div className="w-full max-w-full md:max-w-[720px]">
-            {readOnly ? <ReadOnlyComposerNotice /> : <form
+            {readOnly ? (readOnlyNotice ?? <ReadOnlyComposerNotice />) : <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSend();
@@ -1926,7 +1929,7 @@ export default function ChatPanel({
 
           {/* Input — the bottom nav below it owns the home-indicator safe area */}
           <div className="sticky bottom-0 bg-background px-3 pt-2.5 pb-2.5 max-md:px-2 max-md:pt-1.5 max-md:pb-1.5 shrink-0">
-            {readOnly ? <ReadOnlyComposerNotice /> : <form
+            {readOnly ? (readOnlyNotice ?? <ReadOnlyComposerNotice />) : <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSend();
