@@ -78,6 +78,8 @@ class Collection:
             for key, value in (update.get("$pull") or {}).items():
                 if isinstance(doc.get(key), list):
                     doc[key] = [item for item in doc[key] if item != value]
+            for key in update.get("$unset") or {}:
+                doc.pop(key, None)
 
     async def delete_one(self, query):
         doc = next((d for d in self.docs if _matches(d, query)), None)
@@ -138,6 +140,7 @@ async def test_viewer_stars_a_task_into_their_own_board(monkeypatch):
     assert card["star"] == {
         "lane": "today", "done": False, "role": "viewer", "board_id": "deals1", "board_name": "Deals",
         "board_emoji": card["star"]["board_emoji"], "card_title": "ACME", "source_column": "needs_input",
+        "parked": False,
     }
     assert mine["counts"]["needs_input"] == 1 and mine["counts"]["today"] == 0
 
@@ -151,7 +154,8 @@ async def test_star_moves_and_done_never_touch_the_shared_task(monkeypatch):
 
     assert (await task_stars.handle_update_star(_req("PATCH", {"lane": "later", "rank": 3}))).status == 200
     card = (await _board())["tasks"][0]
-    assert card["column"] == "needs_input" and card["task_lane"] == "later"
+    # Moved out of Needs input: parked in my lane.
+    assert card["column"] == "later" and card["task_lane"] == "later" and card["star"]["parked"] is True
     assert (await task_stars.handle_update_star(_req("PATCH", {"done": True}))).status == 200
     card = (await _board())["tasks"][0]
     assert card["column"] == "done" and card["star"]["done"] is True
@@ -181,7 +185,7 @@ async def test_my_card_follows_the_task_while_live_then_returns_to_my_lane(monke
     db = _db(tasks=[_task(status="running")])
     _as(monkeypatch, db, EDITOR)
     await task_stars.handle_star_task(_req("PUT"))
-    assert (await task_stars.handle_update_star(_req("PATCH", {"lane": "later"}))).status == 200
+    db.task_stars.docs[0]["lane"] = "later"
     assert (await _board())["tasks"][0]["column"] == "working"
     db.conversations.docs[0]["status"] = "completed"
     assert (await _board())["tasks"][0]["column"] == "needs_input"
@@ -191,6 +195,47 @@ async def test_my_card_follows_the_task_while_live_then_returns_to_my_lane(monke
     assert card["column"] == "later" and card["star"]["source_column"] != "needs_input"
     db.conversations.docs[0].update({"task_status": "done", "task_done_at": datetime.now(timezone.utc)})
     assert (await _board())["tasks"][0]["column"] == "later"
+
+
+@pytest.mark.asyncio
+async def test_parked_card_stays_in_my_lane_until_the_task_moves_on(monkeypatch):
+    db = _db(tasks=[_task(total_turns=3)])
+    _as(monkeypatch, db, EDITOR)
+    await task_stars.handle_star_task(_req("PUT"))
+    assert (await _board())["tasks"][0]["column"] == "needs_input"
+
+    # Park it in Later while the task still needs input.
+    assert (await task_stars.handle_update_star(_req("PATCH", {"lane": "later"}))).status == 200
+    assert db.task_stars.docs[0]["parked"] == {"column": "needs_input", "turns": 3}
+    card = (await _board())["tasks"][0]
+    assert card["column"] == "later" and card["star"]["parked"] is True
+    assert card["star"]["source_column"] == "needs_input"
+    assert (await task_stars.handle_update_star(_req("PATCH", {"lane": "today"}))).status == 200
+    assert (await _board())["tasks"][0]["column"] == "today"
+
+    # Someone replies: the task runs again, so the card follows it.
+    db.conversations.docs[0]["status"] = "running"
+    card = (await _board())["tasks"][0]
+    assert card["column"] == "working" and card["star"]["parked"] is False
+    assert "parked" not in db.task_stars.docs[0]
+    db.conversations.docs[0].update({"status": "completed", "total_turns": 5})
+    assert (await _board())["tasks"][0]["column"] == "needs_input"
+
+
+@pytest.mark.asyncio
+async def test_reopening_a_parked_card_follows_the_task_again(monkeypatch):
+    db = _db()
+    _as(monkeypatch, db, EDITOR)
+    await task_stars.handle_star_task(_req("PUT"))
+    await task_stars.handle_update_star(_req("PATCH", {"lane": "later"}))
+    await task_stars.handle_update_star(_req("PATCH", {"done": True}))
+    assert (await _board())["tasks"][0]["column"] == "done"
+    await task_stars.handle_update_star(_req("PATCH", {"done": False}))
+    assert (await _board())["tasks"][0]["column"] == "needs_input"
+    # Moving a star while its task is not live never parks it.
+    db.conversations.docs[0].update({"task_status": "done"})
+    await task_stars.handle_update_star(_req("PATCH", {"lane": "today"}))
+    assert "parked" not in db.task_stars.docs[0]
 
 
 @pytest.mark.asyncio

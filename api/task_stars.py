@@ -5,7 +5,7 @@ tasks"). There it has its own lane, order and done state, kept in the
 `task_stars` collection, one doc per (person, task):
 
   {user_email, conversation_id, lane, done, rank, starred_at, done_at,
-   tag_ids, priority, deadline}
+   tag_ids, priority, deadline, parked}
 
 `tag_ids`, `priority` and `deadline` are the person's own: tags come from
 their personal board, and all three start blank and never sync with the
@@ -22,6 +22,11 @@ starred card follows it into Working / Needs input on your board too; once
 the task is done, staged or parked there, the card goes back to your lane.
 Ticking the star off as done always wins.
 
+You can also park the card in one of your lanes while the real task is live:
+moving it there stores `parked` ({column, turns}: where the task was and its
+turn count). The card stays in your lane until the task moves on (a new run,
+a finished run, done or staged on its board), then follows it again.
+
 Anyone who can see a task can star it, viewers included. A star is dropped
 when its task is deleted, leaves its shared board, or the person loses access
 to that board.
@@ -37,6 +42,12 @@ MAX_STARS_PER_USER = 500
 
 # Real-task columns a starred card mirrors on your board.
 LIVE_COLUMNS = ("working", "needs_input")
+
+
+def _live_signature(view: dict, task: dict) -> dict:
+    """What a parked star remembers: the real task's live column and its
+    turn count, which only changes when a run finishes."""
+    return {"column": view["column"], "turns": task.get("total_turns") or 0}
 
 
 def _lane_or_first(lane, lane_ids: list[str]) -> str:
@@ -116,6 +127,7 @@ async def starred_views(db, user_email: str, lane_ids: list[str],
 
     views: list[dict] = []
     kept: set[str] = set()
+    unpark: list[str] = []
     for task in tasks:
         board_doc = boards.get(task["task_board_id"])
         role = task_routes._board_role(board_doc, user_email) if board_doc else None
@@ -128,6 +140,13 @@ async def starred_views(db, user_email: str, lane_ids: list[str],
         done = bool(star.get("done"))
         lane = _lane_or_first(star.get("lane"), lane_ids)
         live = view["column"] if view["column"] in LIVE_COLUMNS else None
+        parked = bool(star.get("parked"))
+        if parked and (not live or star["parked"] != _live_signature(view, task)):
+            # The task moved on since you parked the card: follow it again.
+            parked = False
+            unpark.append(task["conversation_id"])
+        if parked:
+            live = None
         view.update({
             "starred": True,
             "star": {
@@ -140,6 +159,8 @@ async def starred_views(db, user_email: str, lane_ids: list[str],
                 "card_title": card_titles.get(task.get("task_card_id")),
                 # Where the task really is on its board.
                 "source_column": view["column"],
+                # You moved it into your lane while the task was live.
+                "parked": parked,
             },
             # Follow the real task while it runs or needs input; otherwise
             # your own lane. The lane is kept, so the card returns there.
@@ -156,6 +177,11 @@ async def starred_views(db, user_email: str, lane_ids: list[str],
             "task_deadline": star.get("deadline") or None,
         })
         views.append(view)
+
+    if unpark:
+        await db.task_stars.update_many(
+            {"user_email": user_email, "conversation_id": {"$in": unpark}},
+            {"$unset": {"parked": ""}})
 
     # Forget stars whose task is gone or out of reach. Skipped while a search
     # narrows the match, since a non-matching task is not a missing one.
@@ -233,6 +259,8 @@ async def handle_update_star(request: web.Request) -> web.Response:
     """PATCH /api/tasks/{conversation_id}/star — place a starred task on your
     own board. Accepts any of: lane (one of your lanes), done, rank, and your
     own tag_ids (tags of your board), priority and deadline (YYYY-MM-DD).
+    Moving it to a lane while the task runs or needs input parks it there;
+    reopening it (done=false without a lane) follows the task again.
     Never touches the task itself.
     """
     db, user_email, conversation, error = await _star_context(request)
@@ -288,7 +316,17 @@ async def handle_update_star(request: web.Request) -> web.Response:
         updates["deadline"] = body["deadline"]
     if not updates:
         return web.json_response({"error": "Nothing to update"}, status=400)
-    await db.task_stars.update_one(key, {"$set": updates})
+    unset: dict = {}
+    if "lane" in body:
+        # Live columns don't depend on the board's lanes.
+        view = {"column": task_routes.derive_column(conversation, [])}
+        if view["column"] in LIVE_COLUMNS:
+            updates["parked"] = _live_signature(view, conversation)
+        else:
+            unset["parked"] = ""
+    elif "done" in body:
+        unset["parked"] = ""
+    await db.task_stars.update_one(key, {"$set": updates, **({"$unset": unset} if unset else {})})
     merged = {**star, **updates}
     return web.json_response({"star": {
         "lane": merged.get("lane"), "done": bool(merged.get("done")), "rank": merged.get("rank"),

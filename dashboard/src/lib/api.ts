@@ -1240,6 +1240,9 @@ export interface TaskStar {
   card_title?: string | null;
   /** Where the task really is on its board: a lane id, "working", "needs_input" or "done". */
   source_column: string;
+  /** You moved it into your lane while the task was live: it stays there
+   * until the task moves on (a new run, a finished run, done or staged). */
+  parked?: boolean;
 }
 
 /** Whether `me` can message (run) a task: its creator, or an owner/editor of the shared board it sits on. */
