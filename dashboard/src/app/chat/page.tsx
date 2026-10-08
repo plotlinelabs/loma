@@ -3,8 +3,6 @@
 import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, Suspense } from "react";
 import {
-  RiPencilLine,
-  RiDeleteBinLine,
   RiLoader4Line,
   RiPushpinFill,
   RiPushpinLine,
@@ -50,7 +48,6 @@ function ChatPageContent() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleValue, setTitleValue] = useState("");
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Draft prompt/files for staged board tasks — prefill the composer (or auto-send with ?start=1)
   const [taskDraftPrompt, setTaskDraftPrompt] = useState<string | null>(null);
@@ -304,58 +301,15 @@ function ChatPageContent() {
                 >
                   {headerTitle}
                 </h1>
-                {activeConversationId && !humanTask && user?.email === conversationOwner && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => {
-                          setTitleValue(conversationTitle || promptPreview || "");
-                          setEditingTitle(true);
-                        }}
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <RiPencilLine size={14} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Rename chat</TooltipContent>
-                  </Tooltip>
-                )}
               </div>
             )}
           </div>
 
-          {/* Action buttons — visible once a conversation exists */}
+          {/* Actions: cost, then pin/rename/board/project/delete in one menu */}
           {activeConversationId && !humanTask && (
             <div className="flex items-center gap-1 flex-shrink-0">
-              {/* Live chat cost */}
               <CostChip conversationId={activeConversationId} className="h-8 mr-1" />
-              {/* Pin / Unpin */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => togglePin(activeConversationId)}
-                    className={cn(
-                      isPinned(activeConversationId)
-                        ? "text-amber-500 hover:text-amber-600 hover:bg-amber-50"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                    )}
-                  >
-                    {isPinned(activeConversationId) ? (
-                      <RiPushpinFill size={16} />
-                    ) : (
-                      <RiPushpinLine size={16} />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{isPinned(activeConversationId) ? "Unpin chat" : "Pin chat"}</TooltipContent>
-              </Tooltip>
-
-              {/* More actions (project, etc.) */}
-              {!humanTask && user?.email === conversationOwner && <ChatContextMenu
+              {user?.email === conversationOwner ? <ChatContextMenu
                 conversationId={activeConversationId}
                 conversationTitle={conversationTitle || promptPreview || "Untitled"}
                 isPinned={isPinned(activeConversationId)}
@@ -384,51 +338,22 @@ function ChatPageContent() {
                 isShared={conversationShared}
                 onSharingChange={setConversationShared}
                 triggerClassName="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              />}
-
-              {/* Delete */}
-              {!humanTask && user?.email === conversationOwner && <div className="relative">
+              /> : (
+                // Viewers of a shared chat get no menu, so pinning stays a button.
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => setShowDeleteConfirm(true)}
-                      className="text-muted-foreground hover:text-red-500 hover:bg-red-50"
+                      onClick={() => togglePin(activeConversationId)}
+                      className={isPinned(activeConversationId) ? "text-amber-500 hover:text-amber-600" : "text-muted-foreground hover:text-foreground"}
                     >
-                      <RiDeleteBinLine size={16} />
+                      {isPinned(activeConversationId) ? <RiPushpinFill size={16} /> : <RiPushpinLine size={16} />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Delete chat</TooltipContent>
+                  <TooltipContent>{isPinned(activeConversationId) ? "Unpin chat" : "Pin chat"}</TooltipContent>
                 </Tooltip>
-                {showDeleteConfirm && (
-                  <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 w-56 animate-fade-in">
-                    <p className="text-[13px] font-medium text-foreground mb-1">Delete this chat?</p>
-                    <p className="text-xs text-muted-foreground mb-2">This cannot be undone.</p>
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={async () => {
-                          await removeConversation(activeConversationId);
-                          router.push(`${basePath}/tasks`);
-                        }}
-                        className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                      >
-                        Delete
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setShowDeleteConfirm(false)}
-                        className="flex-1"
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>}
+              )}
             </div>
           )}
         </div>

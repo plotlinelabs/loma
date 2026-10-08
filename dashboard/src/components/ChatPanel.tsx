@@ -23,6 +23,7 @@ import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath,
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
+import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
 import type { Artifact } from "./ArtifactViewer";
 import PetCompanion, { PetRunway } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
@@ -48,6 +49,7 @@ import {
   RiTimeLine,
   RiEditLine,
   RiDeleteBinLine,
+  RiListCheck3,
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
@@ -104,6 +106,19 @@ export interface FileAttachment {
   url: string;
   mime_type: string;
   size: number;
+}
+
+/** What the side panel needs to review plans in this chat. */
+export interface PlanState {
+  /** Plan artifacts in chat order, versioned v1, v2, ... */
+  plans: Artifact[];
+  statuses: Record<string, PlanStatus>;
+  canAct: boolean;
+}
+
+export interface PlanControl {
+  revise: (plan: Artifact, comments: PlanComment[]) => void;
+  approve: (plan: Artifact, notes: PlanComment[]) => void;
 }
 
 export interface ChatItem {
@@ -219,7 +234,13 @@ function formatResponseTime(seconds: number): string {
   return `${Math.round(seconds)}s`;
 }
 
-function WorkingIndicator({ elapsedSeconds }: { elapsedSeconds: number }) {
+function WorkingIndicator({ elapsedSeconds, status, detail }: {
+  elapsedSeconds: number;
+  /** Latest backend status (e.g. "Starting session"), shown beside the timer. */
+  status?: string;
+  /** Which model/account is running this, revealed on hover. */
+  detail?: string;
+}) {
   const display = elapsedSeconds < 10
     ? `${elapsedSeconds.toFixed(1)}s`
     : elapsedSeconds < 60
@@ -227,7 +248,7 @@ function WorkingIndicator({ elapsedSeconds }: { elapsedSeconds: number }) {
       : `${Math.floor(elapsedSeconds / 60)}m ${Math.floor(elapsedSeconds % 60).toString().padStart(2, "0")}s`;
 
   return (
-    <div className="working-indicator flex items-center gap-2 py-1.5 text-[12px] text-muted-foreground/70">
+    <div className="working-indicator flex items-center gap-2 py-1.5 text-[12px] text-muted-foreground/70" title={detail}>
       <span className="grid grid-cols-3 gap-[3px]">
         {Array.from({ length: 9 }, (_, i) => (
           <span
@@ -240,8 +261,37 @@ function WorkingIndicator({ elapsedSeconds }: { elapsedSeconds: number }) {
       <span className="tabular-nums font-mono text-[12px]">
         {display}
       </span>
+      {status && <span className="truncate max-w-[420px]">{status}</span>}
     </div>
   );
+}
+
+type MessageBlock = { kind: "user"; index: number } | { kind: "agent"; indices: number[] };
+
+/** One block per user message, and one per agent reply (its steps, notes and answer). */
+function groupIntoBlocks(items: ChatItem[]): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  items.forEach((item, index) => {
+    const last = blocks[blocks.length - 1];
+    if (item.role === "user") blocks.push({ kind: "user", index });
+    else if (last?.kind === "agent") last.indices.push(index);
+    else blocks.push({ kind: "agent", indices: [index] });
+  });
+  return blocks;
+}
+
+/** One-line summary of the account/model serving this run, for a hover hint. */
+function describeAccount(info: {
+  runtime?: string; provider?: string; model?: string; account_email?: string;
+  pool_available?: number; pool_size?: number;
+} | null): string | undefined {
+  if (!info) return undefined;
+  const pool = typeof info.pool_available === "number" && typeof info.pool_size === "number"
+    ? ` · ${info.pool_available}/${info.pool_size} available`
+    : "";
+  if (info.runtime === "opencode") return `${info.provider}/${info.model} via OpenCode${pool}`;
+  const product = info.runtime === "codex" ? "ChatGPT" : "Claude";
+  return `${info.model ? `${info.model} via ` : ""}${info.account_email || "unknown"}'s ${product} subscription${pool}`;
 }
 
 function stampLatestAssistantDuration(items: ChatItem[], responseTimeSeconds: number): ChatItem[] {
@@ -258,6 +308,61 @@ function stampLatestAssistantDuration(items: ChatItem[], responseTimeSeconds: nu
 function removeTransientStatusItems(items: ChatItem[]): ChatItem[] {
   const filtered = items.filter((item) => item.role !== "status");
   return filtered.length === items.length ? items : filtered;
+}
+
+const FENCED_BLOCK_RE = /```(\w*)\n([\s\S]*?)```/g;
+const DESIGN_FENCE_LANGUAGES = new Set(["html", "svg", "jsx", "tsx"]);
+
+/** Mirrors the backend's promotion threshold (agent/client.py _detect_artifacts). */
+function isArtifactSized(body: string): boolean {
+  const content = body.trimEnd();
+  return content.length >= 200 || content.split("\n").length - 1 >= 8;
+}
+
+type PendingArtifact = "design" | "plan" | null;
+
+/** A block the backend will turn into an artifact card. */
+function pendingKind(lang: string, body: string): PendingArtifact {
+  const l = lang.toLowerCase();
+  if (l === "plan") return "plan";
+  return DESIGN_FENCE_LANGUAGES.has(l) && isArtifactSized(body) ? "design" : null;
+}
+
+/**
+ * The backend sends a promoted code block twice: inside the message text and
+ * as an artifact. Drop the copy from the text, since the card shows it. While
+ * streaming, a design or plan block whose card hasn't arrived yet (unfinished,
+ * or finished but ahead of its artifact event) is held back and reported as
+ * `pending`, so raw source never scrolls past in the chat.
+ */
+function withoutArtifactSource(
+  content: string,
+  artifacts: Artifact[],
+  streaming: boolean,
+): { text: string; pending: PendingArtifact } {
+  const bodies = new Set(artifacts.map((a) => a.content.trimEnd()));
+  let pending: PendingArtifact = null;
+  let text = content.replace(FENCED_BLOCK_RE, (block, lang: string, body: string) => {
+    if (bodies.has(body.trimEnd())) return "";
+    // The artifact event follows the full text, so a finished block is
+    // still unmatched for a moment: hold it back if it will be promoted.
+    const kind = streaming ? pendingKind(lang, body) : null;
+    if (kind) {
+      pending = kind;
+      return "";
+    }
+    return block;
+  });
+  if (streaming && (text.match(/```/g) || []).length % 2 === 1) {
+    const open = text.lastIndexOf("```");
+    const lang = text.slice(open + 3).split("\n", 1)[0].trim().toLowerCase();
+    if (lang === "plan" || DESIGN_FENCE_LANGUAGES.has(lang)) {
+      text = text.slice(0, open);
+      pending = lang === "plan" ? "plan" : "design";
+    }
+  }
+  if (text !== content) text = text.replace(/\n{3,}/g, "\n\n").trim();
+  return { text, pending };
 }
 
 /** Extract a :::clarify block from text content */
@@ -340,6 +445,9 @@ export function rebuildItemsFromConversation(
   // Start with the initial user message
   const items: ChatItem[] = [{ role: "user", content: prompt, ...(firstSender ? { sender: firstSender } : {}) }];
 
+  // Where each turn's items begin, so artifacts can find the reply they belong to.
+  const turnStartIndex: number[] = [];
+
   // Each turn represents one assistant response cycle (possibly with tool calls)
   for (const turn of turns) {
     // Before processing this turn, insert any follow-up user messages
@@ -358,6 +466,7 @@ export function rebuildItemsFromConversation(
       }
     }
 
+    turnStartIndex.push(items.length);
     const toolCalls = turn.tool_calls || [];
     const toolResults = turn.tool_results || [];
     if (toolCalls.length > 0) {
@@ -373,7 +482,14 @@ export function rebuildItemsFromConversation(
           input: summarizeToolInput(tc.tool_name, tc.input),
         };
       });
-      items.push({ role: "steps", content: "", steps });
+      // Runs usually make one tool call per turn: fold back-to-back calls into
+      // one group, as the live stream does.
+      const last = items[items.length - 1];
+      if (last?.role === "steps") {
+        items[items.length - 1] = { ...last, steps: [...(last.steps || []), ...steps] };
+      } else {
+        items.push({ role: "steps", content: "", steps });
+      }
     }
 
     const textBlocks = turn.text_blocks || [];
@@ -430,7 +546,9 @@ export function rebuildItemsFromConversation(
       });
     }
 
-    // Attach artifact IDs to assistant messages by matching timestamps to turns
+    // Attach each artifact to the first reply written at or after the turn that
+    // produced it (most turns are tool-only, so turn N is not the Nth reply),
+    // else to the last reply.
     const turnTimestamps = turns.map((t) => t.timestamp);
     for (const pa of persistedArtifacts) {
       let bestTurnIdx = -1;
@@ -440,31 +558,13 @@ export function rebuildItemsFromConversation(
           break;
         }
       }
-      if (bestTurnIdx >= 0) {
-        let assistantCount = 0;
-        for (let i = 0; i < items.length; i++) {
-          if (items[i].role === "assistant") {
-            if (assistantCount === bestTurnIdx) {
-              const existingIds = items[i].artifactIds || [];
-              if (!existingIds.includes(pa.artifact_id)) {
-                items[i] = { ...items[i], artifactIds: [...existingIds, pa.artifact_id] };
-              }
-              break;
-            }
-            assistantCount++;
-          }
-        }
-      } else {
-        // Fallback: attach to the last assistant message
-        for (let i = items.length - 1; i >= 0; i--) {
-          if (items[i].role === "assistant") {
-            const existingIds = items[i].artifactIds || [];
-            if (!existingIds.includes(pa.artifact_id)) {
-              items[i] = { ...items[i], artifactIds: [...existingIds, pa.artifact_id] };
-            }
-            break;
-          }
-        }
+      const from = bestTurnIdx >= 0 ? turnStartIndex[bestTurnIdx] : items.length;
+      let target = items.findIndex((item, i) => i >= from && item.role === "assistant");
+      if (target < 0) target = items.map((item) => item.role).lastIndexOf("assistant");
+      if (target < 0) continue;
+      const existingIds = items[target].artifactIds || [];
+      if (!existingIds.includes(pa.artifact_id)) {
+        items[target] = { ...items[target], artifactIds: [...existingIds, pa.artifact_id] };
       }
     }
   }
@@ -612,6 +712,8 @@ export default function ChatPanel({
   onConversationCreated,
   onStreamComplete,
   readOnly = false,
+  onPlanStateChange,
+  planControlRef,
 }: {
   initialItems?: ChatItem[];
   /** Artifacts restored from history (persisted in MongoDB) */
@@ -646,6 +748,10 @@ export default function ChatPanel({
   onStreamComplete?: (conversationId: string) => void;
   /** Show the transcript without a composer (e.g. a teammate's task on a shared board). */
   readOnly?: boolean;
+  /** Reports plan versions/statuses so the side panel can review them. */
+  onPlanStateChange?: (state: PlanState) => void;
+  /** Lets the side panel revise or approve a plan through this chat. */
+  planControlRef?: React.MutableRefObject<PlanControl | null>;
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
@@ -731,9 +837,15 @@ export default function ChatPanel({
   const [internalArtifacts, setInternalArtifacts] = useState<Artifact[]>(initialArtifacts || []);
   // Use external artifacts if they have entries, otherwise fall back to internal.
   // Note: `[] || x` evaluates to `[]` because empty arrays are truthy in JS.
-  const allArtifacts = externalArtifacts && externalArtifacts.length > 0
-    ? externalArtifacts
-    : internalArtifacts;
+  // The parent only holds artifacts loaded with the page or opened in the
+  // panel; this chat holds everything streamed since. Merge them, or a card
+  // whose artifact only one side knows drops out (and its source shows raw).
+  const allArtifacts = useMemo(() => {
+    if (!externalArtifacts?.length) return internalArtifacts;
+    const byId = new Map(internalArtifacts.map((a) => [a.id, a]));
+    for (const a of externalArtifacts) byId.set(a.id, a);
+    return [...byId.values()];
+  }, [externalArtifacts, internalArtifacts]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -742,6 +854,8 @@ export default function ChatPanel({
   // Text of a send that has started but may not have re-rendered yet: a second
   // Enter/click in the same render sees a stale `isStreaming`/`input`.
   const sendInFlightRef = useRef<string | null>(null);
+  // Plan mode: the agent researches read-only and proposes a plan to review.
+  const [planMode, setPlanMode] = useState(false);
   const handleSendRef = useRef<
     ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] }) => Promise<void>) | null
   >(null);
@@ -933,12 +1047,21 @@ export default function ChatPanel({
 
         // Rebuild items from turns on every poll so new steps appear,
         // but preserve any locally-queued messages the user added.
-        const { items: rebuilt } = rebuildItemsFromConversation(
+        // Pass the artifacts too, or the rebuilt messages lose their cards.
+        const { items: rebuilt, artifacts: restored } = rebuildItemsFromConversation(
           data.conversation.messages,
           data.conversation.prompt,
           data.conversation.final_response,
           data.turns,
+          data.artifacts,
         );
+        if (restored.length) {
+          setInternalArtifacts((prev) => {
+            const byId = new Map(prev.map((a) => [a.id, a]));
+            for (const a of restored) if (!byId.has(a.id)) byId.set(a.id, a);
+            return [...byId.values()];
+          });
+        }
         const waitingForDeploy = data.conversation.status === DEPLOY_QUEUED_STATUS;
         setItems((prev) => {
           const queued = prev.filter((item) => item.queued);
@@ -1005,8 +1128,10 @@ export default function ChatPanel({
       fromQueue,
       includePendingFiles,
       files: queuedFiles,
-    }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] } = {},
+      planMode: planModeOverride,
+    }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[]; planMode?: boolean } = {},
   ) => {
+    const sendInPlanMode = planModeOverride ?? planMode;
     const displayText = overrideMessage ?? input.trim();
     // Files that rode a queued message are sent with it, not re-read from the composer.
     const carriedFiles = queuedFiles && queuedFiles.length > 0 ? queuedFiles : undefined;
@@ -1130,6 +1255,7 @@ export default function ChatPanel({
         // default agent, so it must not unpin the conversation's agent.
         selectedAgentId || (agentLoadState === "ready" ? null : undefined),
         selectedAgentId ? AGENT_TOOL_CONFIG : toolConfig,
+        sendInPlanMode,
       )) {
         if (event.type === "account_info") {
           setAccountInfo(event);
@@ -1467,6 +1593,12 @@ export default function ChatPanel({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Shift+Tab toggles plan mode, as in Claude Code.
+    if (e.key === "Tab" && e.shiftKey && !readOnly) {
+      e.preventDefault();
+      setPlanMode((on) => !on);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -1486,6 +1618,51 @@ export default function ChatPanel({
 
   const { isDragOver, dropHandlers } = useFileDrop(addFiles);
 
+  // Plans in chat order: number them v1, v2, ... and work out which one is
+  // under review. Approval is the user's "Plan vN approved" message, so the
+  // status survives a reload without extra storage.
+  const planState = useMemo<PlanState>(() => {
+    const plans: Artifact[] = [];
+    const planItemIndex: number[] = [];
+    items.forEach((item, i) => {
+      for (const id of item.artifactIds || []) {
+        const art = allArtifacts.find((a) => a.id === id);
+        if (art?.language === "plan" && !plans.some((p) => p.id === id)) {
+          plans.push({ ...art, version: plans.length + 1 });
+          planItemIndex.push(i);
+        }
+      }
+    });
+    const statuses: Record<string, PlanStatus> = {};
+    plans.forEach((plan, n) => {
+      const approved = items
+        .slice(planItemIndex[n] + 1)
+        .some((item) => item.role === "user" && item.content.startsWith(`Plan v${plan.version} approved`));
+      statuses[plan.id] = approved ? "approved" : n < plans.length - 1 ? "superseded" : "pending";
+    });
+    return { plans, statuses, canAct: !isStreaming && !readOnly };
+  }, [items, allArtifacts, isStreaming, readOnly]);
+  // allArtifacts is rebuilt each render, so report only real changes.
+  const planStateKey = JSON.stringify([planState.plans.map((p) => p.id), planState.statuses, planState.canAct]);
+  const planStateRef = useRef(planState);
+  planStateRef.current = planState;
+  useEffect(() => {
+    onPlanStateChange?.(planStateRef.current);
+  }, [planStateKey, onPlanStateChange]);
+  useEffect(() => {
+    if (!planControlRef) return;
+    planControlRef.current = {
+      revise: (plan, comments) => {
+        setPlanMode(true);
+        handleSend(revisionMessage(plan, comments), { planMode: true });
+      },
+      approve: (plan, notes) => {
+        setPlanMode(false);
+        handleSend(approvalMessage(plan, notes), { planMode: false });
+      },
+    };
+  });
+
   const isEmptyState = items.length === 0 && !isStreaming;
 
   // A selected agent brings its own tools and skills, so the pickers give way
@@ -1494,6 +1671,24 @@ export default function ChatPanel({
     <AgentScope agent={selectedAgent} skills={availableSkills} onOpen={loadToolsCatalog} onUseDefault={() => selectAgent(null)} disabled={isStreaming} />
   ) : (
     <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+  );
+
+  const planToggle = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-pressed={planMode}
+      onClick={() => setPlanMode((on) => !on)}
+      title="Plan first: research read-only, then review the plan before anything runs (Shift+Tab)"
+      className={cn(
+        "h-8 gap-1 rounded-md px-2 text-xs font-normal",
+        planMode ? "bg-accent-200 text-accent-on hover:bg-accent-200/80" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <RiListCheck3 size={14} />
+      Plan
+    </Button>
   );
 
   // Shared by the empty-state and in-conversation composers.
@@ -1510,8 +1705,14 @@ export default function ChatPanel({
         <ComposerSettings>
           <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
           {scopePicker}
+          {planToggle}
         </ComposerSettings>
-      ) : scopePicker}
+      ) : (
+        <>
+          {scopePicker}
+          {planToggle}
+        </>
+      )}
     </>
   );
 
@@ -1523,8 +1724,19 @@ export default function ChatPanel({
       <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
       <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
       {scopePicker}
+      {planToggle}
     </ComposerSettings>
   );
+
+  const messageBlocks = groupIntoBlocks(items);
+
+  // Before the first event arrives, give the working line an agent block to sit in.
+  if (isStreaming && !isRecovering && messageBlocks[messageBlocks.length - 1]?.kind !== "agent") {
+    messageBlocks.push({ kind: "agent", indices: [] });
+  }
+  const lastItem = items[items.length - 1];
+  const latestStatus = lastItem?.role === "status" ? lastItem.content : undefined;
+  const accountSummary = describeAccount(accountInfo);
 
   return (
     <div
@@ -1645,81 +1857,15 @@ export default function ChatPanel({
       ) : (
         /* Normal chat layout */
         <>
-          {/* Account info banner */}
-          {accountInfo && (
-            <div className="px-3 md:px-6 pt-5">
-              <div className="max-w-3xl mx-auto">
-                <div className="inline-flex items-center gap-2 text-[11px] text-muted-foreground/70">
-                  <div className="w-1.5 h-1.5 rounded-full bg-brand-400/80" />
-                  <span>
-                    {accountInfo.runtime === "opencode" ? (
-                      <>
-                        Using <strong>{accountInfo.provider}/{accountInfo.model}</strong> via OpenCode
-                        {typeof accountInfo.pool_available === "number" && typeof accountInfo.pool_size === "number" ? (
-                          <>
-                            {" "}&middot;{" "}
-                            {accountInfo.warm_session_used ? "warm session checked out" : "cold session"}
-                            {" "}&middot; {accountInfo.pool_available}/{accountInfo.pool_size} warm
-                            {accountInfo.pool_warming ? ` · ${accountInfo.pool_warming} warming` : ""}
-                          </>
-                        ) : null}
-                      </>
-                    ) : (
-                      <>
-                        Using{" "}
-                        <strong>
-                          {accountInfo.model ? `${accountInfo.model} via ` : ""}
-                          {accountInfo.account_email || "unknown"}
-                        </strong>
-                        &apos;s {accountInfo.runtime === "codex" ? "ChatGPT" : "Claude"} subscription for this task
-                        {typeof accountInfo.pool_available === "number" && typeof accountInfo.pool_size === "number"
-                          ? <> &middot; {accountInfo.pool_available}/{accountInfo.pool_size} available</>
-                          : null}
-                      </>
-                    )}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
           {/* Messages */}
           <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-4" onScroll={handleMessagesScroll}>
-            <div className="space-y-2 max-w-3xl mx-auto">
-              {items.map((item, i) => {
-                if (item.role === "steps") {
-                  return <StepsGroup key={i} steps={item.steps || []} />;
-                }
-
-                if (item.role === "status") {
-                  return <StatusLine key={i} message={item.content} elapsedSeconds={item.elapsedSeconds} />;
-                }
-
-                if (item.role === "clarify") {
+            <div className="max-w-3xl mx-auto">
+              {messageBlocks.map((block, blockIndex) => {
+                if (block.kind === "user") {
+                  const i = block.index;
+                  const item = items[i];
                   return (
-                    <div key={i} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
-                      <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
-                      <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words">
-                        {item.content && (
-                          <div className="mb-3 [&>*:first-child]:mt-0">
-                            <MarkdownContent content={item.content} />
-                          </div>
-                        )}
-                        <ClarifyingQuestions
-                          questions={item.questions || []}
-                          submitted={item.submitted || false}
-                          selectedLabels={item.selectedLabels}
-                          onSubmit={(selected, otherText) =>
-                            handleClarifySubmit(i, selected, otherText)
-                          }
-                        />
-                      </div>
-                    </div>
-                  );
-                }
-
-                if (item.role === "user") {
-                  return (
-                    <div key={i} className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
+                    <div key={`u${i}`} className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
                       {item.queued && editingQueuedIndex !== i && (
                         <div className="flex items-center gap-0.5 pointer-coarse:gap-1.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <button
@@ -1831,92 +1977,143 @@ export default function ChatPanel({
                   );
                 }
 
-                // Assistant message — editorial style, no bubble
-                const author = replyAuthor(i);
-                const authorAgent = author.agentId ? agentsById[author.agentId] : undefined;
+                // One agent reply: a single avatar, then its steps, notes and
+                // answer stacked in one column.
+                const isLastBlock = blockIndex === messageBlocks.length - 1;
+                const showWorking = isStreaming && !isRecovering && isLastBlock;
+                const firstAuthor = replyAuthor(block.indices[0] ?? items.length);
+                const firstAgent = firstAuthor.agentId ? agentsById[firstAuthor.agentId] : undefined;
+                let previousAuthorName: string | null = null;
                 return (
-                  <div key={i} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
-                    {authorAgent ? (
-                      <AgentAvatar avatar={authorAgent.avatar} size={24} className="rounded-full shrink-0" />
+                  <div key={`a${block.indices[0] ?? "w"}`} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
+                    {firstAgent ? (
+                      <AgentAvatar avatar={firstAgent.avatar} size={24} className="rounded-full shrink-0" />
                     ) : (
                       <PetCompanion size={24} fallback={<CrosscutIcon size={16} className="shrink-0 mt-px" />} />
                     )}
-                    <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
-                      {threadHasAgents && (
-                        <div className="not-prose mb-1 text-[11px] font-semibold text-muted-foreground" data-testid="reply-agent">
-                          {author.agentName}
-                        </div>
-                      )}
-                      {item.content ? (
-                        <MarkdownContent content={item.content} />
-                      ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (
-                        null /* Artifact/file-only message — cards rendered below */
-                      ) : (
-                        <TypingIndicator />
-                      )}
-                      {/* Inline artifact cards */}
-                      {item.artifactIds && item.artifactIds.length > 0 && (
-                        <div className={`flex flex-col gap-2 ${item.content ? "mt-3" : ""}`}>
-                          {item.artifactIds.map((artId) => {
-                            const art = allArtifacts.find((a) => a.id === artId);
-                            if (!art) return null;
-                            return (
-                              <ArtifactCard
-                                key={artId}
-                                artifact={art}
-                                isActive={activeArtifactId === artId}
-                                onClick={() => onArtifactOpen?.(art)}
+                    <div className="min-w-0 flex-1 space-y-2 pt-0.5">
+                      {block.indices.map((i) => {
+                        const item = items[i];
+                        if (item.role === "steps") {
+                          return <StepsGroup key={i} steps={item.steps || []} />;
+                        }
+
+                        if (item.role === "status") {
+                          // While streaming, the working line carries the latest status.
+                          return isStreaming ? null : <StatusPill key={i} message={item.content} elapsedSeconds={item.elapsedSeconds} />;
+                        }
+
+                        const author = replyAuthor(i);
+                        const showAuthor = threadHasAgents && author.agentName !== previousAuthorName;
+                        previousAuthorName = author.agentName;
+                        const authorLabel = showAuthor && (
+                          <div className="not-prose mb-1 text-[11px] font-semibold text-muted-foreground" data-testid="reply-agent">
+                            {author.agentName}
+                          </div>
+                        );
+
+                        if (item.role === "clarify") {
+                          return (
+                            <div key={i} className="chat-text min-w-0 text-[13px] leading-relaxed break-words">
+                              {authorLabel}
+                              {item.content && (
+                                <div className="mb-3 [&>*:first-child]:mt-0">
+                                  <MarkdownContent content={item.content} />
+                                </div>
+                              )}
+                              <ClarifyingQuestions
+                                questions={item.questions || []}
+                                submitted={item.submitted || false}
+                                selectedLabels={item.selectedLabels}
+                                onSubmit={(selected, otherText) =>
+                                  handleClarifySubmit(i, selected, otherText)
+                                }
                               />
-                            );
-                          })}
-                        </div>
-                      )}
-                      {/* Inline file attachment cards */}
-                      {item.fileAttachments && item.fileAttachments.length > 0 && (
-                        <div className={`flex flex-col gap-2 ${item.content || (item.artifactIds && item.artifactIds.length > 0) ? "mt-3" : ""}`}>
-                          {item.fileAttachments.map((file) => (
-                            <FileAttachmentCard key={file.file_id} file={file} />
-                          ))}
-                        </div>
+                            </div>
+                          );
+                        }
+
+                        // Assistant message — editorial style, no bubble
+                        const itemArtifacts = (item.artifactIds || [])
+                          .map((artId) => allArtifacts.find((a) => a.id === artId))
+                          .filter((a): a is Artifact => !!a);
+                        const { text: displayText, pending } = withoutArtifactSource(
+                          item.content,
+                          itemArtifacts,
+                          isStreaming && i === items.length - 1,
+                        );
+                        return (
+                          <div key={i} className="group/reply flex items-start gap-2">
+                            <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
+                              {authorLabel}
+                              {displayText ? (
+                                <MarkdownContent content={displayText} />
+                              ) : (pending || item.artifactIds?.length || item.fileAttachments?.length) ? (
+                                null /* Artifact/file-only message — cards rendered below */
+                              ) : (
+                                <TypingIndicator />
+                              )}
+                              {pending && (
+                                <div className={cn("flex w-full max-w-[320px] items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-[12px] text-muted-foreground", displayText && "mt-3")}>
+                                  <RiLoader4Line size={14} className="animate-spin text-brand-500" />
+                                  {pending === "plan" ? "Writing plan…" : "Designing…"}
+                                </div>
+                              )}
+                              {/* Inline artifact cards */}
+                              {itemArtifacts.length > 0 && (
+                                <div className={`flex flex-col gap-2 ${displayText ? "mt-3" : ""}`}>
+                                  {itemArtifacts.map((art) => {
+                                    const shown = planState.plans.find((p) => p.id === art.id) ?? art;
+                                    return (
+                                      <ArtifactCard
+                                        key={art.id}
+                                        artifact={shown}
+                                        planStatus={planState.statuses[art.id]}
+                                        isActive={activeArtifactId === art.id}
+                                        onClick={() => onArtifactOpen?.(shown)}
+                                      />
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {/* Inline file attachment cards */}
+                              {item.fileAttachments && item.fileAttachments.length > 0 && (
+                                <div className={`flex flex-col gap-2 ${displayText || itemArtifacts.length > 0 ? "mt-3" : ""}`}>
+                                  {item.fileAttachments.map((file) => (
+                                    <FileAttachmentCard key={file.file_id} file={file} />
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            {typeof item.responseTimeSeconds === "number" && (
+                              <span className="shrink-0 text-[10px] text-muted-foreground/60 mt-0.5 opacity-0 group-hover/reply:opacity-100 transition-opacity">
+                                {formatResponseTime(item.responseTimeSeconds)}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {showWorking && (
+                        <WorkingIndicator
+                          elapsedSeconds={streamElapsedSeconds}
+                          status={latestStatus}
+                          detail={accountSummary}
+                        />
                       )}
                     </div>
-                    {typeof item.responseTimeSeconds === "number" && (
-                      <span className="shrink-0 text-[10px] text-muted-foreground/60 mt-0.5">{formatResponseTime(item.responseTimeSeconds)}</span>
-                    )}
                   </div>
                 );
               })}
 
-              {/* Fallback indicator before any events arrive */}
-              {isStreaming && !isRecovering && items.length > 0 && items[items.length - 1].role === "user" && (
-                <div className="flex justify-start animate-message-in ml-6">
-                  <StatusPill
-                    message={
-                      accountInfo?.runtime === "opencode"
-                        ? "Waiting for OpenCode events..."
-                        : "Waiting for agent events..."
-                    }
-                  />
-                </div>
-              )}
-
               {/* Recovery polling indicator */}
               {isRecovering && (
-                <div className="flex justify-start animate-message-in">
-                  <div className="text-[13px]">
-                    <span className="flex items-center gap-2 text-muted-foreground">
-                      <RiLoader4Line size={14} className="animate-spin text-brand-500" />
-                      {items.some((item) => item.deployQueued)
-                        ? "Waiting for Loma to finish updating..."
-                        : "Still working on your request..."}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {isStreaming && (
-                <div className="max-w-3xl mx-auto px-3">
-                  <WorkingIndicator elapsedSeconds={streamElapsedSeconds} />
+                <div className="flex justify-start animate-message-in mt-3 ml-8">
+                  <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                    <RiLoader4Line size={14} className="animate-spin text-brand-500" />
+                    {items.some((item) => item.deployQueued)
+                      ? "Waiting for Loma to finish updating..."
+                      : "Still working on your request..."}
+                  </span>
                 </div>
               )}
 
@@ -2042,6 +2239,8 @@ function applyEvent(items: ChatItem[], event: ChatEvent): ChatItem[] {
       break;
 
     case "tool_call": {
+      // A status line between two calls would otherwise split the group.
+      updated = removeTransientStatusItems(updated);
       const step: Step = {
         type: "tool_call",
         name: event.name,
@@ -2303,14 +2502,6 @@ function StatusPill({ message, elapsedSeconds }: { message: string; elapsedSecon
   );
 }
 
-function StatusLine({ message, elapsedSeconds }: { message: string; elapsedSeconds?: number }) {
-  return (
-    <div className="flex justify-start animate-message-in ml-6">
-      <StatusPill message={message} elapsedSeconds={elapsedSeconds} />
-    </div>
-  );
-}
-
 function StepIcon({ status }: { status: Step["status"] }) {
   if (status === "running") return <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />;
   if (status === "error") return <RiCloseLine size={10} className="text-red-500 flex-shrink-0" />;
@@ -2324,7 +2515,7 @@ function StepsGroup({ steps }: { steps: Step[] }) {
     const step = steps[0];
     const summary = step.input ? summarizeToolInput(step.name || "", step.input) : "";
     return (
-      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground animate-message-in ml-6">
+      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground animate-message-in">
         <StepIcon status={step.status} />
         <span className={step.status === "error" ? "text-red-600" : ""}>{formatToolName(step.name || "tool")}</span>
         {summary && <span className="text-muted-foreground/40 truncate max-w-[300px]">· {summary}</span>}
@@ -2332,25 +2523,30 @@ function StepsGroup({ steps }: { steps: Step[] }) {
     );
   }
 
-  const hasRunning = steps.some(s => s.status === "running");
+  const running = steps.find(s => s.status === "running");
   const errorCount = steps.filter(s => s.status === "error").length;
   const uniqueNames = [...new Set(steps.map(s => formatToolName(s.name || "tool")))];
-  const preview = uniqueNames.slice(0, 4).join(", ") + (uniqueNames.length > 4 ? ", …" : "");
+  // While running, the collapsed line follows the live step; afterwards it names the tools used.
+  const preview = running
+    ? [formatToolName(running.name || "tool"), running.input ? summarizeToolInput(running.name || "", running.input) : ""].filter(Boolean).join(" · ")
+    : uniqueNames.slice(0, 4).join(", ") + (uniqueNames.length > 4 ? ", …" : "");
 
   return (
-    <div className="animate-message-in ml-6">
+    <div className="animate-message-in">
       <button
         onClick={() => setExpanded(e => !e)}
-        className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground/80 transition-colors"
+        type="button"
+        aria-expanded={expanded}
+        className="flex max-w-full min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground/80 transition-colors"
       >
         <RiArrowDownSLine
           size={12}
           className={cn("transition-transform flex-shrink-0", !expanded && "-rotate-90")}
         />
-        {hasRunning && <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />}
-        <span>{steps.length} tool calls</span>
-        {errorCount > 0 && <span className="text-red-500">· {errorCount} failed</span>}
-        {!expanded && <span className="text-muted-foreground/40">· {preview}</span>}
+        {running && <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />}
+        <span className="shrink-0">{steps.length} tool calls</span>
+        {errorCount > 0 && <span className="shrink-0 text-red-500">· {errorCount} failed</span>}
+        {!expanded && <span className="truncate text-muted-foreground/40">· {preview}</span>}
       </button>
       {expanded && (
         <div className="ml-4 mt-0.5 space-y-px">

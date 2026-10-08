@@ -1089,8 +1089,11 @@ export async function* streamChat(
    *  unpins a conversation's agent); undefined leaves the conversation as is. */
   agentId?: string | null,
   toolConfig?: ToolConfig,
+  /** Research read-only and propose a plan for review (agent/plan_mode.py). */
+  planMode?: boolean,
 ): AsyncGenerator<ChatEvent, void, unknown> {
   const body: Record<string, unknown> = { message };
+  if (planMode) body.plan_mode = true;
   if (conversationHistory?.length) body.conversation_history = conversationHistory;
   if (files?.length) body.files = files;
   if (conversationId) body.conversation_id = conversationId;

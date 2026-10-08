@@ -15,6 +15,7 @@ import tarfile
 import zipfile
 
 import yaml
+from agent.plan_mode import plan_from_tool_call, plan_mode_requested
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeSDKClient,
@@ -344,6 +345,7 @@ def _resolve_mcp_template(template: dict, api_key: str, extra_fields: dict | Non
 # Languages whose fenced code blocks should be treated as artifacts
 # when they exceed the minimum size threshold.
 _ARTIFACT_LANGUAGES = {
+    "plan",
     "html", "svg",
     "javascript", "js", "typescript", "ts", "tsx", "jsx",
     "python", "py", "java", "go", "rust", "ruby", "rb",
@@ -382,8 +384,8 @@ def _detect_artifacts(text: str) -> list[dict]:
         if not content:
             continue
 
-        # Check minimum thresholds
-        if len(content) < _ARTIFACT_MIN_CHARS and content.count("\n") < _ARTIFACT_MIN_LINES:
+        # Check minimum thresholds (a plan is always reviewed in the panel)
+        if lang != "plan" and len(content) < _ARTIFACT_MIN_CHARS and content.count("\n") < _ARTIFACT_MIN_LINES:
             continue
 
         # Check if it's a recognized language
@@ -411,6 +413,9 @@ def _detect_artifacts(text: str) -> list[dict]:
 
 def _infer_artifact_title(language: str, content: str) -> str:
     """Infer a human-readable title for an artifact from its content."""
+    if language == "plan":
+        heading = re.search(r"^#+\s+(.+)$", content, re.MULTILINE)
+        return heading.group(1).strip() if heading else "Plan"
     # HTML: look for <title> tag
     if language in ("html", "svg"):
         title_match = re.search(r"<title[^>]*>([^<]+)</title>", content, re.IGNORECASE)
@@ -1281,6 +1286,10 @@ async def _stream_agent(
         hit_rate_limit = False
 
         try:
+            if plan_mode_requested(conversation_context):
+                # Claude's own read-only planning mode backs up the prompt's
+                # rules. Clients are single-use, so this never leaks to a run.
+                await client.set_permission_mode("plan")
             await client.query(full_prompt)
 
             if observer and observer.conversation_id:
@@ -1481,6 +1490,21 @@ async def _stream_agent(
                                     "tool_use_id": block.id,
                                     "input": _summarize_tool_input(block.name, block.input),
                                 }
+                            plan_text = plan_from_tool_call(block.name, block.input)
+                            if plan_text and include_steps and source == "dashboard":
+                                plan_artifact = {
+                                    "artifact_id": f"art_{hashlib.sha256(plan_text.encode()).hexdigest()[:12]}",
+                                    "title": _infer_artifact_title("plan", plan_text),
+                                    "content": plan_text,
+                                    "language": "plan",
+                                    # The dashboard numbers plans by their order in the chat.
+                                    "version": 1,
+                                }
+                                if plan_artifact["artifact_id"] not in emitted_artifact_ids:
+                                    emitted_artifact_ids.add(plan_artifact["artifact_id"])
+                                    if observer:
+                                        await observer.record_artifact({**plan_artifact, "artifact_type": "code"})
+                                    yield {"type": "artifact", **plan_artifact}
                         else:
                             logger.info("[BLOCK] type=%s", type(block).__name__)
 
