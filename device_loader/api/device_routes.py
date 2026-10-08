@@ -21,6 +21,7 @@ from aiohttp import web
 
 from api.auth_helpers import get_system_role, get_user_email, is_loopback, require_admin
 from device_loader.backend import builds, store
+from device_loader.backend import media as media_store
 from device_loader.backend.builds import blobs, FILENAME, MAX_BLOB
 from device_loader.backend.hub import DeviceError, hub
 from device_loader.backend.service import DeviceService, _version
@@ -170,6 +171,30 @@ async def handle_runner_blob(request):
         return _error('Build not found or expired', 404)
     return web.FileResponse(blob['path'], headers={'Content-Type': 'application/octet-stream',
                                                    'Cache-Control': 'no-store'})
+
+
+async def handle_runner_media(request):
+    """A runner (>= 1.5.0) uploads a large screenshot / video of a call result here, out of band of its
+    WebSocket; the result frame then carries the returned media_id (device_loader/backend/media.py)."""
+    db = _db_or_503()
+    runner = await _runner_from_request(request, db)
+    if runner is None:
+        return _error('Invalid runner credentials', 401)
+    if request.content_length is not None and request.content_length > media_store.MAX_MEDIA:
+        return _error('Media too large', 413)
+    data = bytearray()
+    async for chunk in request.content.iter_chunked(1 << 20):
+        data.extend(chunk)
+        if len(data) > media_store.MAX_MEDIA:
+            return _error('Media too large', 413)
+    sha256 = request.headers.get('X-Loma-Media-Sha256')
+    if sha256 is not None and not re.fullmatch(r'[0-9a-f]{64}', sha256):
+        return _error('Invalid X-Loma-Media-Sha256', 400)
+    try:
+        media_id = media_store.media.put(runner['runner_id'], bytes(data), sha256)
+    except media_store.MediaError as exc:
+        return _error(str(exc), 400)
+    return web.json_response({'media_id': media_id, 'bytes': len(data)})
 
 
 async def handle_runner_download(request):
@@ -441,6 +466,7 @@ def setup_device_routes(app):
     app.router.add_post('/device-runner/enroll', handle_enroll)
     app.router.add_get('/device-runner/ws', handle_runner_ws)
     app.router.add_get('/device-runner/blobs/{blob_id}', handle_runner_blob)
+    app.router.add_post('/device-runner/media', handle_runner_media)
     app.router.add_get('/device-runner/download', handle_runner_download)
     app.router.add_get('/api/devices', handle_list)
     app.router.add_post('/api/devices/enrollments', handle_create_enrollment)
