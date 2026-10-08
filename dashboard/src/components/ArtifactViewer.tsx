@@ -26,7 +26,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
-import MarkdownContent from "./MarkdownContent";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -149,8 +150,14 @@ function HtmlRenderer({ content }: { content: string }) {
 function MarkdownRenderer({ content }: { content: string }) {
   return (
     <div className="p-3 md:p-6 overflow-y-auto h-full">
-      <div className="prose prose-sm max-w-none">
-        <MarkdownContent content={content} />
+      {/* Full GFM (quotes, task lists, rules) — documents need more than chat's renderer. */}
+      <div className="prose prose-sm max-w-[72ch] mx-auto prose-code:before:content-none prose-code:after:content-none">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}
+        >
+          {content}
+        </ReactMarkdown>
       </div>
     </div>
   );
@@ -440,8 +447,8 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
   }
 
   return (
-    <div className="p-6 h-full overflow-auto bg-white rounded-b-lg">
-      <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: html }} />
+    <div className="p-6 h-full overflow-auto bg-card rounded-b-lg">
+      <div className="prose prose-sm max-w-[72ch] mx-auto" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }
