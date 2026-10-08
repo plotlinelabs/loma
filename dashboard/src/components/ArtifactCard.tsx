@@ -105,8 +105,31 @@ interface ArtifactCardProps {
   onClick: () => void;
 }
 
+const DESIGN_LANGUAGES = new Set(["html", "svg"]);
+
+/** A design renders as a live thumbnail, like Claude's artifact cards. Scripts
+ * run, but without same-origin access the page can't reach the dashboard. */
+function DesignThumbnail({ artifact }: { artifact: Artifact }) {
+  const srcDoc = artifact.language.toLowerCase() === "svg"
+    ? `<!doctype html><html><body style="margin:0;display:grid;place-items:center;min-height:100vh">${artifact.content}</body></html>`
+    : artifact.content;
+  return (
+    <div className="relative h-40 w-full overflow-hidden border-b border-border bg-white" aria-hidden>
+      {/* Render at desktop width, then scale down so the layout matches the panel. */}
+      <iframe
+        srcDoc={srcDoc}
+        sandbox="allow-scripts"
+        tabIndex={-1}
+        title={`${artifact.title} preview`}
+        className="pointer-events-none absolute left-0 top-0 h-[320px] w-[640px] origin-top-left scale-50 border-0"
+      />
+    </div>
+  );
+}
+
 export default function ArtifactCard({ artifact, isActive, onClick }: ArtifactCardProps) {
   const isFileArtifact = !!artifact.file_url;
+  const isDesign = !isFileArtifact && DESIGN_LANGUAGES.has(artifact.language.toLowerCase());
   const lineCount = artifact.content ? artifact.content.split("\n").length : 0;
   const charCount = artifact.content ? artifact.content.length : 0;
 
@@ -119,6 +142,26 @@ export default function ArtifactCard({ artifact, isActive, onClick }: ArtifactCa
         : charCount > 0
           ? `${charCount} chars`
           : null;
+
+  if (isDesign) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "group w-full max-w-[320px] overflow-hidden rounded-xl border text-left transition-colors",
+          isActive ? "border-accent-300 shadow-sm" : "border-border hover:border-muted-foreground/30",
+        )}
+      >
+        <DesignThumbnail artifact={artifact} />
+        <span className="flex items-center gap-2 bg-muted/50 px-3 py-2">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground/80">{artifact.title}</span>
+          <span className="shrink-0 text-[11px] text-muted-foreground">{getLanguageLabel(artifact.language)}</span>
+          <RiArrowRightSLine size={16} className="shrink-0 text-muted-foreground/40 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+        </span>
+      </button>
+    );
+  }
 
   return (
     <Button

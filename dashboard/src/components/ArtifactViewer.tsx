@@ -122,23 +122,12 @@ function formatFileSize(bytes: number): string {
 // ── HTML Renderer (sandboxed iframe) ────────────────────────────────────────
 
 function HtmlRenderer({ content }: { content: string }) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  useEffect(() => {
-    if (!iframeRef.current) return;
-    const doc = iframeRef.current.contentDocument;
-    if (!doc) return;
-
-    // Write content to sandboxed iframe
-    doc.open();
-    doc.write(content);
-    doc.close();
-  }, [content]);
-
+  // srcDoc + scripts without same-origin: agent-written HTML runs in an opaque
+  // origin, so it can't read the dashboard's cookies or call its API as the user.
   return (
     <iframe
-      ref={iframeRef}
-      sandbox="allow-scripts allow-same-origin"
+      srcDoc={content}
+      sandbox="allow-scripts allow-popups allow-forms"
       className="w-full h-full border-0 bg-white rounded-b-lg"
       title="HTML Preview"
     />

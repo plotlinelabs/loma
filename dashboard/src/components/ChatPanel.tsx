@@ -295,6 +295,37 @@ function removeTransientStatusItems(items: ChatItem[]): ChatItem[] {
   return filtered.length === items.length ? items : filtered;
 }
 
+const FENCED_BLOCK_RE = /```(\w*)\n([\s\S]*?)```/g;
+const DESIGN_FENCE_LANGUAGES = new Set(["html", "svg", "jsx", "tsx"]);
+
+/**
+ * The backend sends a promoted code block twice: inside the message text and
+ * as an artifact. Drop the copy from the text, since the card shows it. While
+ * streaming, an unfinished design block is cut off too and reported as
+ * `designing`, so raw HTML never scrolls past in the chat.
+ */
+function withoutArtifactSource(
+  content: string,
+  artifacts: Artifact[],
+  streaming: boolean,
+): { text: string; designing: boolean } {
+  const bodies = new Set(artifacts.map((a) => a.content.trimEnd()));
+  let text = bodies.size
+    ? content.replace(FENCED_BLOCK_RE, (block, _lang: string, body: string) => (bodies.has(body.trimEnd()) ? "" : block))
+    : content;
+  let designing = false;
+  if (streaming && (text.match(/```/g) || []).length % 2 === 1) {
+    const open = text.lastIndexOf("```");
+    const lang = text.slice(open + 3).split("\n", 1)[0].trim().toLowerCase();
+    if (DESIGN_FENCE_LANGUAGES.has(lang)) {
+      text = text.slice(0, open);
+      designing = true;
+    }
+  }
+  if (text !== content) text = text.replace(/\n{3,}/g, "\n\n").trim();
+  return { text, designing };
+}
+
 /** Extract a :::clarify block from text content */
 function extractClarifyBlock(text: string): {
   questions: ClarifyQuestion[];
@@ -1861,37 +1892,47 @@ export default function ChatPanel({
                         }
 
                         // Assistant message — editorial style, no bubble
+                        const itemArtifacts = (item.artifactIds || [])
+                          .map((artId) => allArtifacts.find((a) => a.id === artId))
+                          .filter((a): a is Artifact => !!a);
+                        const { text: displayText, designing } = withoutArtifactSource(
+                          item.content,
+                          itemArtifacts,
+                          isStreaming && i === items.length - 1,
+                        );
                         return (
                           <div key={i} className="group/reply flex items-start gap-2">
                             <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
                               {authorLabel}
-                              {item.content ? (
-                                <MarkdownContent content={item.content} />
-                              ) : (item.artifactIds?.length || item.fileAttachments?.length) ? (
+                              {displayText ? (
+                                <MarkdownContent content={displayText} />
+                              ) : (designing || item.artifactIds?.length || item.fileAttachments?.length) ? (
                                 null /* Artifact/file-only message — cards rendered below */
                               ) : (
                                 <TypingIndicator />
                               )}
+                              {designing && (
+                                <div className={cn("flex w-full max-w-[320px] items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-[12px] text-muted-foreground", displayText && "mt-3")}>
+                                  <RiLoader4Line size={14} className="animate-spin text-brand-500" />
+                                  Designing…
+                                </div>
+                              )}
                               {/* Inline artifact cards */}
-                              {item.artifactIds && item.artifactIds.length > 0 && (
-                                <div className={`flex flex-col gap-2 ${item.content ? "mt-3" : ""}`}>
-                                  {item.artifactIds.map((artId) => {
-                                    const art = allArtifacts.find((a) => a.id === artId);
-                                    if (!art) return null;
-                                    return (
-                                      <ArtifactCard
-                                        key={artId}
-                                        artifact={art}
-                                        isActive={activeArtifactId === artId}
-                                        onClick={() => onArtifactOpen?.(art)}
-                                      />
-                                    );
-                                  })}
+                              {itemArtifacts.length > 0 && (
+                                <div className={`flex flex-col gap-2 ${displayText ? "mt-3" : ""}`}>
+                                  {itemArtifacts.map((art) => (
+                                    <ArtifactCard
+                                      key={art.id}
+                                      artifact={art}
+                                      isActive={activeArtifactId === art.id}
+                                      onClick={() => onArtifactOpen?.(art)}
+                                    />
+                                  ))}
                                 </div>
                               )}
                               {/* Inline file attachment cards */}
                               {item.fileAttachments && item.fileAttachments.length > 0 && (
-                                <div className={`flex flex-col gap-2 ${item.content || (item.artifactIds && item.artifactIds.length > 0) ? "mt-3" : ""}`}>
+                                <div className={`flex flex-col gap-2 ${displayText || itemArtifacts.length > 0 ? "mt-3" : ""}`}>
                                   {item.fileAttachments.map((file) => (
                                     <FileAttachmentCard key={file.file_id} file={file} />
                                   ))}
