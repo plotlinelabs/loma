@@ -46,9 +46,14 @@ installing or writing specs, and stop with a clear "blocked" message if one is m
 3. **Every app under test can be configured at launch** (user id, locale, endpoint, cache reset) through
    launch extras / UserDefaults. If one platform's test app has no such hook, say so before you start:
    that platform's fresh-state or locale cases cannot run, and that is a gap in the app, not a test result.
-4. **The device is healthy.** `lease` returns `health`. If the check fails, the lease restarts the device once
-   by itself (`recovery` in the result). If `health.ok` is still false, lease another device instead of running
-   tests that will time out. Never restart an emulator by hand or ask the user to, before trying `recover`.
+4. **The device is healthy.** `lease` returns `health`, including `health.network.dns_ok` (runner 1.5.0+). If the
+   check fails, the lease restarts the device once by itself (`recovery` in the result; broken DNS on Android is
+   fixed by a cold boot with a fixed DNS server). If `health.ok` is still false, lease another device instead of
+   running tests that will time out. Never restart an emulator by hand or ask the user to, before trying `recover`.
+5. **Know what is installed.** `lease` returns `installed`: the user apps on the device and, for builds the runner
+   installed, `sha256` and `current`. Install only when the app is missing or not the build you need.
+6. **Want a known clean state?** `lease --template NAME --clean` boots a fresh device from a template the runner
+   owner configured (`list` shows `templates`); `release` shuts it down. Prefer this over a long `reset` chain.
 
 ## Cost rules (read first)
 
@@ -67,7 +72,7 @@ cheapest test is the one with the fewest calls, so:
   the conversation work dir is shared.
   ```yaml
   app_id: com.example.app          # optional: stopped, then launched at t0
-  duration_s: 30                   # upper bound, 1-60 s
+  duration_s: 30                   # upper bound, 1-120 s
   end_after_steps: true            # return as soon as the steps are done
   stop_on_fail: true               # a failed step ends the case
   log_tags: [MyTag, OtherTag]      # optional: log lines containing any of these
@@ -142,6 +147,9 @@ cheapest test is the one with the fewest calls, so:
   verdict is `pass` only when every case passed; otherwise `fail`, `error`, `blocked`, then `flaky`.
   At most 20 cases and 900 s of `duration_s` in total (retries included), so one platform never needs two
   suite files. Videos are kept for cases that did not pass (`keep_video: all` keeps every one).
+  `keep_log_lines: 10` returns the last matched log lines of every case, passed ones too, so a pass has
+  log evidence without a separate `logs` call. If the runner's connection drops under a case, the suite
+  waits up to 90 s for it and re-runs that case once (`runner_reconnected: true` on the row).
   Paste the `table` into the PR or the report. **The suite file is the replay format:** commit it next to
   the test app (for example `e2e/device/suite.yaml`) so the next PR replays it without exploring.
 - **Logs: tags + cursor, never re-read.** `logs --tag A --tag B` keeps lines with any tag and
@@ -162,7 +170,9 @@ cheapest test is the one with the fewest calls, so:
   Use `screenshot --preview` and open the JPEG; keep the PNG for evidence.
 - **Animations off on Android emulators** for ordinary flows (suite `setup`): `ui-tree` stops
   stalling on "UI not idle" and taps don't land mid-transition. Turn them back on for animation or
-  loader cases, and in `teardown`.
+  loader cases, and in `teardown`. With animations on, `wait_for` / `scroll_until_visible` on a screen
+  that never idles (shimmer) still work on runner 1.5.0+: they pause animators for the one UI read
+  (`ui_not_idle: true` in the result). Do not replace them with coordinate swipes.
 - **Time-sensitive states** (anything that appears or changes within a second or two): use
   `scenario` with `at_ms` steps. `burst` and `record` still exist for a single capture, but
   cannot run steps while capturing.
@@ -199,8 +209,9 @@ cheapest test is the one with the fewest calls, so:
    then `logs --clear`.
 5. **Launch configured**: `app --action launch --app-id PKG --extra endpoint=... --bool-extra test_mode=true`.
    On iOS add `--console` if the app logs with `print` (Flutter `debugPrint`, Swift `print`): without it
-   those lines are not in the simulator log at all. Read them with `logs --source console`
-   (in a scenario: `console: true` with `log_source: console`).
+   those lines may not be in the simulator log at all. In a scenario use `console: true` and leave
+   `log_source: auto`: runner 1.5.0+ merges the console capture with the unified log and drops the duplicate
+   copies iOS writes, so each event is counted once (`logs.merged` shows the sources).
    Use deep links (`open-url`) to reach a screen instead of tapping through menus.
 6. **Drive by element, not coordinates**: `tap-text --match "Got it"`, `set-text --match "User ID" --text u1`,
    `wait-for --match "Welcome" --timeout 15`, `scroll-until-visible --match "Offers"`.
@@ -218,6 +229,9 @@ cheapest test is the one with the fewest calls, so:
 8. **Make it repeatable**: the suite file you ran is the regression test; commit it (no secrets in it).
    Use `run-flow` only for Maestro flows that already exist in the repo.
 9. **Release and clean up** (`release --all`, `cleanup --keep ...`) when finished, including after failures.
+
+Spec files: `--spec e2e/device/suite.yaml` may be relative; it is looked up in the current directory, then
+in the conversation work dir.
 
 ## Common blockers on a fresh install
 
@@ -267,6 +281,10 @@ explicitly want that.
 | "Runner too old for scenario" / "logs with tags" | Ask the user to update the runner: download the new `loma_device_runner.py` from Integrations → Devices and run `python3 loma_device_runner.py setup` |
 | "Runner too old for scenario with preflight / expect.max_drift_ms / number_after / launch_app options" | Those need runner >= 1.3.0: same update as above. Everything else in `scenario` still works on 1.2.0 |
 | "Runner too old for health / scenario with expect.screens / screenshot fingerprint" | Those need runner >= 1.4.0 (also iOS `reset_app` and iOS console across relaunch): same update as above. A suite on an older runner skips the health check |
+| "Runner too old for installed / boot / scenario with duration_s over 60 / step timeout_s over 30 / more than 12 log rules" | Those need runner >= 1.5.0 (also media upload, DNS health, shimmer-safe UI reads, iOS log merge): same update as above |
+| `health.reasons` says "cannot resolve DNS" | The emulator's DNS broke (SDK calls hang with no error). The lease already tried `recover`; if it is still broken on iOS, the Mac's own network/VPN is the problem: tell the user |
+| `media_error` / `video_error` in a result | The video or a screenshot could not be delivered; the verdict and steps are still valid. Re-run that one case with `record: true` only if the video is the evidence you need |
+| "No device template matches" | `list` shows `templates`; the runner owner adds them to `config.json` (runner README, "Device templates") |
 | `health.ok: false` / `not run: device_slow` | The emulator is too slow (screenshots over 5 s, UI tree over 10 s) even after the automatic restart. If `health.hint` says the machine is overloaded, a restart will not help: lease another device or ask the user to close other emulators |
 | "Device is not connected to this runner … the runner is restarting it" / "Device is restarting" / `state: recovering` | The emulator/simulator crashed or was closed, and runner >= 1.4.0 is restarting it (cold boot, same `device_id`). Run `recover --device-id ID` (isolated: `device.lease device_id=ID recover=true`) to wait for it, then re-launch the app: it is installed but not running. Do not re-install. A suite does this by itself and re-runs the case (`device_restarted: true`) |
 | `state: down` in `list`, or "The last restart failed: …" | The automatic restart failed (or the device was idle for over 30 min, so it was not restarted). Run `recover` once. If it fails again, the error has the emulator log tail (e.g. low disk, no hypervisor): tell the user, and lease another device |
