@@ -8,6 +8,7 @@ import json
 import os
 import re
 import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 
 PRESETS_FILE = Path(__file__).resolve().parent / 'presets.json'
@@ -120,12 +121,28 @@ def first_rule(rules, kind, value):
 # ── Scenario validation ───────────────────────────────────────────────────
 
 
+def preset_files():
+    """Built-in presets plus any extra JSON files in LOMA_DEVICE_MOCK_PRESETS (os.pathsep separated)."""
+    extra = [Path(p.strip()).expanduser() for p in os.environ.get('LOMA_DEVICE_MOCK_PRESETS', '').split(os.pathsep)
+             if p.strip()]
+    return [PRESETS_FILE, *extra]
+
+
 def load_presets():
-    with open(PRESETS_FILE) as handle:
-        data = json.load(handle)
-    base = data.get('base') or {}
-    return {name: validate_scenario(deep_merge(base, {'name': name, **spec}))
-            for name, spec in data['presets'].items()}
+    """{name: scenario}. Later files override earlier ones; each file's `base` applies to its own presets."""
+    presets = {}
+    for path in preset_files():
+        with open(path) as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict) or not isinstance(data.get('presets'), dict):
+            raise ValueError(f'{path}: expected {{"base": {{...}}, "presets": {{name: scenario}}}}')
+        base = data.get('base') or {}
+        for name, spec in data['presets'].items():
+            try:
+                presets[name] = validate_scenario(deep_merge(base, {'name': name, **spec}))
+            except ValueError as exc:
+                raise ValueError(f'{path}: preset {name!r}: {exc}') from None
+    return presets
 
 
 def _rule(raw):
@@ -183,7 +200,7 @@ def validate_scenario(raw):
     items = raw.get('item_patches') or []
     if not isinstance(items, list) or len(items) > MAX_RULES:
         raise ValueError('item_patches must be a list')
-    scope = raw.get('asset_scope', 'data.widgets')
+    scope = raw.get('asset_scope', '')
     if not isinstance(scope, str):
         raise ValueError('asset_scope must be a dotted path string ("" = whole body)')
     return {'name': name, 'description': str(raw.get('description') or '')[:300], 'init_path': init_path,
@@ -209,6 +226,67 @@ def compose_scenario(presets, preset=None, scenario=None, init_patch=None, name=
     if name:
         result['name'] = name
     return validate_scenario(result)
+
+
+# ── Request log queries ──────────────────────────────────────────────────
+
+LOG_FILTERS = ('path', 'method', 'status', 'applied', 'scenario', 'scenario_version', 'since')
+
+
+def _status_matches(want, status):
+    want = str(want).strip().lower()
+    if len(want) == 3 and want.endswith('xx') and want[0].isdigit():
+        return isinstance(status, int) and status // 100 == int(want[0])
+    try:
+        return status == int(want)
+    except ValueError:
+        raise ValueError('status must be an HTTP status (e.g. 404) or a class (e.g. 4xx)') from None
+
+
+def filter_log(entries, query):
+    """Entries matching every filter in `query` (oldest first). Raises ValueError on bad filters.
+
+    path: glob or re:<regex> on the logged path (asset requests are logged as `/__loma_asset`,
+    with the original URL in `asset`). method: GET/POST... status: 404 or a class like 4xx.
+    applied: init | asset_rule | api_rule | blocked | init_parse_error | none.
+    since: ISO timestamp; only entries strictly after it (pass the previous `latest_at` to poll).
+    """
+    query = {k: v for k, v in (query or {}).items() if k in LOG_FILTERS and v not in (None, '')}
+    if 'path' in query:
+        _compile(query['path'])
+    if 'scenario_version' in query:
+        try:
+            query['scenario_version'] = int(query['scenario_version'])
+        except (TypeError, ValueError):
+            raise ValueError('scenario_version must be an integer') from None
+    if 'status' in query:
+        _status_matches(query['status'], 200)  # validate once
+    if 'since' in query:
+        try:
+            since = datetime.fromisoformat(str(query['since']).replace('Z', '+00:00'))
+        except ValueError:
+            raise ValueError('since must be an ISO 8601 timestamp (use latest_at from a previous log call)') from None
+        query['since'] = (since if since.tzinfo else since.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).isoformat()
+    out = []
+    for entry in entries or []:
+        if 'path' in query and not matches(query['path'], str(entry.get('path') or '')):
+            continue
+        if 'method' in query and str(entry.get('method') or '').upper() != str(query['method']).upper():
+            continue
+        if 'status' in query and not _status_matches(query['status'], entry.get('status')):
+            continue
+        if 'applied' in query:
+            want = None if str(query['applied']).lower() == 'none' else str(query['applied'])
+            if entry.get('applied') != want:
+                continue
+        if 'scenario' in query and entry.get('scenario') != query['scenario']:
+            continue
+        if 'scenario_version' in query and entry.get('scenario_version') != query['scenario_version']:
+            continue
+        if 'since' in query and not str(entry.get('at') or '') > str(query['since']):
+            continue
+        out.append(entry)
+    return out
 
 
 # ── Applying a scenario to an /init response ──────────────────────────────
@@ -259,7 +337,7 @@ def apply_init(body, scenario, asset_hosts, asset_base):
                 if isinstance(entry, dict) and all(entry.get(k) in allowed for k, allowed in item['where'].items()):
                     items[i] = merge_patch(entry, item['merge'])
     if any(r.get('kind', 'asset') == 'asset' for r in scenario.get('rules') or []):
-        scope = scenario.get('asset_scope', 'data.widgets')
+        scope = scenario.get('asset_scope', '')
         target = _get_path(result, scope) if scope else result
         if target is not None:
             rewritten = rewrite_assets(target, scenario['rules'], asset_hosts, asset_base)

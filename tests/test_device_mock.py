@@ -1,6 +1,7 @@
 """Device-mock proxy: token scoping, upstream allowlist, merge patch, asset rules, TTL, isolation."""
 import asyncio
 import json
+import re
 import time
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
@@ -43,26 +44,67 @@ def test_merge_patch_rfc7396(target, patch_, expected):
     assert core.merge_patch(target, patch_) == expected
 
 
-def test_presets_cover_skeleton_scenarios():
+def test_presets_are_generic_data():
     presets = core.load_presets()
-    assert {'absent', 'shimmer', 'lottie', 'failure', 'timeout'} <= set(presets)
+    assert {'passthrough', 'no_flows', 'slow_images', 'failing_images', 'hanging_images', 'slow_init',
+            'init_error', 'api_down'} <= set(presets)
+    assert all(p['description'] for p in presets.values())
+    # No customer/product ids or customer URLs in the built-in presets.
+    raw = core.PRESETS_FILE.read_text()
+    assert not re.search(r'[0-9a-f]{24}', raw) and not re.search(r'https://[a-z0-9.-]+\.[a-z]', raw)
     base = 'https://loma.example/device-mock/t/__loma_asset?u='
     hosts = {'cdn.plotline.so'}
-    absent = core.apply_init({'data': {'widgetSkeletonSettings': {'enabled': True}, 'widgets': []}},
-                             presets['absent'], hosts, base)
-    assert 'widgetSkeletonSettings' not in absent['data']
-    shimmer = core.apply_init(INIT, presets['shimmer'], hosts, base)
-    assert shimmer['data']['widgetSkeletonSettings']['mode'] == 'shimmer'
-    assert shimmer['data']['flows'] == []
-    assert shimmer['data']['widgets'][0]['image'].startswith(base)          # image rewritten
-    assert shimmer['data']['widgets'][1]['font'] == 'https://cdn.plotline.so/f.ttf'  # font untouched
-    lottie = core.apply_init(INIT, presets['lottie'], hosts, base)
-    assert lottie['data']['widgets'][0]['widgetLoaderUrl'] == lottie['data']['widgetSkeletonSettings']['lottieUrl']
-    # Mirrors ApplyProductWidgetLottie: widgets with a missing/empty/default loader get the product Lottie.
-    assert lottie['data']['widgets'][1]['widgetLoaderUrl'] == lottie['data']['widgetSkeletonSettings']['lottieUrl']
-    assert presets['failure']['rules'][0]['status'] == 404
-    assert presets['timeout']['rules'][0]['delay_ms'] > 10_000
+    passthrough = core.apply_init(INIT, presets['passthrough'], hosts, base)
+    assert passthrough == INIT
+    slow = core.apply_init(INIT, presets['slow_images'], hosts, base)
+    assert slow['data']['widgets'][0]['image'].startswith(base)               # image rewritten
+    assert slow['data']['widgets'][1]['font'] == 'https://cdn.plotline.so/f.ttf'  # font untouched
+    assert slow['data']['flows'] == [{'id': 'f1'}]
+    assert core.apply_init(INIT, presets['no_flows'], hosts, base)['data']['flows'] == []
+    assert presets['failing_images']['rules'][0]['status'] == 404
+    assert presets['hanging_images']['rules'][0]['delay_ms'] > 10_000
+    assert presets['init_error']['rules'][0] == {'match': '/sdk/init', 'kind': 'api', 'delay_ms': 0, 'status': 500}
     assert INIT['data']['flows'] == [{'id': 'f1'}]  # input never mutated
+
+
+def test_extra_presets_file(tmp_path, monkeypatch):
+    extra = tmp_path / 'team.json'
+    extra.write_text(json.dumps({'base': {'init_patch': {'data': {'flows': []}}}, 'presets': {
+        'feature_on': {'description': 'x on', 'init_patches': [{'data': {'featureX': {'enabled': True}}}]},
+        'passthrough': {'description': 'overridden'}}}))
+    monkeypatch.setenv('LOMA_DEVICE_MOCK_PRESETS', str(extra))
+    presets = core.load_presets()
+    assert presets['passthrough']['description'] == 'overridden' and 'slow_images' in presets
+    out = core.apply_init(INIT, presets['feature_on'], set(), '')
+    assert out['data']['featureX'] == {'enabled': True} and out['data']['flows'] == []
+    extra.write_text(json.dumps({'presets': {'bad': {'rules': [{'match': 're:('}]}}}))
+    with pytest.raises(ValueError, match="preset 'bad'"):
+        core.load_presets()
+
+
+def test_log_filters():
+    entries = [
+        {'at': '2026-01-01T00:00:01+00:00', 'method': 'POST', 'path': '/sdk/init', 'status': 200,
+         'applied': 'init', 'scenario': 'a', 'scenario_version': 1},
+        {'at': '2026-01-01T00:00:02+00:00', 'method': 'GET', 'path': '/__loma_asset', 'status': 404,
+         'applied': 'asset_rule', 'scenario': 'a', 'scenario_version': 1},
+        {'at': '2026-01-01T00:00:03+00:00', 'method': 'POST', 'path': '/sdk/events', 'status': 503,
+         'applied': None, 'scenario': 'b', 'scenario_version': 2},
+    ]
+    def paths(**q):
+        return [e['path'] for e in core.filter_log(entries, q)]
+    assert paths() == ['/sdk/init', '/__loma_asset', '/sdk/events']
+    assert paths(path='/sdk/*') == ['/sdk/init', '/sdk/events']
+    assert paths(path='re:init$') == ['/sdk/init']
+    assert paths(status='4xx') == ['/__loma_asset'] and paths(status='503') == ['/sdk/events']
+    assert paths(applied='none') == ['/sdk/events'] and paths(applied='init') == ['/sdk/init']
+    assert paths(method='get') == ['/__loma_asset']
+    assert paths(scenario='b') == ['/sdk/events'] and paths(scenario_version='1') == ['/sdk/init', '/__loma_asset']
+    assert paths(since='2026-01-01T00:00:02Z') == ['/sdk/events']
+    assert paths(unknown='x', path='') == ['/sdk/init', '/__loma_asset', '/sdk/events']
+    for bad in [{'status': 'abc'}, {'since': 'yesterday'}, {'path': 're:('}, {'scenario_version': 'x'}]:
+        with pytest.raises(ValueError):
+            core.filter_log(entries, bad)
 
 
 def test_rules_glob_and_regex():
@@ -80,10 +122,10 @@ def test_rules_glob_and_regex():
 
 def test_compose_patch_file_on_top_of_preset():
     presets = core.load_presets()
-    s = core.compose_scenario(presets, 'shimmer', init_patch={'data': {'widgetSkeletonSettings': {'baseColor': '#DD2222'}}})
-    out = core.apply_init({'data': {}}, s, set(), '')
-    assert out['data']['widgetSkeletonSettings']['baseColor'] == '#DD2222'
-    assert out['data']['widgetSkeletonSettings']['mode'] == 'shimmer'
+    s = core.compose_scenario(presets, 'no_flows', init_patch={'data': {'featureX': {'color': '#DD2222'}}})
+    out = core.apply_init({'data': {'flows': [1]}}, s, set(), '')
+    assert out['data']['featureX']['color'] == '#DD2222'
+    assert out['data']['flows'] == [] and s['name'] == 'no_flows'
     with pytest.raises(ValueError, match='unknown preset'):
         core.compose_scenario(presets, 'nope')
     with pytest.raises(ValueError, match='unknown scenario keys'):
@@ -119,6 +161,14 @@ def test_cli_build_body(tmp_path):
                     'name': 'red', 'init_patch': {'data': {'x': 1}}}
     with pytest.raises(SystemExit):
         cli.build_body(cli.parser().parse_args(base + ['set-scenario', '--session-id', 'dm_1']))
+    args = base + ['log', '--session-id', 'dm_1', '--path', '/sdk/init', '--status', '4xx', '--scenario-version', '2']
+    assert cli.build_body(cli.parser().parse_args(args)) == {
+        'scope': 'conv:c1', 'session_id': 'dm_1', 'action': 'log', 'limit': 50,
+        'filters': {'path': '/sdk/init', 'status': '4xx', 'scenario_version': 2}}
+    assert cli.build_body(cli.parser().parse_args(base + ['log', '--session-id', 'dm_1'])) == {
+        'scope': 'conv:c1', 'session_id': 'dm_1', 'action': 'log', 'limit': 50}
+    assert cli.build_body(cli.parser().parse_args(base + ['show', '--session-id', 'dm_1']))['action'] == 'show'
+    assert cli.build_body(cli.parser().parse_args(base + ['presets', '--verbose']))['verbose'] is True
 
 
 def test_control_plane_is_loopback_only(monkeypatch):
@@ -209,14 +259,15 @@ async def test_init_is_patched_and_logged(monkeypatch):
         sess = await s.create()
         assert sess['base_url'].startswith('https://loma.example/device-mock/dmt_')
         status, body = await s.control({'action': 'set_scenario', 'scope': 'conv:a', 'session_id': sess['session_id'],
-                                        'preset': 'shimmer'})
+                                        'preset': 'slow_images',
+                                        'init_patch': {'data': {'featureX': {'enabled': True, 'mode': 'a'}, 'flows': []}}})
         assert status == 200 and body['scenario_version'] == 1
         status, headers, raw = await s.call(sess['path'] + '/sdk/init?x=1', json={'oldResponseBody': {'big': 1}, 'k': 2},
                                             headers={'Cookie': 'authjs.session-token=secret', 'X-User-Email': 'spoof@x',
                                                      'ref-id': 'Loma-e2e'})
         assert status == 200
         data = json.loads(raw)['data']
-        assert data['widgetSkeletonSettings']['enabled'] is True and data['flows'] == []
+        assert data['featureX']['enabled'] is True and data['flows'] == []
         assert data['widgets'][0]['image'].startswith(f"https://loma.example{sess['path']}/__loma_asset?v=1&u=")
         assert 'Set-Cookie' not in headers and headers['Cache-Control'] == 'no-store'
         assert "sandbox" in headers['Content-Security-Policy']
@@ -233,8 +284,8 @@ async def test_init_is_patched_and_logged(monkeypatch):
         status, log = await s.control({'action': 'log', 'scope': 'conv:a', 'session_id': sess['session_id']})
         init_entry, events_entry = log['entries'][-3], log['entries'][-1]
         assert init_entry['path'] == '/sdk/init' and init_entry['applied'] == 'init'
-        assert init_entry['scenario'] == 'shimmer' and init_entry['scenario_version'] == 1
-        assert init_entry['served']['data.widgetSkeletonSettings']['mode'] == 'shimmer'
+        assert init_entry['scenario'] == 'slow_images' and init_entry['scenario_version'] == 1
+        assert init_entry['served']['data.featureX']['mode'] == 'a'
         assert events_entry['applied'] is None and events_entry['status'] == 200
 
 
@@ -274,8 +325,8 @@ async def test_token_scoping(monkeypatch):
         sid = sess['session_id']
         # Another user, or the same user in another conversation, cannot see or drive it.
         for user, scope in [(OTHER, 'conv:a'), (OWNER, 'conv:b')]:
-            for action in ('log', 'set_scenario', 'delete'):
-                body = {'action': action, 'scope': scope, 'session_id': sid, 'preset': 'shimmer'}
+            for action in ('log', 'show', 'set_scenario', 'delete'):
+                body = {'action': action, 'scope': scope, 'session_id': sid, 'preset': 'passthrough'}
                 status, body = await s.control(body, user=user)
                 assert status == 404, (user, scope, action, body)
             _, listed = await s.control({'action': 'list', 'scope': scope}, user=user)
@@ -340,20 +391,21 @@ async def test_concurrent_sessions_are_isolated(monkeypatch):
     async with Stack(monkeypatch) as s:
         a = await s.create(scope='conv:a')
         b = await s.create(scope='conv:b')
-        await s.control({'action': 'set_scenario', 'scope': 'conv:a', 'session_id': a['session_id'], 'preset': 'shimmer'})
+        await s.control({'action': 'set_scenario', 'scope': 'conv:a', 'session_id': a['session_id'],
+                         'name': 'on', 'scenario': {'init_patch': {'data': {'featureX': {'mode': 'a'}}}}})
         await s.control({'action': 'set_scenario', 'scope': 'conv:b', 'session_id': b['session_id'],
-                         'preset': 'absent'})
+                         'name': 'off', 'init_patch': {'data': {'featureX': None}}})
         results = await asyncio.gather(*[s.call(x['path'] + '/sdk/init', json={}) for x in [a, b] * 10])
         for i, (status, _, raw) in enumerate(results):
             data = json.loads(raw)['data']
             if i % 2 == 0:
-                assert data['widgetSkeletonSettings']['mode'] == 'shimmer'
+                assert data['featureX']['mode'] == 'a'
             else:
-                assert 'widgetSkeletonSettings' not in data
+                assert 'featureX' not in data
         _, log_a = await s.control({'action': 'log', 'scope': 'conv:a', 'session_id': a['session_id']})
         _, log_b = await s.control({'action': 'log', 'scope': 'conv:b', 'session_id': b['session_id']})
-        assert {e['scenario'] for e in log_a['entries']} == {'shimmer'} and len(log_a['entries']) == 10
-        assert {e['scenario'] for e in log_b['entries']} == {'absent'} and len(log_b['entries']) == 10
+        assert {e['scenario'] for e in log_a['entries']} == {'on'} and len(log_a['entries']) == 10
+        assert {e['scenario'] for e in log_b['entries']} == {'off'} and len(log_b['entries']) == 10
 
 
 @pytest.mark.asyncio
@@ -371,3 +423,35 @@ async def test_body_and_rate_limits(monkeypatch):
         await s.create()
         status, body = await s.control({'action': 'create', 'scope': 'conv:a'})
         assert status == 409 and 'At most 2' in body['error']
+
+
+@pytest.mark.asyncio
+async def test_switch_scenario_mid_session_and_query_log(monkeypatch):
+    async with Stack(monkeypatch) as s:
+        sess = await s.create()
+        sid = sess['session_id']
+        ctl = {'scope': 'conv:a', 'session_id': sid}
+        await s.control({**ctl, 'action': 'set_scenario', 'preset': 'passthrough'})
+        status, _, raw = await s.call(sess['path'] + '/sdk/init', json={})
+        assert status == 200 and json.loads(raw) == INIT
+        _, first = await s.control({**ctl, 'action': 'log'})
+        # Same session, same base_url: the next request gets the new scenario.
+        _, switched = await s.control({**ctl, 'action': 'set_scenario', 'preset': 'init_error'})
+        assert switched['scenario'] == 'init_error' and switched['scenario_version'] == 2
+        status, _, _ = await s.call(sess['path'] + '/sdk/init', json={})
+        assert status == 500
+        await s.call(sess['path'] + '/sdk/events', method='GET')
+        _, shown = await s.control({**ctl, 'action': 'show'})
+        assert shown['scenario'] == 'init_error' and shown['scenario_detail']['rules'][0]['status'] == 500
+        assert shown['log_entries'] == 3 and 'base_url' not in shown
+        _, log = await s.control({**ctl, 'action': 'log', 'filters': {'path': '/sdk/init'}})
+        assert log['total'] == 3 and log['matched'] == 2
+        assert [(e['scenario'], e['status']) for e in log['entries']] == [('passthrough', 200), ('init_error', 500)]
+        _, log = await s.control({**ctl, 'action': 'log', 'filters': {'status': '5xx', 'scenario_version': 2}})
+        assert [e['path'] for e in log['entries']] == ['/sdk/init']
+        _, log = await s.control({**ctl, 'action': 'log', 'filters': {'since': first['latest_at']}})
+        assert [e['path'] for e in log['entries']] == ['/sdk/init', '/sdk/events']
+        status, body = await s.control({**ctl, 'action': 'log', 'filters': {'status': 'bad'}})
+        assert status == 400 and 'status' in body['error']
+        _, verbose = await s.control({'scope': 'conv:a', 'action': 'presets', 'verbose': True})
+        assert verbose['presets']['init_error']['rules'][0]['status'] == 500

@@ -175,7 +175,7 @@ cheapest test is the one with the fewest calls, so:
 - **Keep device work out of long threads.** For a large matrix, run the device loop in a
   subagent that returns only pass/fail per scenario and file paths (one table, no raw logs).
 - **State file.** Write the device id, installed build SHA, app id and anything you started
-  (servers, tunnels) to `state.json` in the conversation work dir (the literal path in `[Conversation Work Dir: ...]`; never `$LOMA_CONVERSATION_DIR`, which can be unset). Read it first when resuming.
+  (servers, tunnels, device_mock sessions) to `state.json` in the conversation work dir (the literal path in `[Conversation Work Dir: ...]`; never `$LOMA_CONVERSATION_DIR`, which can be unset). Read it first when resuming.
 
 ## The loop
 
@@ -218,6 +218,29 @@ cheapest test is the one with the fewest calls, so:
 8. **Make it repeatable**: the suite file you ran is the regression test; commit it (no secrets in it).
    Use `run-flow` only for Maestro flows that already exist in the repo.
 9. **Release and clean up** (`release --all`, `cleanup --keep ...`) when finished, including after failures.
+
+## Control the backend response: device_mock
+
+Use it when the case needs a Plotline API response you cannot get on demand: a field the server
+does not send yet, an empty or failing `/sdk/init`, slow or broken images, an outage. Do not
+start your own tunnel or proxy. Same auth flags as `tools/device.py`
+(`D="python3 tools/device_mock.py --user-email <E> --auth-token <T> --scope <conversation-id>"`).
+
+1. **Create**: `$D create --label <case>` returns `session_id` and `base_url`. `$D presets` lists the
+   built-in scenarios (`passthrough`, `no_flows`, `slow_images`, `failing_images`, `init_error`, ...).
+2. **Pick the scenario**: `$D set-scenario --session-id ID --preset slow_images`, optionally with
+   `--patch-file p.json` (RFC 7396 merge patch on the `/init` body) or `--scenario-file s.json`
+   (see `docs/device-mock.md`). Keep feature payloads in those files, not in presets.
+3. **Point the app at it**: launch with the test app's API endpoint extra set to `base_url`
+   (`app --action launch --app-id PKG --extra <endpoint-key>=<base_url>`). Start with `passthrough`
+   and check the log shows `/sdk/init` before trusting any other scenario.
+4. **Switch mid-session**: `set-scenario` again; the same `base_url` serves the new scenario from the
+   next request. Relaunch the app if it only calls `/init` at start.
+5. **Prove what the app got**: `$D log --session-id ID --path /sdk/init --limit 3`; `scenario`,
+   `scenario_version` and `served` must match the case before you screenshot it. Filter with
+   `--status 4xx`, `--applied asset_rule`, `--since <latest_at>` instead of reading the whole log.
+6. **Delete** when done, including after failures: `$D delete --session-id ID`. Note the
+   `session_id` in `state.json`. Never paste `base_url` publicly: it is a bearer URL until it expires.
 
 ## Common blockers on a fresh install
 

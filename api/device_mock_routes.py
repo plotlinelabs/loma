@@ -333,7 +333,13 @@ async def handle_control(request):
     action = body.get('action')
 
     if action == 'presets':
-        return web.json_response({'presets': {n: p['description'] for n, p in presets().items()},
+        try:
+            available = presets()
+        except (OSError, ValueError) as exc:
+            return _error(f'Could not load presets: {exc}', 500)
+        if body.get('verbose'):
+            return web.json_response({'presets': available, 'upstreams': core.upstream_allowlist()})
+        return web.json_response({'presets': {n: p['description'] for n, p in available.items()},
                                   'upstreams': core.upstream_allowlist()})
     if action == 'create':
         allowed = core.upstream_allowlist()
@@ -357,11 +363,15 @@ async def handle_control(request):
     session = await store.owned(db, user_email, scope, body.get('session_id'))
     if session is None:
         return _error('Session not found', 404)
+    if action == 'show':
+        return web.json_response({**_view(session), 'scenario_detail': session.get('scenario'),
+                                  'log_entries': len(session.get('log') or [])})
     if action == 'set_scenario':
+        # Takes effect on the next request; already-rewritten asset URLs follow the new rules too.
         try:
             scenario = core.compose_scenario(presets(), body.get('preset'), body.get('scenario'),
                                              body.get('init_patch'), body.get('name'))
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             return _error(str(exc))
         version = await store.set_scenario(db, session['session_id'], scenario)
         return web.json_response({'session_id': session['session_id'], 'scenario': scenario['name'],
@@ -371,7 +381,13 @@ async def handle_control(request):
             limit = max(1, min(int(body.get('limit') or 50), store.LOG_SIZE))
         except (TypeError, ValueError):
             return _error('limit must be an integer')
-        return web.json_response({**_view(session), 'entries': (session.get('log') or [])[-limit:]})
+        log = session.get('log') or []
+        try:
+            matched = core.filter_log(log, body.get('filters'))
+        except ValueError as exc:
+            return _error(str(exc))
+        return web.json_response({**_view(session), 'total': len(log), 'matched': len(matched),
+                                  'latest_at': log[-1]['at'] if log else None, 'entries': matched[-limit:]})
     if action == 'delete':
         await store.delete(db, session['session_id'])
         logger.info('device-mock session %s deleted by %s', session['session_id'], user_email)
