@@ -80,6 +80,10 @@ async def init_observability():
     from device_loader.backend.store import ensure_indexes as ensure_device_indexes
     await ensure_device_indexes(_db)
 
+    # Device-mock proxy sessions (hashed tokens, TTL expiry)
+    from device_mock.store import ensure_indexes as ensure_device_mock_indexes
+    await ensure_device_mock_indexes(_db)
+
     # Draft with Loma indexes
     await _db.drafts.create_index("draft_id", unique=True)
     await _db.drafts.create_index([("user_email", 1), ("status", 1)])
