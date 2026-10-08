@@ -251,8 +251,8 @@ def test_read_only_proposal_and_result_copy():
 
 @pytest.mark.asyncio
 async def test_preview_maps_modes_and_validates():
-    with patch.object(customer_admin.client, "create_plan", AsyncMock(return_value={"planId": "p1"})) as create:
-        await customer_admin.preview("cs@example.com", "o1", [], None, mode="read-only")
+    with patch.object(customer_admin.client, "create_plan", AsyncMock(return_value={"planId": "p1", "summary": READ_ONLY_SUMMARY})) as create:
+        assert "error" not in await customer_admin.preview("cs@example.com", "o1", [], None, mode="read-only")
     assert create.await_args.kwargs["mode"] == "read_only"
     assert "takes --org-id only" in (await customer_admin.preview("cs@example.com", None, ["p1"], None, mode="read-write"))["error"]
     assert "--mode must be one of" in (await customer_admin.preview("cs@example.com", "o1", [], None, mode="delete"))["error"]
@@ -271,3 +271,12 @@ async def test_propose_accepts_a_dashboard_access_change(monkeypatch):
         result = await customer_admin.propose("p1", "cs@example.com", None, None)
     assert result["proposed"] is True and result["channel"] == "C9"
     assert posted.await_args.kwargs["text"].startswith("Make Acme view-only?")
+
+
+@pytest.mark.asyncio
+async def test_preview_refuses_when_service_ignores_the_mode():
+    with patch.object(customer_admin.client, "create_plan", AsyncMock(return_value={"planId": "p1", "summary": SUMMARY})):
+        result = await customer_admin.preview("cs@example.com", "o1", [], None, mode="read-only")
+    assert "does not support --mode read-only" in result["error"]
+    with patch.object(customer_admin.client, "create_plan", AsyncMock(return_value={"planId": "p1", "summary": SUMMARY})):
+        assert "error" not in await customer_admin.preview("cs@example.com", "o1", [], None)

@@ -52,6 +52,10 @@ async def preview(requested_by: str, org_id: str | None, product_ids: list[str],
     result = await client.create_plan(requested_by, org_id=org_id, product_ids=product_ids, reason=reason, mode=MODES[mode])
     if "error" in result:
         return result
+    # An older service ignores `mode` and plans a full offboarding; never let that through as something else.
+    planned = (result.get("summary") or {}).get("mode") or "offboard"
+    if planned != MODES[mode]:
+        return {"error": f"the customer-admin service does not support --mode {mode} yet (it planned '{planned}'); nothing was proposed"}
     return {**result, "next_step": "Show the summary to the user, then run `propose` with this planId to post the Confirm button."}
 
 
