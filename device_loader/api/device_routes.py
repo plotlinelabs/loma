@@ -71,7 +71,10 @@ def _clean_device(device):
         return None
     return {'serial': device['serial'], 'platform': device.get('platform') if device.get('platform') in ('android', 'ios') else 'unknown',
             'name': str(device.get('name') or '')[:80], 'os_version': str(device.get('os_version') or '')[:20],
-            'virtual': bool(device.get('virtual', True))}
+            'virtual': bool(device.get('virtual', True)),
+            # runner >= 1.4.0: ok | recovering | down (auto-recovery); older runners send none (= ok)
+            'state': device.get('state') if device.get('state') in ('ok', 'recovering', 'down') else 'ok',
+            **({'error': str(device['error'])[:300]} if device.get('error') and device.get('state') == 'down' else {})}
 
 
 def _clean_devices(devices):
@@ -382,13 +385,21 @@ async def handle_internal_call(request):
         if action == 'list':
             return web.json_response({'devices': await service.list_devices(user_email)})
         if action == 'lease':
-            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform')))
+            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform'),
+                                                         recover=body.get('recover') is True,
+                                                         cold=body.get('cold') is True))
         if action == 'release':
+            if body.get('all') is True:
+                return web.json_response(await service.release_all(user_email, scope))
             return web.json_response(await service.release(user_email, scope, body.get('device_id')))
         if action == 'call':
             data = await service.call(user_email, scope, body.get('device_id'), body.get('op'), body.get('args') or {})
             return web.json_response(_encode_media(data))
         if action == 'suite':
+            if body.get('device_ids') is not None:
+                data = await service.matrix(user_email, scope, body.get('device_ids'), body.get('args') or {})
+                data['devices'] = [_encode_media(device) for device in data['devices']]
+                return web.json_response(data)
             data = await service.suite(user_email, scope, body.get('device_id'), body.get('args') or {})
             return web.json_response(_encode_media(data))
     except DeviceError as exc:

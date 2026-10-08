@@ -64,6 +64,7 @@ runner should stay up while you are logged out.
 | scenario: the same inputs as one test case (in order, or at fixed times), with optional video, screenshots, screen-change sampling, logs and pass/fail rules | |
 | scenario preflight: up to 4 HTTP GET/POST checks before a test, to public hosts only by default. The agent gets the status and a yes/no per expected text, never the response body | Read the response of an HTTP request made from your machine |
 | run_flow (Maestro YAML, screened) | Run Maestro JavaScript (unless you opt in) |
+| recover: restart a crashed / closed / hung emulator or simulator it has seen before (see `auto_recover`) | Restart physical devices, or start emulators it never saw running |
 
 ## Policy (`~/.loma-device-runner/config.json`)
 
@@ -73,7 +74,9 @@ runner should stay up while you are logged out.
   "allowed_app_ids": ["com.example.demo"],
   "allow_maestro_scripts": false,
   "keep_awake": true,
-  "preflight": "public"
+  "preflight": "public",
+  "auto_recover": true,
+  "emulator_args": []
 }
 ```
 
@@ -91,6 +94,25 @@ runner should stay up while you are logged out.
   probe your local network; `"any"` allows them (use it when the backend under test runs on this machine or your LAN);
   `"off"` refuses every preflight. Redirects are not followed and the response body is never sent to Loma.
 
+- `auto_recover` (default `true`): when an emulator/simulator that Loma used in the last 30 minutes crashes, is
+  closed or hangs, the runner starts it again so the test run can continue. It remembers each device's AVD name
+  and port (`~/.loma-device-runner/known-devices.json`) and restarts it on the **same port**, so the Loma
+  `device_id` does not change. The steps escalate:
+  - Android: reconnect an `offline` emulator, restart a hung `adb` server, then kill the AVD's processes, clear
+    stale `*.lock` files, and cold boot it (`-no-snapshot-load`). If that boot fails, it tries once more with the
+    software GPU.
+  - iOS: boot a shut-down simulator, or shut down and boot a hung one. It restarts `CoreSimulatorService` only when
+    `simctl` itself is stuck.
+
+  Restarting `adb` or `CoreSimulatorService` affects every device, so the runner only does it when no other device
+  on this runner is in use. Physical devices and devices idle for over 30 minutes are never restarted
+  automatically, so an emulator you closed on purpose stays closed. After 3 automatic restarts in 30 minutes the
+  runner stops (a boot loop) and reports the emulator log. Apps and their data are kept, but the app is not running
+  after a restart. Emulator output goes to `~/.loma-device-runner/logs/emulator-<AVD>.log`.
+- `emulator_args` (default `[]`): extra flags used when the runner cold boots an emulator, e.g.
+  `["-memory", "4096", "-cores", "4"]`. On Linux without a display, `-no-window` is added. Emulators the runner
+  started keep running when the runner restarts (`KillMode=process` / `AbandonProcessGroup`).
+
 Run `setup` again after editing the policy to restart the runner.
 
 ## Tips for reliable agent testing
@@ -100,4 +122,10 @@ Run `setup` again after editing the policy to restart the runner.
 - Runner 1.3.0+ re-encodes a recording that is over the 16 MB limit instead of dropping it. It uses `ffmpeg` when
   installed (`brew install ffmpeg`, best quality for the size) and otherwise the `avconvert` tool that ships with macOS.
 - Emulators can run headless: `emulator -avd loma-test -no-window -no-snapshot-save`.
+- Runner 1.4.0+ checks device speed (`health`) when a device is leased and before a suite: an emulator that takes
+  over 5 s per screenshot or 10 s per UI tree is reported as *blocked (device_slow)* instead of timing out tests.
+  Give the emulator more RAM/cores, close other emulators, or use a hardware-accelerated image.
+- Runner 1.4.0+ can reset an iOS app (`reset_app`): it reinstalls the last build it installed (or empties the app's
+  data container) and resets the simulator keychain. The keychain is shared by every app on that simulator, which
+  is one more reason to use a dedicated simulator.
 - Revoke the runner under **Integrations → Devices** at any time; it stops within seconds.

@@ -55,6 +55,12 @@ function DeviceRow({ device, canRelease, busy, onRelease }: {
         <div className="text-[13px] text-foreground truncate">
           {device.name} <span className="text-muted-foreground">· {device.platform} {device.os_version}</span>
           {!device.virtual && <span className="ml-1 text-amber-600 text-xs">physical</span>}
+          {device.state === "recovering" && <span className="ml-1 text-amber-600 text-xs">restarting…</span>}
+          {device.state === "down" && (
+            <span className="ml-1 text-red-600 text-xs" title={device.error || "Crashed or closed"}>
+              down
+            </span>
+          )}
         </div>
         <div className="text-xs text-muted-foreground truncate">
           <code>{device.device_id}</code>
