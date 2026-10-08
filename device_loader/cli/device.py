@@ -8,7 +8,7 @@ users are always isolated); isolated workers bind the scope server-side.
 
 Commands:
   device.py --user-email E --auth-token T --scope CONVERSATION_ID list
-  device.py ... lease [--platform android|ios] [--device-id ID]
+  device.py ... lease [--platform android|ios] [--device-id ID] [--template NAME] [--clean]   (template: boot a new device)
   device.py ... release --device-id ID | --all          (--all: every device this conversation holds)
   device.py ... recover --device-id ID [--cold]        (restart a crashed/closed/hung emulator or simulator)
   device.py ... cleanup [--keep PATH ...]                 (delete this conversation's device media except --keep)
@@ -179,7 +179,8 @@ def build_body(args):
     if args.command == 'list':
         return {**body, 'action': 'list'}
     if args.command == 'lease':
-        return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform}
+        return {**body, 'action': 'lease', 'device_id': args.device_id, 'platform': args.platform,
+                **({'template': args.template} if args.template else {}), **({'clean': True} if args.clean else {})}
     if args.command == 'recover':  # a lease that restarts the device and waits for it
         return {**body, 'action': 'lease', 'device_id': args.device_id, 'recover': True,
                 **({'cold': True} if args.cold else {})}
@@ -339,13 +340,37 @@ def substitute(value, variables, missing):
     return value
 
 
+def resolve_spec_path(path, scope=None):
+    """A relative --spec is looked up in the current directory, then the conversation work dir
+    ($LOMA_CONVERSATION_DIR, else <workspace>/conversations/<scope>), so `--spec e2e/suite.yaml` works from
+    any cwd (the agent's shell cwd is reset to the app dir between commands)."""
+    if os.path.isabs(path):
+        return path
+    tried = [Path.cwd() / path]
+    base = (os.environ.get('LOMA_CONVERSATION_DIR') or '').strip()
+    if base and os.path.isabs(base) and Path(base) != Path('/'):
+        tried.append(Path(base) / path)
+    scope = scope or _SPEC_SCOPE.get('scope')
+    safe = ''.join(c for c in str(scope or '') if c.isalnum() or c in '-_.').strip('.')[:128]
+    if safe:
+        workspace = Path(os.environ.get('LOMA_WORKSPACE_DIR') or '/opt/loma-workspace')
+        tried.append(workspace / 'conversations' / safe / path)
+    for candidate in tried:
+        if candidate.is_file():
+            return str(candidate)
+    raise SystemExit(f'--spec {path} not found; looked in: ' + ', '.join(str(c) for c in tried))
+
+
+_SPEC_SCOPE = {}
+
+
 def load_spec(path, variables=None):
     """A scenario or suite spec file (YAML or JSON object); the backend and runner validate its contents.
 
     ${NAME} placeholders are filled from variables (--var / E2E_* env), so API keys and tokens never
     have to be written into a spec file that is committed or left in a shared work dir.
     """
-    with open(path) as handle:
+    with open(resolve_spec_path(path)) as handle:
         text = handle.read()
     try:
         spec = json.loads(text)
@@ -375,6 +400,8 @@ def parser():
     s = sub.add_parser('lease')
     s.add_argument('--platform', choices=['android', 'ios'])
     s.add_argument('--device-id')
+    s.add_argument('--template', help='Boot a new device from this runner template (see list)')
+    s.add_argument('--clean', action='store_true', help='Boot it from the template clean state (snapshot / clone)')
 
     def with_device(name):
         cmd = sub.add_parser(name)
@@ -606,6 +633,7 @@ def main(argv=None):
         return 0
     if not args.user_email or not args.auth_token:
         p.error('--user-email and --auth-token are required (or set LOMA_USER_EMAIL / LOMA_AUTH_TOKEN)')
+    _SPEC_SCOPE['scope'] = getattr(args, 'scope', None)
     body = build_body(args)
     headers = {'X-Loma-User': args.user_email, 'X-Loma-Auth-Token': args.auth_token}
     if args.command == 'install' and args.file:

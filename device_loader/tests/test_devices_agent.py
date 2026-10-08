@@ -29,9 +29,12 @@ class FakeService:
     async def list_devices(self, owner):
         return [{'device_id': 'r_0123456789abcdef/emulator-5554', 'owner': owner}]
 
-    async def lease(self, owner, scope, device_id=None, platform=None):
+    async def lease(self, owner, scope, device_id=None, platform=None, template=None, clean=False):
         self.calls.append(('lease', owner, scope, device_id, platform))
         return {'device_id': 'r_0123456789abcdef/emulator-5554'}
+
+    async def templates_for(self, owner):
+        return []
 
     async def release(self, owner, scope, device_id):
         self.calls.append(('release', owner, scope, device_id))
@@ -240,7 +243,7 @@ async def test_internal_endpoint_accepts_valid_hmac_token(monkeypatch):
             async with aiohttp.ClientSession() as http:
                 headers = {'X-Loma-User': OWNER, 'X-Loma-Auth-Token': create_user_auth_token(OWNER)}
                 async with http.post(server.make_url('/internal/devices/call'), json={'action': 'list'}, headers=headers) as r:
-                    assert r.status == 200 and (await r.json()) == {'devices': []}
+                    assert r.status == 200 and (await r.json()) == {'devices': [], 'templates': []}
                 async with http.post(server.make_url('/internal/devices/call'), json={'action': 'lease', 'scope': 'conv:c'}, headers=headers) as r:
                     assert r.status == 409 and 'No devices are registered' in (await r.json())['error']
                 # A token for another user does not work for this user.

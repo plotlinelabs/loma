@@ -84,6 +84,18 @@ def _clean_devices(devices):
     return [d for d in (_clean_device(x) for x in (devices or [])[:50]) if d is not None]
 
 
+TEMPLATE_NAME = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
+
+
+def _clean_templates(templates):
+    """Device templates from a runner hello (>= 1.5.0): names the owner configured, never AVD names."""
+    if not isinstance(templates, list):
+        return []
+    return [{'name': t['name'], 'platform': t['platform'], 'clean': t.get('clean') is True}
+            for t in templates[:10] if isinstance(t, dict) and isinstance(t.get('name'), str)
+            and TEMPLATE_NAME.fullmatch(t['name']) and t.get('platform') in ('android', 'ios')]
+
+
 # ── Runner endpoints ──────────────────────────────────────────────────────
 
 
@@ -124,14 +136,15 @@ async def handle_runner_ws(request):
     devices = _clean_devices(hello.get('devices'))
     capabilities = hello.get('capabilities') if isinstance(hello.get('capabilities'), list) else []
     version = str(hello.get('version') or '')[:40]
-    conn = await hub.attach(runner_id, ws, devices, version)
+    templates = _clean_templates(hello.get('templates'))
+    conn = await hub.attach(runner_id, ws, devices, version, templates)
     try:
         if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
             await hub.revoke(runner_id)  # revoked while we waited for hello
             return ws
         await db.device_runners.update_one({'runner_id': runner_id}, {'$set': {
             'devices': devices, 'last_seen': store.now(), 'connected_at': store.now(),
-            'version': version, 'hostname': str(hello.get('hostname') or '')[:120],
+            'version': version, 'templates': templates, 'hostname': str(hello.get('hostname') or '')[:120],
             'os': str(hello.get('os') or '')[:120],
             'capabilities': [str(c)[:20] for c in capabilities[:10]]}})
         logger.info('Device runner %s connected with %d device(s)', runner_id, len(devices))
@@ -216,6 +229,7 @@ def _runner_view(runner, user_email):
         # Newer device ops (scenario, logs cursors) are refused by older runners until they update.
         'update_available': bool(runner.get('version')) and _version(runner.get('version')) < _version(RUNNER_VERSION),
         'capabilities': runner.get('capabilities') or [], 'shared_with': runner.get('shared_with') or [],
+        'templates': runner.get('templates') or [],
         'online': conn is not None, 'last_seen': last_seen.isoformat() if last_seen else None,
         'created_at': store.aware(runner['created_at']).isoformat() if runner.get('created_at') else None}
 
@@ -408,11 +422,14 @@ async def handle_internal_call(request):
     action = body.get('action')
     try:
         if action == 'list':
-            return web.json_response({'devices': await service.list_devices(user_email)})
+            return web.json_response({'devices': await service.list_devices(user_email),
+                                      'templates': await service.templates_for(user_email)})
         if action == 'lease':
             return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform'),
                                                          recover=body.get('recover') is True,
-                                                         cold=body.get('cold') is True))
+                                                         cold=body.get('cold') is True,
+                                                         template=body.get('template'),
+                                                         clean=body.get('clean', False)))
         if action == 'release':
             if body.get('all') is True:
                 return web.json_response(await service.release_all(user_email, scope))
