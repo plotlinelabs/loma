@@ -298,10 +298,17 @@ function removeTransientStatusItems(items: ChatItem[]): ChatItem[] {
 const FENCED_BLOCK_RE = /```(\w*)\n([\s\S]*?)```/g;
 const DESIGN_FENCE_LANGUAGES = new Set(["html", "svg", "jsx", "tsx"]);
 
+/** Mirrors the backend's promotion threshold (agent/client.py _detect_artifacts). */
+function isArtifactSized(body: string): boolean {
+  const content = body.trimEnd();
+  return content.length >= 200 || content.split("\n").length - 1 >= 8;
+}
+
 /**
  * The backend sends a promoted code block twice: inside the message text and
  * as an artifact. Drop the copy from the text, since the card shows it. While
- * streaming, an unfinished design block is cut off too and reported as
+ * streaming, a design block whose card hasn't arrived yet (unfinished, or
+ * finished but ahead of its artifact event) is held back and reported as
  * `designing`, so raw HTML never scrolls past in the chat.
  */
 function withoutArtifactSource(
@@ -310,10 +317,17 @@ function withoutArtifactSource(
   streaming: boolean,
 ): { text: string; designing: boolean } {
   const bodies = new Set(artifacts.map((a) => a.content.trimEnd()));
-  let text = bodies.size
-    ? content.replace(FENCED_BLOCK_RE, (block, _lang: string, body: string) => (bodies.has(body.trimEnd()) ? "" : block))
-    : content;
   let designing = false;
+  let text = content.replace(FENCED_BLOCK_RE, (block, lang: string, body: string) => {
+    if (bodies.has(body.trimEnd())) return "";
+    // The artifact event follows the full text, so a finished design block
+    // is still unmatched for a moment: hold it back if it will be promoted.
+    if (streaming && DESIGN_FENCE_LANGUAGES.has(lang.toLowerCase()) && isArtifactSized(body)) {
+      designing = true;
+      return "";
+    }
+    return block;
+  });
   if (streaming && (text.match(/```/g) || []).length % 2 === 1) {
     const open = text.lastIndexOf("```");
     const lang = text.slice(open + 3).split("\n", 1)[0].trim().toLowerCase();
@@ -792,9 +806,15 @@ export default function ChatPanel({
   const [internalArtifacts, setInternalArtifacts] = useState<Artifact[]>(initialArtifacts || []);
   // Use external artifacts if they have entries, otherwise fall back to internal.
   // Note: `[] || x` evaluates to `[]` because empty arrays are truthy in JS.
-  const allArtifacts = externalArtifacts && externalArtifacts.length > 0
-    ? externalArtifacts
-    : internalArtifacts;
+  // The parent only holds artifacts loaded with the page or opened in the
+  // panel; this chat holds everything streamed since. Merge them, or a card
+  // whose artifact only one side knows drops out (and its source shows raw).
+  const allArtifacts = useMemo(() => {
+    if (!externalArtifacts?.length) return internalArtifacts;
+    const byId = new Map(internalArtifacts.map((a) => [a.id, a]));
+    for (const a of externalArtifacts) byId.set(a.id, a);
+    return [...byId.values()];
+  }, [externalArtifacts, internalArtifacts]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -994,12 +1014,21 @@ export default function ChatPanel({
 
         // Rebuild items from turns on every poll so new steps appear,
         // but preserve any locally-queued messages the user added.
-        const { items: rebuilt } = rebuildItemsFromConversation(
+        // Pass the artifacts too, or the rebuilt messages lose their cards.
+        const { items: rebuilt, artifacts: restored } = rebuildItemsFromConversation(
           data.conversation.messages,
           data.conversation.prompt,
           data.conversation.final_response,
           data.turns,
+          data.artifacts,
         );
+        if (restored.length) {
+          setInternalArtifacts((prev) => {
+            const byId = new Map(prev.map((a) => [a.id, a]));
+            for (const a of restored) if (!byId.has(a.id)) byId.set(a.id, a);
+            return [...byId.values()];
+          });
+        }
         const waitingForDeploy = data.conversation.status === DEPLOY_QUEUED_STATUS;
         setItems((prev) => {
           const queued = prev.filter((item) => item.queued);
