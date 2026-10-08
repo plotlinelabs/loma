@@ -101,7 +101,7 @@ def test_need_steps_validation():
                 [{'at_ms': 0, 'action': 'shell', 'cmd': 'id'}],
                 [{'at_ms': 0, 'action': 'tap', 'x': 1, 'y': 1, 'ref': 'e3'}],
                 [{'at_ms': 0, 'action': 'open_url', 'url': 'file:///etc/passwd'}],
-                [{'at_ms': 0, 'action': 'wait_for', 'match': 'x', 'timeout_s': 31}]):
+                [{'at_ms': 0, 'action': 'wait_for', 'match': 'x', 'timeout_s': 121}]):
         with pytest.raises(ldr.OpError):
             ldr.need_steps({'steps': bad}, 1000)
 
@@ -234,7 +234,7 @@ async def test_scenario_rejects_bad_specs_before_touching_the_device():
     driver = ScenarioDriver()
     r = scenario_runner(driver)
     r.inventory = {'emulator-5554': (driver, {'serial': 'emulator-5554'})}
-    for bad in ({'duration_s': 61}, {'duration_s': 2, 'sample_ms': 50}, {'duration_s': 2, 'extras': {'a': 'b'}},
+    for bad in ({'duration_s': 121}, {'duration_s': 2, 'sample_ms': 50}, {'duration_s': 2, 'extras': {'a': 'b'}},
                 {'duration_s': 2, 'log_tags': []}, {'duration_s': 1, 'steps': [{'at_ms': 1000, 'action': 'key', 'key': 'back'}]},
                 {'duration_s': 2, 'sample_region': [0, 0, 10, 10]},                      # needs sample_ms
                 {'duration_s': 2, 'sample_ms': 200, 'sample_region': [5, 5, 5, 9]},
@@ -479,12 +479,12 @@ def test_service_accepts_valid_scenarios(args):
 
 
 @pytest.mark.parametrize('args', [
-    {}, {'duration_s': 61}, {'duration_s': 5, 'sample_ms': 100}, {'duration_s': 5, 'console': True},
+    {}, {'duration_s': 121}, {'duration_s': 5, 'sample_ms': 100}, {'duration_s': 5, 'console': True},
     {'duration_s': 5, 'log_source': 'console'}, {'duration_s': 5, 'log_tags': ['x'] * 9},
     {'duration_s': 5, 'steps': [{'at_ms': 5000, 'action': 'tap', 'x': 1, 'y': 1}]},
     {'duration_s': 5, 'steps': [{'at_ms': 0, 'action': 'tap', 'ref': 'e1'}]},
     {'duration_s': 5, 'steps': [{'at_ms': 0, 'action': 'install', 'app_id': 'x'}]},
-    {'duration_s': 5, 'steps': [{'at_ms': 0, 'action': 'tap_text', 'match': 'x', 'timeout_s': 31}]},
+    {'duration_s': 5, 'steps': [{'at_ms': 0, 'action': 'tap_text', 'match': 'x', 'timeout_s': 121}]},
     {'duration_s': 5, 'steps': [{'at_ms': 0, 'action': 'key', 'key': 'reboot'}]},
 ])
 def test_service_rejects_bad_scenarios(args):
@@ -590,7 +590,7 @@ async def test_isolated_scenario_tool_delivers_the_video():
     logs = await tools(AUTH, 'device.observe', {'device_id': 'r_0123456789abcdef/e', 'what': 'logs',
                                                 'tags': ['A'], 'since': 't:1'})
     assert logs == {'ok': 'logs'}
-    bad = await tools(AUTH, 'device.scenario', {'device_id': 'r_0123456789abcdef/e', 'duration_s': 99})
+    bad = await tools(AUTH, 'device.scenario', {'device_id': 'r_0123456789abcdef/e', 'duration_s': 199})
     assert bad['ok'] is False and 'duration_s' in bad['device_error']
 
 

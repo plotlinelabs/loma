@@ -1,0 +1,45 @@
+{
+  "_comment": "Generic device-mock presets. Each preset is deep-merged onto `base`, then validated (schema: docs/device-mock.md). Presets are data: add one here, or put team/feature presets in a JSON file listed in LOMA_DEVICE_MOCK_PRESETS. Feature-specific /init payloads belong in a --scenario-file / --patch-file. Never put customer ids, keys or URLs in this file.",
+  "base": {
+    "init_path": "/sdk/init",
+    "request_patch": {"oldResponseBody": null},
+    "asset_scope": ""
+  },
+  "presets": {
+    "passthrough": {
+      "description": "No changes: forward everything and log it. Use to check the app reaches the mock at all."
+    },
+    "no_flows": {
+      "description": "/init with data.flows emptied, so live in-app campaigns do not cover the screen.",
+      "init_patches": [{"data": {"flows": []}}]
+    },
+    "no_widgets": {
+      "description": "/init with data.widgets emptied (empty-state check).",
+      "init_patches": [{"data": {"widgets": []}}]
+    },
+    "slow_images": {
+      "description": "Images (png/jpg/webp/gif) in /init delayed 9s, so loading states stay on screen.",
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 9000}]
+    },
+    "failing_images": {
+      "description": "Images in /init fail with 404 after 2s (error/fallback state).",
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 2000, "status": 404}]
+    },
+    "hanging_images": {
+      "description": "Images in /init delayed 25s (past typical client timeouts and loader caps).",
+      "rules": [{"match": "re:(?i)^https://\\S+\\.(png|jpe?g|webp|gif)$", "delay_ms": 25000}]
+    },
+    "slow_init": {
+      "description": "/sdk/init answered by the upstream after an extra 8s delay.",
+      "rules": [{"kind": "api", "match": "/sdk/init", "delay_ms": 8000}]
+    },
+    "init_error": {
+      "description": "/sdk/init fails with 500 (no upstream call). Other API calls pass through.",
+      "rules": [{"kind": "api", "match": "/sdk/init", "status": 500}]
+    },
+    "api_down": {
+      "description": "Every API call fails with 503 after 1s (backend outage).",
+      "rules": [{"kind": "api", "match": "*", "delay_ms": 1000, "status": 503}]
+    }
+  }
+}

@@ -726,7 +726,7 @@ async def test_wait_for_and_tap_text(adb, tmp_path):
     assert tapped['tapped'] == [290, 650] and ['input', 'tap', '290', '650'] in shell_calls(calls)
     with pytest.raises(ldr.OpError, match='Visible'):
         await r.call('tap_text', 'emulator-5554', {'match': 'Nope', 'timeout_s': 0})
-    for bad in [{'match': 'x', 'by': 'xpath'}, {'match': 'x', 'timeout_s': 61}, {'match': ''}, {'match': 'x', 'gone': 1}]:
+    for bad in [{'match': 'x', 'by': 'xpath'}, {'match': 'x', 'timeout_s': 121}, {'match': ''}, {'match': 'x', 'gone': 1}]:
         with pytest.raises(ldr.OpError):
             await r.call('wait_for', 'emulator-5554', bad)
 
@@ -975,7 +975,7 @@ async def test_scroll_until_visible_retries_when_the_ui_is_not_idle():
         def __init__(self):
             self.dumps, self.swipes = 0, 0
 
-        async def ui_tree(self, serial):
+        async def ui_tree(self, serial, frozen=False):
             self.dumps += 1
             if self.dumps == 1:
                 raise ldr.OpError('uiautomator could not capture the screen (UI not idle?)')

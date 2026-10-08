@@ -408,7 +408,7 @@ def test_a_1_2_runner_is_told_to_update_only_for_the_new_parts():
     current = type('C', (), {'version': ldr.VERSION})()
     _check_runner_version(current, 'scenario', {'duration_s': 1, 'preflight': [{'url': 'https://a.co'}],
                                                 'expect': {'max_drift_ms': 100, 'logs': [SLOT]}})
-    assert ldr.VERSION == '1.3.0'
+    assert ldr.VERSION == '1.5.0'
 
 
 # ── 7. Suite ──────────────────────────────────────────────────────────────
@@ -426,17 +426,25 @@ def test_suite_plan_merges_defaults_and_requires_a_verdict_per_case():
     assert plan[0][1]['expect'] == {'app_running': True, 'logs': [{'match': 'ok'}]}  # merged key by key
     assert plan[1][1] == {'app_id': 'com.example.demo', 'log_tags': ['T'], 'expect': {'app_running': True},
                           'duration_s': 7, 'steps': []}
-    for bad, why in (({'cases': []}, 'list of 1-12'), ({'cases': [{'name': 'a', **CASE}] * 13}, 'list of 1-12'),
+    for bad, why in (({'cases': []}, 'list of 1-20'), ({'cases': [{'name': 'a', **CASE}] * 21}, 'list of 1-20'),
                      ({'cases': [{**CASE}]}, 'needs a name'), ({'cases': [{'name': 'a b', **CASE}]}, 'needs a name'),
                      ({'cases': [{'name': 'a', **CASE}, {'name': 'a', **CASE}]}, 'used twice'),
                      ({'cases': [{'name': 'a', 'duration_s': 5}]}, r'cases\[1\] \(a\): needs expect'),
-                     ({'cases': [{'name': 'a', **CASE, 'duration_s': 99}]}, r'cases\[1\] \(a\): duration_s'),
+                     ({'cases': [{'name': 'a', **CASE, 'duration_s': 199}]}, r'cases\[1\] \(a\): duration_s'),
                      ({'cases': [{'name': 'a', **CASE}], 'reset': 'reset_app'}, 'needs app_id'),
                      ({'cases': [{'name': 'a', **CASE}], 'reset': 'wipe'}, 'reset must be'),
                      ({'cases': [{'name': 'a', **CASE}], 'keep_video': 'none'}, 'keep_video'),
                      ({'cases': [{'name': 'a', **CASE}], 'defaults': {'steps': []}}, 'defaults'),
                      ({'cases': [{'name': 'a', **CASE}], 'parallel': 4}, 'suite needs cases'),
-                     ({'cases': [{'name': f'c{i}', **CASE, 'duration_s': 60} for i in range(11)]}, 'at most 600 s')):
+                     ({'cases': [{'name': f'c{i}', **CASE, 'duration_s': 60} for i in range(16)]}, 'at most 900 s'),
+                     ({'cases': [{'name': f'c{i}', **CASE, 'duration_s': 60} for i in range(8)], 'retries': 1},
+                      'retries included'),
+                     ({'cases': [{'name': 'a', **CASE}], 'retries': 3}, 'retries must be'),
+                     ({'cases': [{'name': 'a', **CASE}], 'setup': [{'action': 'install'}]}, r'setup\[1\]: action'),
+                     ({'cases': [{'name': 'a', **CASE}], 'setup': [{'action': 'key', 'key': 'nope'}]},
+                      r'setup\[1\] \(key\)'),
+                     ({'cases': [{'name': 'a', **CASE, 'only': ['web']}]}, 'only must be'),
+                     ({'cases': [{'name': 'a', **CASE}], 'platform_defaults': {'web': {}}}, 'platform_defaults')):
         with pytest.raises(DeviceError, match=why):
             suite_plan(bad)
 
@@ -452,6 +460,10 @@ class SuiteService(DeviceService):
         self.calls.append((op, args.get('app_id')))
         if op == 'reset_app':
             return {'cleared': args['app_id']}
+        if op == 'health':
+            return {'ok': True, 'screenshot_ms': 300}
+        if op != 'scenario':
+            return {}
         result = self.results[args['log_tags'][0]]
         if isinstance(result, Exception):
             raise result
@@ -480,7 +492,7 @@ async def test_suite_runs_each_case_and_returns_one_summary():
     assert (result['verdict'], result['total'], result['passed']) == ('fail', 4, 1)
     assert result['counts'] == {'blocked': 1, 'error': 1, 'fail': 1, 'pass': 1} and 'not_run' not in result
     assert 'error' not in result          # a top-level 'error' key reads as a broker denial in the isolated worker
-    assert service.calls == [('reset_app', 'com.example.demo'), ('scenario', 'com.example.demo')] * 4
+    assert service.calls == [('health', None)] + [('reset_app', 'com.example.demo'), ('scenario', 'com.example.demo')] * 4
     login, loader, config, offline = result['cases']
     assert login == {'name': 'login', 'verdict': 'pass', 'ran_ms': 1200, 'app_running': True}  # video of a pass is dropped
     assert loader['mp4'] == b'V2' and loader['steps_not_ok'] == [{'i': 2, 'ok': False, 'error': 'boom'}]
@@ -501,7 +513,8 @@ async def test_suite_stop_on_fail_keep_video_and_media_budget(monkeypatch):
                'c': {'verdict': 'pass', 'mp4': b'C' * 10}}
     stopped = await SuiteService(results).suite(OWNER, 'conv-1', 'r/e', suite_args('a', 'b', 'c', stop_on_fail=True))
     assert stopped['not_run'] == ['c'] and stopped['verdict'] == 'fail' and len(stopped['cases']) == 2
-    assert stopped['table'].splitlines()[-1] == '| c | not run | | |'
+    assert stopped['table'].splitlines()[-1] == '| c | not run | | stop_on_fail: an earlier case did not pass |'
+    assert stopped['not_run_reason'].startswith('stop_on_fail') and '<skipped' in stopped['junit']
     monkeypatch.setattr(service_module, 'MAX_SUITE_MEDIA', 25)
     kept = await SuiteService({**results, 'b': results['a']}).suite(OWNER, 'conv-1', 'r/e',
                                                                    suite_args('a', 'b', 'c', keep_video='all'))
@@ -545,7 +558,7 @@ def test_catalog_suite_reuses_the_scenario_fields():
     assert set(scenario['properties']) == {'device_id', *SCENARIO_FIELDS}
     assert scenario['required'] == ['device_id', 'duration_s']
     case = suite['properties']['cases']['items']['properties']
-    assert set(case) == {'name', *SCENARIO_FIELDS} and 'steps' not in suite['properties']['defaults']['properties']
+    assert set(case) == {'name', 'only', *SCENARIO_FIELDS} and 'steps' not in suite['properties']['defaults']['properties']
     step, expect = SCENARIO_FIELDS['steps']['items']['properties'], SCENARIO_FIELDS['expect']['properties']
     assert {'activity', 'extras', 'bool_extras', 'restart'} <= set(step) and 'max_drift_ms' in expect
     assert {'number_after', 'value_min', 'after_reaching', 'last_max'} <= set(expect['logs']['items']['properties'])
@@ -619,7 +632,7 @@ async def test_suite_end_to_end_over_the_runner_websocket(tmp_path, monkeypatch)
                     if test_hub.get(creds['runner_id']):
                         break
                     await asyncio.sleep(0.05)
-                assert test_hub.get(creds['runner_id']).version == '1.3.0'
+                assert test_hub.get(creds['runner_id']).version == ldr.VERSION
                 service = DeviceService(db, hub=test_hub, blobs=BlobStore(tmp_path / 'blobs'))
                 device = (await service.lease(OWNER, 'conv-1', platform='android'))['device_id']
                 tap = {'action': 'tap', 'x': 10, 'y': 90}
@@ -639,6 +652,7 @@ async def test_suite_end_to_end_over_the_runner_websocket(tmp_path, monkeypatch)
                 result = await service.suite(OWNER, 'conv-1', device, suite)
                 print(result['table'])
                 assert [case['verdict'] for case in result['cases']] == ['pass', 'fail', 'pass'], result
+                assert result['health']['ok'] is True and result['platform'] == 'android'
                 assert (result['verdict'], result['passed'], result['counts']) == ('fail', 2, {'fail': 1, 'pass': 2})
                 shown, collapsed, relaunched = result['cases']
                 assert 'mp4' not in shown and collapsed['mp4'] == b'MP4BYTES'  # video only for the failing case
@@ -656,7 +670,8 @@ async def test_suite_end_to_end_over_the_runner_websocket(tmp_path, monkeypatch)
                 async with http.post(base + '/internal/devices/call', headers={'X-Loma-User': OWNER},
                                      json={'action': 'suite'}) as denied:
                     assert denied.status == 401                               # the CLI route keeps its auth
-                blocked = await service.suite(OWNER, 'conv-1', device, {**suite, 'stop_on_fail': True})
+                blocked = await service.suite(OWNER, 'conv-1', device, {**suite, 'stop_on_fail': True,
+                                                                        'health_check': False})
                 print(blocked['table'])
                 assert blocked['verdict'] == 'blocked' and blocked['counts'] == {'blocked': 1}
                 assert blocked['not_run'] == ['slot_keeps_height', 'background_foreground']

@@ -135,6 +135,7 @@ async def stream_run(*, db, owner, conversation_id, prompt, instructions, runtim
 
         from device_loader.backend.gateway import DeviceTools
         devices = DeviceTools(db, authority, conversation_id, artifacts=artifacts, on_artifact=registry)
+        stack.push_async_callback(devices.close)  # release this conversation's devices when the run ends
         gateway = ToolGateway(authority, authorize=context.authorize, audit=audit, artifacts=artifacts,
             connector=personal_read, models=relay, knowledge=knowledge, on_artifact=registry, proposals=proposals, automation=automation,
             devices=devices)
