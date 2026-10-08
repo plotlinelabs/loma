@@ -80,8 +80,10 @@ async def search(query: str) -> dict[str, Any]:
 
 
 async def create_plan(requested_by: str, org_id: str | None = None, product_ids: list[str] | None = None,
-                      reason: str | None = None) -> dict[str, Any]:
+                      reason: str | None = None, mode: str | None = None) -> dict[str, Any]:
     body: dict[str, Any] = {"requestedBy": requested_by}
+    if mode:
+        body["mode"] = mode
     if org_id:
         body["orgId"] = org_id
     if product_ids:

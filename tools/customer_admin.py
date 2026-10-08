@@ -7,6 +7,7 @@ only an approver's click (handled by the Loma backend) applies the plan.
 Commands:
   python3 tools/customer_admin.py search --query "acme"
   python3 tools/customer_admin.py preview --requested-by u@co.com (--org-id ID | --product-ids ID1,ID2) [--reason TEXT]
+  python3 tools/customer_admin.py preview --requested-by u@co.com --org-id ID --mode read-only|read-write [--reason TEXT]
   python3 tools/customer_admin.py status --plan-id PLAN_ID
   python3 tools/customer_admin.py propose --plan-id PLAN_ID --requested-by u@co.com [--channel C123 --thread-ts 1700000000.000100]
 
@@ -37,12 +38,24 @@ async def search(query: str) -> dict[str, Any]:
     return await client.search(query)
 
 
-async def preview(requested_by: str, org_id: str | None, product_ids: list[str], reason: str | None) -> dict[str, Any]:
+MODES = {"offboard": "offboard", "read-only": "read_only", "read-write": "read_write"}
+
+
+async def preview(requested_by: str, org_id: str | None, product_ids: list[str], reason: str | None,
+                  mode: str = "offboard") -> dict[str, Any]:
+    if mode not in MODES:
+        return {"error": f"--mode must be one of {', '.join(MODES)}"}
+    if mode != "offboard" and (not org_id or product_ids):
+        return {"error": f"--mode {mode} takes --org-id only"}
     if not org_id and not product_ids:
         return {"error": "pass --org-id or --product-ids"}
-    result = await client.create_plan(requested_by, org_id=org_id, product_ids=product_ids, reason=reason)
+    result = await client.create_plan(requested_by, org_id=org_id, product_ids=product_ids, reason=reason, mode=MODES[mode])
     if "error" in result:
         return result
+    # An older service ignores `mode` and plans a full offboarding; never let that through as something else.
+    planned = (result.get("summary") or {}).get("mode") or "offboard"
+    if planned != MODES[mode]:
+        return {"error": f"the customer-admin service does not support --mode {mode} yet (it planned '{planned}'); nothing was proposed"}
     return {**result, "next_step": "Show the summary to the user, then run `propose` with this planId to post the Confirm button."}
 
 
@@ -76,8 +89,8 @@ async def propose(plan_id: str, requested_by: str, channel: str | None, thread_t
     if plan.get("status") != "PLANNED":
         return {"error": f"plan is {plan.get('status')}; run preview again for a fresh plan"}
     totals = plan["summary"].get("totals", {})
-    if not any(totals.get(key) for key in ("campaigns", "memberships", "sdkKeys", "apiSecrets")):
-        return {"error": "nothing to offboard: no live campaigns, removable members or active keys"}
+    if not any(totals.get(key) for key in ("campaigns", "memberships", "sdkKeys", "apiSecrets", "dashboardAccessChanges")):
+        return {"error": "nothing to change: no live campaigns, removable members or active keys, and dashboard access is already as requested"}
 
     mongo, db = _connect_db()
     try:
@@ -87,7 +100,7 @@ async def propose(plan_id: str, requested_by: str, channel: str | None, thread_t
         )
         response = await _slack().chat_postMessage(
             channel=channel, thread_ts=thread_ts, blocks=blocks.proposal_blocks(request),
-            text=f"Offboard {blocks.target_name(plan['summary'])}? An approver must confirm.",
+            text=f"{blocks.proposal_title(plan['summary'])} An approver must confirm.",
         )
         await store.set_message_ts(db, request["request_id"], response["ts"])
     finally:
@@ -129,7 +142,7 @@ def main(argv: list[str]) -> dict[str, Any]:
         requested_by = _flag(rest, "--requested-by")
         if not requested_by:
             return {"error": "--requested-by is required"}
-        return asyncio.run(preview(requested_by, _flag(rest, "--org-id"), ids, _flag(rest, "--reason")))
+        return asyncio.run(preview(requested_by, _flag(rest, "--org-id"), ids, _flag(rest, "--reason"), _flag(rest, "--mode") or "offboard"))
     if command == "status":
         plan_id = _flag(rest, "--plan-id")
         return asyncio.run(status(plan_id)) if plan_id else {"error": "--plan-id is required"}

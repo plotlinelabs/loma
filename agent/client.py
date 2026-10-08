@@ -15,6 +15,7 @@ import tarfile
 import zipfile
 
 import yaml
+from agent.plan_mode import plan_from_tool_call, plan_mode_requested
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeSDKClient,
@@ -165,6 +166,10 @@ async def merge_db_integrations(config: dict) -> dict:
             catalog_entry = PROVIDER_CATALOG.get(provider)
             if not catalog_entry:
                 continue
+            # Org-shared OAuth (e.g. Figma): the token expires and is refreshed
+            # on demand, so it is injected per run by build_user_mcp_overrides.
+            if catalog_entry.get("auth_type") == "oauth_shared":
+                continue
             # CLI-tool integrations have no MCP template — they store
             # credentials in the DB and tools read them via _integration_key.
             if not catalog_entry.get("mcp_config_template"):
@@ -238,17 +243,24 @@ async def get_excluded_integrations_for_user(user_email: str) -> set[str]:
 async def build_user_mcp_overrides(user_email: str) -> dict:
     """Build per-user MCP server config for OAuth-requiring connectors.
 
-    Covers two cases:
+    Covers three cases:
     1. Custom MCP connectors with auth_mode "oauth" (existing)
     2. Catalog providers that support per-user OAuth (hubspot, notion, grain)
        — the user's personal token overrides the org-level shared key.
+    3. Org-shared OAuth providers (e.g. Figma) — one admin's login, refreshed
+       on demand, given to every user. Sharing rules still apply afterwards
+       via get_excluded_integrations_for_user.
 
     Returns a dict of MCP server configs keyed by server name.
     """
     try:
         from observability.db import get_db
-        from api.oauth_helpers import get_valid_custom_mcp_token, get_valid_provider_token
-        from integrations.registry import PROVIDER_CATALOG
+        from api.oauth_helpers import (
+            get_valid_custom_mcp_token,
+            get_valid_org_oauth_token,
+            get_valid_provider_token,
+        )
+        from integrations.registry import PROVIDER_CATALOG, shared_oauth_providers
 
         db = get_db()
         if db is None:
@@ -286,6 +298,17 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
             overrides[server_name] = mcp_cfg
             logger.info("Built per-user %s MCP config for %s", provider, user_email)
 
+        # 3. Org-shared OAuth providers (one login for the whole org)
+        for provider in shared_oauth_providers():
+            token = await get_valid_org_oauth_token(provider, db=db)
+            if not token:
+                continue
+            catalog = PROVIDER_CATALOG[provider]
+            overrides[catalog["mcp_server_name"]] = _resolve_mcp_template(
+                catalog["mcp_config_template"], token, {},
+            )
+            logger.info("Built org-shared %s MCP config for %s", provider, user_email)
+
         return overrides
     except Exception:
         logger.exception("Failed to build user MCP overrides for %s", user_email)
@@ -322,6 +345,7 @@ def _resolve_mcp_template(template: dict, api_key: str, extra_fields: dict | Non
 # Languages whose fenced code blocks should be treated as artifacts
 # when they exceed the minimum size threshold.
 _ARTIFACT_LANGUAGES = {
+    "plan",
     "html", "svg",
     "javascript", "js", "typescript", "ts", "tsx", "jsx",
     "python", "py", "java", "go", "rust", "ruby", "rb",
@@ -360,8 +384,8 @@ def _detect_artifacts(text: str) -> list[dict]:
         if not content:
             continue
 
-        # Check minimum thresholds
-        if len(content) < _ARTIFACT_MIN_CHARS and content.count("\n") < _ARTIFACT_MIN_LINES:
+        # Check minimum thresholds (a plan is always reviewed in the panel)
+        if lang != "plan" and len(content) < _ARTIFACT_MIN_CHARS and content.count("\n") < _ARTIFACT_MIN_LINES:
             continue
 
         # Check if it's a recognized language
@@ -389,6 +413,9 @@ def _detect_artifacts(text: str) -> list[dict]:
 
 def _infer_artifact_title(language: str, content: str) -> str:
     """Infer a human-readable title for an artifact from its content."""
+    if language == "plan":
+        heading = re.search(r"^#+\s+(.+)$", content, re.MULTILINE)
+        return heading.group(1).strip() if heading else "Plan"
     # HTML: look for <title> tag
     if language in ("html", "svg"):
         title_match = re.search(r"<title[^>]*>([^<]+)</title>", content, re.IGNORECASE)
@@ -1259,6 +1286,10 @@ async def _stream_agent(
         hit_rate_limit = False
 
         try:
+            if plan_mode_requested(conversation_context):
+                # Claude's own read-only planning mode backs up the prompt's
+                # rules. Clients are single-use, so this never leaks to a run.
+                await client.set_permission_mode("plan")
             await client.query(full_prompt)
 
             if observer and observer.conversation_id:
@@ -1459,6 +1490,21 @@ async def _stream_agent(
                                     "tool_use_id": block.id,
                                     "input": _summarize_tool_input(block.name, block.input),
                                 }
+                            plan_text = plan_from_tool_call(block.name, block.input)
+                            if plan_text and include_steps and source == "dashboard":
+                                plan_artifact = {
+                                    "artifact_id": f"art_{hashlib.sha256(plan_text.encode()).hexdigest()[:12]}",
+                                    "title": _infer_artifact_title("plan", plan_text),
+                                    "content": plan_text,
+                                    "language": "plan",
+                                    # The dashboard numbers plans by their order in the chat.
+                                    "version": 1,
+                                }
+                                if plan_artifact["artifact_id"] not in emitted_artifact_ids:
+                                    emitted_artifact_ids.add(plan_artifact["artifact_id"])
+                                    if observer:
+                                        await observer.record_artifact({**plan_artifact, "artifact_type": "code"})
+                                    yield {"type": "artifact", **plan_artifact}
                         else:
                             logger.info("[BLOCK] type=%s", type(block).__name__)
 

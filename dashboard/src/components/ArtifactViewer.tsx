@@ -26,7 +26,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
-import MarkdownContent from "./MarkdownContent";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import PlanReview, { type PlanActions } from "./PlanReview";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -48,7 +50,7 @@ type ViewMode = "preview" | "code";
 
 // ── Language detection ──────────────────────────────────────────────────────
 
-const PREVIEWABLE_LANGUAGES = new Set(["html", "markdown", "md", "svg", "mermaid", "jsx", "tsx", "pdf", "docx", "pptx"]);
+const PREVIEWABLE_LANGUAGES = new Set(["plan", "html", "markdown", "md", "svg", "mermaid", "jsx", "tsx", "pdf", "docx", "pptx"]);
 const CODE_LANGUAGES = new Set([
   "javascript", "js", "typescript", "ts", "tsx", "jsx",
   "python", "py", "java", "go", "rust", "ruby", "rb",
@@ -69,6 +71,7 @@ function isPreviewable(language: string): boolean {
 
 function getLanguageLabel(lang: string): string {
   const labels: Record<string, string> = {
+    plan: "Plan",
     html: "HTML",
     javascript: "JavaScript",
     js: "JavaScript",
@@ -121,23 +124,12 @@ function formatFileSize(bytes: number): string {
 // ── HTML Renderer (sandboxed iframe) ────────────────────────────────────────
 
 function HtmlRenderer({ content }: { content: string }) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  useEffect(() => {
-    if (!iframeRef.current) return;
-    const doc = iframeRef.current.contentDocument;
-    if (!doc) return;
-
-    // Write content to sandboxed iframe
-    doc.open();
-    doc.write(content);
-    doc.close();
-  }, [content]);
-
+  // srcDoc + scripts without same-origin: agent-written HTML runs in an opaque
+  // origin, so it can't read the dashboard's cookies or call its API as the user.
   return (
     <iframe
-      ref={iframeRef}
-      sandbox="allow-scripts allow-same-origin"
+      srcDoc={content}
+      sandbox="allow-scripts allow-popups allow-forms"
       className="w-full h-full border-0 bg-white rounded-b-lg"
       title="HTML Preview"
     />
@@ -149,8 +141,14 @@ function HtmlRenderer({ content }: { content: string }) {
 function MarkdownRenderer({ content }: { content: string }) {
   return (
     <div className="p-3 md:p-6 overflow-y-auto h-full">
-      <div className="prose prose-sm max-w-none">
-        <MarkdownContent content={content} />
+      {/* Full GFM (quotes, task lists, rules) — documents need more than chat's renderer. */}
+      <div className="prose prose-sm max-w-[72ch] mx-auto prose-code:before:content-none prose-code:after:content-none">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}
+        >
+          {content}
+        </ReactMarkdown>
       </div>
     </div>
   );
@@ -440,8 +438,8 @@ function DocxRenderer({ fileUrl }: { fileUrl: string }) {
   }
 
   return (
-    <div className="p-6 h-full overflow-auto bg-white rounded-b-lg">
-      <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: html }} />
+    <div className="p-6 h-full overflow-auto bg-card rounded-b-lg">
+      <div className="prose prose-sm max-w-[72ch] mx-auto" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }
@@ -501,6 +499,8 @@ interface ArtifactViewerProps {
   allArtifacts?: Artifact[];
   /** Navigate to a specific artifact version */
   onSelectArtifact?: (id: string) => void;
+  /** Review controls when the artifact is a plan */
+  planActions?: PlanActions;
 }
 
 export default function ArtifactViewer({
@@ -508,6 +508,7 @@ export default function ArtifactViewer({
   onClose,
   allArtifacts,
   onSelectArtifact,
+  planActions,
 }: ArtifactViewerProps) {
   const canPreview = isPreviewable(artifact.language) || !!artifact.file_url;
   const isFileArtifact = !!artifact.file_url;
@@ -825,6 +826,8 @@ export default function ArtifactViewer({
           ) : artifact.file_url ? (
             <FileDownloadRenderer fileUrl={artifact.file_url} title={artifact.title} fileSize={artifact.file_size} />
           // Text-based renderers (content-based)
+          ) : artifact.language === "plan" ? (
+            <PlanReview key={artifact.id} plan={artifact} actions={planActions} />
           ) : artifact.language === "html" ? (
             <HtmlRenderer content={artifact.content} />
           ) : artifact.language === "svg" ? (

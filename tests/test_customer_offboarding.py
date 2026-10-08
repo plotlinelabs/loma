@@ -207,7 +207,7 @@ async def test_propose_refuses_stale_or_empty_plans():
         assert "run preview again" in (await customer_admin.propose("p1", "cs@example.com", "C1", None))["error"]
     empty = {**SUMMARY, "totals": {"products": 1, "campaigns": 0, "memberships": 0, "sdkKeys": 0, "apiSecrets": 0}}
     with patch.object(customer_admin.client, "get_plan", AsyncMock(return_value={"status": "PLANNED", "summary": empty})):
-        assert "nothing to offboard" in (await customer_admin.propose("p1", "cs@example.com", "C1", None))["error"]
+        assert "nothing to change" in (await customer_admin.propose("p1", "cs@example.com", "C1", None))["error"]
 
 
 @pytest.mark.asyncio
@@ -226,3 +226,57 @@ def test_cli_validates_arguments():
 def test_tool_exposes_no_apply_command():
     assert not hasattr(customer_admin, "apply")
     assert "apply" not in [line.split()[2] for line in customer_admin.__doc__.splitlines() if line.strip().startswith("python3 tools/")]
+
+
+READ_ONLY_SUMMARY = {
+    "mode": "read_only",
+    "dashboardAccess": {"orgId": "o1", "readOnlyBefore": False, "readOnlyAfter": True},
+    "org": {"id": "o1", "name": "Acme", "membersToRemove": [], "membersToKeep": []},
+    "products": [],
+    "totals": {"products": 0, "campaigns": 0, "memberships": 0, "sdkKeys": 0, "apiSecrets": 0, "dashboardAccessChanges": 1},
+}
+
+
+def test_read_only_proposal_and_result_copy():
+    request = {**REQUEST, "summary": READ_ONLY_SUMMARY}
+    built = blocks.proposal_blocks(request)
+    assert "Make Acme view-only?" in built[0]["text"]["text"]
+    assert "*editable* → *view-only*" in built[0]["text"]["text"]
+    assert built[-1]["elements"][0]["text"]["text"] == "Confirm view-only"
+    done = blocks.applied_blocks(request, {"org": "Acme", "readOnlyBefore": False, "readOnlyAfter": True}, "lead@example.com")
+    assert "Acme is now view-only" in done[0]["text"]["text"]
+    assert "SDK keys" not in done[1]["elements"][0]["text"]
+    assert "edit access" in done[-1]["elements"][0]["confirm"]["text"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_preview_maps_modes_and_validates():
+    with patch.object(customer_admin.client, "create_plan", AsyncMock(return_value={"planId": "p1", "summary": READ_ONLY_SUMMARY})) as create:
+        assert "error" not in await customer_admin.preview("cs@example.com", "o1", [], None, mode="read-only")
+    assert create.await_args.kwargs["mode"] == "read_only"
+    assert "takes --org-id only" in (await customer_admin.preview("cs@example.com", None, ["p1"], None, mode="read-write"))["error"]
+    assert "--mode must be one of" in (await customer_admin.preview("cs@example.com", "o1", [], None, mode="delete"))["error"]
+
+
+@pytest.mark.asyncio
+async def test_propose_accepts_a_dashboard_access_change(monkeypatch):
+    monkeypatch.setenv("CUSTOMER_ADMIN_APPROVAL_CHANNEL", "C9")
+    plan = {"status": "PLANNED", "summary": READ_ONLY_SUMMARY, "expiresAt": "soon"}
+    posted = AsyncMock(return_value={"ts": "1.2"})
+    with patch.object(customer_admin.client, "get_plan", AsyncMock(return_value=plan)), \
+         patch.object(customer_admin, "_connect_db", return_value=(type("M", (), {"close": lambda self: None})(), None)), \
+         patch.object(customer_admin.store, "create_request", AsyncMock(return_value={**REQUEST, "summary": READ_ONLY_SUMMARY})), \
+         patch.object(customer_admin.store, "set_message_ts", AsyncMock()), \
+         patch.object(customer_admin, "_slack", return_value=type("S", (), {"chat_postMessage": posted})()):
+        result = await customer_admin.propose("p1", "cs@example.com", None, None)
+    assert result["proposed"] is True and result["channel"] == "C9"
+    assert posted.await_args.kwargs["text"].startswith("Make Acme view-only?")
+
+
+@pytest.mark.asyncio
+async def test_preview_refuses_when_service_ignores_the_mode():
+    with patch.object(customer_admin.client, "create_plan", AsyncMock(return_value={"planId": "p1", "summary": SUMMARY})):
+        result = await customer_admin.preview("cs@example.com", "o1", [], None, mode="read-only")
+    assert "does not support --mode read-only" in result["error"]
+    with patch.object(customer_admin.client, "create_plan", AsyncMock(return_value={"planId": "p1", "summary": SUMMARY})):
+        assert "error" not in await customer_admin.preview("cs@example.com", "o1", [], None)

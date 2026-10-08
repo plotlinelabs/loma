@@ -1131,6 +1131,8 @@ async def handle_chat(request: web.Request) -> web.Response:
     selected_model = body.get("model")
     if selected_model is not None and not isinstance(selected_model, str):
         return web.json_response({"error": "model must be a provider/model string"}, status=400)
+    # Plan mode: research read-only and propose a plan for review (agent/plan_mode.py).
+    plan_mode = body.get("plan_mode") is True
 
     # Per-chat tool/skill restrictions
     tool_config = body.get("tool_config")
@@ -1325,6 +1327,10 @@ async def handle_chat(request: web.Request) -> web.Response:
                     f"{agent_block}\n\n{conversation_context}"
                     if conversation_context else agent_block
                 )
+
+            if plan_mode:
+                from agent.plan_mode import with_plan_mode
+                conversation_context = with_plan_mode(conversation_context)
 
             # A deploy is waiting for in-flight runs to finish. Don't start a
             # run the restart would kill: save the message and let the next

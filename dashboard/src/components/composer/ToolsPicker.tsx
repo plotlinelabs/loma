@@ -473,7 +473,8 @@ function DomainPicker({
       aria-label={`${title}: ${mode}`}
       className="touch-target inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-55"
     >
-      {title}: {mode}
+      {/* The default needs no label; only a narrowed selection says what it is. */}
+      {mode === "All" ? title : `${title}: ${mode}`}
       <RiArrowDownSLine size={14} />
     </button>
   );

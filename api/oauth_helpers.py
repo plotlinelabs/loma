@@ -4,6 +4,7 @@ Tokens are encrypted at rest using Fernet symmetric encryption.
 The encryption key is read from OAUTH_ENCRYPTION_KEY env var.
 """
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -928,3 +929,159 @@ async def revoke_slack_tokens(db, user_email: str) -> bool:
 
     logger.info("Disconnected Slack for %s", user_email)
     return True
+
+
+# ── Org-shared OAuth (catalog providers with auth_type "oauth_shared") ───
+#
+# One admin logs in; the tokens live on the org `integrations` record and are
+# injected for every user per agent run. Refresh is serialized per provider so
+# concurrent runs never spend the same (possibly single-use) refresh token twice.
+
+_ORG_TOKEN_REFRESH_SKEW_SECONDS = 60
+_org_refresh_locks: dict[str, asyncio.Lock] = {}
+
+
+def _org_refresh_lock(provider: str) -> asyncio.Lock:
+    lock = _org_refresh_locks.get(provider)
+    if lock is None:
+        lock = asyncio.Lock()
+        _org_refresh_locks[provider] = lock
+    return lock
+
+
+def _org_token_is_fresh(tokens: dict) -> bool:
+    expiry = tokens.get("token_expiry")
+    if expiry is None:
+        return True
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return expiry.timestamp() - time.time() > _ORG_TOKEN_REFRESH_SKEW_SECONDS
+
+
+def _org_tokens_update(token_data: dict, keep_refresh: bool = True) -> dict:
+    """Build the $set for a token response; keeps the old refresh token if none is returned."""
+    now = datetime.now(timezone.utc)
+    expires_in = token_data.get("expires_in")
+    update: dict = {
+        "oauth_tokens.access_token": encrypt_token(token_data["access_token"]),
+        "oauth_tokens.token_expiry": (
+            datetime.fromtimestamp(time.time() + int(expires_in), tz=timezone.utc)
+            if expires_in else None
+        ),
+        "oauth_tokens.updated_at": now,
+        "oauth_status": "connected",
+        "updated_at": now,
+    }
+    if token_data.get("refresh_token"):
+        update["oauth_tokens.refresh_token"] = encrypt_token(token_data["refresh_token"])
+    elif not keep_refresh:
+        update["oauth_tokens.refresh_token"] = None
+    raw_scope = token_data.get("scope")
+    if isinstance(raw_scope, str) and raw_scope:
+        update["oauth_tokens.scopes"] = raw_scope.split()
+    return update
+
+
+async def store_org_oauth_tokens(db, provider: str, token_data: dict, connected_by: str) -> None:
+    """Store the org-wide OAuth tokens for a shared provider and mark it active."""
+    now = datetime.now(timezone.utc)
+    update = _org_tokens_update(token_data, keep_refresh=False)
+    update.update({
+        "status": "active",
+        "connected_by": connected_by,
+        "connected_at": now,
+    })
+    await db.integrations.update_one(
+        {"provider": provider},
+        {"$set": update, "$setOnInsert": {"integration_id": secrets.token_hex(16)}},
+        upsert=True,
+    )
+    logger.info("Stored org-shared OAuth tokens for %s (by %s)", provider, connected_by)
+
+
+async def get_valid_org_oauth_token(provider: str, db=None) -> str | None:
+    """Return a valid org-shared access token, refreshing it when it is about to expire."""
+    if db is None:
+        db = get_db()
+    if db is None:
+        return None
+
+    doc = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
+    tokens = (doc or {}).get("oauth_tokens") or {}
+    if not tokens.get("access_token") or doc.get("oauth_status") == "expired":
+        return None
+    if _org_token_is_fresh(tokens):
+        try:
+            return decrypt_token(tokens["access_token"])
+        except ValueError:
+            logger.error("Failed to decrypt org OAuth token for %s", provider)
+            return None
+
+    async with _org_refresh_lock(provider):
+        # Another run may have refreshed while we waited for the lock.
+        doc = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
+        tokens = (doc or {}).get("oauth_tokens") or {}
+        if not tokens.get("access_token"):
+            return None
+        if _org_token_is_fresh(tokens):
+            try:
+                return decrypt_token(tokens["access_token"])
+            except ValueError:
+                return None
+
+        old_refresh_enc = tokens.get("refresh_token")
+        if not old_refresh_enc:
+            await _mark_org_oauth_expired(db, provider)
+            return None
+
+        oauth_cfg = doc.get("oauth_config") or {}
+        try:
+            refresh_val = decrypt_token(old_refresh_enc)
+            client_id = decrypt_token(oauth_cfg["client_id_encrypted"])
+            client_secret = (
+                decrypt_token(oauth_cfg["client_secret_encrypted"])
+                if oauth_cfg.get("client_secret_encrypted") else ""
+            )
+        except (KeyError, ValueError):
+            logger.error("Org OAuth config for %s is incomplete or undecryptable", provider)
+            await _mark_org_oauth_expired(db, provider)
+            return None
+
+        new_token = await _refresh_oauth_token(
+            token_endpoint=oauth_cfg["token_endpoint"],
+            refresh_token=refresh_val,
+            client_id=client_id,
+            client_secret=client_secret,
+            auth_method=oauth_cfg.get("token_endpoint_auth_method", "client_secret_post"),
+        )
+        if not new_token or not new_token.get("access_token"):
+            # A different process may have rotated the refresh token first.
+            latest = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
+            latest_tokens = (latest or {}).get("oauth_tokens") or {}
+            if latest_tokens.get("refresh_token") not in (None, old_refresh_enc) and _org_token_is_fresh(latest_tokens):
+                return decrypt_token(latest_tokens["access_token"])
+            await _mark_org_oauth_expired(db, provider)
+            return None
+
+        # Compare-and-set on the refresh token we used, so a concurrent
+        # process's newer tokens are never overwritten by ours.
+        result = await db.integrations.update_one(
+            {"provider": provider, "oauth_tokens.refresh_token": old_refresh_enc},
+            {"$set": _org_tokens_update(new_token)},
+        )
+        if result.matched_count == 0:
+            latest = await db.integrations.find_one({"provider": provider, "status": "active", "is_custom": {"$ne": True}})
+            latest_tokens = (latest or {}).get("oauth_tokens") or {}
+            if latest_tokens.get("access_token"):
+                return decrypt_token(latest_tokens["access_token"])
+            return None
+        logger.info("Refreshed org-shared OAuth token for %s", provider)
+        return new_token["access_token"]
+
+
+async def _mark_org_oauth_expired(db, provider: str) -> None:
+    await db.integrations.update_one(
+        {"provider": provider},
+        {"$set": {"oauth_status": "expired", "updated_at": datetime.now(timezone.utc)}},
+    )
+    logger.warning("Marked org-shared OAuth as expired for %s", provider)

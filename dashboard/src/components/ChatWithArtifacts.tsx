@@ -2,7 +2,8 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import ChatPanel from "./ChatPanel";
-import type { ChatItem } from "./ChatPanel";
+import type { ChatItem, PlanControl, PlanState } from "./ChatPanel";
+import type { PlanActions } from "./PlanReview";
 import type { ChatFile } from "../lib/api";
 import ArtifactViewer from "./ArtifactViewer";
 import type { Artifact } from "./ArtifactViewer";
@@ -114,8 +115,21 @@ export default function ChatWithArtifacts({
   const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
   const [chatPanelPercent, setChatPanelPercent] = useState(50);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Plans are reviewed in the panel but revised/approved through the chat.
+  const [planState, setPlanState] = useState<PlanState | null>(null);
+  const planControlRef = useRef<PlanControl | null>(null);
 
-  const activeArtifact = artifacts.find((a) => a.id === activeArtifactId) || null;
+  const openedArtifact = artifacts.find((a) => a.id === activeArtifactId) || null;
+  // Show a plan with its chat version (v1, v2, ...) rather than the stored one.
+  const activeArtifact = (openedArtifact && planState?.plans.find((p) => p.id === openedArtifact.id)) || openedArtifact;
+  const planActions: PlanActions | undefined = activeArtifact?.language === "plan" && planState
+    ? {
+        status: planState.statuses[activeArtifact.id] ?? "pending",
+        canAct: planState.canAct,
+        onRevise: (plan, comments) => planControlRef.current?.revise(plan, comments),
+        onApprove: (plan, notes) => planControlRef.current?.approve(plan, notes),
+      }
+    : undefined;
 
   const handleArtifactOpen = useCallback((artifact: Artifact) => {
     setArtifacts((prev) => {
@@ -214,6 +228,8 @@ export default function ChatWithArtifacts({
           onConversationCreated={onConversationCreated}
           onStreamComplete={onStreamComplete}
           readOnly={readOnly}
+          onPlanStateChange={setPlanState}
+          planControlRef={planControlRef}
         />
       </div>
 
@@ -260,6 +276,7 @@ export default function ChatWithArtifacts({
                 onClose={handleArtifactClose}
                 allArtifacts={artifacts}
                 onSelectArtifact={handleSelectArtifact}
+                planActions={planActions}
               />
             </div>
           </div>

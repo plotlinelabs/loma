@@ -1089,8 +1089,11 @@ export async function* streamChat(
    *  unpins a conversation's agent); undefined leaves the conversation as is. */
   agentId?: string | null,
   toolConfig?: ToolConfig,
+  /** Research read-only and propose a plan for review (agent/plan_mode.py). */
+  planMode?: boolean,
 ): AsyncGenerator<ChatEvent, void, unknown> {
   const body: Record<string, unknown> = { message };
+  if (planMode) body.plan_mode = true;
   if (conversationHistory?.length) body.conversation_history = conversationHistory;
   if (files?.length) body.files = files;
   if (conversationId) body.conversation_id = conversationId;
@@ -1240,6 +1243,9 @@ export interface TaskStar {
   card_title?: string | null;
   /** Where the task really is on its board: a lane id, "working", "needs_input" or "done". */
   source_column: string;
+  /** You moved it into your lane while the task was live: it stays there
+   * until the task moves on (a new run, a finished run, done or staged). */
+  parked?: boolean;
 }
 
 /** Whether `me` can message (run) a task: its creator, or an owner/editor of the shared board it sits on. */

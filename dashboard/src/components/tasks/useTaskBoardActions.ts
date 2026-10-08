@@ -14,10 +14,12 @@ import {
   type BoardLane,
   type Task,
   type TaskPriority,
+  type TaskStar,
   type TaskStarUpdate,
   type TasksBoardResponse,
 } from "@/lib/api";
 import { useBoardExtras } from "./boardExtras";
+import { starLiveColumn } from "./transitions";
 
 export const SYSTEM_COLUMNS = [
   { id: "working", name: "Working" },
@@ -102,11 +104,11 @@ export function useTaskBoardActions({
 
   // Starred cards (your own board) are private bookmarks: every move below
   // changes only your star, never the task on its shared board.
-  const patchStar = (task: Task, changes: Partial<Task>, star: TaskStarUpdate) =>
+  const patchStar = (task: Task, changes: Partial<Task>, star: TaskStarUpdate, local: Partial<TaskStar> = {}) =>
     mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id && t.star
-          ? { ...t, ...changes, star: { ...t.star, ...(star.lane ? { lane: star.lane } : {}), ...(star.done !== undefined ? { done: star.done } : {}) } }
+          ? { ...t, ...changes, star: { ...t.star, ...(star.lane ? { lane: star.lane } : {}), ...(star.done !== undefined ? { done: star.done } : {}), ...local } }
           : t),
       () => updateTaskStar(task.conversation_id, star),
     );
@@ -130,8 +132,10 @@ export function useTaskBoardActions({
       () => updateTask(task.conversation_id, { task_status: "done" }),
     );
 
+  // Reopening un-parks: the card follows the real task again.
   const reopen = (task: Task) => task.star
-    ? patchStar(task, { column: task.star.lane, task_lane: task.star.lane }, { done: false })
+    ? patchStar(task, { column: starLiveColumn({ ...task, star: { ...task.star, parked: false } }) ?? task.star.lane, task_lane: task.star.lane },
+      { done: false }, { parked: false })
     : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
@@ -143,8 +147,11 @@ export function useTaskBoardActions({
   // Moving into a staging lane also *parks* active tasks (todo + lane) so a
   // needs-input chat can be shelved and recontinued later.
   const moveToLane = (task: Task, laneId: string, rank?: number) => task.star
+    // Moving it to your lane while the real task runs or needs input parks it
+    // there until the task moves on (the backend tracks that).
     ? patchStar(task, { column: laneId, task_lane: laneId, task_rank: rank ?? task.task_rank },
-      { lane: laneId, done: false, ...(rank !== undefined ? { rank } : {}) })
+      { lane: laneId, done: false, ...(rank !== undefined ? { rank } : {}) },
+      { parked: ["working", "needs_input"].includes(task.star.source_column) })
     : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
