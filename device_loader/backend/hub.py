@@ -19,7 +19,8 @@ OP_TIMEOUTS = {'install': 900, 'run_flow': 660, 'logs': 90, 'ui_tree': 90, 'wait
                'set_text': 90, 'clear_text': 90, 'scroll_until_visible': 300, 'burst': 120, 'record': 90,
                'scenario': 360,  # scenario: 120 s window + 30 s step grace + video finalise / re-encode / upload
                'reset_app': 420,  # iOS reset_app reinstalls the cached build
-               'recover': 420}  # up to two emulator cold boots (180 s each) plus kill / lock cleanup
+               'recover': 420,  # up to two emulator cold boots (180 s each) plus kill / lock cleanup
+               'boot': 480, 'shutdown': 90}  # boot: an iOS clone (180 s) plus a boot (240 s)
 DEFAULT_TIMEOUT = 60
 MAX_PENDING = 32
 
@@ -29,11 +30,12 @@ class DeviceError(Exception):
 
 
 class Connection:
-    def __init__(self, runner_id, ws, devices, version=''):
+    def __init__(self, runner_id, ws, devices, version='', templates=None):
         self.runner_id = runner_id
         self.ws = ws
         self.devices = devices
         self.version = version  # runner VERSION from its hello; service.py gates newer ops on it
+        self.templates = templates or []  # [{name, platform, clean}] the runner can boot (runner >= 1.5.0)
         self.pending = {}
         self.last_seen = time.monotonic()
         self.send_lock = asyncio.Lock()
@@ -55,9 +57,9 @@ class RunnerHub:
         conn = self.connections.get(runner_id)
         return conn if conn is not None and conn.alive else None
 
-    async def attach(self, runner_id, ws, devices, version=''):
+    async def attach(self, runner_id, ws, devices, version='', templates=None):
         old = self.connections.get(runner_id)
-        conn = Connection(runner_id, ws, devices, version)
+        conn = Connection(runner_id, ws, devices, version, templates)
         self.connections[runner_id] = conn
         if old is not None and old.ws is not ws:
             self._fail_pending(old, 'Runner reconnected')

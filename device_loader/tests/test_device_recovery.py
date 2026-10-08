@@ -358,7 +358,7 @@ def test_recover_op_validation_gate_and_device_state_passthrough():
 async def test_recover_tool_and_cli():
     service = FakeService()
     tools = DeviceTools(None, AUTH, 'conv-1', artifacts=FakeArtifacts(AUTH), service=service)
-    async def lease(owner, scope, device_id=None, platform=None, recover=False, cold=False):
+    async def lease(owner, scope, device_id=None, platform=None, recover=False, cold=False, template=None, clean=False):
         service.calls.append(('lease', device_id, platform, recover, cold))
         return {'device_id': device_id}
     service.lease = lease

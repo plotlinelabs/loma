@@ -46,6 +46,7 @@ import platform
 import plistlib
 import random
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -210,7 +211,11 @@ HOSTNAME = re.compile(r'(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Z
 UI_STALL_S = 6  # scroll_until_visible: a UI tree that stays "not idle" this long (shimmer) uses the fallback dump
 MAX_KEEP_LINES = 40  # expect.keep_lines: matched log lines returned for a case that passed
 # Device templates (1.5.0): clean devices booted from a snapshot (Android) or cloned simulator (iOS).
-TEMPLATE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\Z')
+TEMPLATE_NAME = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
+TEMPLATE_AVD = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z')  # never a leading '-' (it would be read as a flag)
+SIMULATOR_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9 _.()-]{0,99}\Z')  # argv only, never a shell: spaces are fine
+MAX_TEMPLATES = 10
+RUNNER_DEVICE = '-'  # the `device` of runner-level calls (boot), which have no device yet
 BOOTED_PATH = CONFIG_DIR / 'booted-devices.json'
 INSTALLED_PATH = CONFIG_DIR / 'installed-builds.json'  # survives a runner restart (installed op, skip reinstall)
 BOOT_WAIT_S = 240
@@ -274,6 +279,40 @@ def default_policy():
     return {'allow_physical_devices': False, 'allowed_app_ids': [], 'allow_maestro_scripts': False,
             'keep_awake': True, 'preflight': 'public', 'auto_recover': True, 'emulator_args': [],
             'net_probe_host': NET_PROBE_HOST, 'dns_servers': DNS_FALLBACK, 'idle_shutdown_s': IDLE_SHUTDOWN_S}
+
+
+def load_templates(config):
+    """Device templates from the runner config (config.json "templates"). The machine owner names what may be
+    booted; an agent only picks a template name, never an AVD, a flag or an arbitrary simulator.
+
+    [{"name": "pixel-clean", "platform": "android", "avd": "Pixel_7_API_34", "snapshot": "clean",
+      "headless": false, "idle_shutdown_s": 1800},
+     {"name": "iphone-clean", "platform": "ios", "simulator": "iPhone 15"}]
+    """
+    templates = {}
+    for item in (config.get('templates') or [])[:MAX_TEMPLATES]:
+        if not isinstance(item, dict):
+            continue
+        name, kind = item.get('name'), item.get('platform')
+        base = item.get('avd') if kind == 'android' else item.get('simulator')
+        snapshot = item.get('snapshot')
+        pattern = TEMPLATE_AVD if kind == 'android' else SIMULATOR_NAME
+        if (not isinstance(name, str) or not TEMPLATE_NAME.fullmatch(name) or kind not in ('android', 'ios')
+                or not isinstance(base, str) or not pattern.fullmatch(base)
+                or (snapshot is not None and (not isinstance(snapshot, str) or not TEMPLATE_AVD.fullmatch(snapshot)))):
+            print(f'Ignoring invalid device template: {str(item)[:200]}', flush=True)
+            continue
+        idle = item.get('idle_shutdown_s', IDLE_SHUTDOWN_S)
+        templates[name] = {'name': name, 'platform': kind, 'base': base, 'snapshot': snapshot,
+                           'headless': item.get('headless') is True,
+                           'idle_shutdown_s': idle if type(idle) is int and 60 <= idle <= 86400 else IDLE_SHUTDOWN_S}
+    return templates
+
+
+def port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex(('127.0.0.1', port)) == 0
 
 
 def android_sdk():
@@ -1327,6 +1366,47 @@ class Android:
             await asyncio.sleep(3)
         return False
 
+    # ── Templates: boot / shut down emulators the machine owner defined ──
+
+    async def boot(self, template, clean, extra_args=()):
+        """Start the template's AVD on a free console port and wait for Android to finish booting.
+        clean: load the template's snapshot read-only and never save, so every session starts from the same
+        state and nothing it does persists (the AVD itself is never modified; several clean copies can run)."""
+        binary = emulator_binary()
+        if not binary:
+            raise OpError('Android emulator not found; install it with the Android Studio SDK Manager')
+        _, out, _ = await run([binary, '-list-avds'], timeout=30, check=False)
+        if template['base'] not in out.decode('utf-8', 'replace').split():
+            raise OpError(f"AVD {template['base']} does not exist on this machine (emulator -list-avds)")
+        if clean and not template['snapshot']:
+            raise OpError(f"Template {template['name']} has no clean snapshot: save one in the emulator "
+                          '(Extended controls > Snapshots) and set "snapshot" in the runner config')
+        running = {device['serial'] for device in await self.list()}
+        port = next((p for p in range(5554, 5586, 2) if f'emulator-{p}' not in running and not port_in_use(p)), None)
+        if port is None:
+            raise OpError('No free emulator console port (5554-5584)')
+        argv = [binary, '-avd', template['base'], '-port', str(port), '-no-boot-anim', '-no-audio', *extra_args]
+        if template['headless'] and '-no-window' not in argv:
+            argv.append('-no-window')
+        if clean:
+            argv += ['-snapshot', template['snapshot'], '-no-snapshot-save', '-read-only']
+        elif not template['snapshot']:
+            argv.append('-no-snapshot-load')
+        serial = f'emulator-{port}'
+        log = CONFIG_DIR / 'logs' / f'{serial}.log'
+        proc = start_detached(argv, log)
+        if not await self.wait_booted(serial, BOOT_WAIT_S, proc):
+            await self.shutdown(serial, {})
+            if proc.poll() is None:
+                proc.kill()
+            raise OpError(f'{serial} ({template["base"]}) did not finish booting within {BOOT_WAIT_S}s: {log_tail(log)}')
+        await run(self._sh(serial, ANDROID_WAKEUP), timeout=15, check=False)
+        return serial, {'avd': template['base'], 'port': port}
+
+    async def shutdown(self, serial, info):
+        await run([self.adb, '-s', serial, 'emu', 'kill'], timeout=30, check=False)
+        return {'shutdown': serial}
+
     async def net_probe(self, serial, host):
         """Can the emulator resolve DNS? ping is the one resolver every Android image ships; ICMP itself may be
         blocked (corporate networks), so only "unknown host" counts as a failure, not a missing reply."""
@@ -1716,6 +1796,45 @@ class IOS:
         except OpError:
             return False
         return code == 0
+
+    async def boot(self, template, clean, extra_args=()):
+        """Boot the template simulator. clean boots a throwaway clone of it (deleted at shutdown), so keychain,
+        permissions, defaults and installed apps all start from the template's saved state."""
+        base = template['base']
+        _, out, _ = await run(['xcrun', 'simctl', 'list', 'devices', '--json'], timeout=20)
+        simulators = [item for items in json.loads(out or b'{}').get('devices', {}).values() for item in items]
+        found = [d for d in simulators if d.get('udid') == base] or [d for d in simulators if d.get('name') == base
+                                                                     and d.get('isAvailable', True)]
+        if not found:
+            raise OpError(f'No simulator named or with UDID {base} (xcrun simctl list devices)')
+        udid, clone = found[0]['udid'], False
+        if clean:
+            if found[0].get('state') != 'Shutdown':
+                raise OpError(f'Shut down simulator {base} first: a clean boot clones it')
+            _, out, _ = await run(['xcrun', 'simctl', 'clone', udid, f"loma-{template['name']}-{secrets.token_hex(3)}"],
+                                  timeout=180)
+            udid, clone = out.decode('utf-8', 'replace').strip().splitlines()[-1].strip(), True
+            if not SERIAL.fullmatch(udid):
+                raise OpError('simctl clone returned no UDID')
+        elif found[0].get('state') == 'Booted':
+            return udid, {'already_booted': True}
+        try:
+            await run(['xcrun', 'simctl', 'boot', udid], timeout=120)
+            await run(['xcrun', 'simctl', 'bootstatus', udid, '-b'], timeout=BOOT_WAIT_S)
+        except BaseException:
+            await self.shutdown(udid, {'clone': clone})
+            raise
+        if not template['headless']:
+            await run(['open', '-a', 'Simulator'], timeout=30, check=False)
+        return udid, {'clone': clone}
+
+    async def shutdown(self, serial, info):
+        await self._stop_console(serial)
+        self.consoles.pop(serial, None)
+        await run(['xcrun', 'simctl', 'shutdown', serial], timeout=60, check=False)
+        if info.get('clone'):
+            await run(['xcrun', 'simctl', 'delete', serial], timeout=60, check=False)
+        return {'shutdown': serial, **({'deleted_clone': True} if info.get('clone') else {})}
 
     async def net_probe(self, udid, host):
         """Simulators use the Mac's network stack, so the Mac's resolver is what the app sees."""
@@ -2218,7 +2337,7 @@ class Runner:
     OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app', 'open_url', 'screenshot',
            'ui_tree', 'tap', 'swipe', 'type', 'key', 'logs', 'run_flow',
            'set_text', 'clear_text', 'wait_for', 'tap_text', 'scroll_until_visible', 'burst', 'record',
-           'animations', 'scenario', 'health', 'recover', 'installed'}
+           'animations', 'scenario', 'health', 'recover', 'installed', 'boot', 'shutdown'}
     APP_OPS = {'install', 'uninstall', 'launch', 'stop', 'reset_app'}
     LAUNCHING_OPS = {'burst', 'record', 'scenario'}  # may launch app_id right before capturing
     CACHE_KEEP = 4
@@ -2249,6 +2368,9 @@ class Runner:
         self.missing_since = {}  # serial -> time a known device was first seen missing
         self.identified = set()  # serials whose AVD was read since they (re)appeared: a port can be reused
         self._known_saved = 0.0
+        self.templates = load_templates(config)
+        self.booted = self._load_booted() if self.persist_known else {}  # serial -> devices booted from a template
+        self.boot_lock = None  # created on the running loop (3.9 binds locks at creation)
 
     def _load_installed(self):
         try:
@@ -2274,7 +2396,95 @@ class Runner:
     def capabilities(self):
         caps = [d.platform for d in self.drivers]
         caps += [tool for tool in ('maestro', 'idb') if shutil.which(tool)]
+        if self.templates:
+            caps.append('templates')
         return caps
+
+    # ── Templates: boot clean devices, shut down the ones we booted ──
+
+    def template_list(self):
+        platforms = {d.platform for d in self.drivers}
+        return [{'name': t['name'], 'platform': t['platform'], 'clean': t['platform'] == 'ios' or bool(t['snapshot'])}
+                for t in self.templates.values() if t['platform'] in platforms]
+
+    def _load_booted(self):
+        """Devices booted before a runner restart are still ours to shut down."""
+        try:
+            data = json.loads(BOOTED_PATH.read_text())
+        except (OSError, ValueError):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(k, str) and SERIAL.fullmatch(k) and isinstance(v, dict)} \
+            if isinstance(data, dict) else {}
+
+    def _save_booted(self):
+        if not self.persist_known:
+            return
+        try:
+            CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+            tmp = BOOTED_PATH.with_suffix('.tmp')
+            tmp.write_text(json.dumps(self.booted))
+            os.replace(tmp, BOOTED_PATH)
+        except OSError:
+            pass
+
+    async def boot(self, args):
+        name = need_str(args, 'template', TEMPLATE_NAME, 64)
+        template = self.templates.get(name)
+        if template is None:
+            raise OpError(f'No device template {name!r} on this runner (templates: {sorted(self.templates) or "none"})')
+        driver = next((d for d in self.drivers if d.platform == template['platform']), None)
+        if driver is None:
+            raise OpError(f"This runner cannot run {template['platform']} devices")
+        clean = need_bool(args, 'clean')
+        if self.boot_lock is None:
+            self.boot_lock = asyncio.Lock()
+        async with self.boot_lock:  # one boot at a time: port choice and clone names never race
+            extra = emulator_args(self.policy) if template['platform'] == 'android' else ()
+            serial, info = await driver.boot(template, clean, extra)
+        await self.refresh()
+        if info.get('already_booted'):
+            return {'serial': serial, 'booted': False, 'template': name, 'clean': False}
+        self.booted[serial] = {'template': name, 'platform': template['platform'], 'clean': clean,
+                               'clone': bool(info.get('clone')), 'last_used': time.time()}
+        self._save_booted()
+        self._mark_used(serial)
+        return {'serial': serial, 'booted': True, 'template': name, 'clean': clean}
+
+    async def shutdown(self, driver, serial):
+        info = self.booted.get(serial)
+        if info is None:
+            raise OpError('Only devices this runner booted from a template can be shut down')
+        result = await driver.shutdown(serial, info)
+        self._forget(serial)
+        await self.refresh()
+        return result
+
+    def _forget(self, serial):
+        """A device we shut down on purpose: not ours any more, and never auto-recovered."""
+        self.booted.pop(serial, None)
+        self._save_booted()
+        self.known.pop(serial, None)
+        self.missing_since.pop(serial, None)
+        self._save_known()
+
+    async def reap_idle(self):
+        """Shut down devices we booted that no call has used for their template's idle limit."""
+        now = time.time()
+        for serial, info in list(self.booted.items()):
+            limit = (self.templates.get(info.get('template')) or {}).get(
+                'idle_shutdown_s', self.policy.get('idle_shutdown_s') or IDLE_SHUTDOWN_S)
+            lock = self.locks.get(serial)
+            if now - info.get('last_used', 0) < limit or (lock is not None and lock.locked()):
+                continue
+            driver = next((d for d in self.drivers if d.platform == info.get('platform')), None)
+            if driver is None:
+                continue
+            try:
+                await driver.shutdown(serial, info)
+                print(f'Shut down idle {serial} (template {info.get("template")})', flush=True)
+            except Exception:  # noqa: BLE001  retried on the next heartbeat
+                continue
+            self._forget(serial)
 
     async def refresh(self):
         inventory = {}
@@ -2465,6 +2675,12 @@ class Runner:
             raise OpError('Unsupported operation')
         if not isinstance(serial, str) or not SERIAL.fullmatch(serial) or not isinstance(args, dict):
             raise OpError('Invalid device or arguments')
+        if op == 'boot':
+            if serial != RUNNER_DEVICE:
+                raise OpError('boot is a runner-level operation')
+            return await self.boot(args)
+        if serial in self.booted:
+            self.booted[serial]['last_used'] = time.time()
         if op == 'recover':
             self._mark_used(serial)
             return await self.recover(serial, need_bool(args, 'cold'))
@@ -2523,6 +2739,8 @@ class Runner:
             return await self.health(driver, serial)
         if op == 'installed':
             return await self.installed_apps(driver, serial)
+        if op == 'shutdown':
+            return await self.shutdown(driver, serial)
         if op in ('set_text', 'clear_text'):
             return await self.set_text(driver, serial, args, op == 'set_text')
         if op in ('wait_for', 'tap_text'):
@@ -3400,6 +3618,11 @@ class Runner:
     async def heartbeat(self, ws):
         while not ws.closed:
             await asyncio.sleep(HEARTBEAT_SECONDS)
+            if self.booted:
+                try:
+                    await asyncio.wait_for(self.reap_idle(), HEARTBEAT_SECONDS * 4)
+                except Exception:  # noqa: BLE001  never let the reaper stop the heartbeat
+                    pass
             try:
                 devices = await asyncio.wait_for(self.refresh(), HEARTBEAT_SECONDS * 2)
             except Exception:  # slow or failing scan: still heartbeat with the last inventory
@@ -3421,7 +3644,7 @@ class Runner:
             await self.send(ws, {
                 'type': 'hello', 'protocol': PROTOCOL, 'version': VERSION, 'hostname': socket.gethostname(),
                 'os': f'{platform.system()} {platform.release()}', 'capabilities': self.capabilities(),
-                'devices': devices})
+                'devices': devices, 'templates': self.template_list()})
             print(f'Connected to {self.config["server"]} with {len(devices)} device(s)', flush=True)
             beat = asyncio.create_task(self.heartbeat(ws))
             # A dead heartbeat would leave a silent socket the server marks offline: reconnect instead.
@@ -3702,7 +3925,11 @@ async def doctor():
         where = shutil.which(tool)
         print(f'{tool:8} {"found at " + where if where else "not found: " + hint}')
     config = load_config() if CONFIG_PATH.exists() else {}
-    devices = await Runner({'policy': config.get('policy', {})}).refresh()
+    runner = Runner({'policy': config.get('policy', {}), 'templates': config.get('templates') or []})
+    devices = await runner.refresh()
+    for template in runner.template_list():
+        print(f"template {template['name']:20} {template['platform']:8} "
+              f"{'clean boots supported' if template['clean'] else 'no clean snapshot (set snapshot)'}")
     print(f'{len(devices)} usable device(s) (physical devices are hidden unless allow_physical_devices=true):')
     for device in devices:
         print(f"  {device['platform']:8} {device['serial']:40} {device['name']} {device['os_version']}")

@@ -35,6 +35,7 @@ APP_ID = re.compile(r'[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*\Z')
 KEYS = {'back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up', 'volume_down', 'power',
         'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup'}
 SCOPE = re.compile(r'[A-Za-z0-9:_.@-]{1,200}\Z')
+TEMPLATE = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
 REPO = re.compile(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}\Z')
 ARTIFACT_NAME = re.compile(r'[A-Za-z0-9._ -]{1,200}\Z')
 EXTRA_KEY = re.compile(r'[A-Za-z0-9_.]{1,100}\Z')
@@ -875,51 +876,151 @@ class DeviceService:
                 continue
         return None
 
-    async def lease(self, user_email, scope, device_id=None, platform=None, recover=False, cold=False):
-        """recover=True: restart the (crashed / hung) device after leasing it and wait for it."""
+    async def lease(self, user_email, scope, device_id=None, platform=None, recover=False, cold=False,
+                    template=None, clean=False):
+        """recover=True: restart the (crashed / hung) device after leasing it and wait for it.
+
+        template (a name from device.list) boots a new device from it; clean boots it from the template's clean
+        state (a read-only snapshot / a throwaway simulator clone). Without either, a free running device is used,
+        and when there is none (or all are taken) an online runner's template is booted automatically.
+        """
         self._check_scope(scope)
         if recover and device_id is None:
             raise DeviceError('recover needs a device_id')
+        if template is not None and (not isinstance(template, str) or not TEMPLATE.fullmatch(template)):
+            raise DeviceError('Invalid template name; use one listed by device list')
+        if type(clean) is not bool or (device_id is not None and (template is not None or clean)):
+            raise DeviceError('clean must be true or false, and template / clean cannot be combined with device_id')
+        if platform not in (None, 'android', 'ios'):
+            raise DeviceError('platform must be android or ios')
+        if template is not None or clean:
+            return await self._boot_and_lease(user_email, scope, template, platform, clean)
         if device_id is not None:
             runner, serial = await self._resolve(user_email, device_id)
             if self.hub.get(runner['runner_id']) is None:
                 raise DeviceError('That device\'s runner is offline')
             candidates = [store.device_id(runner['runner_id'], serial)]
         else:
-            if platform not in (None, 'android', 'ios'):
-                raise DeviceError('platform must be android or ios')
             devices = await self.list_devices(user_email)
             matching = [d for d in devices if d['online'] and (platform is None or d['platform'] == platform)]
             # Running devices first; a down/recovering one is still a candidate (the lease then restarts it).
             candidates = [d['device_id'] for d in sorted(matching, key=lambda d: d.get('state', 'ok') != 'ok')]
             if not candidates:
+                bootable = await self._bootable(user_email, platform)
+                if bootable:  # nothing running: boot one, clean when the template supports it
+                    return await self._boot_and_lease(user_email, scope, bootable['template'], platform,
+                                                      bootable['clean'], bootable['runner_id'])
                 raise DeviceError(self._no_device_message(devices, platform))
         busy = []
         for candidate in candidates:
             lease = await self._acquire(candidate, user_email, scope)
             if lease is not None:
-                await self._audit(user_email, scope, candidate, 'lease', True)
-                result = {'device_id': candidate, 'expires_at': store.aware(lease['expires_at']).isoformat(),
-                          'note': 'Lease renews on every call and expires after 15 idle minutes. Release it when done.'}
-                health = None if recover else await self.health(user_email, scope, candidate)
-                if recover or (health is not None and not health.get('ok')):
-                    recovery = await self.heal(user_email, scope, candidate, cold)
-                    if recovery is not None:
-                        result['recovery'] = recovery
-                        if recovery.get('recovered'):
-                            health = recovery.get('health') or await self.health(user_email, scope, candidate)
-                installed = await self.installed(user_email, scope, candidate)
-                if installed is not None:
-                    result['installed'] = installed
-                if health is not None:
-                    result['health'] = health
-                    if not health.get('ok'):
-                        result['note'] += (' This device is too slow or unresponsive to test on right now (see '
-                                           'health.reasons and recovery): lease another device, or ask the user to '
-                                           'check the runner machine.')
-                return result
+                return await self._leased(user_email, scope, candidate, lease, recover, cold)
             busy.append(candidate)
+        bootable = await self._bootable(user_email, platform) if device_id is None else None
+        if bootable:  # every running device is taken: start another one
+            return await self._boot_and_lease(user_email, scope, bootable['template'], platform,
+                                              bootable['clean'], bootable['runner_id'])
         raise DeviceError('All matching devices are leased by another session: ' + ', '.join(busy))
+
+    async def _leased(self, user_email, scope, candidate, lease, recover=False, cold=False, extra=None):
+        """The lease result: health (restarting a crashed / hung device once) and what is installed."""
+        await self._audit(user_email, scope, candidate, 'lease', True)
+        result = {'device_id': candidate, 'expires_at': store.aware(lease['expires_at']).isoformat(),
+                  **(extra or {}),
+                  'note': 'Lease renews on every call and expires after 15 idle minutes. Release it when done.'
+                          + ((' ' + extra['note']) if extra and extra.get('note') else '')}
+        health = None if recover else await self.health(user_email, scope, candidate)
+        if recover or (health is not None and not health.get('ok')):
+            recovery = await self.heal(user_email, scope, candidate, cold)
+            if recovery is not None:
+                result['recovery'] = recovery
+                if recovery.get('recovered'):
+                    health = recovery.get('health') or await self.health(user_email, scope, candidate)
+        installed = await self.installed(user_email, scope, candidate)
+        if installed is not None:
+            result['installed'] = installed
+        if health is not None:
+            result['health'] = health
+            if not health.get('ok'):
+                result['note'] += (' This device is too slow or unresponsive to test on right now (see '
+                                   'health.reasons and recovery): lease another device, or ask the user to '
+                                   'check the runner machine.')
+        return result
+
+    # ── Templates: boot clean devices on demand (runner >= 1.5.0) ──────────
+
+    async def templates_for(self, user_email):
+        """Device templates the user's runners can boot (live from connected runners)."""
+        templates = []
+        for runner in await self.runners_for(user_email):
+            conn = self.hub.get(runner['runner_id'])
+            listed = (getattr(conn, 'templates', None) or []) if conn is not None else (runner.get('templates') or [])
+            for template in listed:
+                templates.append({'template': template['name'], 'platform': template['platform'],
+                                  'clean': bool(template.get('clean')), 'runner': runner.get('name'),
+                                  'runner_id': runner['runner_id'], 'online': conn is not None})
+        return templates
+
+    async def _bootable(self, user_email, platform):
+        for template in await self.templates_for(user_email):
+            conn = self.hub.get(template['runner_id']) if template['online'] else None
+            if conn is not None and (platform is None or template['platform'] == platform) \
+                    and _version(getattr(conn, 'version', '')) >= RUNNER_1_5:
+                return template
+        return None
+
+    async def _boot_and_lease(self, user_email, scope, template, platform, clean, runner_id=None):
+        templates = [t for t in await self.templates_for(user_email)
+                     if (template is None or t['template'] == template) and (platform is None or t['platform'] == platform)
+                     and (runner_id is None or t['runner_id'] == runner_id) and (t['clean'] or not clean)]
+        if not templates:
+            names = sorted({t['template'] for t in await self.templates_for(user_email)})
+            raise DeviceError(f'No {"clean-capable " if clean else ""}device template matches'
+                              + (f' {template!r}' if template else '') + f'; available: {names or "none"} '
+                              '(templates are set in the runner config.json, see the runner README)')
+        online = [t for t in templates if t['online']]
+        if not online:
+            raise DeviceError(f'The runner with template {templates[0]["template"]} is offline. Start the Loma Device '
+                              'Runner on that machine and retry.')
+        choice = online[0]
+        _check_runner_version(self.hub.get(choice['runner_id']), 'boot', {})
+        started = time.monotonic()
+        try:
+            data = await self.hub.call(choice['runner_id'], 'boot', '-', {'template': choice['template'], 'clean': clean})
+            serial = data.get('serial')
+            if not isinstance(serial, str) or not store.SERIAL.fullmatch(serial):
+                raise DeviceError('Runner returned an invalid device after boot')
+        except DeviceError as exc:
+            await self._audit(user_email, scope, None, 'boot', False, str(exc), started)
+            raise
+        device_id = store.device_id(choice['runner_id'], serial)
+        await self._audit(user_email, scope, device_id, 'boot', True, None, started)
+        lease = await self._acquire(device_id, user_email, scope)
+        if lease is None:
+            raise DeviceError(f'{device_id} was booted but another session leased it first; lease again')
+        booted = bool(data.get('booted'))
+        await self.db.device_leases.update_one({'_id': device_id}, {'$set': {'booted': booted, 'clean': clean}})
+        note = (('Booted from template ' + choice['template'] + (' in a clean state' if clean else '')
+                 + '. release shuts it down (so do 30 idle minutes on the runner).') if booted else
+                'The template device was already running; it was leased as is.')
+        return await self._leased(user_email, scope, device_id, lease,
+                                  extra={'template': choice['template'], 'booted': booted, 'clean': clean,
+                                         'note': note})
+
+    async def _shutdown(self, user_email, scope, device_id):
+        """Shut down a device the lease booted (best effort; the runner's idle reaper is the safety net)."""
+        try:
+            runner, serial = await self._resolve(user_email, device_id)
+            conn = self.hub.get(runner['runner_id'])
+            if conn is None or _version(getattr(conn, 'version', '')) < RUNNER_1_5:
+                return False
+            await self.hub.call(runner['runner_id'], 'shutdown', serial, {})
+            await self._audit(user_email, scope, device_id, 'shutdown', True)
+            return True
+        except DeviceError as exc:
+            await self._audit(user_email, scope, device_id, 'shutdown', False, str(exc))
+            return False
 
     @staticmethod
     def _no_device_message(devices, platform):
@@ -932,9 +1033,13 @@ class DeviceService:
     async def release(self, user_email, scope, device_id):
         self._check_scope(scope)
         await self._resolve(user_email, device_id)
-        result = await self.db.device_leases.delete_one({'_id': device_id, 'owner_email': user_email, 'scope': scope})
+        lease = await self.db.device_leases.find_one_and_delete(
+            {'_id': device_id, 'owner_email': user_email, 'scope': scope})
         await self._audit(user_email, scope, device_id, 'release', True)
-        return {'released': bool(result.deleted_count)}
+        result = {'released': lease is not None}
+        if lease is not None and lease.get('booted'):  # booted from a template for this lease: shut it down
+            result['shutdown'] = await self._shutdown(user_email, scope, device_id)
+        return result
 
     async def release_all(self, user_email, scope):
         """Release every device this user's scope (one conversation) holds; used when a run ends."""
@@ -947,6 +1052,8 @@ class DeviceService:
             if result.deleted_count:
                 released.append(lease['_id'])
                 await self._audit(user_email, scope, lease['_id'], 'release', True)
+                if lease.get('booted'):
+                    await self._shutdown(user_email, scope, lease['_id'])
         return {'released': released}
 
     async def health(self, user_email, scope, device_id):
