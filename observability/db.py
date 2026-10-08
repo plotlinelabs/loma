@@ -35,6 +35,10 @@ async def init_observability():
     await _db.turns.create_index([("conversation_id", 1), ("turn_number", 1)])
     await _db.turns.create_index("conversation_id")
     await _db.conversations.create_index("cost.total_cost_usd")
+    # Single-conversation lookups (open, update, star) all go by conversation_id;
+    # without this every one is a collection scan over full message histories.
+    await _db.conversations.create_index("conversation_id")
+    await _db.artifacts.create_index("conversation_id")
 
     # Flow indexes
     await _db.flows.create_index("flow_id", unique=True)
@@ -124,6 +128,16 @@ async def init_observability():
     await _db.task_boards.create_index("owner")
     await _db.task_boards.create_index("members.email")
     await _db.conversations.create_index([("task_board_id", 1), ("task_status", 1)])
+    # Done column: newest-first by task_done_at, capped, on either board kind.
+    await _db.conversations.create_index(
+        [("metadata.user_name", 1), ("task_status", 1), ("task_done_at", -1)],
+    )
+    await _db.conversations.create_index(
+        [("task_board_id", 1), ("task_status", 1), ("task_done_at", -1)],
+    )
+    # "Waiting on you" ($or over creator and assignee) needs both branches
+    # indexed, or it scans the collection on every 5s board poll.
+    await _db.conversations.create_index("task_assignee", sparse=True)
     # Card boards: cards on a board, and the tasks inside a card.
     await _db.task_cards.create_index("card_id", unique=True)
     await _db.task_cards.create_index("board_id")
