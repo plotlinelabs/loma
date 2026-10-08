@@ -1,9 +1,10 @@
 "use client";
 
-import { RiArrowRightSLine } from "@remixicon/react";
+import { RiArrowRightSLine, RiListCheck3 } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Artifact } from "./ArtifactViewer";
+import { PlanStatusDot, type PlanStatus } from "./PlanReview";
 
 // ── Language icons ──────────────────────────────────────────────────────────────
 
@@ -103,6 +104,8 @@ interface ArtifactCardProps {
   artifact: Artifact;
   isActive?: boolean;
   onClick: () => void;
+  /** Review state when the artifact is a plan */
+  planStatus?: PlanStatus;
 }
 
 const DESIGN_LANGUAGES = new Set(["html", "svg"]);
@@ -127,7 +130,7 @@ function DesignThumbnail({ artifact }: { artifact: Artifact }) {
   );
 }
 
-export default function ArtifactCard({ artifact, isActive, onClick }: ArtifactCardProps) {
+export default function ArtifactCard({ artifact, isActive, onClick, planStatus }: ArtifactCardProps) {
   const isFileArtifact = !!artifact.file_url;
   const isDesign = !isFileArtifact && DESIGN_LANGUAGES.has(artifact.language.toLowerCase());
   const lineCount = artifact.content ? artifact.content.split("\n").length : 0;
@@ -142,6 +145,34 @@ export default function ArtifactCard({ artifact, isActive, onClick }: ArtifactCa
         : charCount > 0
           ? `${charCount} chars`
           : null;
+
+  if (artifact.language === "plan") {
+    const status = planStatus ?? "pending";
+    // The first heading names the plan; the title is the generic fallback.
+    const heading = artifact.content.match(/^#+\s+(.+)$/m)?.[1]?.trim();
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "group flex w-full max-w-[420px] items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors",
+          isActive ? "border-accent-300 bg-accent-50 shadow-sm" : "border-border bg-muted/50 hover:border-muted-foreground/30 hover:bg-muted",
+          status === "superseded" && "opacity-60",
+        )}
+      >
+        <RiListCheck3 size={18} className="shrink-0 text-muted-foreground" />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[13px] font-medium text-foreground">{heading || artifact.title}</span>
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <PlanStatusDot status={status} />
+            {status === "pending" ? "Awaiting your review" : status === "approved" ? "Approved" : "Superseded"} · v{artifact.version}
+          </span>
+        </span>
+        {status === "pending" && <span className="shrink-0 text-[12px] font-medium text-foreground/80">Review</span>}
+        <RiArrowRightSLine size={16} className="shrink-0 text-muted-foreground/40 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+      </button>
+    );
+  }
 
   if (isDesign) {
     return (

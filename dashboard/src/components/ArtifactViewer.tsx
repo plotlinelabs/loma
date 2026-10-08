@@ -28,6 +28,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import PlanReview, { type PlanActions } from "./PlanReview";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ type ViewMode = "preview" | "code";
 
 // ── Language detection ──────────────────────────────────────────────────────
 
-const PREVIEWABLE_LANGUAGES = new Set(["html", "markdown", "md", "svg", "mermaid", "jsx", "tsx", "pdf", "docx", "pptx"]);
+const PREVIEWABLE_LANGUAGES = new Set(["plan", "html", "markdown", "md", "svg", "mermaid", "jsx", "tsx", "pdf", "docx", "pptx"]);
 const CODE_LANGUAGES = new Set([
   "javascript", "js", "typescript", "ts", "tsx", "jsx",
   "python", "py", "java", "go", "rust", "ruby", "rb",
@@ -70,6 +71,7 @@ function isPreviewable(language: string): boolean {
 
 function getLanguageLabel(lang: string): string {
   const labels: Record<string, string> = {
+    plan: "Plan",
     html: "HTML",
     javascript: "JavaScript",
     js: "JavaScript",
@@ -497,6 +499,8 @@ interface ArtifactViewerProps {
   allArtifacts?: Artifact[];
   /** Navigate to a specific artifact version */
   onSelectArtifact?: (id: string) => void;
+  /** Review controls when the artifact is a plan */
+  planActions?: PlanActions;
 }
 
 export default function ArtifactViewer({
@@ -504,6 +508,7 @@ export default function ArtifactViewer({
   onClose,
   allArtifacts,
   onSelectArtifact,
+  planActions,
 }: ArtifactViewerProps) {
   const canPreview = isPreviewable(artifact.language) || !!artifact.file_url;
   const isFileArtifact = !!artifact.file_url;
@@ -821,6 +826,8 @@ export default function ArtifactViewer({
           ) : artifact.file_url ? (
             <FileDownloadRenderer fileUrl={artifact.file_url} title={artifact.title} fileSize={artifact.file_size} />
           // Text-based renderers (content-based)
+          ) : artifact.language === "plan" ? (
+            <PlanReview key={artifact.id} plan={artifact} actions={planActions} />
           ) : artifact.language === "html" ? (
             <HtmlRenderer content={artifact.content} />
           ) : artifact.language === "svg" ? (

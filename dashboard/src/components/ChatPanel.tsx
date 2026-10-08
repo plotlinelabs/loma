@@ -23,6 +23,7 @@ import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath,
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
+import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
 import type { Artifact } from "./ArtifactViewer";
 import PetCompanion, { PetRunway } from "./PetCompanion";
 import CrosscutIcon from "./CrosscutIcon";
@@ -48,6 +49,7 @@ import {
   RiTimeLine,
   RiEditLine,
   RiDeleteBinLine,
+  RiListCheck3,
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
@@ -104,6 +106,19 @@ export interface FileAttachment {
   url: string;
   mime_type: string;
   size: number;
+}
+
+/** What the side panel needs to review plans in this chat. */
+export interface PlanState {
+  /** Plan artifacts in chat order, versioned v1, v2, ... */
+  plans: Artifact[];
+  statuses: Record<string, PlanStatus>;
+  canAct: boolean;
+}
+
+export interface PlanControl {
+  revise: (plan: Artifact, comments: PlanComment[]) => void;
+  approve: (plan: Artifact, notes: PlanComment[]) => void;
 }
 
 export interface ChatItem {
@@ -304,26 +319,36 @@ function isArtifactSized(body: string): boolean {
   return content.length >= 200 || content.split("\n").length - 1 >= 8;
 }
 
+type PendingArtifact = "design" | "plan" | null;
+
+/** A block the backend will turn into an artifact card. */
+function pendingKind(lang: string, body: string): PendingArtifact {
+  const l = lang.toLowerCase();
+  if (l === "plan") return "plan";
+  return DESIGN_FENCE_LANGUAGES.has(l) && isArtifactSized(body) ? "design" : null;
+}
+
 /**
  * The backend sends a promoted code block twice: inside the message text and
  * as an artifact. Drop the copy from the text, since the card shows it. While
- * streaming, a design block whose card hasn't arrived yet (unfinished, or
- * finished but ahead of its artifact event) is held back and reported as
- * `designing`, so raw HTML never scrolls past in the chat.
+ * streaming, a design or plan block whose card hasn't arrived yet (unfinished,
+ * or finished but ahead of its artifact event) is held back and reported as
+ * `pending`, so raw source never scrolls past in the chat.
  */
 function withoutArtifactSource(
   content: string,
   artifacts: Artifact[],
   streaming: boolean,
-): { text: string; designing: boolean } {
+): { text: string; pending: PendingArtifact } {
   const bodies = new Set(artifacts.map((a) => a.content.trimEnd()));
-  let designing = false;
+  let pending: PendingArtifact = null;
   let text = content.replace(FENCED_BLOCK_RE, (block, lang: string, body: string) => {
     if (bodies.has(body.trimEnd())) return "";
-    // The artifact event follows the full text, so a finished design block
-    // is still unmatched for a moment: hold it back if it will be promoted.
-    if (streaming && DESIGN_FENCE_LANGUAGES.has(lang.toLowerCase()) && isArtifactSized(body)) {
-      designing = true;
+    // The artifact event follows the full text, so a finished block is
+    // still unmatched for a moment: hold it back if it will be promoted.
+    const kind = streaming ? pendingKind(lang, body) : null;
+    if (kind) {
+      pending = kind;
       return "";
     }
     return block;
@@ -331,13 +356,13 @@ function withoutArtifactSource(
   if (streaming && (text.match(/```/g) || []).length % 2 === 1) {
     const open = text.lastIndexOf("```");
     const lang = text.slice(open + 3).split("\n", 1)[0].trim().toLowerCase();
-    if (DESIGN_FENCE_LANGUAGES.has(lang)) {
+    if (lang === "plan" || DESIGN_FENCE_LANGUAGES.has(lang)) {
       text = text.slice(0, open);
-      designing = true;
+      pending = lang === "plan" ? "plan" : "design";
     }
   }
   if (text !== content) text = text.replace(/\n{3,}/g, "\n\n").trim();
-  return { text, designing };
+  return { text, pending };
 }
 
 /** Extract a :::clarify block from text content */
@@ -687,6 +712,8 @@ export default function ChatPanel({
   onConversationCreated,
   onStreamComplete,
   readOnly = false,
+  onPlanStateChange,
+  planControlRef,
 }: {
   initialItems?: ChatItem[];
   /** Artifacts restored from history (persisted in MongoDB) */
@@ -721,6 +748,10 @@ export default function ChatPanel({
   onStreamComplete?: (conversationId: string) => void;
   /** Show the transcript without a composer (e.g. a teammate's task on a shared board). */
   readOnly?: boolean;
+  /** Reports plan versions/statuses so the side panel can review them. */
+  onPlanStateChange?: (state: PlanState) => void;
+  /** Lets the side panel revise or approve a plan through this chat. */
+  planControlRef?: React.MutableRefObject<PlanControl | null>;
 } = {}) {
   const { data: session } = useSession();
   const standalone = useStandalone();
@@ -823,6 +854,8 @@ export default function ChatPanel({
   // Text of a send that has started but may not have re-rendered yet: a second
   // Enter/click in the same render sees a stale `isStreaming`/`input`.
   const sendInFlightRef = useRef<string | null>(null);
+  // Plan mode: the agent researches read-only and proposes a plan to review.
+  const [planMode, setPlanMode] = useState(false);
   const handleSendRef = useRef<
     ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] }) => Promise<void>) | null
   >(null);
@@ -1095,8 +1128,10 @@ export default function ChatPanel({
       fromQueue,
       includePendingFiles,
       files: queuedFiles,
-    }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] } = {},
+      planMode: planModeOverride,
+    }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[]; planMode?: boolean } = {},
   ) => {
+    const sendInPlanMode = planModeOverride ?? planMode;
     const displayText = overrideMessage ?? input.trim();
     // Files that rode a queued message are sent with it, not re-read from the composer.
     const carriedFiles = queuedFiles && queuedFiles.length > 0 ? queuedFiles : undefined;
@@ -1220,6 +1255,7 @@ export default function ChatPanel({
         // default agent, so it must not unpin the conversation's agent.
         selectedAgentId || (agentLoadState === "ready" ? null : undefined),
         selectedAgentId ? AGENT_TOOL_CONFIG : toolConfig,
+        sendInPlanMode,
       )) {
         if (event.type === "account_info") {
           setAccountInfo(event);
@@ -1557,6 +1593,12 @@ export default function ChatPanel({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Shift+Tab toggles plan mode, as in Claude Code.
+    if (e.key === "Tab" && e.shiftKey && !readOnly) {
+      e.preventDefault();
+      setPlanMode((on) => !on);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -1576,6 +1618,51 @@ export default function ChatPanel({
 
   const { isDragOver, dropHandlers } = useFileDrop(addFiles);
 
+  // Plans in chat order: number them v1, v2, ... and work out which one is
+  // under review. Approval is the user's "Plan vN approved" message, so the
+  // status survives a reload without extra storage.
+  const planState = useMemo<PlanState>(() => {
+    const plans: Artifact[] = [];
+    const planItemIndex: number[] = [];
+    items.forEach((item, i) => {
+      for (const id of item.artifactIds || []) {
+        const art = allArtifacts.find((a) => a.id === id);
+        if (art?.language === "plan" && !plans.some((p) => p.id === id)) {
+          plans.push({ ...art, version: plans.length + 1 });
+          planItemIndex.push(i);
+        }
+      }
+    });
+    const statuses: Record<string, PlanStatus> = {};
+    plans.forEach((plan, n) => {
+      const approved = items
+        .slice(planItemIndex[n] + 1)
+        .some((item) => item.role === "user" && item.content.startsWith(`Plan v${plan.version} approved`));
+      statuses[plan.id] = approved ? "approved" : n < plans.length - 1 ? "superseded" : "pending";
+    });
+    return { plans, statuses, canAct: !isStreaming && !readOnly };
+  }, [items, allArtifacts, isStreaming, readOnly]);
+  // allArtifacts is rebuilt each render, so report only real changes.
+  const planStateKey = JSON.stringify([planState.plans.map((p) => p.id), planState.statuses, planState.canAct]);
+  const planStateRef = useRef(planState);
+  planStateRef.current = planState;
+  useEffect(() => {
+    onPlanStateChange?.(planStateRef.current);
+  }, [planStateKey, onPlanStateChange]);
+  useEffect(() => {
+    if (!planControlRef) return;
+    planControlRef.current = {
+      revise: (plan, comments) => {
+        setPlanMode(true);
+        handleSend(revisionMessage(plan, comments), { planMode: true });
+      },
+      approve: (plan, notes) => {
+        setPlanMode(false);
+        handleSend(approvalMessage(plan, notes), { planMode: false });
+      },
+    };
+  });
+
   const isEmptyState = items.length === 0 && !isStreaming;
 
   // A selected agent brings its own tools and skills, so the pickers give way
@@ -1584,6 +1671,24 @@ export default function ChatPanel({
     <AgentScope agent={selectedAgent} skills={availableSkills} onOpen={loadToolsCatalog} onUseDefault={() => selectAgent(null)} disabled={isStreaming} />
   ) : (
     <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
+  );
+
+  const planToggle = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-pressed={planMode}
+      onClick={() => setPlanMode((on) => !on)}
+      title="Plan first: research read-only, then review the plan before anything runs (Shift+Tab)"
+      className={cn(
+        "h-8 gap-1 rounded-md px-2 text-xs font-normal",
+        planMode ? "bg-accent-200 text-accent-on hover:bg-accent-200/80" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <RiListCheck3 size={14} />
+      Plan
+    </Button>
   );
 
   // Shared by the empty-state and in-conversation composers.
@@ -1600,8 +1705,14 @@ export default function ChatPanel({
         <ComposerSettings>
           <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
           {scopePicker}
+          {planToggle}
         </ComposerSettings>
-      ) : scopePicker}
+      ) : (
+        <>
+          {scopePicker}
+          {planToggle}
+        </>
+      )}
     </>
   );
 
@@ -1613,10 +1724,12 @@ export default function ChatPanel({
       <ModelPicker models={agentModels} selectedModel={selectedModel} onSelect={selectModel} loadState={modelLoadState} disabled={isStreaming} />
       <AgentPicker agents={agentIdentities} selectedAgentId={selectedAgentId} onSelect={selectAgent} loadState={agentLoadState} disabled={isStreaming} />
       {scopePicker}
+      {planToggle}
     </ComposerSettings>
   );
 
   const messageBlocks = groupIntoBlocks(items);
+
   // Before the first event arrives, give the working line an agent block to sit in.
   if (isStreaming && !isRecovering && messageBlocks[messageBlocks.length - 1]?.kind !== "agent") {
     messageBlocks.push({ kind: "agent", indices: [] });
@@ -1924,7 +2037,7 @@ export default function ChatPanel({
                         const itemArtifacts = (item.artifactIds || [])
                           .map((artId) => allArtifacts.find((a) => a.id === artId))
                           .filter((a): a is Artifact => !!a);
-                        const { text: displayText, designing } = withoutArtifactSource(
+                        const { text: displayText, pending } = withoutArtifactSource(
                           item.content,
                           itemArtifacts,
                           isStreaming && i === items.length - 1,
@@ -1935,28 +2048,32 @@ export default function ChatPanel({
                               {authorLabel}
                               {displayText ? (
                                 <MarkdownContent content={displayText} />
-                              ) : (designing || item.artifactIds?.length || item.fileAttachments?.length) ? (
+                              ) : (pending || item.artifactIds?.length || item.fileAttachments?.length) ? (
                                 null /* Artifact/file-only message — cards rendered below */
                               ) : (
                                 <TypingIndicator />
                               )}
-                              {designing && (
+                              {pending && (
                                 <div className={cn("flex w-full max-w-[320px] items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-[12px] text-muted-foreground", displayText && "mt-3")}>
                                   <RiLoader4Line size={14} className="animate-spin text-brand-500" />
-                                  Designing…
+                                  {pending === "plan" ? "Writing plan…" : "Designing…"}
                                 </div>
                               )}
                               {/* Inline artifact cards */}
                               {itemArtifacts.length > 0 && (
                                 <div className={`flex flex-col gap-2 ${displayText ? "mt-3" : ""}`}>
-                                  {itemArtifacts.map((art) => (
-                                    <ArtifactCard
-                                      key={art.id}
-                                      artifact={art}
-                                      isActive={activeArtifactId === art.id}
-                                      onClick={() => onArtifactOpen?.(art)}
-                                    />
-                                  ))}
+                                  {itemArtifacts.map((art) => {
+                                    const shown = planState.plans.find((p) => p.id === art.id) ?? art;
+                                    return (
+                                      <ArtifactCard
+                                        key={art.id}
+                                        artifact={shown}
+                                        planStatus={planState.statuses[art.id]}
+                                        isActive={activeArtifactId === art.id}
+                                        onClick={() => onArtifactOpen?.(shown)}
+                                      />
+                                    );
+                                  })}
                                 </div>
                               )}
                               {/* Inline file attachment cards */}
