@@ -26,6 +26,11 @@ LEASE_TTL = timedelta(minutes=15)
 DEVICE_GONE = re.compile(r"not connected to this runner|is restarting|restarting it now|device '?[^ ]*'? not found|device offline"
                          r"|no devices/emulators|Unable to lookup in current state|Invalid device state", re.IGNORECASE)
 MAX_SUITE_RECOVERIES = 2
+# The runner's connection dropped under a case (network blip, laptop sleep, an old runner sending a big video
+# inline): the suite waits this long for it to reconnect, then re-runs the case once (not counted as a retry).
+RUNNER_GONE = re.compile(r'Runner reconnected|Runner disconnected|Runner is offline', re.IGNORECASE)
+RUNNER_RETURN_S = 90
+MAX_SUITE_RECONNECTS = 2
 APP_ID = re.compile(r'[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*\Z')
 KEYS = {'back', 'home', 'enter', 'delete', 'tab', 'app_switch', 'volume_up', 'volume_down', 'power',
         'lock', 'siri', 'side', 'apple_pay', 'escape', 'wakeup'}
@@ -46,8 +51,8 @@ MAX_LOG_TAGS = 8
 STEP_ACTIONS = {'tap', 'swipe', 'type', 'key', 'open_url', 'tap_text', 'wait_for', 'set_text', 'clear_text',
                 'scroll_until_visible', 'screenshot', 'launch_app', 'stop_app'}
 MAX_STEPS = 40
-MAX_STEP_WAIT = 30
-MAX_SCENARIO_SECONDS = 60
+MAX_STEP_WAIT = 120
+MAX_SCENARIO_SECONDS = 120
 MAX_SCENARIO_SHOTS = 6
 SHOT_NAME = re.compile(r'[A-Za-z0-9_-]{1,40}\Z')
 EXPECT_KEYS = {'steps_ok', 'app_running', 'settled_by_ms', 'max_drift_ms', 'logs', 'log_order', 'screens'}
@@ -58,7 +63,7 @@ LOG_EXPECT_INTS = {'min': 100000, 'max': 100000, 'by_ms': MAX_SCENARIO_SECONDS *
 # Number checks on a log rule: the first number after the literal text number_after in each matching line.
 LOG_EXPECT_NUMBERS = ('value_min', 'value_max', 'after_reaching', 'last_min', 'last_max')
 MAX_VALUE = 10 ** 12
-MAX_LOG_EXPECTS = 12
+MAX_LOG_EXPECTS = 24
 LAUNCH_STEP = {'app_id', 'activity', 'extras', 'bool_extras', 'restart'}
 PREFLIGHT_KEYS = {'url', 'name', 'method', 'headers', 'body', 'status', 'contains', 'timeout_s'}
 HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}\Z")
@@ -66,7 +71,7 @@ MAX_PREFLIGHT = 4
 MAX_PREFLIGHT_BODY = 4096
 # suite: several scenario cases in one call (the backend runs them one after the other), one summary.
 SUITE_KEYS = {'cases', 'defaults', 'platform_defaults', 'reset', 'stop_on_fail', 'keep_video', 'setup', 'teardown',
-              'retries', 'health_check'}
+              'retries', 'health_check', 'keep_log_lines'}
 CASE_NAME = re.compile(r'[A-Za-z0-9_.-]{1,60}\Z')
 MAX_SUITE_CASES = 20
 MAX_SUITE_SECONDS = 900  # duration_s of every case, counting its retries
@@ -77,6 +82,7 @@ SUITE_DEADLINE_S = 3300
 # setup / teardown: plain device ops run once around the cases (wake, animations, clear logs, reset, ...).
 SUITE_SETUP_OPS = {'key', 'animations', 'logs', 'reset_app', 'stop', 'launch', 'open_url', 'uninstall'}
 MAX_SETUP_STEPS = 8
+MAX_KEEP_LOG_LINES = 40
 MAX_MATRIX_DEVICES = 4
 MAX_SUITE_MEDIA = 64 * 1024 * 1024  # videos + screenshots kept across the whole suite
 
@@ -109,6 +115,7 @@ OPS = {
     'animations': ({'enabled'}, set()),
     'health': (set(), set()),
     'recover': (set(), {'cold'}),
+    'installed': (set(), set()),
     'scenario': ({'duration_s'}, {'app_id', 'steps', 'record', 'sample_ms', 'sample_region', 'sample_min_change',
                                   'log_tags', 'log_source', 'log_lines', 'stop_first', 'stop_on_fail', 'end_after_steps',
                                   'console',
@@ -118,8 +125,8 @@ OPS = {
 BACKEND_ARGS = {'ui_tree': {'compact', 'clickable_only', 'filter'}, 'run_flow': {'verbose'},
                 'install': {'wait_s', 'dispatch_workflow'}}
 INTS = {'x': (0, 10000), 'y': (0, 10000), 'x1': (0, 10000), 'y1': (0, 10000), 'x2': (0, 10000),
-        'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 60),
-        'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 60),
+        'y2': (0, 10000), 'duration_ms': (50, 5000), 'lines': (1, 2000), 'timeout_s': (0, 120),
+        'max_swipes': (1, 20), 'count': (2, 12), 'interval_ms': (100, 5000), 'duration_s': (1, 120),
         'wait_s': (0, MAX_WAIT), 'sample_ms': (0, 2000), 'log_lines': (1, 2000)}
 BOOLS = {'cold', 'clear', 'exact', 'gone', 'console', 'compact', 'clickable_only', 'force', 'verbose', 'enabled', 'record',
          'stop_first', 'stop_on_fail', 'end_after_steps'}
@@ -151,9 +158,29 @@ NEW_RUNNER_ARGS = {'launch': {'extras', 'bool_extras', 'activity', 'console'},
 RUNNER_GATES = ((NEEDS_RUNNER, NEW_RUNNER_OPS, NEW_RUNNER_ARGS),
                 ((1, 2, 0), {'scenario'}, {'logs': {'tags', 'since'}}),
                 ((1, 3, 0), set(), {'scenario': {'preflight'}}),
-                ((1, 4, 0), {'health', 'recover'}, {}))
+                ((1, 4, 0), {'health', 'recover'}, {}),
+                ((1, 5, 0), {'installed', 'boot', 'shutdown'}, {}))
 SCENARIO_1_3 = (1, 3, 0)
 SCENARIO_1_4 = (1, 4, 0)
+RUNNER_1_5 = (1, 5, 0)
+
+
+def _limits_1_5_parts(op, args):
+    """Limits raised in runner 1.5.0 (a 1.4.0 runner rejects the larger values)."""
+    parts = []
+    if op in ('wait_for', 'tap_text') and args.get('timeout_s', 0) > 60:
+        parts.append('timeout_s over 60')
+    if op != 'scenario':
+        return parts
+    if args.get('duration_s', 0) > 60:
+        parts.append('duration_s over 60')
+    if any(isinstance(step, dict) and isinstance(step.get('timeout_s'), int) and step['timeout_s'] > 30
+           for step in args.get('steps') or []):
+        parts.append('step timeout_s over 30')
+    expect = args.get('expect') if isinstance(args.get('expect'), dict) else {}
+    if len(expect.get('logs') or []) > 12 or len(expect.get('log_order') or []) > 12:
+        parts.append('more than 12 log rules')
+    return parts
 
 
 def _newer_scenario_parts(args):
@@ -211,6 +238,10 @@ def _check_runner_version(conn, op, args):
         parts = _scenario_1_4_parts(args)
         if parts:
             raise _too_old(version, 'scenario with ' + ', '.join(parts), SCENARIO_1_4)
+    if _version(version) < RUNNER_1_5:
+        parts = _limits_1_5_parts(op, args)
+        if parts:
+            raise _too_old(version, f'{op} with ' + ', '.join(parts), RUNNER_1_5)
 
 
 def _validate(op, args):
@@ -524,6 +555,10 @@ def suite_plan(args, platform=None):
     retries = args.get('retries', 0)
     if type(retries) is not int or not 0 <= retries <= MAX_RETRIES:
         raise DeviceError(f'retries must be an integer from 0 to {MAX_RETRIES}')
+    keep_lines = args.get('keep_log_lines', 0)
+    if type(keep_lines) is not int or not 0 <= keep_lines <= MAX_KEEP_LOG_LINES:
+        raise DeviceError(f'keep_log_lines must be an integer from 0 to {MAX_KEEP_LOG_LINES} (matched log lines kept '
+                          'per case, also for cases that passed)')
     if type(args.get('health_check', True)) is not bool:
         raise DeviceError('health_check must be true or false')
     if keep_video not in ('failed', 'all'):
@@ -573,13 +608,17 @@ def suite_options(args):
             args.get('retries', 0), args.get('health_check', True))
 
 
-def _case_row(name, data, keep_video, budget):
-    """One suite row: the verdict and, for a case that did not pass, what is needed to see why."""
+def _case_row(name, data, keep_video, budget, keep_lines=0):
+    """One suite row: the verdict and, for a case that did not pass, what is needed to see why.
+    keep_lines: the last N matched log lines, for every case (evidence for a pass, not only for a failure)."""
     verdict = data.get('verdict', 'fail')
     row = {'name': name, 'verdict': verdict}
     if data.get('attempts', 1) > 1:
         row['attempts'] = data['attempts']
-    row.update({k: data[k] for k in ('failed', 'ran_ms', 'max_drift_ms', 'app_running', 'video_error') if k in data})
+    row.update({k: data[k] for k in ('failed', 'ran_ms', 'max_drift_ms', 'app_running', 'video_error', 'media_error',
+                                     'device_restarted', 'runner_reconnected') if k in data})
+    if keep_lines and (data.get('logs') or {}).get('lines'):
+        row['log_lines'] = data['logs']['lines'][-keep_lines:]
     if verdict != 'pass':
         row.update({k: data[k] for k in ('preflight', 'launch') if k in data})
         bad = [step for step in data.get('steps') or [] if not step.get('ok')]
@@ -744,6 +783,8 @@ def summarize_flow(data):
 
 
 def _decode(value, what):
+    if isinstance(value, (bytes, bytearray)):  # uploaded out of band (runner >= 1.5.0), resolved by the hub
+        return bytes(value)
     try:
         return base64.b64decode(value, validate=True)
     except (TypeError, ValueError):
@@ -867,6 +908,9 @@ class DeviceService:
                         result['recovery'] = recovery
                         if recovery.get('recovered'):
                             health = recovery.get('health') or await self.health(user_email, scope, candidate)
+                installed = await self.installed(user_email, scope, candidate)
+                if installed is not None:
+                    result['installed'] = installed
                 if health is not None:
                     result['health'] = health
                     if not health.get('ok'):
@@ -913,6 +957,15 @@ class DeviceService:
             if 'too old' in str(exc) or 'Unsupported' in str(exc):
                 return None
             return {'ok': False, 'reasons': [str(exc)[:300]]}
+
+    async def installed(self, user_email, scope, device_id):
+        """Apps on the device and the build checksum of those the runner installed (None on older runners)."""
+        try:
+            return await self.call(user_email, scope, device_id, 'installed', {})
+        except DeviceError as exc:
+            if 'too old' in str(exc) or 'Unsupported' in str(exc):
+                return None
+            return {'error': str(exc)[:200]}
 
     async def heal(self, user_email, scope, device_id, cold=False):
         """Ask the runner to restart a crashed / hung emulator or simulator and wait for it. None when the
@@ -1039,12 +1092,13 @@ class DeviceService:
                 return self._suite_result([], names, f'setup[{index}] ({op}) failed: {str(exc)[:200]}', extra)
         loop = asyncio.get_running_loop()
         deadline, rows, budget, reason = loop.time() + SUITE_DEADLINE_S, [], MAX_SUITE_MEDIA, None
+        reconnects = 0
         try:
             for name, spec in plan:
                 if loop.time() > deadline:
                     reason = f'the suite ran past its {SUITE_DEADLINE_S} s deadline; split it'
                     break
-                data, attempts, healed = None, 0, False
+                data, attempts, healed, resumed = None, 0, False, False
                 while True:
                     attempts += 1
                     try:
@@ -1053,6 +1107,16 @@ class DeviceService:
                         data = await self.call(user_email, scope, device_id, 'scenario', dict(spec))
                     except DeviceError as exc:
                         data = {'verdict': 'error', 'failed': [str(exc)[:300]]}
+                        # The runner's connection dropped: wait for it to come back and re-run this case.
+                        if (RUNNER_GONE.search(str(exc)) and not resumed and reconnects < MAX_SUITE_RECONNECTS
+                                and loop.time() < deadline):
+                            reconnects += 1
+                            back = await self._await_runner(user_email, device_id, RUNNER_RETURN_S)
+                            extra.setdefault('reconnects', []).append({'before': name, 'runner_back': back})
+                            if back:
+                                resumed = True
+                                attempts -= 1
+                                continue
                         # The device died under this case: restart it and re-run the case (not a retry).
                         if (DEVICE_GONE.search(str(exc)) and not healed and len(recoveries) < MAX_SUITE_RECOVERIES
                                 and loop.time() < deadline):
@@ -1068,11 +1132,13 @@ class DeviceService:
                         break
                 if healed:
                     data = {**data, 'device_restarted': True}
+                if resumed:
+                    data = {**data, 'runner_reconnected': True}
                 if attempts > 1:
                     data = {**data, 'attempts': attempts}
                     if data.get('verdict') == 'pass':
                         data['verdict'] = 'flaky'
-                row, used = _case_row(name, data, keep_video, budget)
+                row, used = _case_row(name, data, keep_video, budget, args.get('keep_log_lines', 0))
                 budget -= used
                 rows.append(row)
                 if stop_on_fail and row['verdict'] not in ('pass', 'flaky'):
@@ -1085,6 +1151,21 @@ class DeviceService:
                 except DeviceError:
                     pass
         return self._suite_result(rows, names[len(rows):], reason, extra)
+
+    async def _await_runner(self, user_email, device_id, timeout):
+        """True once the device's runner is connected again (polls the hub; no device call is made)."""
+        try:
+            runner, _ = await self._resolve(user_email, device_id)
+        except DeviceError:
+            return False
+        loop = asyncio.get_running_loop()
+        end = loop.time() + timeout
+        while loop.time() < end:
+            if self.hub.get(runner['runner_id']) is not None:
+                await asyncio.sleep(1)  # let the new connection send its device list
+                return True
+            await asyncio.sleep(2)
+        return False
 
     @staticmethod
     def _suite_result(rows, not_run, reason, extra):

@@ -398,14 +398,14 @@ class LeaseService(HealingSuite):
 async def test_lease_restarts_an_unhealthy_device_and_recover_forces_it():
     service = LeaseService(health={'ok': False, 'reasons': ['screenshot failed: device offline']})
     result = await service.lease(OWNER, 'conv-1', 'r/emulator-5554')
-    assert service.calls == ['health', 'recover'] and result['recovery']['recovered'] is True
+    assert service.calls == ['health', 'recover', 'installed'] and result['recovery']['recovered'] is True
     assert result['health'] == {'ok': True}
     healthy = LeaseService(health={'ok': True})
     result = await healthy.lease(OWNER, 'conv-1', 'r/emulator-5554')
-    assert healthy.calls == ['health'] and 'recovery' not in result
+    assert healthy.calls == ['health', 'installed'] and 'recovery' not in result
     forced = LeaseService(health={'ok': True})
     result = await forced.lease(OWNER, 'conv-1', 'r/emulator-5554', recover=True)
-    assert forced.calls == ['recover'] and result['recovery']['method'] == 'cold_boot'
+    assert forced.calls == ['recover', 'installed'] and result['recovery']['method'] == 'cold_boot'
     broken = LeaseService(health={'ok': False, 'reasons': ['x']}, recover=DeviceError('did not boot'))
     result = await broken.lease(OWNER, 'conv-1', 'r/emulator-5554')
     assert result['recovery'] == {'recovered': False, 'error': 'did not boot'} and 'lease another device' in result['note']

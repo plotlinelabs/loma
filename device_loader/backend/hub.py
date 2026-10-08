@@ -10,12 +10,14 @@ import logging
 import secrets
 import time
 
+from device_loader.backend import media as media_store
+
 logger = logging.getLogger(__name__)
 
 STALE_SECONDS = 60  # no heartbeat for this long => treat as offline
-OP_TIMEOUTS = {'install': 900, 'run_flow': 660, 'logs': 90, 'ui_tree': 90, 'wait_for': 120, 'tap_text': 120,
+OP_TIMEOUTS = {'install': 900, 'run_flow': 660, 'logs': 90, 'ui_tree': 90, 'wait_for': 180, 'tap_text': 180,
                'set_text': 90, 'clear_text': 90, 'scroll_until_visible': 300, 'burst': 120, 'record': 90,
-               'scenario': 300,  # scenario: 60 s window + 30 s step grace + video finalise / re-encode
+               'scenario': 360,  # scenario: 120 s window + 30 s step grace + video finalise / re-encode / upload
                'reset_app': 420,  # iOS reset_app reinstalls the cached build
                'recover': 420}  # up to two emulator cold boots (180 s each) plus kill / lock cleanup
 DEFAULT_TIMEOUT = 60
@@ -101,8 +103,11 @@ class RunnerHub:
         try:
             timeout = OP_TIMEOUTS.get(op, DEFAULT_TIMEOUT)
             # The runner gets the deadline too, so it drops calls this side has given up on.
-            await conn.send({'type': 'call', 'id': call_id, 'op': op, 'device': serial, 'args': args, 'timeout': timeout})
-            return await asyncio.wait_for(future, timeout)
+            # media: 'upload' lets a 1.5.0+ runner send large screenshots / videos over HTTP (media.py)
+            # instead of inside the result frame; older runners ignore the field.
+            await conn.send({'type': 'call', 'id': call_id, 'op': op, 'device': serial, 'args': args, 'timeout': timeout,
+                             'media': 'upload'})
+            return media_store.resolve(await asyncio.wait_for(future, timeout), runner_id)
         except asyncio.TimeoutError:
             raise DeviceError(f'Device operation {op} timed out') from None
         except ConnectionResetError:

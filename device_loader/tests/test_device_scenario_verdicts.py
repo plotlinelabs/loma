@@ -408,7 +408,7 @@ def test_a_1_2_runner_is_told_to_update_only_for_the_new_parts():
     current = type('C', (), {'version': ldr.VERSION})()
     _check_runner_version(current, 'scenario', {'duration_s': 1, 'preflight': [{'url': 'https://a.co'}],
                                                 'expect': {'max_drift_ms': 100, 'logs': [SLOT]}})
-    assert ldr.VERSION == '1.4.0'
+    assert ldr.VERSION == '1.5.0'
 
 
 # ── 7. Suite ──────────────────────────────────────────────────────────────
@@ -430,7 +430,7 @@ def test_suite_plan_merges_defaults_and_requires_a_verdict_per_case():
                      ({'cases': [{**CASE}]}, 'needs a name'), ({'cases': [{'name': 'a b', **CASE}]}, 'needs a name'),
                      ({'cases': [{'name': 'a', **CASE}, {'name': 'a', **CASE}]}, 'used twice'),
                      ({'cases': [{'name': 'a', 'duration_s': 5}]}, r'cases\[1\] \(a\): needs expect'),
-                     ({'cases': [{'name': 'a', **CASE, 'duration_s': 99}]}, r'cases\[1\] \(a\): duration_s'),
+                     ({'cases': [{'name': 'a', **CASE, 'duration_s': 199}]}, r'cases\[1\] \(a\): duration_s'),
                      ({'cases': [{'name': 'a', **CASE}], 'reset': 'reset_app'}, 'needs app_id'),
                      ({'cases': [{'name': 'a', **CASE}], 'reset': 'wipe'}, 'reset must be'),
                      ({'cases': [{'name': 'a', **CASE}], 'keep_video': 'none'}, 'keep_video'),
