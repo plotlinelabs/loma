@@ -21,6 +21,7 @@ from aiohttp import web
 
 from api.auth_helpers import get_system_role, get_user_email, is_loopback, require_admin
 from device_loader.backend import builds, store
+from device_loader.backend import media as media_store
 from device_loader.backend.builds import blobs, FILENAME, MAX_BLOB
 from device_loader.backend.hub import DeviceError, hub
 from device_loader.backend.service import DeviceService, _version
@@ -71,13 +72,28 @@ def _clean_device(device):
         return None
     return {'serial': device['serial'], 'platform': device.get('platform') if device.get('platform') in ('android', 'ios') else 'unknown',
             'name': str(device.get('name') or '')[:80], 'os_version': str(device.get('os_version') or '')[:20],
-            'virtual': bool(device.get('virtual', True))}
+            'virtual': bool(device.get('virtual', True)),
+            # runner >= 1.4.0: ok | recovering | down (auto-recovery); older runners send none (= ok)
+            'state': device.get('state') if device.get('state') in ('ok', 'recovering', 'down') else 'ok',
+            **({'error': str(device['error'])[:300]} if device.get('error') and device.get('state') == 'down' else {})}
 
 
 def _clean_devices(devices):
     if not isinstance(devices, list):
         return []
     return [d for d in (_clean_device(x) for x in (devices or [])[:50]) if d is not None]
+
+
+TEMPLATE_NAME = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
+
+
+def _clean_templates(templates):
+    """Device templates from a runner hello (>= 1.5.0): names the owner configured, never AVD names."""
+    if not isinstance(templates, list):
+        return []
+    return [{'name': t['name'], 'platform': t['platform'], 'clean': t.get('clean') is True}
+            for t in templates[:10] if isinstance(t, dict) and isinstance(t.get('name'), str)
+            and TEMPLATE_NAME.fullmatch(t['name']) and t.get('platform') in ('android', 'ios')]
 
 
 # ── Runner endpoints ──────────────────────────────────────────────────────
@@ -120,14 +136,15 @@ async def handle_runner_ws(request):
     devices = _clean_devices(hello.get('devices'))
     capabilities = hello.get('capabilities') if isinstance(hello.get('capabilities'), list) else []
     version = str(hello.get('version') or '')[:40]
-    conn = await hub.attach(runner_id, ws, devices, version)
+    templates = _clean_templates(hello.get('templates'))
+    conn = await hub.attach(runner_id, ws, devices, version, templates)
     try:
         if await db.device_runners.find_one({'runner_id': runner_id, 'revoked': True}, {'_id': 1}):
             await hub.revoke(runner_id)  # revoked while we waited for hello
             return ws
         await db.device_runners.update_one({'runner_id': runner_id}, {'$set': {
             'devices': devices, 'last_seen': store.now(), 'connected_at': store.now(),
-            'version': version, 'hostname': str(hello.get('hostname') or '')[:120],
+            'version': version, 'templates': templates, 'hostname': str(hello.get('hostname') or '')[:120],
             'os': str(hello.get('os') or '')[:120],
             'capabilities': [str(c)[:20] for c in capabilities[:10]]}})
         logger.info('Device runner %s connected with %d device(s)', runner_id, len(devices))
@@ -169,6 +186,30 @@ async def handle_runner_blob(request):
                                                    'Cache-Control': 'no-store'})
 
 
+async def handle_runner_media(request):
+    """A runner (>= 1.5.0) uploads a large screenshot / video of a call result here, out of band of its
+    WebSocket; the result frame then carries the returned media_id (device_loader/backend/media.py)."""
+    db = _db_or_503()
+    runner = await _runner_from_request(request, db)
+    if runner is None:
+        return _error('Invalid runner credentials', 401)
+    if request.content_length is not None and request.content_length > media_store.MAX_MEDIA:
+        return _error('Media too large', 413)
+    data = bytearray()
+    async for chunk in request.content.iter_chunked(1 << 20):
+        data.extend(chunk)
+        if len(data) > media_store.MAX_MEDIA:
+            return _error('Media too large', 413)
+    sha256 = request.headers.get('X-Loma-Media-Sha256')
+    if sha256 is not None and not re.fullmatch(r'[0-9a-f]{64}', sha256):
+        return _error('Invalid X-Loma-Media-Sha256', 400)
+    try:
+        media_id = media_store.media.put(runner['runner_id'], bytes(data), sha256)
+    except media_store.MediaError as exc:
+        return _error(str(exc), 400)
+    return web.json_response({'media_id': media_id, 'bytes': len(data)})
+
+
 async def handle_runner_download(request):
     return web.FileResponse(RUNNER_SCRIPT, headers={
         'Content-Type': 'text/x-python; charset=utf-8',
@@ -188,6 +229,7 @@ def _runner_view(runner, user_email):
         # Newer device ops (scenario, logs cursors) are refused by older runners until they update.
         'update_available': bool(runner.get('version')) and _version(runner.get('version')) < _version(RUNNER_VERSION),
         'capabilities': runner.get('capabilities') or [], 'shared_with': runner.get('shared_with') or [],
+        'templates': runner.get('templates') or [],
         'online': conn is not None, 'last_seen': last_seen.isoformat() if last_seen else None,
         'created_at': store.aware(runner['created_at']).isoformat() if runner.get('created_at') else None}
 
@@ -380,15 +422,26 @@ async def handle_internal_call(request):
     action = body.get('action')
     try:
         if action == 'list':
-            return web.json_response({'devices': await service.list_devices(user_email)})
+            return web.json_response({'devices': await service.list_devices(user_email),
+                                      'templates': await service.templates_for(user_email)})
         if action == 'lease':
-            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform')))
+            return web.json_response(await service.lease(user_email, scope, body.get('device_id'), body.get('platform'),
+                                                         recover=body.get('recover') is True,
+                                                         cold=body.get('cold') is True,
+                                                         template=body.get('template'),
+                                                         clean=body.get('clean', False)))
         if action == 'release':
+            if body.get('all') is True:
+                return web.json_response(await service.release_all(user_email, scope))
             return web.json_response(await service.release(user_email, scope, body.get('device_id')))
         if action == 'call':
             data = await service.call(user_email, scope, body.get('device_id'), body.get('op'), body.get('args') or {})
             return web.json_response(_encode_media(data))
         if action == 'suite':
+            if body.get('device_ids') is not None:
+                data = await service.matrix(user_email, scope, body.get('device_ids'), body.get('args') or {})
+                data['devices'] = [_encode_media(device) for device in data['devices']]
+                return web.json_response(data)
             data = await service.suite(user_email, scope, body.get('device_id'), body.get('args') or {})
             return web.json_response(_encode_media(data))
     except DeviceError as exc:
@@ -430,6 +483,7 @@ def setup_device_routes(app):
     app.router.add_post('/device-runner/enroll', handle_enroll)
     app.router.add_get('/device-runner/ws', handle_runner_ws)
     app.router.add_get('/device-runner/blobs/{blob_id}', handle_runner_blob)
+    app.router.add_post('/device-runner/media', handle_runner_media)
     app.router.add_get('/device-runner/download', handle_runner_download)
     app.router.add_get('/api/devices', handle_list)
     app.router.add_post('/api/devices/enrollments', handle_create_enrollment)

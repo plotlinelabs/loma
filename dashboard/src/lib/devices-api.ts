@@ -20,6 +20,7 @@ export interface DeviceRunner {
   online: boolean;
   last_seen: string | null;
   created_at: string | null;
+  templates?: { name: string; platform: "android" | "ios"; clean: boolean }[];
 }
 
 export interface DeviceRecord {
@@ -31,6 +32,9 @@ export interface DeviceRecord {
   runner: string;
   owner: string;
   online: boolean;
+  /** ok | recovering (the runner is restarting it) | down (crashed or closed) | offline (runner offline) */
+  state?: "ok" | "recovering" | "down" | "offline";
+  error?: string;
   leased_by: { owner: string; scope: string; expires_at: string } | null;
 }
 

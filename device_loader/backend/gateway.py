@@ -68,12 +68,26 @@ class DeviceTools:
         self.screenshots = 0
         self.service = service or DeviceService(db)
         self.pending = {}  # device_id -> (tool, task) still running past WAIT_SECONDS
+        self.owner = authority.user_email
+
+    async def close(self):
+        """At the end of the run: release every device this conversation still holds, so a finished or
+        failed run never leaves a device leased (the agent's own release call is easy to skip)."""
+        for _, task in list(self.pending.values()):
+            task.cancel()
+        try:
+            return await self.service.release_all(self.owner, self.scope)
+        except Exception:
+            logger.exception('Releasing devices at the end of the run failed')
+            return None
 
     async def __call__(self, authority, tool, arguments):
         if authority != self.authority or tool not in TOOLS or not isinstance(arguments, dict):
             raise DeviceError('Invalid device request')
         owner, args = authority.user_email, dict(arguments)
         key = args.get('device_id') if isinstance(args.get('device_id'), str) else None
+        if tool == 'device.lease' and key is None:  # a lease that boots a template is resumed by calling it again
+            key = f"lease:{args.get('platform')}:{args.get('template')}:{args.get('clean')}"
         try:
             if key in self.pending:
                 busy_tool, task = self.pending[key]
@@ -87,7 +101,7 @@ class DeviceTools:
             if not done:
                 self.pending[key] = (tool, task)
                 return failure(f'{tool} is still running on the device. Call {tool} again with the same '
-                               'device_id to wait for the result.', pending=True)
+                               'device_id (or the same lease arguments) to wait for the result.', pending=True)
             self.pending.pop(key, None)
             return cap_result(task.result())
         except DeviceError as exc:
@@ -101,10 +115,26 @@ class DeviceTools:
         service, scope = self.service, self.scope
         if tool == 'device.list':
             _pick(args, set(), set(), tool)
-            return {'devices': await service.list_devices(owner)}
+            return {'devices': await service.list_devices(owner), 'templates': await service.templates_for(owner)}
         if tool == 'device.lease':
-            picked = _pick(args, set(), {'platform', 'device_id'}, tool)
-            return await service.lease(owner, scope, picked.get('device_id'), picked.get('platform'))
+            picked = _pick(args, set(), {'platform', 'device_id', 'recover', 'cold', 'template', 'clean'}, tool)
+            if picked.get('recover') is True or picked.get('cold') is True:
+                if not isinstance(picked.get('device_id'), str):
+                    raise DeviceError('recover needs the device_id to restart (see device.list)')
+                return await service.lease(owner, scope, picked['device_id'], recover=True,
+                                           cold=picked.get('cold') is True)
+            return await service.lease(owner, scope, picked.get('device_id'), picked.get('platform'),
+                                       template=picked.get('template'), clean=picked.get('clean', False))
+        if tool == 'device.release' and args.get('all') is True and 'device_id' not in args:
+            _pick(args, {'all'}, set(), tool)
+            return await service.release_all(owner, scope)
+        if tool == 'device.suite' and 'device_ids' in args and 'device_id' not in args:
+            device_ids = args.pop('device_ids')
+            data = await service.matrix(owner, scope, device_ids, args)
+            for device in data['devices']:
+                device['cases'] = [await self._deliver_flow_screenshots(await self._deliver_video(case))
+                                   for case in device.get('cases') or []]
+            return data
         device_id = args.pop('device_id', None)
         if not isinstance(device_id, str):
             raise DeviceError('device_id is required; get one from device.list or device.lease')

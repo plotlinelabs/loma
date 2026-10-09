@@ -55,6 +55,12 @@ function DeviceRow({ device, canRelease, busy, onRelease }: {
         <div className="text-[13px] text-foreground truncate">
           {device.name} <span className="text-muted-foreground">· {device.platform} {device.os_version}</span>
           {!device.virtual && <span className="ml-1 text-amber-600 text-xs">physical</span>}
+          {device.state === "recovering" && <span className="ml-1 text-amber-600 text-xs">restarting…</span>}
+          {device.state === "down" && (
+            <span className="ml-1 text-red-600 text-xs" title={device.error || "Crashed or closed"}>
+              down
+            </span>
+          )}
         </div>
         <div className="text-xs text-muted-foreground truncate">
           <code>{device.device_id}</code>
@@ -327,6 +333,14 @@ export default function DevicesPanel() {
                     </Button>
                   </div>
                 )}
+                {(runner.templates?.length ?? 0) > 0 && (
+                  <div className="text-xs text-muted-foreground" data-testid="runner-templates">
+                    Can boot:{" "}
+                    {runner.templates!
+                      .map((t) => `${t.name} (${t.platform}${t.clean ? ", clean" : ""})`)
+                      .join(", ")}
+                  </div>
+                )}
                 {runner.shared_with.length > 0 && sharing?.id !== runner.runner_id && (
                   <div className="text-xs text-muted-foreground">Shared with {runner.shared_with.join(", ")}</div>
                 )}
@@ -334,7 +348,9 @@ export default function DevicesPanel() {
                 {mine.length === 0 ? (
                   <div className="text-xs text-muted-foreground">
                     {runner.online
-                      ? "No emulators or simulators running. Boot one and it will appear within ~15s."
+                      ? (runner.templates?.length ?? 0) > 0
+                        ? "No emulators or simulators running. The agent boots one from a template when it needs a device."
+                        : "No emulators or simulators running. Boot one and it will appear within ~15s."
                       : "Start the runner on this machine to see its devices."}
                   </div>
                 ) : (
