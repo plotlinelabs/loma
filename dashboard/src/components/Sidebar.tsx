@@ -10,6 +10,7 @@ import { useUser } from "../lib/UserContext";
 import { useNotifications } from "../lib/NotificationsContext";
 import type { SystemRole } from "../lib/governance-api";
 import PetCompanion, { usePetSettings } from "./PetCompanion";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import CrosscutIcon from "./CrosscutIcon";
 import { NavBoards, NAV_ACTIVE, NAV_IDLE, NAV_ROW } from "./NavBoards";
 import { useTheme } from "../lib/ThemeContext";
@@ -32,6 +33,7 @@ import {
   RiDownloadLine,
   RiBarChartBoxLine,
   RiSettings3Line,
+  RiKeyboardLine,
   RiShieldCheckLine,
   RiCloseLine,
   RiArrowDownSLine,
@@ -360,6 +362,7 @@ export default function Sidebar({
   }, []);
 
   const openPetSettings = usePetSettings();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Phone drawer: lock the page behind it, close on Escape and on a leftward swipe.
   useBodyScrollLock(isOpen);
@@ -577,6 +580,9 @@ export default function Sidebar({
                       <DropdownMenuItem onSelect={() => { openPetSettings(); onClose(); }} className="text-[13px]">
                         <RiSettings3Line size={16} />Pet settings
                       </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => { setShortcutsOpen(true); onClose(); }} className="text-[13px]">
+                        <RiKeyboardLine size={16} />Keyboard shortcuts
+                      </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => signOut({ callbackUrl: "/login" })}
@@ -620,6 +626,7 @@ export default function Sidebar({
       >
         {sidebarContent}
       </aside>
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </>
   );
 }
