@@ -50,9 +50,9 @@ export function useVoiceAvailable(): boolean {
 
 /** Voice dispatcher for the tasks board: a live WebRTC session with the
  * voice model, whose delegated tool calls run here against the normal task
- * routes. Voice only hands out, reads, steers, stops, moves and opens tasks.
+ * routes. Voice only hands out, reads, steers, stops, moves, opens and closes tasks.
  * While it is on it also watches the board and announces tasks that stop. */
-export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask }: {
+export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask }: {
   boardId?: string;
   model?: string;
   toolConfig?: ToolConfig;
@@ -61,6 +61,9 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   /** Shows a task without leaving the board (the desktop chat drawer). Where
    * there is none, open_task leaves a link in the panel instead. */
   onOpenTask?: (task: Task) => void;
+  /** Closes the task shown by onOpenTask (or opened by hand) and returns it,
+   * or null when no task is open. */
+  onCloseTask?: () => Task | null;
 }) {
   const [state, setState] = useState<VoiceState>("idle");
   const [lines, setLines] = useState<VoiceLine[]>([]);
@@ -92,6 +95,8 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   onBoardChangedRef.current = onBoardChanged;
   const onOpenTaskRef = useRef(onOpenTask);
   onOpenTaskRef.current = onOpenTask;
+  const onCloseTaskRef = useRef(onCloseTask);
+  onCloseTaskRef.current = onCloseTask;
   // Task id -> column it was last seen in. A task seen in Working is announced when it stops.
   const watchedRef = useRef(new Map<string, string>());
   const announceRef = useRef<Array<{ title: string; outcome: RunOutcome; reply?: string | null }>>([]);
@@ -290,6 +295,12 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           if (open) open(found.task);
           logAction(`${open ? "Opened" : "Tap to open"}: ${taskLabel(found.task)}`, true, found.task.conversation_id);
           return { ok: true, title: taskLabel(found.task), shown: open ? "screen" : "link" };
+        }
+        case "close_task": {
+          const closed = onCloseTaskRef.current?.() ?? null;
+          if (!closed) return { closed: false, reason: "No task is open on the screen." };
+          logAction(`Closed: ${taskLabel(closed)}`, true, closed.conversation_id);
+          return { ok: true, closed: true, title: taskLabel(closed) };
         }
         default:
           return { error: `Unknown tool ${call.name}` };

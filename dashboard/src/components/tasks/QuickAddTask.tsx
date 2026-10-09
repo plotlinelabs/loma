@@ -25,6 +25,8 @@ interface QuickAddTaskProps {
   boardId?: string;
   /** Lets voice mode show a task without leaving the board (desktop chat drawer). */
   onOpenTask?: (task: Task) => void;
+  /** Lets voice mode close that drawer again; returns the task it closed, if any. */
+  onCloseTask?: () => Task | null;
 }
 
 /** Bottom-pinned capture box on the tasks board (mobile and desktop) — the
@@ -32,7 +34,7 @@ interface QuickAddTaskProps {
  * fires the task immediately: the agent starts running in the background
  * (survives closing the app) and the backend titles the task from the prompt
  * with an LLM. */
-export function QuickAddTask({ onAdded, boardId, onOpenTask }: QuickAddTaskProps) {
+export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -51,7 +53,7 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask }: QuickAddTaskProps
     toolConfig,
   } = useToolsPicker();
   const voiceAvailable = useVoiceAvailable();
-  const voice = useVoiceDispatcher({ boardId, model: selectedModel || undefined, toolConfig, onBoardChanged: onAdded, onOpenTask });
+  const voice = useVoiceDispatcher({ boardId, model: selectedModel || undefined, toolConfig, onBoardChanged: onAdded, onOpenTask, onCloseTask });
 
   const addFiles = async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);

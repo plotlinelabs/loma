@@ -171,9 +171,31 @@ fs.mkdirSync(out, { recursive: true });
       await page.getByRole("dialog").waitFor({ timeout: 15000 });
       await page.waitForTimeout(2500);
       await page.screenshot({ path: out + "/live-open-task.png" });
+    });
+    await step("closed", async () => {
+      // The drawer is modal and keeps keyboard focus, so real typing would not
+      // reach the voice composer behind it. Set the text and Enter on it
+      // directly; a real user would simply say this.
+      const box = page.getByPlaceholder("Type to Loma...");
+      await page.getByText("Listening", { exact: true }).waitFor({ timeout: 120000 });
+      const sentBefore = await page.evaluate(() => liveSent.length);
+      await box.evaluate((el, text) => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, text);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }, "Close the task that is open on my screen.");
+      await page.waitForTimeout(300);
+      await box.dispatchEvent("keydown", { key: "Enter", bubbles: true });
+      await page.waitForFunction((n) => liveSent.length > n, sentBefore, { timeout: 15000 });
+      await page.getByText("Closed:", { exact: false }).waitFor({ timeout: 90000 });
+      await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 15000 });
+      assert(await page.evaluate(() => liveEvents.some(e => e.event?.item?.name === "close_task")), "real model calls close_task");
+      await page.waitForTimeout(1500);
+      await page.screenshot({ path: out + "/live-close-task.png" });
+    });
+    if (await page.getByRole("dialog").count()) {
       await page.keyboard.press("Escape");
       await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 15000 });
-    });
+    }
     await step("markedDone", async () => {
       await say(`Mark the task with id ${liveDraftId} done.`);
       await page.getByText("Moved to Done:", { exact: false }).waitFor({ timeout: 90000 });
@@ -439,7 +461,22 @@ fs.mkdirSync(out, { recursive: true });
   await page.screenshot({ path: out + "/desktop-open-task.png" });
   // Voice is still on behind the drawer.
   assert(await page.getByTestId("voice-panel").count());
-  await page.keyboard.press("Escape");
+  // close_task shuts the drawer; the task and the voice session are untouched.
+  const closed = await call("close1", "close_task", {});
+  assert.equal(closed.closed, true);
+  assert.equal(closed.title, opened.title);
+  await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 15000 });
+  assert(await page.getByTestId("voice-panel").count());
+  await page.getByText("Closed:", { exact: false }).first().waitFor();
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: out + "/desktop-close-task.png" });
+  const closedAgain = await call("close2", "close_task", {});
+  assert.equal(closedAgain.closed, false);
+  assert.match(closedAgain.reason, /No task is open/);
+  // Opening and closing again works.
+  await call("open1b", "open_task", { task: draft });
+  await page.getByRole("dialog").waitFor({ timeout: 15000 });
+  assert.equal((await call("close3", "close_task", {})).closed, true);
   await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 15000 });
 
   // A watched task stops running: the board says so on its own. The run is
@@ -507,6 +544,8 @@ fs.mkdirSync(out, { recursive: true });
   const linked = await call("open2", "open_task", { task: draft });
   assert.equal(linked.shown, "link");
   await page.getByText("Tap to open:", { exact: false }).waitFor();
+  // Nothing is open on a phone board, so there is nothing to close.
+  assert.equal((await call("close4", "close_task", {})).closed, false);
   await page.waitForTimeout(800);
   await page.screenshot({ path: out + "/mobile-active.png" });
   assert(await page.getByPlaceholder("Type to Loma...").isVisible());
@@ -550,6 +589,7 @@ fs.mkdirSync(out, { recursive: true });
           "move between lanes",
           "blocked moves give a reason",
           "open task in drawer",
+          "close task drawer, and nothing-open reason",
           "finish announced once",
           "mobile open leaves a link",
           "mobile layout",
@@ -564,7 +604,7 @@ fs.mkdirSync(out, { recursive: true });
     ),
   );
   console.log(
-    "PASS: 16 browser checks. Provider signaling status:",
+    "PASS: 17 browser checks. Provider signaling status:",
     signal.status(),
   );
   await browser.close();

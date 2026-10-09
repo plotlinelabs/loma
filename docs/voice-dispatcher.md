@@ -43,6 +43,9 @@ remain authoritative. Tool output goes back to the delegated model, then voice.
   They cannot be dragged manually either; moving/completing a card is not approval.
 - `open_task` opens the task in the desktop chat drawer while voice keeps running. Phones
   have no drawer, so it leaves a tap-to-open link in the panel and says so.
+- `close_task` closes whichever task drawer is open and returns to
+  the board. It takes no arguments and never stops or changes the task. With nothing open,
+  or on phones, it returns `closed: false` with the reason.
 - Finish announcements: while voice is on, the hook checks the board every four seconds.
   A task it saw in Working that stops (run finished, failed, needs input, or marked done)
   is announced with `session.commentary.append`, which the voice model says in its own
@@ -83,7 +86,7 @@ LOMA_VOICE_E2E=1 LOMA_VOICE_EVIDENCE=/tmp/voice-evidence \
 
 This browser test uses real GPT-Live signaling with a synthetic microphone and typed
 requests: it saves a draft, starts that existing draft, waits for the finish to be announced and
-spoken, opens the task and marks it done (`live-flow.json`). A WebRTC double then covers
+spoken, opens the task, closes it and marks it done (`live-flow.json`). A WebRTC double then covers
 the deterministic checks, including lane moves, blocked moves and a faked run finish. Task CRUD
 still uses the isolated backend. Starred moves verify the source stays unchanged; a mocked
 chat submission verifies saved draft model/tool/attachment preservation. It is not proof of audible quality or barge-in.
