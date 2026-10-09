@@ -71,5 +71,5 @@ def test_tool_allowlist():
     conf = voice.build_session_config('gpt-live-1','gpt-6-luna')
     assert conf['delegation']['type'] == 'responses'
     assert {tool['name'] for tool in conf['delegation']['responses']['tools']} == {
-        'list_tasks','create_task','get_task_status','steer_task','stop_task','move_task','open_task'}
+        'list_tasks','create_task','get_task_status','steer_task','stop_task','move_task','open_task','start_task'}
     assert 'API_KEY' not in json.dumps(conf)

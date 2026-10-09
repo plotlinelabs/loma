@@ -112,7 +112,7 @@ fs.mkdirSync(out, { recursive: true });
     await page
       .getByPlaceholder("Type to Loma...")
       .fill(
-        "Save a draft task: Check the voice dispatcher UI. Do not start it.",
+        "Save a draft task with the exact instructions: Reply with only the word OK and do nothing else. Do not start it.",
       );
     await page.getByPlaceholder("Type to Loma...").press("Enter");
     await page
@@ -135,10 +135,19 @@ fs.mkdirSync(out, { recursive: true });
         live[name + "_error"] = String(e.message || e).slice(0, 300);
       }
     };
+    let liveDraftId;
     await step("started", async () => {
-      await say("Start a task now with this exact prompt: Reply with only the word OK and do nothing else.");
+      const draftId = await page.evaluate(() => {
+        const outputs = liveSent.filter(e => e.item?.type === "function_call_output").map(e => JSON.parse(e.item.output));
+        return outputs.find(o => o.state === "draft")?.id;
+      });
+      assert(draftId, "saved draft id returned");
+      liveDraftId = draftId;
+      await say(`Start the existing draft with id ${draftId}. Do not create another task.`);
       await page.getByText("Started:", { exact: false }).waitFor({ timeout: 90000 });
+      assert(await page.evaluate(() => liveEvents.some(e => e.event?.item?.name === "start_task")), "real model calls start_task");
     });
+    assert(live.started, live.started_error);
     await step("announcedByApp", async () => {
       await page.waitForFunction(
         () => window.liveSent.some((e) => e.type === "session.commentary.append"),
@@ -157,7 +166,7 @@ fs.mkdirSync(out, { recursive: true });
     });
     await page.screenshot({ path: out + "/live-announcement.png" });
     await step("opened", async () => {
-      await say("Yes, show it to me.");
+      await say(`Open the task with id ${liveDraftId} on screen.`);
       await page.getByText("Opened:", { exact: false }).waitFor({ timeout: 90000 });
       await page.getByRole("dialog").waitFor({ timeout: 15000 });
       await page.waitForTimeout(2500);
@@ -166,7 +175,7 @@ fs.mkdirSync(out, { recursive: true });
       await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 15000 });
     });
     await step("markedDone", async () => {
-      await say("Mark that task done.");
+      await say(`Mark the task with id ${liveDraftId} done.`);
       await page.getByText("Moved to Done:", { exact: false }).waitFor({ timeout: 90000 });
       await page.waitForTimeout(1500);
       await page.screenshot({ path: out + "/live-moved-done.png" });
@@ -370,6 +379,59 @@ fs.mkdirSync(out, { recursive: true });
   await page.waitForTimeout(600);
   await page.screenshot({ path: out + "/desktop-move.png" });
 
+  // A real shared-board card starred onto the personal board. Voice must patch
+  // only the bookmark, even while the source task remains an unstarted draft.
+  const shared = await page.evaluate(async () => {
+    const request = async (url, method, body) => {
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(JSON.stringify(data));
+      return data;
+    };
+    const { board } = await request("/api/tasks/boards", "POST", { name: "Voice bookmark QA" });
+    const { task } = await request("/api/tasks", "POST", { board: board.id, prompt: "Equipment inventory", start: false });
+    await request(`/api/tasks/${task.conversation_id}/star`, "PUT", {});
+    return { id: task.conversation_id, board: board.id };
+  });
+  const starredDone = await call("starDone", "move_task", { task: shared.id, to: "done" });
+  assert.equal(starredDone.scope, "your bookmark only");
+  assert.equal(starredDone.moved_to, "Done");
+  const source = await page.evaluate(async ({ id, board }) => {
+    const data = await (await fetch(`/api/tasks?board=${board}`)).json();
+    return data.tasks.find(t => t.conversation_id === id);
+  }, shared);
+  assert.equal(source.task_status, "todo", "bookmark completion never completes source");
+  assert.equal((await call("starReopen", "move_task", { task: shared.id, to: "reopen" })).ok, true);
+  const starLane = await call("starLane", "move_task", { task: shared.id, to: before.lanes[0].name });
+  assert.equal(starLane.ok, true);
+  await page.screenshot({ path: out + "/desktop-starred-move.png" });
+
+  // Starting reuses the saved draft's data. Mock only the expensive chat run;
+  // draft reads and attachment storage still use the authenticated backend.
+  const configured = await page.evaluate(async () => {
+    const res = await fetch("/api/tasks", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "Inspect equipment list", start: false, model: "openai/gpt-6-luna",
+        tool_config: { enabled_tools: [], enabled_skills: [] },
+        files: [{ name: "equipment.txt", type: "text", mimetype: "text/plain", data: btoa("laptop") }] }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(JSON.stringify(data));
+    return data.task.conversation_id;
+  });
+  let startedBody;
+  await page.route("**/api/chat", route => {
+    startedBody = route.request().postDataJSON();
+    return route.fulfill({ status: 202, contentType: "application/json", body: "{}" });
+  });
+  assert.equal((await call("startSaved", "start_task", { task: configured })).state, "queued");
+  assert.equal(startedBody.conversation_id, configured);
+  assert.equal(startedBody.message, "Inspect equipment list");
+  assert.equal(startedBody.model, "openai/gpt-6-luna");
+  assert.equal(startedBody.files[0].data, Buffer.from("laptop").toString("base64"));
+  assert.deepEqual(startedBody.tool_config, { enabled_tools: [], enabled_skills: [] });
+  assert.match((await call("startSavedAgain", "start_task", { task: configured })).error, /already been sent/);
+  await page.unroute("**/api/chat");
+  await page.screenshot({ path: out + "/desktop-start-saved.png" });
+
   const opened = await call("open1", "open_task", { task: draft });
   assert.equal(opened.shown, "screen");
   await page.getByRole("dialog").waitFor({ timeout: 15000 });
@@ -493,6 +555,8 @@ fs.mkdirSync(out, { recursive: true });
           "mobile layout",
           "end restores composer",
           "provider failure restores typing",
+          "starred card done/reopen/lane moves leave source unchanged",
+          "start saved draft preserves instructions, model, tools and attachments",
         ],
       },
       null,
@@ -500,7 +564,7 @@ fs.mkdirSync(out, { recursive: true });
     ),
   );
   console.log(
-    "PASS: 14 browser checks. Provider signaling status:",
+    "PASS: 16 browser checks. Provider signaling status:",
     signal.status(),
   );
   await browser.close();

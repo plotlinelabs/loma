@@ -24,16 +24,23 @@ Attachments require ending voice first; the pending files are retained.
 `QuickAddTask` -> `useVoiceDispatcher` -> authenticated `/api/voice/session` ->
 OpenAI `/v1/live/sessions` -> WebRTC media/data channel. The server sends its API
 key to OpenAI, never to the browser. GPT-Live delegates to a Responses model with
-seven allowlisted task tools. The browser executes those through existing
+eight allowlisted task tools. The browser executes those through existing
 session-authenticated task routes; existing board and conversation access checks
 remain authoritative. Tool output goes back to the delegated model, then voice.
 
-- List, create, inspect, message, stop, move and open tasks on the currently selected board.
+- List, create, start saved drafts, inspect, message, stop, move and open tasks on the currently selected board.
 - `move_task` marks a task done, reopens a done task, or puts it in a named lane, with
   the same `PATCH /api/tasks/{id}` the board uses for drag and drop. The board's rules
   hold (`components/tasks/transitions.ts`): a draft that never ran cannot be marked
   done, a running task cannot be parked, and Working / Needs input are never
   destinations except reopening a done task. A blocked move returns its reason to be spoken.
+- Starred cards use `PATCH /api/tasks/{id}/star`, exactly like the board: Done,
+  reopen and lane moves change only the user's bookmark, even while the source runs.
+- `start_task` starts an existing unstarted agent draft through `/api/chat`, preserving
+  its stored prompt, model, tools and attachments. Empty drafts and already-run tasks
+  return a reason; duplicate start requests in the voice session are not submitted again.
+- Human approval/information cards retain the board's response-only restriction.
+  They cannot be dragged manually either; moving/completing a card is not approval.
 - `open_task` opens the task in the desktop chat drawer while voice keeps running. Phones
   have no drawer, so it leaves a tap-to-open link in the panel and says so.
 - Finish announcements: while voice is on, the hook checks the board every four seconds.
@@ -75,10 +82,11 @@ LOMA_VOICE_E2E=1 LOMA_VOICE_EVIDENCE=/tmp/voice-evidence \
 ```
 
 This browser test uses real GPT-Live signaling with a synthetic microphone and typed
-requests: it saves a draft, starts a real task, waits for the finish to be announced and
+requests: it saves a draft, starts that existing draft, waits for the finish to be announced and
 spoken, opens the task and marks it done (`live-flow.json`). A WebRTC double then covers
 the deterministic checks, including lane moves, blocked moves and a faked run finish. Task CRUD
-still uses the isolated backend. It is not proof of audible quality or barge-in.
+still uses the isolated backend. Starred moves verify the source stays unchanged; a mocked
+chat submission verifies saved draft model/tool/attachment preservation. It is not proof of audible quality or barge-in.
 The normal `scripts/browser/chat-smoke.cjs` checks chat persistence and follow-ups.
 
 ## API references

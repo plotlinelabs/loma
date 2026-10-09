@@ -1751,11 +1751,12 @@ export async function createVoiceSession(sdp: string): Promise<{ session_id: str
  * which carries on in the background like any other chat. */
 export async function sendTaskMessage(
   conversationId: string, message: string,
+  options: { model?: string; tool_config?: ToolConfig; files?: ChatFile[] } = {},
 ): Promise<"started" | "injected" | "queued" | "busy"> {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, conversation_id: conversationId }),
+    body: JSON.stringify({ ...options, message, conversation_id: conversationId }),
   });
   if (res.status === 202) return "queued";
   if (!res.ok) {

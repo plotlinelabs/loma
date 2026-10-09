@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createTask, createVoiceSession, fetchConversation, fetchTasksBoard, fetchVoiceStatus,
-  interruptAgent, sendTaskMessage, updateTask, type Task, type ToolConfig,
+  interruptAgent, sendTaskMessage, updateTask, updateTaskStar, type Task, type ToolConfig,
 } from "@/lib/api";
 import {
-  announcement, appendTranscript, detectFinished, matchTasks, parseToolCall, planMove, taskLabel, voiceColumn,
+  announcement, appendTranscript, detectFinished, matchTasks, parseToolCall, planMove, startTaskError, taskLabel, voiceColumn,
   type RunOutcome, type VoiceLine, type VoiceToolCall,
 } from "@/lib/voice-dispatcher";
 
@@ -77,6 +77,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   // Tool calls of the backend response in flight; answered together when it completes.
   const pendingRef = useRef<Array<{ callId: string; result: Promise<ToolResult> }>>([]);
   const busyRef = useRef(0);
+  const startedDraftsRef = useRef(new Set<string>());
   const seenCallsRef = useRef(new Set<string>());
   const generationRef = useRef(0);
   const settingsRef = useRef({ model, toolConfig });
@@ -117,6 +118,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
     audioRef.current = null;
     pendingRef.current = [];
     seenCallsRef.current.clear();
+    startedDraftsRef.current.clear();
     watchedRef.current.clear();
     announceRef.current = [];
     pollingRef.current = false;
@@ -195,6 +197,33 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           onBoardChangedRef.current();
           return { ok: true, id: task.conversation_id, title: taskLabel(task), state: start ? "running" : "draft" };
         }
+        case "start_task": {
+          const found = await resolve();
+          if ("result" in found) return found.result;
+          const id = found.task.conversation_id;
+          const startedDrafts = startedDraftsRef.current;
+          if (startedDrafts.has(id)) return { error: "That draft has already been sent to start. Check its status." };
+          startedDrafts.add(id);
+          let accepted = false;
+          try {
+            const { conversation } = await fetchConversation(id);
+            const reason = startTaskError({ ...found.task, ...conversation });
+            if (reason) return { error: reason };
+            const outcome = await sendTaskMessage(id, conversation.prompt, {
+              model: conversation.model || undefined,
+              tool_config: conversation.tool_config || undefined,
+              files: conversation.draft_files,
+            });
+            accepted = outcome === "started" || outcome === "queued";
+            if (!accepted) return { error: "The task is already busy. Check its status before trying again." };
+            if (!found.task.star?.done && !found.task.star?.parked) watched.set(id, "working");
+            logAction(`Started: ${taskLabel(found.task)}`, true, id);
+            onBoardChangedRef.current();
+            return { ok: true, title: taskLabel(found.task), state: outcome === "queued" ? "queued" : "running" };
+          } finally {
+            if (!accepted) startedDrafts.delete(id);
+          }
+        }
         case "get_task_status": {
           const found = await resolve();
           if ("result" in found) return found.result;
@@ -247,11 +276,12 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           const task = found[0];
           const move = planMove(task, text("to"), board.lanes);
           if ("error" in move) return { error: move.error, title: taskLabel(task) };
-          await updateTask(task.conversation_id, move.updates);
+          if (move.starUpdates) await updateTaskStar(task.conversation_id, move.starUpdates);
+          else await updateTask(task.conversation_id, move.updates);
           logAction(`Moved to ${move.destination}: ${taskLabel(task)}`, true, task.conversation_id);
           watched.set(task.conversation_id, voiceColumn(move.column));
           onBoardChangedRef.current();
-          return { ok: true, title: taskLabel(task), moved_to: move.destination };
+          return { ok: true, title: taskLabel(task), moved_to: move.destination, scope: task.star ? "your bookmark only" : "task" };
         }
         case "open_task": {
           const found = await resolve();

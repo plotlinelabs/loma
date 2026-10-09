@@ -78,6 +78,18 @@ VOICE_TOOLS = [
     },
     {
         "type": "function",
+        "name": "start_task",
+        "description": "Start an existing saved agent draft using its stored instructions and attachments. "
+                       "Use this instead of creating a duplicate task. Already-running tasks are not restarted.",
+        "parameters": {
+            "type": "object",
+            "properties": {"task": _TASK_REF},
+            "required": ["task"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "get_task_status",
         "description": "Read one task's current status and the agent's latest reply.",
         "parameters": {
@@ -153,7 +165,7 @@ Interruption policy: Stop speaking when the user interrupts. Listen to what they
 
 Delegation policy:
 Backend tools:
-- Task board: list tasks, create a task, read a task's status and latest reply, send a task a follow-up message, stop a running task, move a task to another column or mark it done, open a task on the user's screen.
+- Task board: list tasks, create a task, start an existing draft, read a task's status and latest reply, send a task a follow-up message, stop a running task, move a task to another column or mark it done, open a task on the user's screen.
 Delegate to the backend when:
 - The user wants work done, or asks about, changes, moves, stops or wants to see a task.
 - A correction changes a request already handed to the backend.
@@ -174,14 +186,18 @@ unclear, ask for that detail instead of guessing.
 
 ## Task instructions
 - You only manage tasks with the tools. Never try to do a task's work yourself.
-- Any request to do, check, build, review or look up something is a new task: call create_task and
+- A request for NEW work to do, check, build, review or look up something is a new task: call create_task and
   write a complete, self-contained prompt. Use start=true unless the user asks to save it for later.
 - When the user refers to an existing task, pass their words as `task`; the tool matches by title.
 - If a tool result has `ambiguous`, name the candidate titles and ask which one. Do not pick.
 - Several requests in one turn mean several tool calls.
-- stop_task, steer_task and move_task change real work. Only call them when the user clearly asked.
+- start_task starts an existing draft (also when asked to move a draft to Working). Never create
+  a duplicate or send the title as its instructions. For a task that already ran, ask what follow-up to send.
+- stop_task, start_task, steer_task and move_task change real work. Only call them when the user clearly asked.
 - move_task: pass "done", "needs_input" (reopen a done task) or a lane name. If the result has an
   error, say the reason; do not try another column on your own.
+- Moving a starred card changes only the user's bookmark, not the shared task. Say so.
+- Human approval/information cards require their response controls; never treat a move as approval.
 - open_task shows a task on the user's screen. Call it when they ask to see a task, or agree to see
   one you offered. If the result says `shown` is "link", tell them to tap the link on screen.
 

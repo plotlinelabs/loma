@@ -1,6 +1,8 @@
 /** Pure helpers for the tasks-board voice dispatcher (hooks/useVoiceDispatcher.ts).
  * No React or browser APIs, so tests/voice-dispatcher.test.cjs can run them. */
 
+import type { TaskStar, TaskStarUpdate } from "./api";
+
 export type VoiceSpeaker = "user" | "assistant";
 
 export interface VoiceLine {
@@ -106,13 +108,15 @@ export interface VoiceLane {
 /** A task as move_task needs it: where it is and whether it has ever run. */
 export interface MovableTask extends VoiceTask {
   status: string | null;
-  star?: unknown;
+  star?: TaskStar | null;
   human_task?: unknown;
 }
 
 export interface TaskMove {
   /** Body for PATCH /api/tasks/{id}. */
   updates: { task_status?: "todo" | "active" | "done"; task_lane?: string };
+  /** When present, patch only the private bookmark instead of the task. */
+  starUpdates?: TaskStarUpdate;
   /** The column's name as the user would say it. */
   destination: string;
   /** The board column the task ends up in. */
@@ -142,8 +146,23 @@ function findLane(lanes: VoiceLane[], wanted: string): VoiceLane | undefined {
 export function planMove(task: MovableTask, to: string, lanes: VoiceLane[]): TaskMove | { error: string } {
   const wanted = to.trim().toLowerCase();
   if (!wanted) return { error: "Say where to move it." };
-  if (task.human_task) return { error: "That is a task for a person. Use its own controls." };
-  if (task.star) return { error: "That is a starred card from another board. Move it on the board." };
+  if (task.human_task) return { error: "Use the human task response controls; moving it is not approval." };
+  if (task.star) {
+    if (DONE_WORDS.has(wanted)) {
+      return { updates: {}, starUpdates: { done: true }, destination: "Done", column: "done" };
+    }
+    if (REOPEN_WORDS.has(wanted)) {
+      if (task.column !== "done") return { error: "That bookmark is not done." };
+      const source = task.star.source_column;
+      const column = source === "working" || source === "needs_input" ? source : task.star.lane;
+      const destination = column === "working" ? "Working" : column === "needs_input" ? "Needs input"
+        : lanes.find((l) => l.id === column)?.name || column;
+      return { updates: {}, starUpdates: { done: false }, destination, column };
+    }
+    const lane = findLane(lanes, wanted);
+    if (!lane) return { error: `Choose a bookmark lane or Done: ${lanes.map((l) => l.name).join(", ")}.` };
+    return { updates: {}, starUpdates: { lane: lane.id, done: false }, destination: lane.name, column: lane.id };
+  }
   const from = voiceColumn(task.column);
   const isDraft = !task.status;
 
@@ -153,11 +172,13 @@ export function planMove(task: MovableTask, to: string, lanes: VoiceLane[]): Tas
     return { updates: { task_status: "done" }, destination: "Done", column: "done" };
   }
   if (WORKING_WORDS.has(wanted)) {
-    return { error: "A task is in Working only while it runs. Send it a message to start it." };
+    return { error: "A task is in Working only while it runs. Use start_task for a draft, or send a follow-up message to resume a task." };
   }
   if (REOPEN_WORDS.has(wanted)) {
     if (from !== "done") return { error: "Only a done task can be reopened. A task needs input when its run stops to ask." };
-    return { updates: { task_status: "active" }, destination: "Needs input", column: "needs_input" };
+    return { updates: { task_status: "active" },
+      destination: task.status === "running" ? "Working" : "Needs input",
+      column: task.status === "running" ? "working" : "needs_input" };
   }
   const lane = findLane(lanes, wanted);
   if (!lane) {
@@ -170,6 +191,15 @@ export function planMove(task: MovableTask, to: string, lanes: VoiceLane[]): Tas
     destination: lane.name,
     column: lane.id,
   };
+}
+
+/** Starting a saved draft uses its stored instructions, never the spoken title. */
+export function startTaskError(task: MovableTask & { task_status?: string | null }): string | null {
+  if (task.human_task) return "Use the human task response controls; it cannot run as an agent.";
+  if (task.status === "running") return "That task is already running.";
+  if (task.task_status !== "todo" || task.status) return "That task has already run. Send a follow-up message to continue it.";
+  if (!task.prompt.trim()) return "That draft has no instructions. Add details before starting it.";
+  return null;
 }
 
 export type RunOutcome = "finished" | "failed" | "needs_input" | "done";

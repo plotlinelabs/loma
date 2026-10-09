@@ -23,6 +23,7 @@ const {
   voiceColumn,
   taskLabel,
   planMove,
+  startTaskError,
   detectFinished,
   announcement,
   speakable,
@@ -150,11 +151,10 @@ test("lanes are matched by name, id or a distinct word", () => {
 test("moves the board forbids come back with a reason", () => {
   assert.match(planMove(card("working"), "today", lanes).error, /running/);
   assert.match(planMove(card("today"), "today", lanes).error, /already/);
-  assert.match(planMove(card("today"), "working", lanes).error, /message/);
+  assert.match(planMove(card("today"), "working", lanes).error, /start_task/);
   assert.match(planMove(card("needs_input"), "needs_input", lanes).error, /done task/);
   assert.match(planMove(card("done"), "", lanes).error, /where/);
-  assert.match(planMove(card("done", "completed", { star: {} }), "today", lanes).error, /starred/);
-  assert.match(planMove(card("needs_input", "completed", { human_task: {} }), "done", lanes).error, /person/);
+  assert.match(planMove(card("needs_input", "completed", { human_task: {} }), "done", lanes).error, /response controls/);
 });
 test("reopening a done task sends it to needs input", () =>
   assert.deepEqual(planMove(card("done"), "needs_input", lanes), {
@@ -224,4 +224,40 @@ test("long replies are cut at a word", () => {
   const cut = speakable("word ".repeat(200));
   assert.ok(cut.length <= 284);
   assert.match(cut, /word\.\.\.$/);
+});
+
+const star = { lane: "today", done: false, source_column: "working" };
+test("starred cards move only the bookmark, including while the source runs", () => {
+  for (const from of ["today", "working", "needs_input", "done"]) {
+    const task = card(from, null, { star });
+    const done = planMove(task, "done", lanes);
+    assert.deepEqual(done.updates, {});
+    assert.deepEqual(done.starUpdates, { done: true });
+    const parked = planMove(task, "later", lanes);
+    assert.deepEqual(parked.updates, {});
+    assert.deepEqual(parked.starUpdates, { lane: "later", done: false });
+    assert.equal(parked.column, "later");
+  }
+});
+test("reopened bookmarks follow their source or return to their saved lane", () => {
+  for (const source_column of ["working", "needs_input", "done", "later"]) {
+    const move = planMove(card("done", null, { star: { ...star, source_column } }), "reopen", lanes);
+    assert.deepEqual(move.starUpdates, { done: false });
+    assert.equal(move.column, ["working", "needs_input"].includes(source_column) ? source_column : "today");
+  }
+  assert.match(planMove(card("today", null, { star }), "working", lanes).error, /bookmark lane/);
+});
+test("start uses only saved drafts with instructions, not human or already-run tasks", () => {
+  const draft = { ...card("today", null), task_status: "todo", prompt: "Check equipment inventory" };
+  assert.equal(startTaskError(draft), null);
+  assert.equal(startTaskError({ ...draft, star }), null);
+  assert.match(startTaskError({ ...draft, prompt: " " }), /no instructions/);
+  assert.match(startTaskError({ ...draft, status: "running" }), /already running/);
+  assert.match(startTaskError({ ...draft, status: "completed" }), /follow-up/);
+  assert.match(startTaskError({ ...draft, task_status: "done" }), /follow-up/);
+  assert.match(startTaskError({ ...draft, human_task: {} }), /response controls/);
+});
+
+test("reopening a task marked done during its run still reports Working", () => {
+  assert.equal(planMove(card("done", "running"), "reopen", lanes).column, "working");
 });
