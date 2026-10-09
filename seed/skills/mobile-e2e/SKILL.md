@@ -47,8 +47,8 @@ installing or writing specs, and stop with a clear "blocked" message if one is m
    launch extras / UserDefaults. If one platform's test app has no such hook, say so before you start:
    that platform's fresh-state or locale cases cannot run, and that is a gap in the app, not a test result.
 4. **The device is healthy.** `lease` returns `health`, including `health.network.dns_ok` (runner 1.5.0+). If the
-   check fails, the lease restarts the device once by itself (`recovery` in the result; broken DNS on Android is
-   fixed by a cold boot with a fixed DNS server). If `health.ok` is still false, lease another device instead of
+   check fails, the lease restarts the device once by itself (`recovery` in the result; broken DNS on Android gets a
+   cold boot, with the runner's `dns_servers` if set). If `health.ok` is still false, lease another device instead of
    running tests that will time out. Never restart an emulator by hand or ask the user to, before trying `recover`.
 5. **Know what is installed.** `lease` returns `installed`: the user apps on the device and, for builds the runner
    installed, `sha256` and `current`. Install only when the app is missing or not the build you need.
@@ -171,8 +171,8 @@ cheapest test is the one with the fewest calls, so:
 - **Animations off on Android emulators** for ordinary flows (suite `setup`): `ui-tree` stops
   stalling on "UI not idle" and taps don't land mid-transition. Turn them back on for animation or
   loader cases, and in `teardown`. With animations on, `wait_for` / `scroll_until_visible` on a screen
-  that never idles (shimmer) still work on runner 1.5.0+: they pause animators for the one UI read
-  (`ui_not_idle: true` in the result). Do not replace them with coordinate swipes.
+  that never idles (shimmer) work on runner 1.5.0+ when the runner owner set `freeze_animations_on_stall`:
+  they pause animators for the one UI read (`ui_not_idle: true` in the result). Do not replace them with coordinate swipes.
 - **Time-sensitive states** (anything that appears or changes within a second or two): use
   `scenario` with `at_ms` steps. `burst` and `record` still exist for a single capture, but
   cannot run steps while capturing.
@@ -210,8 +210,8 @@ cheapest test is the one with the fewest calls, so:
 5. **Launch configured**: `app --action launch --app-id PKG --extra endpoint=... --bool-extra test_mode=true`.
    On iOS add `--console` if the app logs with `print` (Flutter `debugPrint`, Swift `print`): without it
    those lines may not be in the simulator log at all. In a scenario use `console: true` and leave
-   `log_source: auto`: runner 1.5.0+ merges the console capture with the unified log and drops the duplicate
-   copies iOS writes, so each event is counted once (`logs.merged` shows the sources).
+   `log_source: auto`. If the runner has `log_dedupe` on (1.5.0+), it merges the console capture with the
+   unified log and drops the duplicate copies iOS writes (`logs.merged` shows the sources).
    Use deep links (`open-url`) to reach a screen instead of tapping through menus.
 6. **Drive by element, not coordinates**: `tap-text --match "Got it"`, `set-text --match "User ID" --text u1`,
    `wait-for --match "Welcome" --timeout 15`, `scroll-until-visible --match "Offers"`.

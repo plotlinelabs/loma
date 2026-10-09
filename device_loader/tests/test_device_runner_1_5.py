@@ -268,14 +268,28 @@ class NetDriver(ScenarioDriver):
 async def test_health_fails_on_broken_dns_and_recover_cold_boots_with_a_dns_server():
     driver = NetDriver(dns_ok=False)
     r = scenario_runner(driver)
+    r.policy['dns_servers'] = '10.0.0.53'
     r.inventory = {'emulator-5554': (driver, {'serial': 'emulator-5554', 'virtual': True, 'platform': 'android'})}
     r.known = {'emulator-5554': {'platform': 'android', 'virtual': True, 'avd': 'Pixel', 'port': 5554}}
     health = await r.call('health', 'emulator-5554', {})
     assert health['ok'] is False and 'cannot resolve DNS' in health['reasons'][0]
     result = await r.call('recover', 'emulator-5554', {})
     restart, extra = driver.recovered
-    assert restart is True and extra[extra.index('-dns-server') + 1] == ldr.DNS_FALLBACK and result['dns_fix'] is True
+    assert restart is True and extra[extra.index('-dns-server') + 1] == '10.0.0.53' and result['dns_fix'] is True
     assert result['health']['ok'] is True
+
+
+@pytest.mark.asyncio
+async def test_recover_on_broken_dns_adds_no_dns_server_by_default():
+    driver = NetDriver(dns_ok=False)
+    r = scenario_runner(driver)
+    assert r.policy['dns_servers'] == ''
+    r.inventory = {'emulator-5554': (driver, {'serial': 'emulator-5554', 'virtual': True, 'platform': 'android'})}
+    r.known = {'emulator-5554': {'platform': 'android', 'virtual': True, 'avd': 'Pixel', 'port': 5554}}
+    await r.call('health', 'emulator-5554', {})
+    result = await r.call('recover', 'emulator-5554', {})
+    restart, extra = driver.recovered
+    assert restart is True and '-dns-server' not in extra and 'dns_fix' not in result
     off = scenario_runner(NetDriver(dns_ok=False))
     off.policy['net_probe_host'] = 'off'
     off.inventory = {'emulator-5554': (off.drivers[0], {'serial': 'emulator-5554'})}
@@ -315,12 +329,22 @@ class Shimmer(ScenarioDriver):
 async def test_scroll_and_wait_switch_to_the_frozen_dump_after_one_not_idle_read():
     driver = Shimmer()
     r = scenario_runner(driver)
+    r.policy['freeze_animations_on_stall'] = True
     r.inventory = {'emulator-5554': (driver, {'serial': 'emulator-5554'})}
     found = await r.call('scroll_until_visible', 'emulator-5554', {'match': 'Offers'})
     assert found['found'] and found['ui_not_idle'] and driver.reads == [False, True]
     driver.reads.clear()
     waited = await r.call('wait_for', 'emulator-5554', {'match': 'Offers', 'timeout_s': 5})
     assert waited['found'] and driver.reads == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_frozen_dump_is_off_by_default():
+    driver = Shimmer()
+    r = scenario_runner(driver)
+    r.inventory = {'emulator-5554': (driver, {'serial': 'emulator-5554'})}
+    waited = await r.call('wait_for', 'emulator-5554', {'match': 'Offers', 'timeout_s': 1})
+    assert not waited['found'] and True not in driver.reads
 
 
 def test_frozen_dump_restores_the_animator_scale_in_the_same_round_trip():
@@ -381,6 +405,7 @@ async def test_scenario_auto_logs_on_ios_merge_console_and_system():
     driver = ScenarioDriver()
     driver.platform = 'ios'
     r = scenario_runner(driver)
+    r.policy['log_dedupe'] = True
 
     async def system(serial, since, source='auto'):
         return [(since + 1.2, '2026-10-08 10:00:00.100 Df Runner[1:2] flutter: T done'),
@@ -389,6 +414,9 @@ async def test_scenario_auto_logs_on_ios_merge_console_and_system():
     driver.timed_logs = system
     logs, kept = await r._scenario_logs(driver, 'U', 'auto', ['T'], 0.0, [(200, 'flutter: T done')], 50)
     assert logs['counts'] == {'T': 2} and logs['merged'] == {'console': 1, 'system': 3, 'kept': 2}
+    r.policy['log_dedupe'] = False  # default: console only on iOS auto, nothing dropped
+    logs, kept = await r._scenario_logs(driver, 'U', 'auto', ['T'], 0.0, [(200, 'flutter: T done')], 50)
+    assert logs['counts'] == {'T': 1} and 'merged' not in logs
 
 
 # ── 11. installed ─────────────────────────────────────────────────────────

@@ -80,8 +80,11 @@ runner should stay up while you are logged out.
   "auto_recover": true,
   "emulator_args": [],
   "net_probe_host": "connectivitycheck.gstatic.com",
-  "dns_servers": "8.8.8.8,1.1.1.1",
-  "idle_shutdown_s": 1800
+  "dns_servers": "",
+  "idle_shutdown_s": 1800,
+  "freeze_animations_on_stall": false,
+  "log_dedupe": false,
+  "log_dedupe_markers": ["flutter: ", "] ", ") "]
 },
 "templates": [
   {"name": "pixel-clean", "platform": "android", "avd": "Pixel_7_API_34", "snapshot": "clean"},
@@ -126,11 +129,18 @@ runner should stay up while you are logged out.
   this host. An emulator whose DNS broke still takes screenshots fine, but every SDK call hangs, so it is reported
   as unhealthy. Android checks with `ping` from the device (only "unknown host" fails it; blocked ICMP is fine),
   iOS with the Mac's resolver. `"off"` disables the check.
-- `dns_servers` (1.5.0, default `"8.8.8.8,1.1.1.1"`): when `health` found broken DNS, `recover` cold boots the
-  emulator with `-dns-server` set to these (unless `emulator_args` already sets one). On iOS a broken DNS is the Mac's
+- `dns_servers` (1.5.0, default `""`, none): when `health` found broken DNS, `recover` cold boots the emulator
+  with `-dns-server` set to these (unless `emulator_args` already sets one). Empty means a plain restart; set your
+  own resolvers (public ones like `8.8.8.8` are often blocked on corporate networks). On iOS a broken DNS is the Mac's
   own network, so it is reported instead of restarting the simulator.
 - `idle_shutdown_s` (1.5.0, default 1800): a device booted from a template is shut down after this long without
   calls, in case a lease was never released. A template's own `idle_shutdown_s` wins.
+- `freeze_animations_on_stall` (1.5.0, default `false`): on Android, when a UI read fails with "UI not idle"
+  (shimmer, looping Lottie), retry it with `animator_duration_scale` set to 0 for that one read, then restore it.
+  Off by default because it changes a global device setting under the app under test.
+- `log_dedupe` (1.5.0, default `false`): on iOS, merge the console capture with the unified log and drop duplicate
+  copies of one print. `log_dedupe_markers` is the list of prefixes stripped before comparing lines (the defaults
+  suit Flutter). Off by default because two real events with the same text within 500 ms are counted once.
 
 ### Device templates (1.5.0)
 
@@ -163,9 +173,9 @@ Run `setup` again after editing the policy to restart the runner.
 - Runner 1.5.0+ uploads large screenshots and videos to Loma over HTTPS (`/device-runner/media`) instead of inside
   the WebSocket message. A video inline used to block the connection long enough to drop it ("Runner reconnected" on
   the next test). If a suite still loses the connection, it waits up to 90 s for the runner and re-runs that case.
-- Runner 1.5.0+ reads the UI tree of an Android screen that never goes idle (shimmer / skeleton loaders, looping
-  animations) by pausing animators for that one read and restoring them, so `scroll_until_visible` and `wait_for` no
-  longer hang on such screens.
+- With `freeze_animations_on_stall` on, runner 1.5.0+ reads the UI tree of an Android screen that never goes idle
+  (shimmer / skeleton loaders, looping animations) by pausing animators for that one read and restoring them, so
+  `scroll_until_visible` and `wait_for` no longer hang on such screens.
 - Runner 1.5.0+ remembers which build it installed on which device across restarts
   (`~/.loma-device-runner/installed-builds.json`), so a lease can report whether the app under test is installed
   and current.

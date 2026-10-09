@@ -206,9 +206,8 @@ MEDIA_UPLOAD_S = 180
 # Network probe in health (1.5.0): an emulator whose DNS broke still screenshots fine, but every SDK call hangs.
 NET_PROBE_HOST = 'connectivitycheck.gstatic.com'
 NET_PROBE_S = 8
-DNS_FALLBACK = '8.8.8.8,1.1.1.1'
+DNS_FALLBACK = ''  # no default: public resolvers are often blocked on corporate networks (policy dns_servers)
 HOSTNAME = re.compile(r'(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9-]{1,63})*\Z')
-UI_STALL_S = 6  # scroll_until_visible: a UI tree that stays "not idle" this long (shimmer) uses the fallback dump
 MAX_KEEP_LINES = 40  # expect.keep_lines: matched log lines returned for a case that passed
 # Device templates (1.5.0): clean devices booted from a snapshot (Android) or cloned simulator (iOS).
 TEMPLATE_NAME = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
@@ -278,7 +277,10 @@ def normalize_server(value, allow_http=False):
 def default_policy():
     return {'allow_physical_devices': False, 'allowed_app_ids': [], 'allow_maestro_scripts': False,
             'keep_awake': True, 'preflight': 'public', 'auto_recover': True, 'emulator_args': [],
-            'net_probe_host': NET_PROBE_HOST, 'dns_servers': DNS_FALLBACK, 'idle_shutdown_s': IDLE_SHUTDOWN_S}
+            'net_probe_host': NET_PROBE_HOST, 'dns_servers': DNS_FALLBACK, 'idle_shutdown_s': IDLE_SHUTDOWN_S,
+            # Opt-in behaviours (off by default; they change the device or the evidence, so the owner chooses):
+            'freeze_animations_on_stall': False, 'log_dedupe': False,
+            'log_dedupe_markers': list(LOG_DEDUPE_MARKERS)}
 
 
 def load_templates(config):
@@ -678,13 +680,14 @@ def tag_filter(lines, tags, needle=None, text=lambda line: line):
 
 
 LOG_TAIL_CHARS = 120
+LOG_DEDUPE_MARKERS = ('flutter: ', '] ', ') ')
 
 
-def log_message(line):
+def log_message(line, markers=LOG_DEDUPE_MARKERS):
     """The message part of a log line, for spotting the same event twice: the timestamp and process prefix
     differ between iOS's two copies of one print (unified log "Df Runner[..] flutter: x" and the console)."""
     text = IOS_LOG_TIME.sub('', line, count=1).strip()
-    for marker in ('flutter: ', '] ', ') '):
+    for marker in markers:
         at = text.find(marker)
         if 0 <= at < 160:
             text = text[at + len(marker):]
@@ -692,7 +695,7 @@ def log_message(line):
     return text.strip()[-LOG_TAIL_CHARS:]
 
 
-def dedupe_log_entries(entries, same_source_ms=30, cross_source_ms=500):
+def dedupe_log_entries(entries, same_source_ms=30, cross_source_ms=500, markers=LOG_DEDUPE_MARKERS):
     """[(at_ms, line, source)] sorted by time -> [(at_ms, line)] without the duplicate copies iOS writes.
 
     Two lines with the same message are one event when they are within same_source_ms in one source (the unified
@@ -702,7 +705,7 @@ def dedupe_log_entries(entries, same_source_ms=30, cross_source_ms=500):
     """
     kept, last = [], {}  # message -> [(at_ms, source)] of recent kept lines
     for at, line, source in sorted(entries, key=lambda item: item[0]):
-        message = log_message(line)
+        message = log_message(line, markers)
         recent = [(t, src) for t, src in last.get(message, []) if at - t <= cross_source_ms]
         duplicate = any((src == source and at - t <= same_source_ms) or src != source for t, src in recent)
         last[message] = recent + ([] if duplicate else [(at, source)])
@@ -2646,14 +2649,14 @@ class Runner:
             dns_broken = bool(present and not cold and health.get('network', {}).get('dns_ok') is False)
             if platform == 'android' and (dns_broken or cold) and '-dns-server' not in extra:
                 servers = str(self.policy.get('dns_servers') or DNS_FALLBACK)
-                if re.fullmatch(r'[0-9a-fA-F.:,]{3,200}', servers):
+                if servers and re.fullmatch(r'[0-9a-fA-F.:,]{3,200}', servers):
                     extra += ['-dns-server', servers]  # a cold boot keeps the host's broken resolver otherwise
             if dns_broken and platform == 'ios':
                 raise OpError('The Mac itself cannot resolve DNS (simulators share its network): check the Wi-Fi / '
                               'VPN / DNS settings of the runner machine. Restarting the simulator would not help.')
             result = await driver.recover(serial, info, restart=bool(present) or cold or dns_broken,
                                           allow_global=not busy, extra_args=tuple(extra))
-            if dns_broken:
+            if dns_broken and '-dns-server' in extra:
                 result = {**result, 'dns_fix': True}
         finally:
             if locked:
@@ -3187,7 +3190,9 @@ class Runner:
 
     async def _scenario_logs(self, driver, serial, source, tags, wall, console, limit):
         merged = None
-        if console is not None and driver.platform == 'ios' and source == 'auto':
+        dedupe = bool(self.policy.get('log_dedupe'))
+        markers = tuple(m for m in self.policy.get('log_dedupe_markers') or LOG_DEDUPE_MARKERS if isinstance(m, str) and m)
+        if console is not None and driver.platform == 'ios' and source == 'auto' and dedupe:
             # auto on iOS: a Flutter / Swift print can land in the console capture, the unified log, or both
             # (twice in the unified log). Read both and keep one copy of each event.
             try:
@@ -3196,7 +3201,7 @@ class Runner:
                 raw = []
             both = [(at, line, 'console') for at, line in console]
             both += [(int((at - wall) * 1000), line, 'system') for at, line in raw]
-            entries = dedupe_log_entries(both)
+            entries = dedupe_log_entries(both, markers=markers)
             merged = {'console': len(console), 'system': len(raw), 'kept': len(entries)}
             timing = 'merged: log timestamp (system) and arrival (console, +-100 ms); duplicate copies removed'
         elif console is not None:
@@ -3204,8 +3209,8 @@ class Runner:
         else:
             raw = await driver.timed_logs(serial, wall - 1, source)
             entries, timing = [(int((at - wall) * 1000), line) for at, line in raw], 'log timestamp'
-            if driver.platform == 'ios':  # the unified log often stores one print twice with the same timestamp
-                entries = dedupe_log_entries([(at, line, 'system') for at, line in entries])
+            if driver.platform == 'ios' and dedupe:  # the unified log can store one print twice, same timestamp
+                entries = dedupe_log_entries([(at, line, 'system') for at, line in entries], markers=markers)
         kept, counts = tag_filter(entries, tags, text=lambda entry: entry[1])
         first = {}
         for at, line in kept:
@@ -3236,7 +3241,8 @@ class Runner:
         try:
             return await driver.ui_tree(serial)
         except OpError:
-            if driver.platform != 'android':
+            # Opt-in: freezing changes a global device setting (animator_duration_scale) under the app.
+            if driver.platform != 'android' or not self.policy.get('freeze_animations_on_stall'):
                 raise
             state['frozen'] = True
             return await driver.ui_tree(serial, frozen=True)
@@ -3429,7 +3435,7 @@ class Runner:
                 result['network'] = await driver.net_probe(serial, host)
                 if not result['network']['dns_ok']:
                     reasons.append(f'network: the device cannot resolve DNS ({host}); SDK calls would hang. '
-                                   'recover restarts it with a fixed DNS server')
+                                   'recover restarts it (with policy dns_servers, if set)')
             except OpError as exc:
                 result['network'] = {'host': host, 'error': str(exc)[:200]}
         try:  # an overloaded machine is the usual cause of a slow emulator: report it, do not fail on it
