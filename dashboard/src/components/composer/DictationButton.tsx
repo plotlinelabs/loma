@@ -5,6 +5,9 @@ import { useEffect, useRef } from "react";
 import { RiLoader4Line, RiMicLine, RiStopFill } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { useDictation } from "@/hooks/useDictation";
+import { useDictationShortcut } from "@/hooks/useDictationShortcut";
+import { useIsMac } from "@/components/tasks/boardBits";
+import { ariaShortcut, formatShortcut, matchesShortcut } from "@/lib/dictation-shortcut";
 import { cn } from "@/lib/utils";
 
 /** Append a transcript to existing composer text with sane spacing. */
@@ -28,18 +31,13 @@ interface DictationButtonProps {
 export function DictationButton({ onText, disabled, mobileProminent, className, hideIdleOnMobile, compactMobile }: DictationButtonProps) {
   const { state, seconds, error, supported, toggle } = useDictation(onText);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const [shortcut] = useDictationShortcut();
+  const mac = useIsMac();
+  const shortcutHint = shortcut ? ` (${formatShortcut(shortcut, mac)})` : "";
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
-      if (
-        event.code !== "Space" ||
-        !event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        disabled ||
-        state === "transcribing"
-      ) return;
+      if (!matchesShortcut(event, shortcut) || disabled || state === "transcribing") return;
 
       const button = buttonRef.current;
       const scope = button?.closest("form, [role=dialog]") ?? button?.parentElement?.parentElement?.parentElement;
@@ -51,7 +49,7 @@ export function DictationButton({ onText, disabled, mobileProminent, className, 
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [disabled, state, toggle]);
+  }, [disabled, shortcut, state, toggle]);
 
   if (!supported) return null;
 
@@ -65,9 +63,9 @@ export function DictationButton({ onText, disabled, mobileProminent, className, 
         variant="ghost"
         size="sm"
       onClick={toggle}
-      title="Stop and transcribe (Option + Space)"
+      title={`Stop and transcribe${shortcutHint}`}
       aria-label="Stop dictation and transcribe"
-      aria-keyshortcuts="Alt+Space"
+      aria-keyshortcuts={ariaShortcut(shortcut)}
       className={cn(
           "h-7 gap-1.5 rounded-lg px-2 text-red-600 hover:text-red-600 hover:bg-red-500/10 max-md:order-last max-md:h-12 max-md:px-4 max-md:ring-2 max-md:ring-red-500/20",
           compactMobile && "max-md:h-11 max-md:px-2",
@@ -97,9 +95,9 @@ export function DictationButton({ onText, disabled, mobileProminent, className, 
       size="icon-sm"
       onClick={toggle}
       disabled={disabled || state === "transcribing"}
-      title={error ?? "Dictate (Option + Space)"}
+      title={error ?? `Dictate${shortcutHint}`}
       aria-label={state === "transcribing" ? "Transcribing dictation" : "Start dictation"}
-      aria-keyshortcuts="Alt+Space"
+      aria-keyshortcuts={ariaShortcut(shortcut)}
       className={cn(
         error ? "text-destructive" : "text-muted-foreground hover:text-foreground",
         "max-md:order-last max-md:size-11 max-md:rounded-xl",
