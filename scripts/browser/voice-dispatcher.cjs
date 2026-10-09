@@ -42,6 +42,33 @@ fs.mkdirSync(out, { recursive: true });
   const page = await browser.newPage({
     viewport: { width: 1440, height: 1000 },
   });
+  // Record what crosses the real voice data channel, so the live run can show
+  // which events were sent and what the model said back.
+  await page.addInitScript(() => {
+    window.liveSent = [];
+    window.liveEvents = [];
+    const create = RTCPeerConnection.prototype.createDataChannel;
+    RTCPeerConnection.prototype.createDataChannel = function (...args) {
+      const channel = create.apply(this, args);
+      const send = channel.send.bind(channel);
+      channel.send = (data) => {
+        try {
+          const e = JSON.parse(data);
+          window.liveSent.push(e);
+          if (e.type === "session.commentary.append") window.liveAnnouncedAt = window.liveEvents.length;
+        } catch {}
+        return send(data);
+      };
+      channel.addEventListener("message", ({ data }) => {
+        try {
+          const e = JSON.parse(data);
+          if (e.type !== "session.usage.updated") window.liveEvents.push(e);
+        } catch {}
+      });
+      return channel;
+    };
+  });
+  const live = {};
   await page.goto("http://localhost:13001/login");
   await page.waitForLoadState("networkidle");
   await page.fill("#signin-email", env.USER_NAME);
@@ -92,6 +119,64 @@ fs.mkdirSync(out, { recursive: true });
       .getByText("Saved draft:", { exact: false })
       .waitFor({ timeout: 60000 });
     await page.screenshot({ path: out + "/live-draft.png" });
+    // Real run, real voice model: start a task, hear about it when it stops,
+    // open it, then mark it done. Each step is recorded rather than asserted,
+    // since it depends on the provider and a live agent run.
+    const say = async (text) => {
+      await page.getByText("Listening", { exact: true }).waitFor({ timeout: 120000 });
+      await page.getByPlaceholder("Type to Loma...").fill(text);
+      await page.getByPlaceholder("Type to Loma...").press("Enter");
+    };
+    const step = async (name, fn) => {
+      try {
+        live[name] = (await fn()) ?? true;
+      } catch (e) {
+        live[name] = false;
+        live[name + "_error"] = String(e.message || e).slice(0, 300);
+      }
+    };
+    await step("started", async () => {
+      await say("Start a task now with this exact prompt: Reply with only the word OK and do nothing else.");
+      await page.getByText("Started:", { exact: false }).waitFor({ timeout: 90000 });
+    });
+    await step("announcedByApp", async () => {
+      await page.waitForFunction(
+        () => window.liveSent.some((e) => e.type === "session.commentary.append"),
+        null, { timeout: 420000 });
+      return page.evaluate(() => window.liveSent.find((e) => e.type === "session.commentary.append"));
+    });
+    await step("spokenByModel", async () => {
+      // Captions that arrive after the announcement was sent, with no user turn in between.
+      const from = await page.evaluate(() => window.liveAnnouncedAt);
+      await page.waitForFunction(
+        (n) => window.liveEvents.slice(n).some((e) => e.type === "session.output_transcript.delta"),
+        from, { timeout: 60000 });
+      await page.waitForTimeout(8000);
+      return page.evaluate((n) => window.liveEvents.slice(n)
+        .filter((e) => e.type === "session.output_transcript.delta").map((e) => e.delta).join(""), from);
+    });
+    await page.screenshot({ path: out + "/live-announcement.png" });
+    await step("opened", async () => {
+      await say("Yes, show it to me.");
+      await page.getByText("Opened:", { exact: false }).waitFor({ timeout: 90000 });
+      await page.getByRole("dialog").waitFor({ timeout: 15000 });
+      await page.waitForTimeout(2500);
+      await page.screenshot({ path: out + "/live-open-task.png" });
+      await page.keyboard.press("Escape");
+      await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 15000 });
+    });
+    await step("markedDone", async () => {
+      await say("Mark that task done.");
+      await page.getByText("Moved to Done:", { exact: false }).waitFor({ timeout: 90000 });
+      await page.waitForTimeout(1500);
+      await page.screenshot({ path: out + "/live-moved-done.png" });
+      return page.evaluate(async () => {
+        const board = await (await fetch("/api/tasks")).json();
+        return board.tasks.filter((t) => t.column === "done").map((t) => t.title || t.prompt);
+      });
+    });
+    live.errors = await page.evaluate(() => window.liveEvents.filter((e) => e.type === "error"));
+    fs.writeFileSync(out + "/live-flow.json", JSON.stringify(live, null, 2));
     await page.getByRole("button", { name: "End", exact: true }).click();
     await page.waitForTimeout(6000);
   }
@@ -235,11 +320,131 @@ fs.mkdirSync(out, { recursive: true });
       ),
     ),
   );
+  // The typed turn ends, then the delegated backend calls the newer tools.
+  const completed = () =>
+    page.evaluate(() => voiceEmit({ type: "response.event", event: { type: "response.completed" } }));
+  await completed();
+  const call = async (callId, name, args) => {
+    await page.evaluate(([callId, name, args]) => {
+      voiceEmit({ type: "session.delegation.created" });
+      voiceEmit({
+        type: "response.event",
+        event: {
+          type: "response.output_item.done",
+          item: { type: "function_call", call_id: callId, name, arguments: JSON.stringify(args) },
+        },
+      });
+      voiceEmit({ type: "response.event", event: { type: "response.completed" } });
+    }, [callId, name, args]);
+    await page.waitForFunction(
+      (id) => voiceSent.some((e) => e.item?.call_id === id), callId, { timeout: 30000 });
+    const output = await page.evaluate(
+      (id) => voiceSent.find((e) => e.item?.call_id === id).item.output, callId);
+    await completed();
+    return JSON.parse(output);
+  };
+  // By id: reruns against the same database leave older drafts with the same words.
+  const draft = task.id;
+  const columnOf = () => page.evaluate(async (id) => {
+    const board = await (await fetch("/api/tasks")).json();
+    const found = board.tasks.find((t) => t.conversation_id === id);
+    return { column: found.column, id, lanes: board.lanes };
+  }, draft);
+
+  const listed = await call("list1", "list_tasks", { column: "all" });
+  assert(listed.lanes.length > 0, "list_tasks names the board's lanes");
+  assert(listed.tasks.some((t) => t.lane), "staged tasks say which lane they are in");
+  const before = await columnOf();
+  const target = before.lanes.find((l) => l.id !== before.column);
+  if (target) {
+    const moved = await call("move1", "move_task", { task: draft, to: target.name });
+    assert.equal(moved.moved_to, target.name);
+    assert.equal((await columnOf()).column, target.id, "the task really moved lanes");
+    await page.getByText(`Moved to ${target.name}:`, { exact: false }).waitFor();
+  }
+  // The board's rules come back as a spoken reason, not a silent failure.
+  const refused = await call("move2", "move_task", { task: draft, to: "done" });
+  assert.match(refused.error, /draft/);
+  assert.match((await call("move3", "move_task", { task: draft, to: "nowhere" })).error, /Done/);
+  assert.notEqual((await columnOf()).column, "done");
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: out + "/desktop-move.png" });
+
+  const opened = await call("open1", "open_task", { task: draft });
+  assert.equal(opened.shown, "screen");
+  await page.getByRole("dialog").waitFor({ timeout: 15000 });
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: out + "/desktop-open-task.png" });
+  // Voice is still on behind the drawer.
+  assert(await page.getByTestId("voice-panel").count());
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 15000 });
+
+  // A watched task stops running: the board says so on its own. The run is
+  // faked at the HTTP layer so the timing is deterministic.
+  const { id: draftId } = await columnOf();
+  let phase = "running";
+  const isBoard = (u) => u.pathname === "/api/tasks";
+  await page.route(isBoard, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const t of body.tasks) {
+      if (t.conversation_id !== draftId) continue;
+      t.task_status = "active";
+      t.column = phase === "running" ? "working" : "needs_input";
+      t.status = phase === "running" ? "running" : "completed";
+    }
+    await route.fulfill({ response: res, json: body });
+  });
+  const isDraft = (u) => u.pathname === `/api/conversations/${draftId}`;
+  await page.route(isDraft, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.conversation.final_response =
+      "**2 issues** found in `voice.ts`. Details in [the PR](https://example.com/pr/1).";
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.waitForTimeout(9000); // at least one board check sees it running
+  assert.equal(
+    await page.evaluate(() => voiceSent.filter((e) => e.type === "session.commentary.append").length), 0,
+    "nothing is announced while the task still runs");
+  phase = "stopped";
+  await page.waitForFunction(
+    () => voiceSent.some((e) => e.type === "session.commentary.append"), null, { timeout: 20000 });
+  const spoken = await page.evaluate(
+    () => voiceSent.filter((e) => e.type === "session.commentary.append"));
+  assert.equal(spoken.length, 1);
+  assert.equal(spoken[0].delegation_id, null);
+  // The title can be the async-generated one by now, so match around it.
+  assert.match(spoken[0].content, /^Update from the board: the task ".+" just finished\./);
+  assert.match(spoken[0].content, /It says: 2 issues found in voice\.ts\. Details in the PR\. Want to see it\?$/);
+  assert.doesNotMatch(spoken[0].content, /https?:|\*|`/);
+  await page.getByText("Finished:", { exact: false }).waitFor();
+  await page.evaluate(() => voiceEmit({
+    type: "session.output_transcript.delta",
+    delta: "Review voice dispatcher just finished: two issues found. Want to see it?",
+    start_ms: 60000,
+    end_ms: 63000,
+  }));
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: out + "/desktop-announcement.png" });
+  // Told once: later checks of the same board stay quiet.
+  await page.waitForTimeout(9000);
+  assert.equal(
+    await page.evaluate(() => voiceSent.filter((e) => e.type === "session.commentary.append").length), 1);
+  await page.unroute(isBoard);
+  await page.unroute(isDraft);
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page
     .getByRole("button", { name: "Start voice mode", exact: true })
     .click();
   await page.getByText("Listening", { exact: true }).waitFor();
+  // Phones have no drawer: open_task leaves a link instead of navigating away.
+  const linked = await call("open2", "open_task", { task: draft });
+  assert.equal(linked.shown, "link");
+  await page.getByText("Tap to open:", { exact: false }).waitFor();
   await page.waitForTimeout(800);
   await page.screenshot({ path: out + "/mobile-active.png" });
   assert(await page.getByPlaceholder("Type to Loma...").isVisible());
@@ -272,12 +477,19 @@ fs.mkdirSync(out, { recursive: true });
         mockedTransport: true,
         realIsolatedTaskCRUD: true,
         liveProviderDraftCreated: signal.status() === 201,
+        liveFlow: live,
         checks: [
           "desktop idle",
           "draft creation",
           "duplicate event suppressed",
           "mute/unmute",
           "typed dispatcher input",
+          "list names lanes",
+          "move between lanes",
+          "blocked moves give a reason",
+          "open task in drawer",
+          "finish announced once",
+          "mobile open leaves a link",
           "mobile layout",
           "end restores composer",
           "provider failure restores typing",
@@ -288,7 +500,7 @@ fs.mkdirSync(out, { recursive: true });
     ),
   );
   console.log(
-    "PASS: 8 browser checks. Provider signaling status:",
+    "PASS: 14 browser checks. Provider signaling status:",
     signal.status(),
   );
   await browser.close();

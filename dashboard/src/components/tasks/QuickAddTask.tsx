@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { RiSendPlaneLine, RiLoader4Line, RiAttachmentLine, RiUploadLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { createTask, type ChatFile } from "@/lib/api";
+import { createTask, type ChatFile, type Task } from "@/lib/api";
 import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
@@ -23,6 +23,8 @@ interface QuickAddTaskProps {
   onAdded: () => void;
   /** Board the task is added to; omitted = the caller's own board. */
   boardId?: string;
+  /** Lets voice mode show a task without leaving the board (desktop chat drawer). */
+  onOpenTask?: (task: Task) => void;
 }
 
 /** Bottom-pinned capture box on the tasks board (mobile and desktop) — the
@@ -30,7 +32,7 @@ interface QuickAddTaskProps {
  * fires the task immediately: the agent starts running in the background
  * (survives closing the app) and the backend titles the task from the prompt
  * with an LLM. */
-export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
+export function QuickAddTask({ onAdded, boardId, onOpenTask }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -49,7 +51,7 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
     toolConfig,
   } = useToolsPicker();
   const voiceAvailable = useVoiceAvailable();
-  const voice = useVoiceDispatcher({ boardId, model: selectedModel || undefined, toolConfig, onBoardChanged: onAdded });
+  const voice = useVoiceDispatcher({ boardId, model: selectedModel || undefined, toolConfig, onBoardChanged: onAdded, onOpenTask });
 
   const addFiles = async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);

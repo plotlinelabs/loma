@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createTask, createVoiceSession, fetchConversation, fetchTasksBoard, fetchVoiceStatus,
-  interruptAgent, sendTaskMessage, type Task, type ToolConfig,
+  interruptAgent, sendTaskMessage, updateTask, type Task, type ToolConfig,
 } from "@/lib/api";
 import {
-  appendTranscript, matchTasks, parseToolCall, taskLabel, voiceColumn,
-  type VoiceLine, type VoiceToolCall,
+  announcement, appendTranscript, detectFinished, matchTasks, parseToolCall, planMove, taskLabel, voiceColumn,
+  type RunOutcome, type VoiceLine, type VoiceToolCall,
 } from "@/lib/voice-dispatcher";
 
 export type VoiceState = "idle" | "connecting" | "listening" | "working" | "speaking";
@@ -27,6 +27,10 @@ const CLOSE_TIMEOUT_MS = 5000;
 const ICE_TIMEOUT_MS = 10_000;
 /** Captions arrive in bursts; hold "speaking" briefly between them. */
 const SPEAKING_HOLD_MS = 1500;
+/** How often the board is checked for tasks that stopped running. */
+const BOARD_POLL_MS = 4000;
+/** An announcement waits for this much quiet from the user. */
+const QUIET_BEFORE_ANNOUNCE_MS = 1500;
 const LIST_LIMIT = 30;
 const REPLY_LIMIT = 1500;
 
@@ -46,13 +50,17 @@ export function useVoiceAvailable(): boolean {
 
 /** Voice dispatcher for the tasks board: a live WebRTC session with the
  * voice model, whose delegated tool calls run here against the normal task
- * routes. Voice only hands out, reads, steers and stops tasks. */
-export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged }: {
+ * routes. Voice only hands out, reads, steers, stops, moves and opens tasks.
+ * While it is on it also watches the board and announces tasks that stop. */
+export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask }: {
   boardId?: string;
   model?: string;
   toolConfig?: ToolConfig;
   /** Called after voice changes the board so it refreshes right away. */
   onBoardChanged: () => void;
+  /** Shows a task without leaving the board (the desktop chat drawer). Where
+   * there is none, open_task leaves a link in the panel instead. */
+  onOpenTask?: (task: Task) => void;
 }) {
   const [state, setState] = useState<VoiceState>("idle");
   const [lines, setLines] = useState<VoiceLine[]>([]);
@@ -81,6 +89,14 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
   boardIdRef.current = boardId;
   const onBoardChangedRef = useRef(onBoardChanged);
   onBoardChangedRef.current = onBoardChanged;
+  const onOpenTaskRef = useRef(onOpenTask);
+  onOpenTaskRef.current = onOpenTask;
+  // Task id -> column it was last seen in. A task seen in Working is announced when it stops.
+  const watchedRef = useRef(new Map<string, string>());
+  const announceRef = useRef<Array<{ title: string; outcome: RunOutcome; reply?: string | null }>>([]);
+  const lastPollRef = useRef(0);
+  const pollingRef = useRef(false);
+  const lastUserSpeechRef = useRef(0);
 
   const cleanup = useCallback((message?: string) => {
     generationRef.current += 1;
@@ -101,6 +117,9 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
     audioRef.current = null;
     pendingRef.current = [];
     seenCallsRef.current.clear();
+    watchedRef.current.clear();
+    announceRef.current = [];
+    pollingRef.current = false;
     busyRef.current = 0;
     readyRef.current = false;
     setMuted(false);
@@ -135,7 +154,9 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
 
   const runTool = useCallback(async (call: VoiceToolCall): Promise<ToolResult> => {
     const text = (key: string) => (typeof call.args[key] === "string" ? (call.args[key] as string).trim() : "");
-    const loadTasks = async () => (await fetchTasksBoard("", boardIdRef.current)).tasks;
+    const loadBoard = () => fetchTasksBoard("", boardIdRef.current);
+    const loadTasks = async () => (await loadBoard()).tasks;
+    const watched = watchedRef.current;
     // One task for a spoken reference, or the tool result explaining why not.
     const resolve = async (): Promise<{ task: Task } | { result: ToolResult }> => {
       const ref = text("task");
@@ -150,10 +171,15 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
       switch (call.name) {
         case "list_tasks": {
           const column = text("column") || "all";
-          const tasks = (await loadTasks())
-            .map((t) => ({ id: t.conversation_id, title: taskLabel(t), column: voiceColumn(t.column) }))
+          const board = await loadBoard();
+          const laneName = new Map(board.lanes.map((l) => [l.id, l.name]));
+          const tasks = board.tasks
+            .map((t) => ({
+              id: t.conversation_id, title: taskLabel(t), column: voiceColumn(t.column),
+              ...(laneName.has(t.column) ? { lane: laneName.get(t.column) } : {}),
+            }))
             .filter((t) => (column === "all" ? t.column !== "done" : t.column === column));
-          return { total: tasks.length, tasks: tasks.slice(0, LIST_LIMIT) };
+          return { total: tasks.length, tasks: tasks.slice(0, LIST_LIMIT), lanes: board.lanes.map((l) => l.name) };
         }
         case "create_task": {
           const prompt = text("prompt");
@@ -164,6 +190,8 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
             model: settingsRef.current.model, tool_config: settingsRef.current.toolConfig,
           });
           logAction(`${start ? "Started" : "Saved draft"}: ${taskLabel(task)}`, true, task.conversation_id);
+          // Watch it from now, so a run that ends before the next board check is still announced.
+          if (start) watched.set(task.conversation_id, "working");
           onBoardChangedRef.current();
           return { ok: true, id: task.conversation_id, title: taskLabel(task), state: start ? "running" : "draft" };
         }
@@ -187,6 +215,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
           const outcome = await sendTaskMessage(found.task.conversation_id, message);
           const delivered = outcome !== "busy";
           logAction(`${delivered ? "Messaged" : "Busy, not sent"}: ${taskLabel(found.task)}`, delivered, found.task.conversation_id);
+          if (outcome === "started" || outcome === "queued") watched.set(found.task.conversation_id, "working");
           onBoardChangedRef.current();
           return delivered
             ? { ok: true, title: taskLabel(found.task), delivery: outcome }
@@ -199,8 +228,38 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
           const result = await interruptAgent(found.task.conversation_id);
           if (!result.interrupted) return { error: "The task did not confirm it was stopped. Refresh its status." };
           logAction(`Stopped: ${taskLabel(found.task)}`, true, found.task.conversation_id);
+          // The user stopped it themselves: nothing to announce.
+          watched.set(found.task.conversation_id, "needs_input");
           onBoardChangedRef.current();
           return { ok: true, title: taskLabel(found.task), stopped: true };
+        }
+        case "move_task": {
+          const ref = text("task");
+          if (!ref) return { error: "Say which task." };
+          const board = await loadBoard();
+          const wanted = text("to").toLowerCase();
+          // "Reopen X" means the finished one, which matchTasks otherwise ranks last.
+          const reopening = wanted === "needs_input" || wanted === "needs input" || wanted === "reopen";
+          const done = reopening ? matchTasks(board.tasks.filter((t) => t.column === "done"), ref) : [];
+          const found = done.length ? done : matchTasks(board.tasks, ref);
+          if (found.length === 0) return { error: `No task matches "${ref}".` };
+          if (found.length > 1) return { ambiguous: true, candidates: found.slice(0, 5).map(taskLabel) };
+          const task = found[0];
+          const move = planMove(task, text("to"), board.lanes);
+          if ("error" in move) return { error: move.error, title: taskLabel(task) };
+          await updateTask(task.conversation_id, move.updates);
+          logAction(`Moved to ${move.destination}: ${taskLabel(task)}`, true, task.conversation_id);
+          watched.set(task.conversation_id, voiceColumn(move.column));
+          onBoardChangedRef.current();
+          return { ok: true, title: taskLabel(task), moved_to: move.destination };
+        }
+        case "open_task": {
+          const found = await resolve();
+          if ("result" in found) return found.result;
+          const open = onOpenTaskRef.current;
+          if (open) open(found.task);
+          logAction(`${open ? "Opened" : "Tap to open"}: ${taskLabel(found.task)}`, true, found.task.conversation_id);
+          return { ok: true, title: taskLabel(found.task), shown: open ? "screen" : "link" };
         }
         default:
           return { error: `Unknown tool ${call.name}` };
@@ -211,6 +270,48 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
       return { error: message };
     }
   }, [logAction]);
+
+  /** Look at the board; queue an announcement for every watched task that stopped. */
+  const pollBoard = useCallback(async () => {
+    if (pollingRef.current) return;
+    pollingRef.current = true;
+    const generation = generationRef.current;
+    try {
+      const { tasks } = await fetchTasksBoard("", boardIdRef.current);
+      if (generation !== generationRef.current) return;
+      const finished = detectFinished(watchedRef.current, tasks);
+      if (!finished.length) return;
+      const items = await Promise.all(finished.map(async ({ task, outcome }) => {
+        // The reply is a nicety: announce the task even if it can't be read.
+        const reply = await fetchConversation(task.conversation_id)
+          .then((r) => r.conversation.final_response || null).catch(() => null);
+        return { id: task.conversation_id, title: taskLabel(task), outcome, reply };
+      }));
+      if (generation !== generationRef.current) return;
+      for (const item of items) {
+        logAction(`${item.outcome === "failed" ? "Failed" : item.outcome === "needs_input" ? "Needs you" : "Finished"}: ${item.title}`,
+          item.outcome !== "failed", item.id);
+      }
+      announceRef.current.push(...items);
+      onBoardChangedRef.current();
+    } catch {
+      // A missed check is fine: the next one compares against the same snapshot.
+    } finally {
+      if (generation === generationRef.current) pollingRef.current = false;
+    }
+  }, [logAction]);
+
+  /** Speak queued announcements once nobody is talking and no request is in flight. */
+  const flushAnnouncements = useCallback((now: number) => {
+    if (!announceRef.current.length || busyRef.current > 0 || pendingRef.current.length) return;
+    if (now < speakingUntilRef.current || now - lastUserSpeechRef.current < QUIET_BEFORE_ANNOUNCE_MS) return;
+    const content = announcement(announceRef.current);
+    announceRef.current = [];
+    // General session context (no delegation): the voice model says it in its own words.
+    send({ type: "session.commentary.append", delegation_id: null, content });
+    speakingUntilRef.current = now + SPEAKING_HOLD_MS;
+    lastActivityRef.current = now;
+  }, [send]);
 
   const handleEvent = useCallback((event: { type?: string; [key: string]: unknown }) => {
     // Usage ticks arrive on a timer; only talk and task work count as activity.
@@ -224,6 +325,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
       case "session.output_transcript.delta": {
         const speaker = event.type === "session.input_transcript.delta" ? "user" : "assistant";
         if (speaker === "assistant") speakingUntilRef.current = Date.now() + SPEAKING_HOLD_MS;
+        else lastUserSpeechRef.current = Date.now();
         setLines((prev) => appendTranscript(
           prev, speaker, String(event.delta ?? ""), Number(event.start_ms ?? 0), Number(event.end_ms ?? 0)));
         return;
@@ -344,14 +446,23 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
       await peer.setRemoteDescription({ type: "answer", sdp: answer.sdp });
 
       startedAtRef.current = lastActivityRef.current = Date.now();
+      lastPollRef.current = 0;
       timerRef.current = setInterval(() => {
         const now = Date.now();
         if (now - startedAtRef.current > SESSION_LIMIT_MS) return stop("Voice ended after 20 minutes.");
-        if (now - lastActivityRef.current > IDLE_LIMIT_MS && busyRef.current === 0) return stop("Voice ended after 3 quiet minutes.");
+        // Stay on while a task it is watching still runs, so the finish can be announced.
+        let watching = announceRef.current.length > 0;
+        for (const column of watchedRef.current.values()) watching ||= column === "working";
+        if (now - lastActivityRef.current > IDLE_LIMIT_MS && busyRef.current === 0 && !watching) return stop("Voice ended after 3 quiet minutes.");
         if (!readyRef.current) {
           if (now - startedAtRef.current > 30_000) stop("Voice connection timed out. Please try again.");
           return;
         }
+        if (now - lastPollRef.current >= BOARD_POLL_MS) {
+          lastPollRef.current = now;
+          void pollBoard();
+        }
+        flushAnnouncements(now);
         setState(now < speakingUntilRef.current ? "speaking" : busyRef.current > 0 ? "working" : "listening");
       }, 300);
     } catch (e) {
@@ -359,7 +470,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged 
       const denied = e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "NotFoundError");
       cleanup(denied ? "Microphone access is needed for voice mode." : e instanceof Error ? e.message : "Could not start voice mode");
     }
-  }, [cleanup, handleEvent, stop]);
+  }, [cleanup, flushAnnouncements, handleEvent, pollBoard, stop]);
 
   const toggleMute = useCallback(() => {
     setMuted((prev) => {

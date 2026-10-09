@@ -902,7 +902,13 @@ export default function TasksPage() {
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task
                 immediately (start: true); it lands in Working on refresh. */}
-            {!readOnly && <QuickAddTask onAdded={refresh} boardId={boardId} />}
+            {!readOnly && (
+              <QuickAddTask
+                onAdded={refresh}
+                boardId={boardId}
+                onOpenTask={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
+              />
+            )}
           </>
         )
       ) : (
