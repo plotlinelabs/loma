@@ -9,6 +9,7 @@ import {
   announcement, appendTranscript, detectFinished, matchTasks, parseToolCall, planMove, startTaskError, taskLabel, voiceColumn,
   type RunOutcome, type VoiceLine, type VoiceToolCall,
 } from "@/lib/voice-dispatcher";
+import { readTaskScreen, scrollTaskScreen, type ScrollAmount, type ScrollDirection } from "@/lib/voice-viewport";
 
 export type VoiceState = "idle" | "connecting" | "listening" | "working" | "speaking";
 
@@ -31,6 +32,10 @@ const SPEAKING_HOLD_MS = 1500;
 const BOARD_POLL_MS = 4000;
 /** An announcement waits for this much quiet from the user. */
 const QUIET_BEFORE_ANNOUNCE_MS = 1500;
+/** "End voice": how long the goodbye may take to start, and the most it may run. */
+const GOODBYE_WAIT_MS = 4000;
+const GOODBYE_LIMIT_MS = 10_000;
+const SCROLL_DIRECTIONS: ScrollDirection[] = ["up", "down", "top", "bottom"];
 const LIST_LIMIT = 30;
 const REPLY_LIMIT = 1500;
 
@@ -50,7 +55,8 @@ export function useVoiceAvailable(): boolean {
 
 /** Voice dispatcher for the tasks board: a live WebRTC session with the
  * voice model, whose delegated tool calls run here against the normal task
- * routes. Voice only hands out, reads, steers, stops, moves, opens and closes tasks.
+ * routes. Voice only hands out, reads, steers, stops, moves, opens and closes tasks,
+ * scrolls and reads the task that is open, and ends itself when asked.
  * While it is on it also watches the board and announces tasks that stop. */
 export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask, onTaskActivity }: {
   boardId?: string;
@@ -109,6 +115,8 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   const lastPollRef = useRef(0);
   const pollingRef = useRef(false);
   const lastUserSpeechRef = useRef(0);
+  // Set when the user asked to end voice: the session closes once Loma has said goodbye.
+  const endingRef = useRef<{ at: number; quietAt: number; spoke: boolean } | null>(null);
 
   const cleanup = useCallback((message?: string) => {
     generationRef.current += 1;
@@ -133,6 +141,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
     watchedRef.current.clear();
     announceRef.current = [];
     pollingRef.current = false;
+    endingRef.current = null;
     busyRef.current = 0;
     readyRef.current = false;
     setMuted(false);
@@ -313,6 +322,29 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           logAction(`Closed: ${taskLabel(closed)}`, true, closed.conversation_id);
           return { ok: true, closed: true, title: taskLabel(closed) };
         }
+        case "scroll_task": {
+          const direction = text("direction") as ScrollDirection;
+          if (!SCROLL_DIRECTIONS.includes(direction)) return { error: "Say which way to scroll: up, down, top or bottom." };
+          const amount: ScrollAmount = text("amount") === "half" ? "half" : "page";
+          const screen = scrollTaskScreen(direction, amount);
+          if (!screen) return { scrolled: false, reason: "No task is open on the screen." };
+          const { moved, ...shown } = screen;
+          if (!moved) {
+            const edge = direction === "up" || direction === "top" ? "top" : "bottom";
+            return { scrolled: false, reason: `Already at the ${edge} of the task.`, ...shown };
+          }
+          return { ok: true, scrolled: true, ...shown };
+        }
+        case "read_screen": {
+          const screen = readTaskScreen();
+          if (!screen) return { task_open: false, showing: "The task board. No task is open." };
+          return { task_open: true, ...screen };
+        }
+        case "end_voice": {
+          endingRef.current ??= { at: Date.now(), quietAt: 0, spoke: false };
+          logAction("Ending voice mode", true);
+          return { ok: true, ending: true };
+        }
         default:
           return { error: `Unknown tool ${call.name}` };
       }
@@ -377,8 +409,11 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
       case "session.input_transcript.delta":
       case "session.output_transcript.delta": {
         const speaker = event.type === "session.input_transcript.delta" ? "user" : "assistant";
-        if (speaker === "assistant") speakingUntilRef.current = Date.now() + SPEAKING_HOLD_MS;
-        else lastUserSpeechRef.current = Date.now();
+        if (speaker === "assistant") {
+          speakingUntilRef.current = Date.now() + SPEAKING_HOLD_MS;
+          // Speech after the backend finished is the goodbye, not a "one moment" filler.
+          if (endingRef.current && busyRef.current === 0) endingRef.current.spoke = true;
+        } else lastUserSpeechRef.current = Date.now();
         setLines((prev) => appendTranscript(
           prev, speaker, String(event.delta ?? ""), Number(event.start_ms ?? 0), Number(event.end_ms ?? 0)));
         return;
@@ -514,6 +549,17 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
         if (now - lastPollRef.current >= BOARD_POLL_MS) {
           lastPollRef.current = now;
           void pollBoard();
+        }
+        // Asked to end: let Loma finish its goodbye, then close as the End button does.
+        const ending = endingRef.current;
+        if (ending) {
+          const idle = busyRef.current === 0 && pendingRef.current.length === 0;
+          if (idle && !ending.quietAt) ending.quietAt = now;
+          const saidGoodbye = idle && ending.spoke && now >= speakingUntilRef.current;
+          const noGoodbye = idle && !ending.spoke && now - ending.quietAt > GOODBYE_WAIT_MS;
+          if (saidGoodbye || noGoodbye || now - ending.at > GOODBYE_LIMIT_MS) return stop();
+          setState(now < speakingUntilRef.current ? "speaking" : "working");
+          return;
         }
         flushAnnouncements(now);
         setState(now < speakingUntilRef.current ? "speaking" : busyRef.current > 0 ? "working" : "listening");

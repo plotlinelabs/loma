@@ -1858,14 +1858,14 @@ export default function ChatPanel({
         /* Normal chat layout */
         <>
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-4" onScroll={handleMessagesScroll}>
+          <div data-slot="chat-messages" className="flex-1 overflow-y-auto overscroll-contain px-3 py-4" onScroll={handleMessagesScroll}>
             <div className="max-w-3xl mx-auto">
               {messageBlocks.map((block, blockIndex) => {
                 if (block.kind === "user") {
                   const i = block.index;
                   const item = items[i];
                   return (
-                    <div key={`u${i}`} className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
+                    <div key={`u${i}`} data-chat-role="user" className="flex justify-end animate-message-in group/msg mt-6 first:mt-0">
                       {item.queued && editingQueuedIndex !== i && (
                         <div className="flex items-center gap-0.5 pointer-coarse:gap-1.5 mr-1.5 opacity-0 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                           <button
@@ -1985,7 +1985,7 @@ export default function ChatPanel({
                 const firstAgent = firstAuthor.agentId ? agentsById[firstAuthor.agentId] : undefined;
                 let previousAuthorName: string | null = null;
                 return (
-                  <div key={`a${block.indices[0] ?? "w"}`} className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
+                  <div key={`a${block.indices[0] ?? "w"}`} data-chat-role="assistant" className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
                     {firstAgent ? (
                       <AgentAvatar avatar={firstAgent.avatar} size={24} className="rounded-full shrink-0" />
                     ) : (
