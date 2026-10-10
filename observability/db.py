@@ -36,6 +36,12 @@ async def init_observability():
     await _db.turns.create_index("conversation_id")
     await _db.conversations.create_index("cost.total_cost_usd")
 
+    # Onboarding tracker indexes
+    await _db.onboarding_records.create_index("record_id", unique=True)
+    await _db.onboarding_records.create_index("name_lower")
+    await _db.onboarding_records.create_index("fields.org_id")
+    await _db.onboarding_events.create_index([("record_id", 1), ("at", -1)])
+
     # Flow indexes
     await _db.flows.create_index("flow_id", unique=True)
     await _db.flows.create_index("status")
