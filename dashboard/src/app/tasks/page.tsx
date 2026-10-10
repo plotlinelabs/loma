@@ -844,6 +844,16 @@ export default function TasksPage() {
   // CardBoard on every screen size, so they keep the page-level top bar.
   const boardOwnsTopBar = !!board && isMobile && !cardMode;
 
+  const handleChatDrawerChange = (open: boolean) => {
+    setChatDrawerOpen(open);
+    if (!open) {
+      refresh();
+      // Opened from a card: go back to that card.
+      if (returnToCard.current && panelCard) setCardPanelOpen(true);
+      returnToCard.current = false;
+    }
+  };
+
   return (
     <BoardExtrasContext.Provider value={boardExtras}>
     <div className="flex h-full min-h-0 flex-col space-y-2 md:p-4 lg:p-6">
@@ -902,7 +912,18 @@ export default function TasksPage() {
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task
                 immediately (start: true); it lands in Working on refresh. */}
-            {!readOnly && <QuickAddTask onAdded={refresh} boardId={boardId} />}
+            {!readOnly && (
+              <QuickAddTask
+                onAdded={refresh}
+                boardId={boardId}
+                onOpenTask={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
+                onCloseTask={() => {
+                  if (!chatDrawerOpen || !chatTask) return null;
+                  handleChatDrawerChange(false);
+                  return chatTask;
+                }}
+              />
+            )}
           </>
         )
       ) : (
@@ -978,15 +999,7 @@ export default function TasksPage() {
         readOnly={chatReadOnly}
         canRename={chatTask?.star ? chatTask.star.role !== "viewer" : !readOnly}
         open={chatDrawerOpen}
-        onOpenChange={(open) => {
-          setChatDrawerOpen(open);
-          if (!open) {
-            refresh();
-            // Opened from a card: go back to that card.
-            if (returnToCard.current && panelCard) setCardPanelOpen(true);
-            returnToCard.current = false;
-          }
-        }}
+        onOpenChange={handleChatDrawerChange}
         onTaskChange={(updatedTask) => {
           setChatTask(updatedTask);
           setBoard((current) => current ? {

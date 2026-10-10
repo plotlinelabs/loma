@@ -1726,6 +1726,56 @@ export async function transcribeAudio(blob: Blob, filename: string): Promise<str
   return body.text || "";
 }
 
+// ---------- Voice dispatcher (tasks board) ----------
+
+export async function fetchVoiceStatus(): Promise<{ enabled: boolean; model: string }> {
+  const res = await fetch(`${API_BASE}/api/voice/status`);
+  if (!res.ok) throw new Error(`Failed to fetch voice status: ${res.status}`);
+  return res.json();
+}
+
+/** Exchange the browser's WebRTC offer for the voice model's answer. */
+export async function createVoiceSession(sdp: string): Promise<{ session_id: string | null; sdp: string }> {
+  const res = await fetch(`${API_BASE}/api/voice/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Could not start voice mode: ${res.status}`);
+  return body;
+}
+
+/** Send a follow-up to a task without watching the reply. A running task
+ * takes it mid-run where the runtime allows; an idle one starts a new run,
+ * which carries on in the background like any other chat. */
+export async function sendTaskMessage(
+  conversationId: string, message: string,
+  options: { model?: string; tool_config?: ToolConfig; files?: ChatFile[] } = {},
+): Promise<"started" | "injected" | "queued" | "busy"> {
+  const res = await fetch(`${API_BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...options, message, conversation_id: conversationId }),
+  });
+  if (res.status === 202) return "queued";
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 409 && body.busy) return body.injected || body.duplicate ? "injected" : "busy";
+    throw new Error(body.error || `Could not message the task: ${res.status}`);
+  }
+  // Keep draining the stream so the request ends normally; nobody reads it.
+  const reader = res.body?.getReader();
+  if (reader) {
+    void (async () => {
+      try {
+        while (!(await reader.read()).done) { /* discard */ }
+      } catch { /* the run continues server-side */ }
+    })();
+  }
+  return "started";
+}
+
 // ---------- Personal AI usage ----------
 
 /** Sums shared by totals, days, models and chats on /api/usage/me. */

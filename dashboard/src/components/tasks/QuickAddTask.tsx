@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { RiSendPlaneLine, RiLoader4Line, RiAttachmentLine, RiUploadLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { createTask, type ChatFile } from "@/lib/api";
+import { createTask, type ChatFile, type Task } from "@/lib/api";
 import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
@@ -15,12 +15,18 @@ import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
 import { useFileDrop } from "@/components/composer/useFileDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useVoiceAvailable, useVoiceDispatcher } from "@/hooks/useVoiceDispatcher";
+import { VoiceModeButton, VoicePanel } from "./VoiceDispatcher";
 import { cn } from "@/lib/utils";
 
 interface QuickAddTaskProps {
   onAdded: () => void;
   /** Board the task is added to; omitted = the caller's own board. */
   boardId?: string;
+  /** Lets voice mode show a task without leaving the board (desktop chat drawer). */
+  onOpenTask?: (task: Task) => void;
+  /** Lets voice mode close that drawer again; returns the task it closed, if any. */
+  onCloseTask?: () => Task | null;
 }
 
 /** Bottom-pinned capture box on the tasks board (mobile and desktop) — the
@@ -28,7 +34,7 @@ interface QuickAddTaskProps {
  * fires the task immediately: the agent starts running in the background
  * (survives closing the app) and the backend titles the task from the prompt
  * with an LLM. */
-export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
+export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -46,6 +52,8 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
     setAll,
     toolConfig,
   } = useToolsPicker();
+  const voiceAvailable = useVoiceAvailable();
+  const voice = useVoiceDispatcher({ boardId, model: selectedModel || undefined, toolConfig, onBoardChanged: onAdded, onOpenTask, onCloseTask });
 
   const addFiles = async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
@@ -61,6 +69,12 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
     setBusy(true);
     setError(null);
     try {
+      if (voice.active) {
+        if (files.length) throw new Error("End voice mode to submit a task with attachments.");
+        voice.sendText(prompt);
+        setValue("");
+        return;
+      }
       await createTask({
         prompt: prompt || files.map((f) => f.name).join(", "),
         model: selectedModel || undefined,
@@ -98,7 +112,7 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
           void addFiles(pasted);
         }
       }}
-      placeholder="What do you need done?"
+      placeholder={voice.active ? "Type to Loma..." : "What do you need done?"}
       rows={1}
       className={cn(
         "bg-transparent text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
@@ -118,6 +132,18 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
       onSelect={selectModel}
       loadState={loadState}
     />
+  );
+  // Voice mode replaces both mics while it is on; Mute and End live in its panel.
+  const micButtons = voice.active ? null : (
+    <>
+      <DictationButton
+        onText={(t) => setValue((prev) => appendDictation(prev, t))}
+        mobileProminent
+        hideIdleOnMobile={!empty}
+        compactMobile
+      />
+      {voiceAvailable && <VoiceModeButton voice={voice} className={cn(!empty && "max-md:hidden")} />}
+    </>
   );
   const sendButton = (
     <Button
@@ -166,7 +192,9 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
           desktop board; on a phone max-w-3xl is simply full width. */}
       <div className="mx-auto w-full max-w-3xl">
       {error && <p className="mb-1 text-xs text-destructive">{error}</p>}
+      {!voice.active && voice.error && <p className="mb-1 text-xs text-destructive">{voice.error}</p>}
       <PendingFilesStrip files={files} onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))} />
+      {voice.active && isMobile && <VoicePanel voice={voice} className="mb-1.5 rounded-2xl border border-border bg-card" />}
       {isMobile ? (
         /* Phones: one row. Attach, model, tools and skills sit behind "+",
            so the capture box costs the board one line instead of two. */
@@ -176,16 +204,12 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
             {toolsPicker}
           </ComposerSettings>
           {textarea}
-          <DictationButton
-            onText={(t) => setValue((prev) => appendDictation(prev, t))}
-            mobileProminent
-            hideIdleOnMobile={!empty}
-            compactMobile
-          />
+          {micButtons}
           {sendButton}
         </div>
       ) : (
       <div data-slot="task-composer" className="flex flex-col bg-card border border-border rounded-xl focus-within:border-input transition-colors">
+        {voice.active && <VoicePanel voice={voice} className="border-b border-border" />}
         {textarea}
         <div className="flex items-center justify-between gap-2 px-2 pb-2">
           <div className="flex min-w-0 items-center gap-1">
@@ -193,12 +217,7 @@ export function QuickAddTask({ onAdded, boardId }: QuickAddTaskProps) {
             {toolsPicker}
           </div>
           <div className="ml-auto flex items-center gap-1 shrink-0">
-            <DictationButton
-              onText={(t) => setValue((prev) => appendDictation(prev, t))}
-              mobileProminent
-              hideIdleOnMobile={!empty}
-              compactMobile
-            />
+            {micButtons}
             <Button
               type="button"
               variant="ghost"
