@@ -138,6 +138,9 @@ export default function TasksPage() {
   // board keeps its tab. Task is kept on close for the exit animation.
   const [chatTask, setChatTask] = useState<Task | null>(null);
   const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
+  // Bumped when voice mode changes the task open in the drawer, so the drawer
+  // reloads its transcript in place (no close/reopen).
+  const [drawerReloadToken, setDrawerReloadToken] = useState(0);
   // Card boards: the card whose side panel is open (kept on close for the
   // exit animation). Opening one of its tasks swaps the panel for the chat
   // drawer; closing the chat brings the card back.
@@ -916,11 +919,18 @@ export default function TasksPage() {
               <QuickAddTask
                 onAdded={refresh}
                 boardId={boardId}
+                drawerOpen={chatDrawerOpen}
                 onOpenTask={(task) => { setChatTask(task); setChatDrawerOpen(true); }}
                 onCloseTask={() => {
                   if (!chatDrawerOpen || !chatTask) return null;
                   handleChatDrawerChange(false);
                   return chatTask;
+                }}
+                onTaskActivity={(conversationId) => {
+                  // Only the task currently on screen needs an in-place reload.
+                  if (chatDrawerOpen && chatTask?.conversation_id === conversationId) {
+                    setDrawerReloadToken((n) => n + 1);
+                  }
                 }}
               />
             )}
@@ -999,6 +1009,7 @@ export default function TasksPage() {
         readOnly={chatReadOnly}
         canRename={chatTask?.star ? chatTask.star.role !== "viewer" : !readOnly}
         open={chatDrawerOpen}
+        reloadToken={drawerReloadToken}
         onOpenChange={handleChatDrawerChange}
         onTaskChange={(updatedTask) => {
           setChatTask(updatedTask);

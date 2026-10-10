@@ -52,7 +52,7 @@ export function useVoiceAvailable(): boolean {
  * voice model, whose delegated tool calls run here against the normal task
  * routes. Voice only hands out, reads, steers, stops, moves, opens and closes tasks.
  * While it is on it also watches the board and announces tasks that stop. */
-export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask }: {
+export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask, onTaskActivity }: {
   boardId?: string;
   model?: string;
   toolConfig?: ToolConfig;
@@ -64,6 +64,10 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   /** Closes the task shown by onOpenTask (or opened by hand) and returns it,
    * or null when no task is open. */
   onCloseTask?: () => Task | null;
+  /** Fired with the conversation id whenever voice changes a specific task's
+   * run or messages (create, start, steer, stop, move, or a watched finish).
+   * Lets an open drawer for that task refresh its transcript in place. */
+  onTaskActivity?: (conversationId: string) => void;
 }) {
   const [state, setState] = useState<VoiceState>("idle");
   const [lines, setLines] = useState<VoiceLine[]>([]);
@@ -97,6 +101,8 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   onOpenTaskRef.current = onOpenTask;
   const onCloseTaskRef = useRef(onCloseTask);
   onCloseTaskRef.current = onCloseTask;
+  const onTaskActivityRef = useRef(onTaskActivity);
+  onTaskActivityRef.current = onTaskActivity;
   // Task id -> column it was last seen in. A task seen in Working is announced when it stops.
   const watchedRef = useRef(new Map<string, string>());
   const announceRef = useRef<Array<{ title: string; outcome: RunOutcome; reply?: string | null }>>([]);
@@ -200,6 +206,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           // Watch it from now, so a run that ends before the next board check is still announced.
           if (start) watched.set(task.conversation_id, "working");
           onBoardChangedRef.current();
+          onTaskActivityRef.current?.(task.conversation_id);
           return { ok: true, id: task.conversation_id, title: taskLabel(task), state: start ? "running" : "draft" };
         }
         case "start_task": {
@@ -224,6 +231,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
             if (!found.task.star?.done && !found.task.star?.parked) watched.set(id, "working");
             logAction(`Started: ${taskLabel(found.task)}`, true, id);
             onBoardChangedRef.current();
+            onTaskActivityRef.current?.(id);
             return { ok: true, title: taskLabel(found.task), state: outcome === "queued" ? "queued" : "running" };
           } finally {
             if (!accepted) startedDrafts.delete(id);
@@ -251,6 +259,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           logAction(`${delivered ? "Messaged" : "Busy, not sent"}: ${taskLabel(found.task)}`, delivered, found.task.conversation_id);
           if (outcome === "started" || outcome === "queued") watched.set(found.task.conversation_id, "working");
           onBoardChangedRef.current();
+          onTaskActivityRef.current?.(found.task.conversation_id);
           return delivered
             ? { ok: true, title: taskLabel(found.task), delivery: outcome }
             : { error: "The task is busy and can't take a message until its run ends." };
@@ -265,6 +274,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           // The user stopped it themselves: nothing to announce.
           watched.set(found.task.conversation_id, "needs_input");
           onBoardChangedRef.current();
+          onTaskActivityRef.current?.(found.task.conversation_id);
           return { ok: true, title: taskLabel(found.task), stopped: true };
         }
         case "move_task": {
@@ -286,6 +296,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           logAction(`Moved to ${move.destination}: ${taskLabel(task)}`, true, task.conversation_id);
           watched.set(task.conversation_id, voiceColumn(move.column));
           onBoardChangedRef.current();
+          onTaskActivityRef.current?.(task.conversation_id);
           return { ok: true, title: taskLabel(task), moved_to: move.destination, scope: task.star ? "your bookmark only" : "task" };
         }
         case "open_task": {
@@ -332,6 +343,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
       for (const item of items) {
         logAction(`${item.outcome === "failed" ? "Failed" : item.outcome === "needs_input" ? "Needs you" : "Finished"}: ${item.title}`,
           item.outcome !== "failed", item.id);
+        onTaskActivityRef.current?.(item.id);
       }
       announceRef.current.push(...items);
       onBoardChangedRef.current();
