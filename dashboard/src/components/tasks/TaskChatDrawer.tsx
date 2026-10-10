@@ -219,6 +219,8 @@ export function TaskChatDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
+        // Voice mode finds the open task's transcript through this marker.
+        data-task-drawer=""
         onInteractOutside={(event) => {
           // A closing picker can dispatch its outside event after open becomes false.
           if (petSettingsOpen || (event.target instanceof Element && event.target.closest("[data-pet-settings]"))) event.preventDefault();
