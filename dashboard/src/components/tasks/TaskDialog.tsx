@@ -128,7 +128,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg" onKeyDown={handleKeyDown}>
+      <DialogContent className="sm:max-w-lg md:max-h-[calc(100dvh-2rem)] md:overflow-y-auto" onKeyDown={handleKeyDown}>
         <DialogHeader>
           <DialogTitle>{task ? "Task details" : "New task"}</DialogTitle>
         </DialogHeader>
@@ -157,6 +157,7 @@ export function TaskDialog({ open, onOpenChange, lanes, task, defaultLane, onSub
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="What should the agent do?"
               rows={6}
+              className="max-h-[40vh] overflow-y-auto"
             />
           </div>
           <ToolsPicker tools={picker.tools} skills={picker.skills} selection={picker.selection} onSetEnabled={picker.setEnabled} onSetAll={picker.setAll} onOpen={picker.loadCatalog} loadState={picker.loadState} disabled={busy} />
