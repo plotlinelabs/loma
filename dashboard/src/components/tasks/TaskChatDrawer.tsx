@@ -224,6 +224,8 @@ export function TaskChatDrawer({
         onInteractOutside={(event) => {
           // A closing picker can dispatch its outside event after open becomes false.
           if (petSettingsOpen || (event.target instanceof Element && event.target.closest("[data-pet-settings]"))) event.preventDefault();
+          // The floating voice pill sits above the drawer; using it must not close the task.
+          if (event.target instanceof Element && event.target.closest('[data-slot="voice-pill"]')) event.preventDefault();
         }}
         onEscapeKeyDown={(event) => { if (petSettingsOpen) event.preventDefault(); }}
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(1100px,92vw)]"

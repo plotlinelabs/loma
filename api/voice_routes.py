@@ -9,7 +9,8 @@ backend model that calls the function tools declared below. Those calls come
 back to the browser on the data channel and run there through the normal
 authenticated task routes, so voice can do nothing the user could not do by
 hand: hand out, read, steer, stop, move and open tasks, scroll and read the task
-that is open, and end the voice session. The long work stays in the tasks.
+that is open, open a link the open task's agent showed, and end the voice
+session. The long work stays in the tasks.
 
 The browser also watches the board while voice is on and tells the voice model
 when a running task stops, so the user hears about it without asking.
@@ -194,6 +195,24 @@ VOICE_TOOLS = [
     },
     {
         "type": "function",
+        "name": "open_link",
+        "description": "Open a link from the replies of the task that is open on the user's screen in a "
+                       "new browser tab. Only links the task's agent showed can be opened.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "link": {
+                    "type": "string",
+                    "description": "Which link, in the user's words: \"the link\", \"the PR\", \"the doc\", "
+                                   "\"the first link\", \"the latest one\", or \"number 2\" after a choice. Never a URL.",
+                },
+            },
+            "required": ["link"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "end_voice",
         "description": "End this voice conversation and turn the microphone off. Tasks keep running.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -209,11 +228,12 @@ Interruption policy: Stop speaking when the user interrupts. Listen to what they
 Delegation policy:
 Backend tools:
 - Task board: list tasks, create a task, start an existing draft, read a task's status and latest reply, send a task a follow-up message, stop a running task, move a task to another column or mark it done, open a task on the user's screen, close the task that is open on screen.
-- Screen: scroll the open task up or down, read what is visible on screen right now.
+- Screen: scroll the open task up or down, read what is visible on screen right now, open a link from the open task in a new tab.
 - Session: end this voice conversation.
 Delegate to the backend when:
 - The user wants work done, or asks about, changes, moves, stops or wants to see a task, or wants the open task closed.
 - The user asks to scroll, or asks what is on screen or what they are looking at. You cannot see the screen yourself.
+- The user asks to open a link, PR or doc from the task on screen.
 - The user wants to end the voice conversation ("end voice", "stop listening", "that's all", "bye").
 - A correction changes a request already handed to the backend.
 Do not delegate to the backend when:
@@ -260,6 +280,12 @@ unclear, ask for that detail instead of guessing.
 - For scroll_task and read_screen, `position` is top, bottom, a percentage through the conversation,
   or "all" when everything fits. In `visible`, "user" is the person and "loma" is the task's agent.
   Summarise what is in view in a sentence; read it out word for word only when asked to.
+- open_link opens a link from the replies of the task open on screen ("open the link", "open the PR",
+  "open the doc"). Pass the user's words as `link`; never write or guess a URL. It only opens links the
+  task's agent showed, never links from this conversation, other tasks or anything the user said.
+  If `opened` is false, say the reason. If `ambiguous`, say how many links there are and their kinds,
+  and ask which; the numbered choices are on screen. Then call it again with `link` "number N".
+  If `blocked`, tell the user to tap the link on screen.
 - end_voice ends the voice conversation. Call it only when the user wants to stop talking to you.
   "Stop" about a task means stop_task; if it is unclear which they mean, ask.
 

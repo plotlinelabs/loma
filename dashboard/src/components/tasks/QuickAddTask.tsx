@@ -248,11 +248,12 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask, drawer
       </div>
       {/* Drawer open: voice mode lifts out of the composer into a floating pill
           that sits above the drawer (Sheet is z-50), so the live session,
-          captions and Mute/End stay reachable while a task is on screen. */}
+          captions, Mute/End and link chips stay reachable while a task is on screen.
+          The modal drawer disables pointer events outside it, hence pointer-events-auto. */}
       {mounted && floatingVoice && createPortal(
         <div
           data-slot="voice-pill"
-          className="fixed bottom-4 left-1/2 z-[60] w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2"
+          className="pointer-events-auto fixed bottom-4 left-1/2 z-[60] w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2"
         >
           <VoicePanel voice={voice} className="rounded-2xl border border-border bg-popover shadow-lg ring-1 ring-black/5" />
         </div>,
