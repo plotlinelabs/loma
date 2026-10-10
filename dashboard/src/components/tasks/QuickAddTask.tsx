@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { RiSendPlaneLine, RiLoader4Line, RiAttachmentLine, RiUploadLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,6 +28,12 @@ interface QuickAddTaskProps {
   onOpenTask?: (task: Task) => void;
   /** Lets voice mode close that drawer again; returns the task it closed, if any. */
   onCloseTask?: () => Task | null;
+  /** True while a task drawer is open over the board. Voice mode then moves
+   * from the inline composer panel to a floating pill above the drawer. */
+  drawerOpen?: boolean;
+  /** Voice touched a specific task's run/messages — lets the open drawer for
+   * that task refresh in place. */
+  onTaskActivity?: (conversationId: string) => void;
 }
 
 /** Bottom-pinned capture box on the tasks board (mobile and desktop) — the
@@ -34,7 +41,7 @@ interface QuickAddTaskProps {
  * fires the task immediately: the agent starts running in the background
  * (survives closing the app) and the backend titles the task from the prompt
  * with an LLM. */
-export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask }: QuickAddTaskProps) {
+export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask, drawerOpen, onTaskActivity }: QuickAddTaskProps) {
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [busy, setBusy] = useState(false);
@@ -53,7 +60,12 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask }: Quic
     toolConfig,
   } = useToolsPicker();
   const voiceAvailable = useVoiceAvailable();
-  const voice = useVoiceDispatcher({ boardId, model: selectedModel || undefined, toolConfig, onBoardChanged: onAdded, onOpenTask, onCloseTask });
+  const voice = useVoiceDispatcher({ boardId, model: selectedModel || undefined, toolConfig, onBoardChanged: onAdded, onOpenTask, onCloseTask, onTaskActivity });
+  // Portal target is only there on the client; gate the floating pill on mount.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  // A drawer covers the composer, so voice mode floats above it as a pill.
+  const floatingVoice = voice.active && !!drawerOpen;
 
   const addFiles = async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
@@ -194,7 +206,7 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask }: Quic
       {error && <p className="mb-1 text-xs text-destructive">{error}</p>}
       {!voice.active && voice.error && <p className="mb-1 text-xs text-destructive">{voice.error}</p>}
       <PendingFilesStrip files={files} onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))} />
-      {voice.active && isMobile && <VoicePanel voice={voice} className="mb-1.5 rounded-2xl border border-border bg-card" />}
+      {voice.active && isMobile && !floatingVoice && <VoicePanel voice={voice} className="mb-1.5 rounded-2xl border border-border bg-card" />}
       {isMobile ? (
         /* Phones: one row. Attach, model, tools and skills sit behind "+",
            so the capture box costs the board one line instead of two. */
@@ -209,7 +221,7 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask }: Quic
         </div>
       ) : (
       <div data-slot="task-composer" className="flex flex-col bg-card border border-border rounded-xl focus-within:border-input transition-colors">
-        {voice.active && <VoicePanel voice={voice} className="border-b border-border" />}
+        {voice.active && !floatingVoice && <VoicePanel voice={voice} className="border-b border-border" />}
         {textarea}
         <div className="flex items-center justify-between gap-2 px-2 pb-2">
           <div className="flex min-w-0 items-center gap-1">
@@ -234,6 +246,18 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask }: Quic
       </div>
       )}
       </div>
+      {/* Drawer open: voice mode lifts out of the composer into a floating pill
+          that sits above the drawer (Sheet is z-50), so the live session,
+          captions and Mute/End stay reachable while a task is on screen. */}
+      {mounted && floatingVoice && createPortal(
+        <div
+          data-slot="voice-pill"
+          className="fixed bottom-4 left-1/2 z-[60] w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2"
+        >
+          <VoicePanel voice={voice} className="rounded-2xl border border-border bg-popover shadow-lg ring-1 ring-black/5" />
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

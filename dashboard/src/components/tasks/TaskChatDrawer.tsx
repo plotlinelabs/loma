@@ -21,10 +21,14 @@ function DrawerConversation({
   conversationId,
   onStreamComplete,
   readOnly = false,
+  reloadToken = 0,
 }: {
   conversationId: string;
   onStreamComplete?: (conversationId: string) => void;
   readOnly?: boolean;
+  /** Bumped by the parent to re-fetch the conversation in place (e.g. voice
+   * mode steered or started this task while the drawer stayed open). */
+  reloadToken?: number;
 }) {
   const [loading, setLoading] = useState(true);
   const [humanTask, setHumanTask] = useState(false);
@@ -54,6 +58,10 @@ function DrawerConversation({
           setDraftPrompt(data.conversation.prompt);
           setDraftFiles(data.conversation.draft_files || null);
         } else {
+          // A reload may find a once-draft task now running: drop the staged
+          // composer prompt and render the real transcript instead.
+          setDraftPrompt(null);
+          setDraftFiles(null);
           const { items, artifacts } = rebuildItemsFromConversation(
             data.conversation.messages,
             data.conversation.prompt,
@@ -75,7 +83,9 @@ function DrawerConversation({
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+    // reloadToken re-runs the fetch in place; loading is left as-is so the
+    // transcript updates without flashing the full-panel spinner.
+  }, [conversationId, reloadToken]);
 
   if (loading) {
     return (
@@ -129,6 +139,7 @@ export function TaskChatDrawer({
   onTaskChange,
   readOnly = false,
   canRename = true,
+  reloadToken = 0,
 }: {
   task: Task | null;
   open: boolean;
@@ -138,6 +149,9 @@ export function TaskChatDrawer({
   readOnly?: boolean;
   /** False for view-only board members. */
   canRename?: boolean;
+  /** Bumped when something outside the drawer (e.g. voice mode) changed this
+   * task, so the open transcript reloads in place. */
+  reloadToken?: number;
 }) {
   // Refs so the delayed title fetch below reads the latest task/callback, not
   // the ones captured when the stream started.
@@ -265,6 +279,7 @@ export function TaskChatDrawer({
             conversationId={task.conversation_id}
             onStreamComplete={handleStreamComplete}
             readOnly={readOnly}
+            reloadToken={reloadToken}
           />
         )}
       </SheetContent>
