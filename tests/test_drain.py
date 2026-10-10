@@ -184,6 +184,49 @@ async def test_follow_up_on_existing_chat_is_queued_and_releases_the_claim():
 
 
 @pytest.mark.asyncio
+async def test_follow_up_without_history_gets_the_stored_thread_as_context():
+    """Voice follow-ups send no conversation_history; the saved thread fills in."""
+    drain.set_draining(True)
+    db = _mock_db()
+    await db.conversations.insert_one({
+        "conversation_id": "c-voice", "status": "completed", "source": "dashboard",
+        "metadata": {"user_name": "user@example.com"},
+        "messages": [
+            {"role": "user", "content": "Check events for product P1"},
+            {"role": "assistant", "content": "No events for P1"},
+            {"role": "assistant", "content": ""},
+        ],
+    })
+    request = FakeRequest(body={"message": "I fixed the key, check again", "conversation_id": "c-voice"},
+                          user_email="user@example.com")
+    with patch("api.routes.get_db", return_value=db):
+        response = await handle_chat(request)
+    assert response.status == 202
+    context = (await db.pending_runs.find_one({"conversation_id": "c-voice"}))["conversation_context"]
+    assert context == "User: Check events for product P1\n\nAssistant: No events for P1"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_with_client_history_keeps_the_client_history():
+    drain.set_draining(True)
+    db = _mock_db()
+    await db.conversations.insert_one({
+        "conversation_id": "c-typed", "status": "completed", "source": "dashboard",
+        "metadata": {"user_name": "user@example.com"},
+        "messages": [{"role": "user", "content": "stored"}],
+    })
+    request = FakeRequest(
+        body={"message": "next", "conversation_id": "c-typed",
+              "conversation_history": [{"role": "user", "content": "from client"}]},
+        user_email="user@example.com")
+    with patch("api.routes.get_db", return_value=db):
+        response = await handle_chat(request)
+    assert response.status == 202
+    context = (await db.pending_runs.find_one({"conversation_id": "c-typed"}))["conversation_context"]
+    assert context == "User: from client"
+
+
+@pytest.mark.asyncio
 async def test_quick_add_task_is_queued_while_draining_and_drafts_still_work():
     drain.set_draining(True)
     db = _mock_db()

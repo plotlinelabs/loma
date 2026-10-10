@@ -1114,6 +1114,23 @@ async def _queue_chat_for_deploy(
     }, status=202)
 
 
+def _history_context(messages: list) -> str:
+    """Render prior user/assistant messages as the agent's thread context."""
+    parts: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content", "")
+        if not content or not isinstance(content, str):
+            continue
+        role = msg.get("role", "user")
+        if role == "user":
+            parts.append(f"User: {content}")
+        elif role == "assistant":
+            parts.append(f"Assistant: {content}")
+    return "\n\n".join(parts)
+
+
 async def handle_chat(request: web.Request) -> web.Response:
     """POST /api/chat — SSE stream for dashboard chat.
 
@@ -1149,16 +1166,8 @@ async def handle_chat(request: web.Request) -> web.Response:
                 )
 
     # Build conversation context from history
-    history = body.get("conversation_history", [])
-    context_parts: list[str] = []
-    for msg in history:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if role == "user":
-            context_parts.append(f"User: {content}")
-        elif role == "assistant":
-            context_parts.append(f"Assistant: {content}")
-    conversation_context = "\n\n".join(context_parts)
+    history = body.get("conversation_history") or []
+    conversation_context = _history_context(history)
 
     # Parse file attachments
     files = body.get("files") or None
@@ -1217,6 +1226,14 @@ async def handle_chat(request: web.Request) -> web.Response:
                     return await _busy_conversation_response(
                         db, existing_conversation_id, user_email, message, files,
                     )
+                # A caller that sends no history (voice follow-ups, API clients)
+                # still continues the same thread: every run starts a fresh agent
+                # session, so without this the agent sees only the new message.
+                if existing and not history:
+                    stored = await db.conversations.find_one(
+                        {"conversation_id": existing_conversation_id}, {"messages": 1},
+                    )
+                    conversation_context = _history_context((stored or {}).get("messages") or [])
 
             # Agent identity: an explicit selection wins; resumed conversations fall
             # back to the agent pinned on the conversation. An explicit empty
