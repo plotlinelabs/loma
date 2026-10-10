@@ -19,6 +19,7 @@ from scheduler.run_identity import require_execution_account
 from observability.db import get_db
 from observability.observer import ConversationObserver
 from api.dashboard_ingestion import ingest_dashboard_chat
+from webhooks.github_run_failure import extract_pull_request_target, post_run_failure_comment
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,14 @@ async def execute_webhook_flow(
 
     flow_id = flow["flow_id"]
 
+    # Parse payload for template rendering (and for the PR failure fallback)
+    try:
+        payload = json.loads(raw_body)
+        payload_pretty = json.dumps(payload, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = {}
+        payload_pretty = raw_body.decode("utf-8", errors="replace")
+
     # Re-read at execution time: queued events must not use stale account/config.
     flow = await db.flows.find_one({"flow_id": flow_id})
     if flow is None:
@@ -148,19 +157,14 @@ async def execute_webhook_flow(
         await db.webhook_logs.update_one({"log_id": log_id}, {"$set": {
             "execution_status": "failed", "error": str(exc),
         }})
+        # Best-effort: surface the failed start on the triggering PR (GitHub
+        # pull_request payloads only; no-op for other webhook sources).
+        await post_run_failure_comment(payload, exc)
         return None
 
     if flow["status"] != "active":
         logger.info("[WEBHOOK-EXEC] Flow %s is %s, skipping", flow_id, flow["status"])
         return None
-
-    # Parse payload for template rendering
-    try:
-        payload = json.loads(raw_body)
-        payload_pretty = json.dumps(payload, indent=2, ensure_ascii=False)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        payload = {}
-        payload_pretty = raw_body.decode("utf-8", errors="replace")
 
     # Render prompt: replace {{payload}} with the pretty-printed JSON
     template = flow.get("prompt_template") or flow.get("prompt", "")
@@ -292,6 +296,9 @@ async def execute_webhook_flow(
                 "last_error": error_message[:1000],
             }},
         )
+        # Best-effort: surface the failure on the triggering PR (GitHub
+        # pull_request payloads only; no-op for other webhook sources).
+        await post_run_failure_comment(payload, exc)
         return observer.conversation_id
 
     # Update webhook log
@@ -316,6 +323,26 @@ async def execute_webhook_flow(
             "$inc": {"run_count": 1},
         },
     )
+
+    # The agent runtime swallows some startup failures (client pool exhaustion,
+    # OAuth refresh errors, client init): it records the error on the
+    # conversation and ends the stream without raising.  For GitHub
+    # pull_request-triggered flows, surface those on the PR so the review never
+    # fails silently.  Runs that finished normally (status != "error"), including
+    # silent-exit routing decisions, post nothing.
+    if extract_pull_request_target(payload) is not None:
+        convo = None
+        try:
+            convo = await db.conversations.find_one(
+                {"conversation_id": observer.conversation_id},
+                {"status": 1, "error": 1},
+            )
+        except Exception:
+            logger.exception(
+                "[WEBHOOK-EXEC] Failed to check conversation status for PR fallback",
+            )
+        if convo and convo.get("status") == "error":
+            await post_run_failure_comment(payload, convo.get("error") or "")
 
     # Fire-and-forget: ingest this conversation as a change-stream event.
     asyncio.create_task(ingest_dashboard_chat(
@@ -375,7 +402,32 @@ async def _run_superseding(
     """
     if predecessor is not None and not predecessor.done():
         await asyncio.wait({predecessor}, timeout=30)
-    return await execute_webhook_flow(flow, raw_body, headers, log_id)
+    return await _execute_with_failure_fallback(flow, raw_body, headers, log_id)
+
+
+async def _execute_with_failure_fallback(
+    flow: dict,
+    raw_body: bytes,
+    headers: dict,
+    log_id: str,
+) -> str | None:
+    """Run a webhook flow, posting the PR fallback comment if execution dies
+    before execute_webhook_flow's own error handling gets a chance (e.g. a
+    failure while setting up observability).  Re-raises the original error so
+    task-level logging is unchanged; cancellation passes through untouched.
+    """
+    try:
+        return await execute_webhook_flow(flow, raw_body, headers, log_id)
+    except Exception as exc:
+        logger.exception(
+            "[WEBHOOK-EXEC] Flow %s died before its own error handling", flow["flow_id"],
+        )
+        try:
+            payload = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
+        await post_run_failure_comment(payload, exc)
+        raise
 
 
 def dispatch_webhook_flow(flow: dict, raw_body: bytes, headers: dict, log_id: str) -> None:
@@ -394,7 +446,7 @@ def dispatch_webhook_flow(flow: dict, raw_body: bytes, headers: dict, log_id: st
     thread_id = extract_thread_id(flow, payload) if isinstance(payload, dict) else None
 
     if not thread_id:
-        asyncio.create_task(execute_webhook_flow(flow, raw_body, headers, log_id))
+        asyncio.create_task(_execute_with_failure_fallback(flow, raw_body, headers, log_id))
         return
 
     key = f"{flow_id}:{thread_id}"
