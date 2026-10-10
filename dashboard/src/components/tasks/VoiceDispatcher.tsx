@@ -47,7 +47,7 @@ export function VoiceModeButton({ voice, className }: { voice: Voice; className?
 }
 
 /** Live voice session panel: state, captions, and each action voice took
- * with a link to the task it touched. */
+ * with a link to the task it touched, or chips for links from the open task. */
 export function VoicePanel({ voice, className }: { voice: Voice; className?: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { state, lines, actions, muted, error } = voice;
@@ -98,20 +98,40 @@ export function VoicePanel({ voice, className }: { voice: Voice; className?: str
             </p>
           ))}
           {actions.slice(-4).map((action) => (
-            <p key={action.id} className={cn("flex items-center gap-1.5", action.ok ? "text-foreground" : "text-destructive")}>
-              {action.ok ? <RiCheckLine size={14} className="shrink-0 text-green-600" /> : <RiErrorWarningLine size={14} className="shrink-0" />}
-              <span className="min-w-0 truncate">{action.label}</span>
-              {action.conversationId && (
-                <a
-                  href={`${basePath}/chat?continue=${action.conversationId}`}
-                  target="_blank" rel="noopener noreferrer"
-                  className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Open task
-                  <RiExternalLinkLine size={12} />
-                </a>
-              )}
-            </p>
+            <div key={action.id}>
+              <p className={cn("flex items-center gap-1.5", action.ok ? "text-foreground" : "text-destructive")}>
+                {action.ok ? <RiCheckLine size={14} className="shrink-0 text-green-600" /> : <RiErrorWarningLine size={14} className="shrink-0" />}
+                <span className="min-w-0 truncate">{action.label}</span>
+                {action.conversationId && (
+                  <a
+                    href={`${basePath}/chat?continue=${action.conversationId}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Open task
+                    <RiExternalLinkLine size={12} />
+                  </a>
+                )}
+              </p>
+              {action.links?.length ? (
+                <div className="mt-1 flex flex-wrap gap-1.5 pl-5" data-testid="voice-link-chips">
+                  {action.links.map((link, _, all) => (
+                    <a
+                      key={link.href}
+                      href={link.href}
+                      target="_blank" rel="noopener noreferrer"
+                      title={link.href}
+                      data-testid="voice-link-chip"
+                      className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-foreground hover:bg-accent max-md:py-1.5"
+                    >
+                      {all.length > 1 && <span className="font-medium text-muted-foreground">{link.number}</span>}
+                      <span className="min-w-0 truncate">{link.label}</span>
+                      <RiExternalLinkLine size={12} className="shrink-0 text-muted-foreground" />
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ))}
         </div>
       )}

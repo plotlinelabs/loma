@@ -2017,7 +2017,7 @@ export default function ChatPanel({
                             <div key={i} className="chat-text min-w-0 text-[13px] leading-relaxed break-words">
                               {authorLabel}
                               {item.content && (
-                                <div className="mb-3 [&>*:first-child]:mt-0">
+                                <div data-chat-reply="" className="mb-3 [&>*:first-child]:mt-0">
                                   <MarkdownContent content={item.content} />
                                 </div>
                               )}
@@ -2047,7 +2047,7 @@ export default function ChatPanel({
                             <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
                               {authorLabel}
                               {displayText ? (
-                                <MarkdownContent content={displayText} />
+                                <div data-chat-reply=""><MarkdownContent content={displayText} /></div>
                               ) : (pending || item.artifactIds?.length || item.fileAttachments?.length) ? (
                                 null /* Artifact/file-only message — cards rendered below */
                               ) : (

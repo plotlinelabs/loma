@@ -10,6 +10,7 @@ import {
   type RunOutcome, type VoiceLine, type VoiceToolCall,
 } from "@/lib/voice-dispatcher";
 import { readTaskScreen, scrollTaskScreen, type ScrollAmount, type ScrollDirection } from "@/lib/voice-viewport";
+import { collectLinks, openLinkInNewTab, readTaskLinks, resolveLinkRef } from "@/lib/voice-links";
 
 export type VoiceState = "idle" | "connecting" | "listening" | "working" | "speaking";
 
@@ -19,6 +20,8 @@ export interface VoiceAction {
   ok: boolean;
   /** Task the action touched; the panel links to it. */
   conversationId?: string;
+  /** Validated links from the open task, shown as numbered chips to tap. */
+  links?: Array<{ number: number; label: string; href: string }>;
 }
 
 /** Live audio is billed per second, so a forgotten session ends itself. */
@@ -56,7 +59,7 @@ export function useVoiceAvailable(): boolean {
 /** Voice dispatcher for the tasks board: a live WebRTC session with the
  * voice model, whose delegated tool calls run here against the normal task
  * routes. Voice only hands out, reads, steers, stops, moves, opens and closes tasks,
- * scrolls and reads the task that is open, and ends itself when asked.
+ * scrolls and reads the task that is open, opens a link from its replies, and ends itself when asked.
  * While it is on it also watches the board and announces tasks that stop. */
 export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask, onTaskActivity }: {
   boardId?: string;
@@ -170,8 +173,8 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
     closeTimerRef.current = setTimeout(() => cleanup(), CLOSE_TIMEOUT_MS);
   }, [cleanup, send]);
 
-  const logAction = useCallback((label: string, ok: boolean, conversationId?: string) => {
-    setActions((prev) => [...prev, { id: `${Date.now()}-${prev.length}`, label, ok, conversationId }].slice(-20));
+  const logAction = useCallback((label: string, ok: boolean, conversationId?: string, links?: VoiceAction["links"]) => {
+    setActions((prev) => [...prev, { id: `${Date.now()}-${prev.length}`, label, ok, conversationId, links }].slice(-20));
   }, []);
 
   const runTool = useCallback(async (call: VoiceToolCall): Promise<ToolResult> => {
@@ -339,6 +342,30 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
           const screen = readTaskScreen();
           if (!screen) return { task_open: false, showing: "The task board. No task is open." };
           return { task_open: true, ...screen };
+        }
+        case "open_link": {
+          // Only links the open task's agent showed; URLs and labels stay out of the result.
+          const screen = readTaskLinks();
+          if (!screen) return { opened: false, reason: "No task is open on the screen. Open the task first." };
+          const links = collectLinks(screen.links);
+          const numbered = new Map(links.map((l, i) => [l.href, i + 1]));
+          const chip = (l: (typeof links)[number]) => ({ number: numbered.get(l.href) ?? 0, label: l.label, href: l.href });
+          const choice = resolveLinkRef(links, text("link"));
+          if ("none" in choice) return { opened: false, reason: choice.none, links_in_task: links.length };
+          if ("ambiguous" in choice) {
+            logAction("Which link? Tap one or say its number", true, undefined, choice.ambiguous.slice(0, 6).map(chip));
+            return {
+              opened: false, ambiguous: true, count: choice.ambiguous.length,
+              choices: choice.ambiguous.slice(0, 6).map((l) => ({ number: numbered.get(l.href), kind: l.kind })),
+            };
+          }
+          const { link } = choice;
+          if (openLinkInNewTab(link.href)) {
+            logAction(`Opened ${link.kind}: ${link.label}`, true, undefined, [chip(link)]);
+            return { ok: true, opened: true, kind: link.kind };
+          }
+          logAction(`Tap to open ${link.kind}: ${link.label}`, true, undefined, [chip(link)]);
+          return { opened: false, blocked: true, kind: link.kind, reason: "The browser blocked the new tab. A link is on screen to tap." };
         }
         case "end_voice": {
           endingRef.current ??= { at: Date.now(), quietAt: 0, spoke: false };
