@@ -15,7 +15,7 @@ import tarfile
 import zipfile
 
 import yaml
-from agent.plan_mode import plan_from_tool_call, plan_mode_requested
+from agent.plan_mode import clarify_from_tool_call, plan_from_tool_call, plan_mode_requested
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeSDKClient,
@@ -1505,6 +1505,12 @@ async def _stream_agent(
                                     if observer:
                                         await observer.record_artifact({**plan_artifact, "artifact_type": "code"})
                                     yield {"type": "artifact", **plan_artifact}
+                            clarify_text = clarify_from_tool_call(block.name, block.input)
+                            if clarify_text and include_steps and source == "dashboard":
+                                # Recorded as text so the question card survives a reload.
+                                if observer:
+                                    await observer.record_text(turn_count, clarify_text)
+                                yield {"type": "text", "text": clarify_text}
                         else:
                             logger.info("[BLOCK] type=%s", type(block).__name__)
 

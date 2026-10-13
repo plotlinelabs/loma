@@ -1195,6 +1195,14 @@ async def handle_chat(request: web.Request) -> web.Response:
     run_id = None
     db = get_db()
     existing_conversation_id = body.get("conversation_id")
+    # `/review <link>` etc.: the transcript keeps what was typed, the agent
+    # gets the template's full instructions (api/prompt_templates.py).
+    agent_prompt = message
+    from api.prompt_templates import expand_command
+    command = await expand_command(db, user_email, message)
+    if command:
+        agent_prompt = command.prompt
+        plan_mode = plan_mode or command.plan_mode
     try:
         if db is not None:
             metadata = {
@@ -1370,7 +1378,7 @@ async def handle_chat(request: web.Request) -> web.Response:
             if is_draining():
                 return await _queue_chat_for_deploy(
                     db, existing_conversation_id or str(uuid.uuid4()), existing, metadata,
-                    message, files, user_email, selected_model, tool_config,
+                    agent_prompt, files, user_email, selected_model, tool_config,
                     conversation_context, run_tool_config=run_tool_config,
                 )
 
@@ -1440,7 +1448,7 @@ async def handle_chat(request: web.Request) -> web.Response:
 
         try:
             async for event in stream_agent(
-                prompt=message,
+                prompt=agent_prompt,
                 conversation_context=conversation_context,
                 files=files,
                 observer=observer,
@@ -2584,6 +2592,8 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/token-usage", handle_token_usage)
     app.router.add_get("/api/persons", handle_list_persons)
     app.router.add_post("/api/conversations/generate-titles", handle_generate_titles)
+    from api.prompt_templates import register_routes as register_prompt_template_routes
+    register_prompt_template_routes(app)
     app.router.add_get("/api/agent-models", handle_agent_models)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_get("/api/skills", handle_list_skills)

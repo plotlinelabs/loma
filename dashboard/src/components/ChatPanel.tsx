@@ -24,6 +24,8 @@ import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, Persisted
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import { CopyButton } from "./CopyButton";
+import { SlashCommandHint, SlashCommandMenu, slashMatches } from "./composer/SlashCommandMenu";
+import { matchCommand, usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
 import type { Artifact } from "./ArtifactViewer";
 import PetCompanion, { PetRunway } from "./PetCompanion";
@@ -907,6 +909,10 @@ export default function ChatPanel({
   const sendInFlightRef = useRef<string | null>(null);
   // Plan mode: the agent researches read-only and proposes a plan to review.
   const [planMode, setPlanMode] = useState(false);
+  // Slash commands: highlighted row, and the input the menu was dismissed at.
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissedAt, setSlashDismissedAt] = useState<string | null>(null);
+  const { templates: promptTemplates } = usePromptTemplates();
   const handleSendRef = useRef<
     ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] }) => Promise<void>) | null
   >(null);
@@ -987,6 +993,7 @@ export default function ChatPanel({
   // draft safe even when the drawer is closed immediately after the last key.
   const updateComposerInput = (value: string) => {
     setInput(value);
+    setSlashIndex(0);
     if (!draftStorageKey) return;
     try {
       if (value.trim()) window.localStorage.setItem(draftStorageKey, value);
@@ -1189,7 +1196,11 @@ export default function ChatPanel({
       planMode: planModeOverride,
     }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[]; planMode?: boolean } = {},
   ) => {
-    const sendInPlanMode = planModeOverride ?? planMode;
+    // A plan-mode command (/plan) turns plan mode on, and keeps it on for
+    // the review that follows, as the Plan toggle does.
+    const commandPlansFirst = !!matchCommand(promptTemplates, (overrideMessage ?? input).trim())?.plan_mode;
+    if (commandPlansFirst && planModeOverride === undefined) setPlanMode(true);
+    const sendInPlanMode = planModeOverride ?? (planMode || commandPlansFirst);
     const displayText = overrideMessage ?? input.trim();
     // Files that rode a queued message are sent with it, not re-read from the composer.
     const carriedFiles = queuedFiles && queuedFiles.length > 0 ? queuedFiles : undefined;
@@ -1643,7 +1654,34 @@ export default function ChatPanel({
     setEditingQueuedText("");
   };
 
+  const visibleSlashMatches = slashDismissedAt === input ? [] : slashMatches(promptTemplates, input);
+  const activeCommand = matchCommand(promptTemplates, input);
+  const applyCommand = (template: { name: string }) => {
+    updateComposerInput(`/${template.name} `);
+    setSlashIndex(0);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (visibleSlashMatches.length) {
+      const count = visibleSlashMatches.length;
+      const index = Math.min(slashIndex, count - 1);
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIndex((index + (e.key === "ArrowDown" ? 1 : count - 1)) % count);
+        return;
+      }
+      if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey)) {
+        e.preventDefault();
+        applyCommand(visibleSlashMatches[index]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissedAt(input);
+        return;
+      }
+    }
     // Shift+Tab toggles plan mode, as in Claude Code.
     if (e.key === "Tab" && e.shiftKey && !readOnly) {
       e.preventDefault();
@@ -1849,6 +1887,14 @@ export default function ChatPanel({
             >
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
+              <div className="relative">
+              {activeCommand && !visibleSlashMatches.length && <SlashCommandHint template={activeCommand} />}
+              <SlashCommandMenu
+                matches={visibleSlashMatches}
+                activeIndex={Math.min(slashIndex, Math.max(visibleSlashMatches.length - 1, 0))}
+                onSelect={applyCommand}
+                onHover={setSlashIndex}
+              />
               <div className="relative flex flex-col bg-card border border-border rounded-2xl composer-shadow focus-within:border-input transition-colors">
                 <Textarea
                   ref={inputRef}
@@ -1861,7 +1907,7 @@ export default function ChatPanel({
                     // message in view above the composer.
                     if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? "Type your next message..." : isMobile ? "Ask Loma anything..." : "What do you need to get done?"}
+                  placeholder={isStreaming ? "Type your next message..." : isMobile ? "Ask Loma anything..." : "What do you need to get done? Type / for commands"}
                   rows={isMobile ? 1 : 2}
                   className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-base md:text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
@@ -1901,6 +1947,7 @@ export default function ChatPanel({
                     </Button>
                   </div>
                 </div>
+              </div>
               </div>
             </form>}
           </div>
@@ -2196,6 +2243,14 @@ export default function ChatPanel({
               {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
+              <div className="relative">
+              {activeCommand && !visibleSlashMatches.length && <SlashCommandHint template={activeCommand} />}
+              <SlashCommandMenu
+                matches={visibleSlashMatches}
+                activeIndex={Math.min(slashIndex, Math.max(visibleSlashMatches.length - 1, 0))}
+                onSelect={applyCommand}
+                onHover={setSlashIndex}
+              />
               <div className={cn(
                 "flex bg-card border border-border composer-shadow focus-within:border-input transition-colors",
                 isMobile ? "items-end gap-0.5 rounded-[26px] p-1" : "flex-col rounded-2xl",
@@ -2212,7 +2267,7 @@ export default function ChatPanel({
                     // message in view above the composer.
                     if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : "Ask the agent something..."}
+                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : "Ask anything, or type / for commands"}
                   rows={1}
                   className={cn(
                     "bg-transparent text-base md:text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
@@ -2267,6 +2322,7 @@ export default function ChatPanel({
                     </Button>
                   </div>
                 </div>
+              </div>
               </div>
             </form>}
           </div>

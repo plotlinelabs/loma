@@ -1946,3 +1946,49 @@ export async function skillSourceRequest<T>(path: string, body?: object): Promis
   if (!res.ok) throw new Error(data.error || "Google skill request failed");
   return data;
 }
+
+// ── Prompt templates (slash commands) ───────────────────────────────────────
+
+export interface PromptTemplate {
+  /** Typed as `/name`. */
+  name: string;
+  description: string;
+  /** Shown after the command, e.g. "<PR link>". */
+  input_hint: string;
+  /** `{input}` is replaced by what follows the command. */
+  body: string;
+  /** Sending it turns on plan mode. */
+  plan_mode: boolean;
+  builtin: boolean;
+}
+
+export type PromptTemplateInput = Pick<PromptTemplate, "name" | "description" | "input_hint" | "body" | "plan_mode">;
+
+async function templateRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/prompt-templates${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Template request failed: ${res.status}`);
+  return body as T;
+}
+
+export async function fetchPromptTemplates(): Promise<PromptTemplate[]> {
+  return (await templateRequest<{ templates: PromptTemplate[] }>("")).templates;
+}
+
+export async function createPromptTemplate(template: PromptTemplateInput): Promise<PromptTemplate> {
+  return (await templateRequest<{ template: PromptTemplate }>("", { method: "POST", body: JSON.stringify(template) })).template;
+}
+
+export async function updatePromptTemplate(name: string, template: Omit<PromptTemplateInput, "name">): Promise<PromptTemplate> {
+  return (await templateRequest<{ template: PromptTemplate }>(`/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify(template),
+  })).template;
+}
+
+export async function deletePromptTemplate(name: string): Promise<void> {
+  await templateRequest(`/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
