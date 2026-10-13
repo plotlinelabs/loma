@@ -1207,7 +1207,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                 # Check if conversation already exists (resume) or is client-generated (start)
                 existing = await db.conversations.find_one(
                     {"conversation_id": existing_conversation_id},
-                    {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1,
+                    {"_id": 1, "task_status": 1, "status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1,
                      "task_board_id": 1, "task_card_id": 1, "task_assignee": 1, "human_task": 1},
                 )
                 if existing and not _check_conversation_access(
@@ -1307,7 +1307,8 @@ async def handle_chat(request: web.Request) -> web.Response:
                         flip["task_started_at"] = now
                     # The first message sent is the thread's prompt. Drafts can
                     # be staged empty or edited in the composer before sending.
-                    if not existing.get("messages"):
+                    # A draft that never ran has no status; parked chats keep theirs.
+                    if not existing.get("status"):
                         flip["prompt"] = message
                     await db.conversations.update_one(
                         {"conversation_id": existing_conversation_id},
