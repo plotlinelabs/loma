@@ -1084,7 +1084,7 @@ async def _busy_conversation_response(
 async def _queue_chat_for_deploy(
     db, conversation_id: str, existing, metadata: dict, message: str, files,
     user_email: str, selected_model, tool_config, conversation_context: str,
-    run_tool_config=None,
+    run_tool_config=None, agent_prompt: str | None = None,
 ) -> web.Response:
     """202 for a chat message that arrived while a deploy drains.
 
@@ -1108,7 +1108,8 @@ async def _queue_chat_for_deploy(
         conversation_id=conversation_id,
         user_email=user_email,
         source="dashboard",
-        prompt=message,
+        # A slash command is recorded as typed but runs as its template.
+        prompt=agent_prompt or message,
         files=files or [],
         model=selected_model or "",
         tool_config=run_tool_config or tool_config,
@@ -1378,8 +1379,9 @@ async def handle_chat(request: web.Request) -> web.Response:
             if is_draining():
                 return await _queue_chat_for_deploy(
                     db, existing_conversation_id or str(uuid.uuid4()), existing, metadata,
-                    agent_prompt, files, user_email, selected_model, tool_config,
+                    message, files, user_email, selected_model, tool_config,
                     conversation_context, run_tool_config=run_tool_config,
+                    agent_prompt=agent_prompt,
                 )
 
             if existing_conversation_id:
