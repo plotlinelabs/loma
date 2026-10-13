@@ -25,6 +25,25 @@ import { fetchConversation, fetchFlow, basePath } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
 import { MobileTopBarActions, MobileTopBarTitle, useHideBottomNav } from "@/components/mobile/MobileChrome";
 
+/** Past this, a load is treated as failed and offers Retry instead of spinning forever. */
+const LOAD_TIMEOUT_MS = 30_000;
+
+class LoadTimeoutError extends Error {}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new LoadTimeoutError("timed out")), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+function previewOf(prompt: string): string {
+  return prompt.length > 80 ? prompt.slice(0, 80) + "..." : prompt;
+}
+
 // ── Chat Page Content ───────────────────────────────────────────────────────
 
 function ChatPageContent() {
@@ -49,6 +68,8 @@ function ChatPageContent() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleValue, setTitleValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Bumped by Retry to reload a conversation that failed or timed out.
+  const [reloadKey, setReloadKey] = useState(0);
   // Draft prompt/files for staged board tasks — prefill the composer (or auto-send with ?start=1)
   const [taskDraftPrompt, setTaskDraftPrompt] = useState<string | null>(null);
   const [taskDraftFiles, setTaskDraftFiles] = useState<ChatFile[] | null>(null);
@@ -79,17 +100,20 @@ function ChatPageContent() {
     setConversationOwner(user?.email || null);
   }, [user?.email]);
 
-  // After stream completes, poll for the async-generated title
+  // After a run, the title is written in the background (an LLM call that
+  // can take 15s+). Check a few times with backoff until the LLM title lands.
   const handleStreamComplete = useCallback((convId: string) => {
-    setTimeout(async () => {
+    const delays = [3000, 7000, 15000, 30000];
+    const check = async (attempt: number) => {
       try {
         const data = await fetchConversation(convId);
-        if (data.conversation?.title) {
-          setConversationTitle(data.conversation.title);
-        }
+        if (data.conversation?.title) setConversationTitle(data.conversation.title);
         window.dispatchEvent(new Event("conversations-updated"));
+        if (data.conversation?.title_edited || data.conversation?.title_source === "llm") return;
       } catch {}
-    }, 4000);
+      if (attempt + 1 < delays.length) setTimeout(() => check(attempt + 1), delays[attempt + 1]);
+    };
+    setTimeout(() => check(0), delays[0]);
   }, []);
 
   useEffect(() => {
@@ -126,8 +150,14 @@ function ChatPageContent() {
     }
 
     async function loadConversation() {
+      setError(null);
       try {
-        const data = await fetchConversation(continueId!);
+        const data = await withTimeout(fetchConversation(continueId!), LOAD_TIMEOUT_MS);
+        // The stored prompt can be empty (board drafts staged empty); the
+        // first message sent is what the thread is about.
+        const firstPrompt = data.conversation.prompt
+          || data.conversation.messages?.find((m) => m.role === "user")?.content
+          || "";
         setHumanTaskId(data.conversation.human_task ? continueId : null);
         setConversationOwner(data.conversation.metadata?.user_name || null);
         setConversationShared(data.conversation.metadata?.visibility === "shared");
@@ -139,16 +169,12 @@ function ChatPageContent() {
           // sent message) — put the draft in the composer instead. Parked
           // chats (staged after running) fall through to the normal rebuild.
           setInitialItems([]);
-          setTaskDraftPrompt(data.conversation.prompt);
+          setTaskDraftPrompt(data.conversation.prompt || "");
           setTaskDraftFiles(data.conversation.draft_files || null);
           setTaskModel(data.conversation.model || null);
           setTaskToolConfig(data.conversation.tool_config || null);
           setConversationTitle(data.conversation.title || null);
-          setPromptPreview(
-            data.conversation.prompt.length > 80
-              ? data.conversation.prompt.slice(0, 80) + "..."
-              : data.conversation.prompt
-          );
+          setPromptPreview(previewOf(firstPrompt));
           return;
         }
         const { items, artifacts: restoredArtifacts } = rebuildItemsFromConversation(
@@ -165,19 +191,17 @@ function ChatPageContent() {
         setInitialStatus(data.conversation.status);
         setConversationTitle(data.conversation.title || null);
         setProjectId(data.conversation.project_id || null);
-        setPromptPreview(
-          data.conversation.prompt.length > 80
-            ? data.conversation.prompt.slice(0, 80) + "..."
-            : data.conversation.prompt
-        );
+        setPromptPreview(previewOf(firstPrompt));
       } catch (e) {
         console.error("Failed to load conversation for continuation:", e);
-        setError("Failed to load conversation");
+        setError(e instanceof LoadTimeoutError
+          ? "This conversation is taking too long to load."
+          : "Failed to load conversation");
       } finally {
         setLoading(false);
       }
     }
-  }, [continueId, flowId, taskId]);
+  }, [continueId, flowId, taskId, reloadKey]);
 
   // Derive the display title for the header
   const headerTitle = flowId
@@ -361,7 +385,23 @@ function ChatPageContent() {
 
       {error && (
         <div className="px-3 lg:px-4 py-2">
-          <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>
+          <Alert variant="destructive">
+            <AlertDescription className="flex items-center justify-between gap-3">
+              <span>{error}</span>
+              {continueId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setLoading(true);
+                    setReloadKey((k) => k + 1);
+                  }}
+                >
+                  Retry
+                </Button>
+              )}
+            </AlertDescription>
+          </Alert>
         </div>
       )}
 

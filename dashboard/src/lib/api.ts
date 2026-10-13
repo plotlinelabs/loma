@@ -61,6 +61,10 @@ export interface Conversation {
   claude_account?: string | null;
   project_id?: string | null;
   title_edited?: boolean;
+  /** "fallback" until the LLM names the thread (it retries on later runs). */
+  title_source?: "llm" | "fallback";
+  /** Written every 30s while a run is alive. */
+  last_heartbeat?: string;
   deleted?: boolean;
   task_status?: "todo" | "active" | "done" | null;
   /** Attachments staged with a board-task draft (cleared once started) */

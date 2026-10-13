@@ -491,6 +491,9 @@ class ConversationObserver:
         except Exception as e:
             logger.warning("Observability: failed to record error: %s", e)
 
+        # A thread whose first run fails still needs a name in the sidebar.
+        asyncio.create_task(self._run_title_topic_enrichment("", title_only=True))
+
         from observability.push import fire_task_push
         fire_task_push(self.db, self.conversation_id)
 
@@ -526,49 +529,51 @@ class ConversationObserver:
         from observability.push import fire_task_push
         fire_task_push(self.db, self.conversation_id)
 
-    async def _run_title_topic_enrichment(self, final_response: str):
+    async def _run_title_topic_enrichment(self, final_response: str, title_only: bool = False):
         """Generate title and topic for the conversation via LLM."""
         try:
-            from api.routes import _generate_title_llm, _classify_topic_llm
+            from api.routes import generate_title, _classify_topic_llm
             prompt = self.metadata.get("prompt", "")
             response_snippet = (final_response or "")[:300]
 
             existing = await self.db.conversations.find_one(
                 {"conversation_id": self.conversation_id},
-                {"title_edited": 1, "messages.role": 1},
+                {"title": 1, "title_edited": 1, "title_source": 1,
+                 "messages.role": 1, "messages.content": 1},
+            ) or {}
+            user_messages = [
+                m.get("content") or "" for m in existing.get("messages", [])
+                if m.get("role") == "user"
+            ]
+            # Refresh after user messages 1, 6, 11, ...; agent/tool turns don't
+            # count. An untitled thread, or one holding the word-slice fallback,
+            # is (re)titled on every run until the LLM names it.
+            needs_title = not existing.get("title") or existing.get("title_source") == "fallback"
+            refresh_title = not existing.get("title_edited") and user_messages and (
+                needs_title or (len(user_messages) - 1) % 5 == 0
             )
-            user_message_count = sum(
-                message.get("role") == "user"
-                for message in (existing or {}).get("messages", [])
-            )
-            # Refresh after user messages 1, 6, 11, ...; agent/tool turns don't count.
-            refresh_title = (
-                not (existing or {}).get("title_edited")
-                and user_message_count > 0
-                and (user_message_count - 1) % 5 == 0
-            )
+            # Name the thread from where it started, not only the latest message.
+            first = user_messages[0] if user_messages else ""
+            title_context = first if not prompt or prompt == first else f"{first}\n\nLatest: {prompt}"
             title = None
             if refresh_title:
-                title, topic = await asyncio.gather(
-                    _generate_title_llm(prompt, response_snippet, db=self.db, conversation_id=self.conversation_id),
-                    _classify_topic_llm(prompt, response_snippet, db=self.db, conversation_id=self.conversation_id),
-                )
-            else:
-                topic = await _classify_topic_llm(prompt, response_snippet, db=self.db, conversation_id=self.conversation_id)
-
-            await self.db.conversations.update_one(
-                {"conversation_id": self.conversation_id},
-                {"$set": {"topic": topic}},
-            )
-            if refresh_title:
+                title, from_llm = await generate_title(
+                    title_context, response_snippet, db=self.db, conversation_id=self.conversation_id)
                 # Check at write time too: a rename may happen during the LLM call.
                 await self.db.conversations.update_one(
                     {"conversation_id": self.conversation_id,
                      "title_edited": {"$ne": True}},
-                    {"$set": {"title": title}},
+                    {"$set": {"title": title, "title_source": "llm" if from_llm else "fallback"}},
                 )
-            logger.info("Observability: enrichment complete for %s: title=%r topic=%s",
-                         self.conversation_id, title, topic)
+            if not title_only:
+                topic = await _classify_topic_llm(
+                    title_context or prompt, response_snippet, db=self.db, conversation_id=self.conversation_id)
+                await self.db.conversations.update_one(
+                    {"conversation_id": self.conversation_id},
+                    {"$set": {"topic": topic}},
+                )
+            logger.info("Observability: enrichment complete for %s: title=%r",
+                         self.conversation_id, title)
         except Exception as e:
             logger.warning("Observability: title/topic enrichment failed for %s: %s",
                            self.conversation_id, e)

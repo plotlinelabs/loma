@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { Artifact } from "./ArtifactViewer";
+import { markdownComponents } from "./MarkdownCodeBlock";
 
 export type PlanStatus = "pending" | "approved" | "superseded";
 
@@ -136,7 +137,7 @@ export default function PlanReview({ plan, actions }: { plan: Artifact; actions?
           {reviewable && <span className="ml-auto hidden md:inline">Select text to comment</span>}
         </div>
         <div className="prose prose-sm mx-auto max-w-[72ch] prose-code:before:content-none prose-code:after:content-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{plan.content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{plan.content}</ReactMarkdown>
         </div>
 
         {selection && draftQuote === null && (

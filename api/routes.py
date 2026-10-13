@@ -319,8 +319,17 @@ def _fallback_title(prompt: str) -> str:
 async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
     """Generate a short 5-word conversation title using Claude Haiku.
 
-    Uses the claude CLI (same pattern as observability/confidence.py).
     Falls back to extracting words from the prompt on any failure.
+    """
+    title, _ = await generate_title(prompt, response_snippet, db=db, conversation_id=conversation_id)
+    return title
+
+
+async def generate_title(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> tuple[str, bool]:
+    """Return (title, from_llm). from_llm is False for the word-slice fallback,
+    so callers can mark it and retry on a later run.
+
+    Uses the claude CLI (same pattern as observability/confidence.py).
     """
     context = prompt[:500]
     if response_snippet:
@@ -339,7 +348,8 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=Non
             from isolation.utility import complete
             raw = await complete(message, db=db, conversation_id=conversation_id, timeout=45)
             title = raw.strip().strip('"').strip("'").strip()
-            return ' '.join(title.split()[:8]) or _fallback_title(prompt)
+            title = ' '.join(title.split()[:8])
+            return (title, True) if title else (_fallback_title(prompt), False)
         from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
@@ -355,7 +365,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=Non
         if proc.returncode != 0:
             detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
             logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, detail)
-            return _fallback_title(prompt)
+            return _fallback_title(prompt), False
 
         output = stdout.decode().strip()
         try:
@@ -369,14 +379,14 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=Non
         words = title.split()
         if len(words) > 8:
             title = " ".join(words[:8])
-        return title or _fallback_title(prompt)
+        return (title, True) if title else (_fallback_title(prompt), False)
 
     except asyncio.TimeoutError:
         logger.warning("Title generation timed out")
-        return _fallback_title(prompt)
+        return _fallback_title(prompt), False
     except Exception as e:
         logger.warning("Title generation failed: %s", e)
-        return _fallback_title(prompt)
+        return _fallback_title(prompt), False
 
 
 async def _classify_topic_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
@@ -1295,6 +1305,10 @@ async def handle_chat(request: web.Request) -> web.Response:
                     if not existing.get("started_at"):
                         flip["started_at"] = now
                         flip["task_started_at"] = now
+                    # The first message sent is the thread's prompt. Drafts can
+                    # be staged empty or edited in the composer before sending.
+                    if not existing.get("messages"):
+                        flip["prompt"] = message
                     await db.conversations.update_one(
                         {"conversation_id": existing_conversation_id},
                         # Draft attachments ride the first message (the client

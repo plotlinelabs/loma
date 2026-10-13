@@ -778,6 +778,8 @@ async def run_codex_agent(
     ``extra_env`` reaches the worker only when one is started for this run
     (per-user MCP overrides); warm pooled workers were started without it.
     """
+    from agent.opencode_runtime import _emit_text
+
     from agent.codex_pool import get_codex_pool
 
     model_id = normalize_codex_model(selected_model) or default_codex_model()
@@ -841,6 +843,8 @@ async def run_codex_agent(
 
     last_text = ""
     streamed_text = ""
+    emitted_artifact_ids: set[str] = set()
+    emitted_file_paths: set[str] = set()
     total_usage = {"input_tokens": 0, "output_tokens": 0,
                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     emitted_tool_results: set[str] = set()
@@ -895,11 +899,20 @@ async def run_codex_agent(
                 message = event.get("message") or ""
                 if message:
                     last_text = message
-                    if observer:
-                        await observer.record_text(turn_count, message)
                     if not streamed_text:
                         yield {"type": "text", "text": message, "append": True}
                     streamed_text = ""
+                    # Records the text, then emits artifact cards (designs,
+                    # plans, documents) and file downloads, as OpenCode does.
+                    # Codex streamed the text itself, so it isn't re-emitted.
+                    async for extra in _emit_text(
+                        message, turn_count=turn_count, observer=observer,
+                        include_steps=include_steps, source=source,
+                        emitted_artifact_ids=emitted_artifact_ids,
+                        emitted_file_paths=emitted_file_paths,
+                        emit_text=False, user_email=user_email,
+                    ):
+                        yield extra
 
             elif etype in ("exec_command_begin", "mcp_tool_call_begin", "web_search_begin"):
                 call_id = event.get("call_id") or ""

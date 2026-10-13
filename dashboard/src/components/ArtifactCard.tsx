@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Artifact } from "./ArtifactViewer";
 import { PlanStatusDot, type PlanStatus } from "./PlanReview";
+import { CopyButton } from "./CopyButton";
 
 // ── Language icons ──────────────────────────────────────────────────────────────
 
@@ -130,7 +131,40 @@ function DesignThumbnail({ artifact }: { artifact: Artifact }) {
   );
 }
 
-export default function ArtifactCard({ artifact, isActive, onClick, planStatus }: ArtifactCardProps) {
+/**
+ * Artifact card plus a copy action for text artifacts. The card is itself a
+ * button, so the copy control sits beside it in a wrapper, not inside it.
+ */
+export default function ArtifactCard(props: ArtifactCardProps) {
+  const { artifact, planStatus } = props;
+  const copyable = !artifact.file_url && !!artifact.content;
+  if (!copyable) return <ArtifactCardBody {...props} />;
+  const language = artifact.language.toLowerCase();
+  const isPlan = language === "plan";
+  const isDesign = DESIGN_LANGUAGES.has(language);
+  // Keep clear of each variant's own right-hand content (arrow, "Review").
+  const position = isDesign
+    ? "right-2 top-2"
+    : isPlan && (planStatus ?? "pending") === "pending"
+      ? "right-[4.75rem] top-1/2 -translate-y-1/2"
+      : "right-8 top-1/2 -translate-y-1/2";
+  return (
+    <div className={cn("group/card relative w-full", isPlan ? "max-w-[420px]" : "max-w-[320px]")}>
+      <ArtifactCardBody {...props} />
+      <CopyButton
+        text={artifact.content}
+        label={`Copy ${getLanguageLabel(artifact.language)}`}
+        className={cn(
+          "absolute h-7 w-7 rounded-md bg-background/85 text-muted-foreground backdrop-blur hover:text-foreground",
+          "opacity-0 transition-opacity group-hover/card:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
+          position,
+        )}
+      />
+    </div>
+  );
+}
+
+function ArtifactCardBody({ artifact, isActive, onClick, planStatus }: ArtifactCardProps) {
   const isFileArtifact = !!artifact.file_url;
   const isDesign = !isFileArtifact && DESIGN_LANGUAGES.has(artifact.language.toLowerCase());
   const lineCount = artifact.content ? artifact.content.split("\n").length : 0;
