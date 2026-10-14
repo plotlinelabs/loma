@@ -108,21 +108,25 @@ class TestGmailParseAttachments:
 class TestGmailBuildMessageWithAttachments:
     """Test _build_message_with_attachments helper."""
 
-    def test_no_attachments_returns_mime_text(self):
+    def test_no_attachments_returns_alternative(self):
         from tools.gmail import _build_message_with_attachments
         msg = _build_message_with_attachments("Hello world")
-        assert isinstance(msg, MIMEText)
-        assert "Hello world" in msg.as_string()
+        assert msg.get_content_type() == "multipart/alternative"
+        plain, html = msg.get_payload()
+        assert plain.get_content_type() == "text/plain"
+        assert html.get_content_type() == "text/html"
+        assert "Hello world" in plain.get_payload(decode=True).decode()
+        assert "Hello world" in html.get_payload(decode=True).decode()
 
-    def test_none_attachments_returns_mime_text(self):
+    def test_none_attachments_returns_alternative(self):
         from tools.gmail import _build_message_with_attachments
         msg = _build_message_with_attachments("Hello world", None)
-        assert isinstance(msg, MIMEText)
+        assert msg.get_content_type() == "multipart/alternative"
 
-    def test_empty_list_returns_mime_text(self):
+    def test_empty_list_returns_alternative(self):
         from tools.gmail import _build_message_with_attachments
         msg = _build_message_with_attachments("Hello world", [])
-        assert isinstance(msg, MIMEText)
+        assert msg.get_content_type() == "multipart/alternative"
 
     def test_with_text_attachment(self, temp_text_file):
         from tools.gmail import _build_message_with_attachments
@@ -131,9 +135,9 @@ class TestGmailBuildMessageWithAttachments:
         # Should have 2 parts: text body + attachment
         parts = msg.get_payload()
         assert len(parts) == 2
-        # First part is text
-        assert parts[0].get_content_type() == "text/plain"
-        assert "Body text" in parts[0].get_payload()
+        # First part is the plain+HTML body
+        assert parts[0].get_content_type() == "multipart/alternative"
+        assert "Body text" in parts[0].get_payload()[0].get_payload(decode=True).decode()
         # Second part is attachment
         assert parts[1].get_content_type() == "text/plain"
         disposition = parts[1].get("Content-Disposition", "")

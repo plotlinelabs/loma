@@ -6,9 +6,13 @@ a user's personal Google OAuth tokens.
 Commands:
   1. gmail.py list-inbox --user-email EMAIL [--limit N] [--query Q]
   2. gmail.py read-email --user-email EMAIL --message-id ID
-  3. gmail.py send-email --user-email EMAIL --to ADDR --subject S --body B [--cc ADDR] [--attachments PATH1,PATH2]
+  3. gmail.py send-email --user-email EMAIL --to ADDR --subject S --body B [--cc ADDR] [--attachments PATH1,PATH2] [--thread-id TID --in-reply-to MSG_ID]
   4. gmail.py search --user-email EMAIL --query Q [--limit N]
   5. gmail.py create-draft --user-email EMAIL --body B [--to ADDR] [--subject S] [--cc ADDR] [--thread-id TID] [--in-reply-to MSG_ID] [--attachments PATH1,PATH2] [--html-body HTML | --html-body-file PATH]
+  6. gmail.py send-draft --user-email EMAIL --draft-id DRAFT_ID
+  7. gmail.py list-drafts --user-email EMAIL [--limit N] [--query Q]
+  8. gmail.py delete-draft --user-email EMAIL --draft-id DRAFT_ID
+     (permanent: Gmail does not move deleted drafts to Trash)
 
   For rich, full-width emails with clickable links, pass --html-body-file (the HTML
   renders as the email; --body becomes the plain-text fallback). Use a file for large
@@ -24,6 +28,10 @@ Usage (called by the agent via Bash):
   python3 tools/gmail.py read-email --user-email adarsh@example.com --message-id 18abc123
   python3 tools/gmail.py send-email --user-email adarsh@example.com --to bob@example.com --subject "Hello" --body "Hi Bob"
   python3 tools/gmail.py search --user-email adarsh@example.com --query "from:alice subject:invoice"
+
+  Reply-all inside an existing thread: read-email the latest message, then pass its
+  threadId as --thread-id, its messageId (RFC Message-ID header) as --in-reply-to,
+  "Re: <subject>" as --subject, and its From/To/Cc as --to/--cc.
 """
 
 import argparse
@@ -135,6 +143,25 @@ def _html_to_plaintext(html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _plaintext_to_html(text: str) -> str:
+    """Render a plain-text body as minimal HTML that reflows like a typed email.
+
+    Gmail hard-wraps text/plain-only messages at ~76 chars (and shows drafts
+    with breaks mid-sentence). Shipping an HTML alternative makes clients flow
+    the text to the window width. Blank lines start a new paragraph, single
+    newlines become <br>, and the text is HTML-escaped so it shows literally.
+    """
+    import html as _htmllib
+
+    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    paragraphs = re.split(r"\n[ \t]*\n+", normalized)
+    blocks = []
+    for para in paragraphs:
+        lines = [_htmllib.escape(line) for line in para.split("\n")]
+        blocks.append("<div>" + "<br>\n".join(lines) + "</div>")
+    return "<div dir=\"ltr\">" + "\n<div><br></div>\n".join(blocks) + "</div>"
+
+
 def _build_message_with_attachments(
     body: str,
     attachment_paths: list[str] | None = None,
@@ -142,9 +169,9 @@ def _build_message_with_attachments(
 ) -> MIMEMultipart | MIMEText:
     """Build an email message, optionally with HTML and/or file attachments.
 
-    - Plain text only: returns MIMEText.
-    - With html_body: returns a multipart/alternative (plain-text fallback +
-      HTML) so clients render the rich version and it spans the full width.
+    - Always returns content as multipart/alternative (plain text + HTML). If no
+      html_body is given, one is generated from `body` so Gmail reflows the text
+      instead of hard-wrapping plain text at ~76 chars mid-sentence.
     - With attachments: wraps the content in multipart/mixed.
 
     Safety net: if no html_body is given but `body` itself looks like HTML, it is
@@ -155,13 +182,13 @@ def _build_message_with_attachments(
         html_body = body
         body = _html_to_plaintext(body)
 
-    # Content part: plain text, or a plain+HTML alternative.
-    if html_body:
-        content: MIMEMultipart | MIMEText = MIMEMultipart("alternative")
-        content.attach(MIMEText(body, "plain"))
-        content.attach(MIMEText(html_body, "html"))
-    else:
-        content = MIMEText(body)
+    if not html_body:
+        html_body = _plaintext_to_html(body)
+
+    # Content part: plain-text fallback + HTML alternative (as Gmail does).
+    content: MIMEMultipart | MIMEText = MIMEMultipart("alternative")
+    content.attach(MIMEText(body, "plain", "utf-8"))
+    content.attach(MIMEText(html_body, "html", "utf-8"))
 
     if not attachment_paths:
         return content
@@ -300,15 +327,20 @@ async def read_email(user_email: str, message_id: str) -> dict:
 async def send_email(
     user_email: str, to: str, subject: str, body: str, cc: str = "",
     attachments: str = "", html_body: str = "", rfc_message_id: str = "",
+    thread_id: str = "", in_reply_to: str = "",
 ) -> dict:
     """Send an email on behalf of the user, optionally with HTML and attachments.
 
     Args:
         attachments: Comma-separated file paths (e.g., "/tmp/a.pdf,/tmp/b.csv").
         html_body: Optional HTML body; `body` becomes the plain-text fallback.
+        thread_id: Gmail thread ID to send the reply into (same as create_draft).
+        in_reply_to: Message-ID header of the message being replied to.
     """
     if rfc_message_id and not re.fullmatch(r"<loma-[a-f0-9]{64}@actions.loma.invalid>", rfc_message_id):
         raise ValueError("Invalid bounded action Message-ID")
+    if in_reply_to and not re.fullmatch(r"<[^<>\s]+>", in_reply_to):
+        raise ValueError("Invalid --in-reply-to: expected a Message-ID like <abc@mail.gmail.com>")
     service = await _get_service(user_email)
 
     attachment_paths = _parse_attachments(attachments)
@@ -319,10 +351,16 @@ async def send_email(
         message["Message-ID"] = rfc_message_id
     if cc:
         message["cc"] = cc
+    if in_reply_to:
+        message["In-Reply-To"] = in_reply_to
+        message["References"] = in_reply_to
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+    send_body: dict[str, Any] = {"raw": raw}
+    if thread_id:
+        send_body["threadId"] = thread_id
     result = service.users().messages().send(
-        userId="me", body={"raw": raw},
+        userId="me", body=send_body,
     ).execute()
 
     response: dict[str, Any] = {
@@ -414,6 +452,48 @@ async def create_draft(
     return response
 
 
+async def send_draft(user_email: str, draft_id: str) -> dict:
+    """Send an existing Gmail draft as-is (keeps its thread, recipients and body)."""
+    service = await _get_service(user_email)
+    result = service.users().drafts().send(
+        userId="me", body={"id": draft_id},
+    ).execute()
+    return {
+        "sent": True,
+        "messageId": result.get("id"),
+        "threadId": result.get("threadId"),
+    }
+
+
+async def list_drafts(user_email: str, limit: int = 10, query: str = "") -> dict:
+    """List saved drafts with their IDs, recipients and subjects."""
+    service = await _get_service(user_email)
+    params: dict[str, Any] = {"userId": "me", "maxResults": limit}
+    if query:
+        params["q"] = query
+    result = service.users().drafts().list(**params).execute()
+
+    drafts = []
+    for ref in result.get("drafts", []):
+        draft = service.users().drafts().get(
+            userId="me", id=ref["id"], format="metadata",
+        ).execute()
+        summary = _format_message_summary(draft.get("message", {}))
+        summary["draftId"] = draft.get("id", ref["id"])
+        drafts.append(summary)
+    return {"drafts": drafts, "total": len(drafts)}
+
+
+async def delete_draft(user_email: str, draft_id: str) -> dict:
+    """Permanently delete a Gmail draft. Only drafts can be deleted this way;
+    sent and received messages are untouched."""
+    if not draft_id or not draft_id.strip():
+        raise ValueError("--draft-id is required")
+    service = await _get_service(user_email)
+    service.users().drafts().delete(userId="me", id=draft_id.strip()).execute()
+    return {"deleted": True, "draftId": draft_id.strip()}
+
+
 async def search_emails(user_email: str, query: str, limit: int = 10) -> dict:
     """Search emails using Gmail query syntax."""
     service = await _get_service(user_email)
@@ -471,6 +551,24 @@ def main():
     p_send.add_argument("--html-body-file", default="", help="Path to a file containing the HTML body (avoids shell-escaping large HTML)")
 
     p_send.add_argument("--rfc-message-id", default="", help="Stable bounded action identity; not an idempotency guarantee")
+    p_send.add_argument("--thread-id", default="", help="Gmail thread ID to reply into (from read-email/search)")
+    p_send.add_argument("--in-reply-to", default="", help="Message-ID header of the message being replied to")
+
+    # send-draft
+    p_send_draft = sub.add_parser("send-draft", help="Send an existing draft")
+    p_send_draft.add_argument("--user-email", required=True)
+    p_send_draft.add_argument("--draft-id", required=True)
+
+    # list-drafts
+    p_list_drafts = sub.add_parser("list-drafts", help="List saved drafts with their IDs")
+    p_list_drafts.add_argument("--user-email", required=True)
+    p_list_drafts.add_argument("--limit", type=int, default=10)
+    p_list_drafts.add_argument("--query", default="", help="Gmail search query to filter drafts")
+
+    # delete-draft
+    p_delete_draft = sub.add_parser("delete-draft", help="Permanently delete a draft")
+    p_delete_draft.add_argument("--user-email", required=True)
+    p_delete_draft.add_argument("--draft-id", required=True)
 
     p_check = sub.add_parser("check-sent", help="Read-only lookup of a bounded action in Sent")
     p_check.add_argument("--user-email", required=True)
@@ -513,7 +611,14 @@ def main():
             result = asyncio.run(send_email(
                 args.user_email, args.to, args.subject, args.body, args.cc,
                 args.attachments, _resolve_html_body(args), args.rfc_message_id,
+                args.thread_id, args.in_reply_to,
             ))
+        elif args.command == "send-draft":
+            result = asyncio.run(send_draft(args.user_email, args.draft_id))
+        elif args.command == "list-drafts":
+            result = asyncio.run(list_drafts(args.user_email, args.limit, args.query))
+        elif args.command == "delete-draft":
+            result = asyncio.run(delete_draft(args.user_email, args.draft_id))
         elif args.command == "check-sent":
             result = asyncio.run(check_sent(args.user_email, args.rfc_message_id))
         elif args.command == "create-draft":
