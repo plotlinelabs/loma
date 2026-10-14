@@ -430,12 +430,18 @@ async def _inject_into_active_run(conversation_id, prompt, db, user_email) -> bo
     ):
         return False
     try:
-        await stream.client.query(prompt)
-        await ConversationObserver(db, {}, conversation_id=conversation_id).record_injected_message(prompt)
-        return True
+        if not await active_streams.inject(stream, prompt):
+            return False  # run is finishing; the caller queues a new run
     except Exception:
         logger.exception("[SLACK] Failed to inject into active run of %s", conversation_id)
         return False
+    # Delivered: report True even if recording fails, or the caller would
+    # queue the same message as a second run.
+    try:
+        await ConversationObserver(db, {}, conversation_id=conversation_id).record_injected_message(prompt)
+    except Exception:
+        logger.exception("[SLACK] Injected into %s but failed to record the message", conversation_id)
+    return True
 
 
 def register_handlers(app):
