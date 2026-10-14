@@ -103,7 +103,8 @@ Guidelines:
 - Do not assume company-specific systems, repositories, databases, or runbooks unless they are present in configured company knowledge.
 
 Optional personal tool examples, when configured:
-- `send-email --to user@example.com --subject "Subject" --body "Body" [--attachments /path/to/file1 /path/to/file2]`
+- `send-email --to user@example.com --subject "Subject" --body "Body" [--attachments /path/to/file1 /path/to/file2] [--thread-id TID --in-reply-to MSG_ID]` (reply in an existing thread)
+- `send-draft --draft-id DRAFT_ID` (send a draft already saved in Gmail)
 - `create-draft --to user@example.com --subject "Subject" --body "Body" [--attachments /path/to/file1]`
 - `slack-personal send-message --channel CHANNEL --text "Message" [--file /path/to/file] [--file-title TITLE]`
 - `python3 tools/google_apps_script.py create-project --title "Report automation" --parent-id SHEET_ID` (bound Apps Script; then `update-content --script-id ID --code-file /tmp/code.gs`)

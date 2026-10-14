@@ -6,9 +6,10 @@ a user's personal Google OAuth tokens.
 Commands:
   1. gmail.py list-inbox --user-email EMAIL [--limit N] [--query Q]
   2. gmail.py read-email --user-email EMAIL --message-id ID
-  3. gmail.py send-email --user-email EMAIL --to ADDR --subject S --body B [--cc ADDR] [--attachments PATH1,PATH2]
+  3. gmail.py send-email --user-email EMAIL --to ADDR --subject S --body B [--cc ADDR] [--attachments PATH1,PATH2] [--thread-id TID --in-reply-to MSG_ID]
   4. gmail.py search --user-email EMAIL --query Q [--limit N]
   5. gmail.py create-draft --user-email EMAIL --body B [--to ADDR] [--subject S] [--cc ADDR] [--thread-id TID] [--in-reply-to MSG_ID] [--attachments PATH1,PATH2] [--html-body HTML | --html-body-file PATH]
+  6. gmail.py send-draft --user-email EMAIL --draft-id DRAFT_ID
 
   For rich, full-width emails with clickable links, pass --html-body-file (the HTML
   renders as the email; --body becomes the plain-text fallback). Use a file for large
@@ -24,6 +25,10 @@ Usage (called by the agent via Bash):
   python3 tools/gmail.py read-email --user-email adarsh@example.com --message-id 18abc123
   python3 tools/gmail.py send-email --user-email adarsh@example.com --to bob@example.com --subject "Hello" --body "Hi Bob"
   python3 tools/gmail.py search --user-email adarsh@example.com --query "from:alice subject:invoice"
+
+  Reply-all inside an existing thread: read-email the latest message, then pass its
+  threadId as --thread-id, its messageId (RFC Message-ID header) as --in-reply-to,
+  "Re: <subject>" as --subject, and its From/To/Cc as --to/--cc.
 """
 
 import argparse
@@ -300,15 +305,20 @@ async def read_email(user_email: str, message_id: str) -> dict:
 async def send_email(
     user_email: str, to: str, subject: str, body: str, cc: str = "",
     attachments: str = "", html_body: str = "", rfc_message_id: str = "",
+    thread_id: str = "", in_reply_to: str = "",
 ) -> dict:
     """Send an email on behalf of the user, optionally with HTML and attachments.
 
     Args:
         attachments: Comma-separated file paths (e.g., "/tmp/a.pdf,/tmp/b.csv").
         html_body: Optional HTML body; `body` becomes the plain-text fallback.
+        thread_id: Gmail thread ID to send the reply into (same as create_draft).
+        in_reply_to: Message-ID header of the message being replied to.
     """
     if rfc_message_id and not re.fullmatch(r"<loma-[a-f0-9]{64}@actions.loma.invalid>", rfc_message_id):
         raise ValueError("Invalid bounded action Message-ID")
+    if in_reply_to and not re.fullmatch(r"<[^<>\s]+>", in_reply_to):
+        raise ValueError("Invalid --in-reply-to: expected a Message-ID like <abc@mail.gmail.com>")
     service = await _get_service(user_email)
 
     attachment_paths = _parse_attachments(attachments)
@@ -319,10 +329,16 @@ async def send_email(
         message["Message-ID"] = rfc_message_id
     if cc:
         message["cc"] = cc
+    if in_reply_to:
+        message["In-Reply-To"] = in_reply_to
+        message["References"] = in_reply_to
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+    send_body: dict[str, Any] = {"raw": raw}
+    if thread_id:
+        send_body["threadId"] = thread_id
     result = service.users().messages().send(
-        userId="me", body={"raw": raw},
+        userId="me", body=send_body,
     ).execute()
 
     response: dict[str, Any] = {
@@ -414,6 +430,19 @@ async def create_draft(
     return response
 
 
+async def send_draft(user_email: str, draft_id: str) -> dict:
+    """Send an existing Gmail draft as-is (keeps its thread, recipients and body)."""
+    service = await _get_service(user_email)
+    result = service.users().drafts().send(
+        userId="me", body={"id": draft_id},
+    ).execute()
+    return {
+        "sent": True,
+        "messageId": result.get("id"),
+        "threadId": result.get("threadId"),
+    }
+
+
 async def search_emails(user_email: str, query: str, limit: int = 10) -> dict:
     """Search emails using Gmail query syntax."""
     service = await _get_service(user_email)
@@ -471,6 +500,13 @@ def main():
     p_send.add_argument("--html-body-file", default="", help="Path to a file containing the HTML body (avoids shell-escaping large HTML)")
 
     p_send.add_argument("--rfc-message-id", default="", help="Stable bounded action identity; not an idempotency guarantee")
+    p_send.add_argument("--thread-id", default="", help="Gmail thread ID to reply into (from read-email/search)")
+    p_send.add_argument("--in-reply-to", default="", help="Message-ID header of the message being replied to")
+
+    # send-draft
+    p_send_draft = sub.add_parser("send-draft", help="Send an existing draft")
+    p_send_draft.add_argument("--user-email", required=True)
+    p_send_draft.add_argument("--draft-id", required=True)
 
     p_check = sub.add_parser("check-sent", help="Read-only lookup of a bounded action in Sent")
     p_check.add_argument("--user-email", required=True)
@@ -513,7 +549,10 @@ def main():
             result = asyncio.run(send_email(
                 args.user_email, args.to, args.subject, args.body, args.cc,
                 args.attachments, _resolve_html_body(args), args.rfc_message_id,
+                args.thread_id, args.in_reply_to,
             ))
+        elif args.command == "send-draft":
+            result = asyncio.run(send_draft(args.user_email, args.draft_id))
         elif args.command == "check-sent":
             result = asyncio.run(check_sent(args.user_email, args.rfc_message_id))
         elif args.command == "create-draft":
