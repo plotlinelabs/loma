@@ -46,6 +46,11 @@ MAX_ACCOUNT_RETRIES = 3
 SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS = int(
     os.environ.get("SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS", "600")
 )
+# Safety net while waiting for the turn that answers a mid-run (injected)
+# message: if nothing arrives in this long, finish instead of hanging.
+INJECTED_MESSAGE_IDLE_TIMEOUT_SECONDS = int(
+    os.environ.get("INJECTED_MESSAGE_IDLE_TIMEOUT_SECONDS", "180")
+)
 DEFAULT_AGENT_MODEL = "opencode-go/deepseek-v4-flash"
 
 CONFIG_PATH = Path(os.environ.get("AGENT_CONFIG_PATH", Path(__file__).parent.parent / "config.yaml"))
@@ -1305,22 +1310,42 @@ async def _stream_agent(
             # True after the final ResultMessage when Agent sub-agent results
             # are still pending: the stream stays open only to collect them.
             awaiting_subagents = False
+            # True after a turn result while a message injected mid-run is
+            # still waiting for the turn that answers it.
+            awaiting_injection = False
             message_iter = aiter(client.receive_messages())
 
             while True:
                 try:
-                    if awaiting_subagents:
+                    if awaiting_subagents or awaiting_injection:
                         # Bounded wait: if no message arrives within the idle
                         # timeout, finish the run instead of hanging forever.
                         message = await asyncio.wait_for(
                             anext(message_iter),
-                            timeout=SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS,
+                            timeout=(
+                                SUBAGENT_RESULT_IDLE_TIMEOUT_SECONDS
+                                if awaiting_subagents
+                                else INJECTED_MESSAGE_IDLE_TIMEOUT_SECONDS
+                            ),
                         )
                     else:
                         message = await anext(message_iter)
                 except StopAsyncIteration:
+                    if active_stream is not None:
+                        active_stream.closing = True
                     break
                 except asyncio.TimeoutError:
+                    if active_stream is not None:
+                        # Nothing reads the client after this; refuse new
+                        # injections so they get queued instead of lost.
+                        active_stream.closing = True
+                    if awaiting_injection and not awaiting_subagents:
+                        logger.warning(
+                            "[INJECT] Timed out after %ss waiting for the answer to an "
+                            "injected message; finishing run anyway",
+                            INJECTED_MESSAGE_IDLE_TIMEOUT_SECONDS,
+                        )
+                        break
                     logger.warning(
                         "[SUBAGENT] Timed out after %ss waiting for %d pending "
                         "sub-agent result(s) (tool_use_ids=%s); finishing run anyway",
@@ -1528,11 +1553,27 @@ async def _stream_agent(
                         last_total_cost_usd = msg_cost
                     logger.info("[USAGE] cost=%.6f usage=%s", msg_cost or 0, msg_usage)
                     logger.info("[RESULT] %s", _truncate_json(vars(message) if hasattr(message, '__dict__') else str(message)))
-                    if not pending_subagent_tool_ids and not pending_background_tool_ids:
-                        break
                     if active_stream is not None and active_stream.stopped:
-                        # User stopped the run: don't wait on sub-agents.
+                        # User stopped the run: don't wait on sub-agents or
+                        # injected messages.
+                        active_stream.closing = True
                         break
+                    nothing_pending = not pending_subagent_tool_ids and not pending_background_tool_ids
+                    if active_stream is None:
+                        if nothing_pending:
+                            break
+                    else:
+                        from agent.active_streams import end_turn
+                        if await end_turn(active_stream, may_finish=nothing_pending):
+                            break
+                        if nothing_pending:
+                            # A message was injected mid-run; the CLI answers
+                            # it in a follow-up turn on this same stream.
+                            # Ending now would drop it and it would be sent
+                            # again as a new run (the duplicate).
+                            awaiting_injection = True
+                            logger.info("[INJECT] Turn ended with an injected message pending; waiting for its answer")
+                            continue
                     # Keep the stream open: foreground Agent results arrive in
                     # UserMessages; background Agent completion arrives as a
                     # terminal task lifecycle message, after which the CLI

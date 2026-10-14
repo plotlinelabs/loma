@@ -57,6 +57,13 @@ class ActiveStream:
     # The task running the run; if it finished without unregistering (crash,
     # abandoned generator) the handle is dead even though ``ended`` is False.
     task: asyncio.Task | None = None
+    # Messages injected mid-run whose turn has not finished yet. The run loop
+    # must not end while one is waiting, or the message is never answered and
+    # the user (or the dashboard) sends it again as a new run.
+    pending_injections: int = 0
+    # Set once the run loop has decided to finish. From then on nothing reads
+    # the client, so injections are refused and the caller queues instead.
+    closing: bool = False
 
     @property
     def live(self) -> bool:
@@ -143,6 +150,7 @@ async def unregister(conversation_id: str, stream: ActiveStream) -> None:
     """Remove ``stream`` — and only ``stream`` — from the registry."""
     async with _lock:
         stream.ended = True
+        stream.closing = True
         if _streams.get(conversation_id) is not stream:
             return
         previous = stream.superseded
@@ -199,6 +207,49 @@ def supports_injection(stream: ActiveStream) -> bool:
     return getattr(stream.client, "supports_injection", True) and callable(
         getattr(stream.client, "query", None)
     )
+
+
+async def inject(stream: ActiveStream, message: str) -> bool:
+    """Send ``message`` into the running turn; False if the run can't take it.
+
+    Refused once the run is closing (its loop no longer reads the client), so
+    the message is never swallowed by a run that has already finished; the
+    caller then queues it for the next run instead. Counting the injection
+    under the same lock the run loop uses to decide to finish means the run
+    either sees it and keeps going, or the injection is refused: never both,
+    never neither.
+    """
+    if not supports_injection(stream):
+        return False
+    async with _lock:
+        if stream.closing or not stream.live:
+            return False
+        stream.pending_injections += 1
+    try:
+        await stream.client.query(message)
+    except Exception:
+        async with _lock:
+            stream.pending_injections = max(0, stream.pending_injections - 1)
+        raise
+    return True
+
+
+async def end_turn(stream: ActiveStream, *, may_finish: bool) -> bool:
+    """Called by the run loop on every turn result; True means finish now.
+
+    A pending injection is answered by the next turn, so this turn's result
+    consumes it and the run keeps reading. Otherwise, if the run has nothing
+    else to wait for (``may_finish``), it is marked closing atomically so no
+    injection can slip in after this decision.
+    """
+    async with _lock:
+        if stream.pending_injections > 0:
+            stream.pending_injections -= 1
+            return False
+        if may_finish:
+            stream.closing = True
+            return True
+        return False
 
 
 async def get_stream(conversation_id: str) -> ActiveStream | None:

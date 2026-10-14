@@ -936,7 +936,7 @@ async def handle_generate_titles(request: web.Request) -> web.Response:
 
 async def handle_inject_message(request: web.Request) -> web.Response:
     """POST /api/conversations/{id}/inject — send a message to an active agent mid-stream."""
-    from agent.active_streams import get_for_user
+    from agent.active_streams import get_for_user, inject
 
     cid = request.match_info["conversation_id"]
     user_email = get_user_email(request)
@@ -953,15 +953,25 @@ async def handle_inject_message(request: web.Request) -> web.Response:
         return web.json_response({"error": "No active stream for this conversation"}, status=404)
 
     try:
-        await stream.client.query(message)
-        db = request.app["db"]
-        from observability.observer import ConversationObserver
-        observer = ConversationObserver(db, {}, conversation_id=cid)
-        await observer.record_injected_message(message)
-        return web.json_response({"injected": True, "conversation_id": cid})
+        injected = await inject(stream, message)
     except Exception as e:
         logger.exception("Failed to inject message into conversation %s", cid)
         return web.json_response({"error": str(e)}, status=500)
+    if not injected:
+        # The run is finishing and would never read it; the dashboard queues
+        # the message and sends it once, as the next run.
+        return web.json_response(
+            {"injected": False, "error": "The run is finishing; your message will be sent next."},
+            status=409,
+        )
+    # The agent has the message now. Report success even if recording it
+    # fails: an error here makes the dashboard queue and send it a second time.
+    try:
+        from observability.observer import ConversationObserver
+        await ConversationObserver(request.app["db"], {}, conversation_id=cid).record_injected_message(message)
+    except Exception:
+        logger.exception("Injected into %s but failed to record the message", cid)
+    return web.json_response({"injected": True, "conversation_id": cid})
 
 
 async def handle_interrupt_agent(request: web.Request) -> web.Response:
@@ -1054,7 +1064,7 @@ async def _busy_conversation_response(
     message with attachments is always queued: injection only carries text,
     so its files would be silently dropped.
     """
-    from agent.active_streams import get_for_user, supports_injection
+    from agent.active_streams import get_for_user, inject, supports_injection
 
     body = {"busy": True, "injected": False, "duplicate": False, "conversation_id": conversation_id}
     if await _is_recent_duplicate(db, conversation_id, message):
@@ -1065,15 +1075,20 @@ async def _busy_conversation_response(
         )
     stream = None if files else await get_for_user(conversation_id, user_email)
     if stream is not None and supports_injection(stream):
+        injected = False
         try:
-            await stream.client.query(message)
-            observer = ConversationObserver(db, {}, conversation_id=conversation_id)
-            await observer.record_injected_message(message)
+            injected = await inject(stream, message)
+        except Exception:
+            logger.exception("Failed to inject into busy conversation %s", conversation_id)
+        if injected:
+            try:
+                observer = ConversationObserver(db, {}, conversation_id=conversation_id)
+                await observer.record_injected_message(message)
+            except Exception:
+                logger.exception("Injected into %s but failed to record the message", conversation_id)
             return web.json_response(
                 {**body, "injected": True, "error": "Sent to the running agent."}, status=409,
             )
-        except Exception:
-            logger.exception("Failed to inject into busy conversation %s", conversation_id)
     return web.json_response(
         {**body, "error": "The agent is still working on this conversation; "
                           "your message will be sent when it finishes."},
