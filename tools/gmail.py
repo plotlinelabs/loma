@@ -140,6 +140,25 @@ def _html_to_plaintext(html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _plaintext_to_html(text: str) -> str:
+    """Render a plain-text body as minimal HTML that reflows like a typed email.
+
+    Gmail hard-wraps text/plain-only messages at ~76 chars (and shows drafts
+    with breaks mid-sentence). Shipping an HTML alternative makes clients flow
+    the text to the window width. Blank lines start a new paragraph, single
+    newlines become <br>, and the text is HTML-escaped so it shows literally.
+    """
+    import html as _htmllib
+
+    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    paragraphs = re.split(r"\n[ \t]*\n+", normalized)
+    blocks = []
+    for para in paragraphs:
+        lines = [_htmllib.escape(line) for line in para.split("\n")]
+        blocks.append("<div>" + "<br>\n".join(lines) + "</div>")
+    return "<div dir=\"ltr\">" + "\n<div><br></div>\n".join(blocks) + "</div>"
+
+
 def _build_message_with_attachments(
     body: str,
     attachment_paths: list[str] | None = None,
@@ -147,9 +166,9 @@ def _build_message_with_attachments(
 ) -> MIMEMultipart | MIMEText:
     """Build an email message, optionally with HTML and/or file attachments.
 
-    - Plain text only: returns MIMEText.
-    - With html_body: returns a multipart/alternative (plain-text fallback +
-      HTML) so clients render the rich version and it spans the full width.
+    - Always returns content as multipart/alternative (plain text + HTML). If no
+      html_body is given, one is generated from `body` so Gmail reflows the text
+      instead of hard-wrapping plain text at ~76 chars mid-sentence.
     - With attachments: wraps the content in multipart/mixed.
 
     Safety net: if no html_body is given but `body` itself looks like HTML, it is
@@ -160,13 +179,13 @@ def _build_message_with_attachments(
         html_body = body
         body = _html_to_plaintext(body)
 
-    # Content part: plain text, or a plain+HTML alternative.
-    if html_body:
-        content: MIMEMultipart | MIMEText = MIMEMultipart("alternative")
-        content.attach(MIMEText(body, "plain"))
-        content.attach(MIMEText(html_body, "html"))
-    else:
-        content = MIMEText(body)
+    if not html_body:
+        html_body = _plaintext_to_html(body)
+
+    # Content part: plain-text fallback + HTML alternative (as Gmail does).
+    content: MIMEMultipart | MIMEText = MIMEMultipart("alternative")
+    content.attach(MIMEText(body, "plain", "utf-8"))
+    content.attach(MIMEText(html_body, "html", "utf-8"))
 
     if not attachment_paths:
         return content

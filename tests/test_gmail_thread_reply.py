@@ -70,3 +70,43 @@ async def test_send_draft_sends_by_id():
         userId="me", body={"id": "r-123"},
     )
     assert result == {"sent": True, "messageId": "m9", "threadId": "t9"}
+
+
+class TestPlaintextToHtml:
+    """Plain-text bodies get an HTML part so Gmail reflows instead of hard-wrapping."""
+
+    def test_paragraphs_and_line_breaks(self):
+        from tools.gmail import _plaintext_to_html
+        out = _plaintext_to_html("Hi Sunil,\n\nLine one\nLine two")
+        assert "<div>Hi Sunil,</div>" in out
+        assert "<div><br></div>" in out
+        assert "Line one<br>\nLine two" in out
+
+    def test_long_paragraph_has_no_inserted_breaks(self):
+        from tools.gmail import _plaintext_to_html
+        para = "word " * 60
+        out = _plaintext_to_html(para.strip())
+        assert "<br>" not in out
+        assert para.strip() in out
+
+    def test_escapes_special_characters(self):
+        from tools.gmail import _plaintext_to_html
+        out = _plaintext_to_html("A & B <tag> \"q\"")
+        assert "A &amp; B &lt;tag&gt; &quot;q&quot;" in out
+
+    def test_crlf_normalized(self):
+        from tools.gmail import _plaintext_to_html
+        assert _plaintext_to_html("a\r\n\r\nb") == _plaintext_to_html("a\n\nb")
+
+    def test_explicit_html_body_is_kept(self):
+        from tools.gmail import _build_message_with_attachments
+        msg = _build_message_with_attachments("plain", None, "<p>custom</p>")
+        html = msg.get_payload()[1].get_payload(decode=True).decode()
+        assert html == "<p>custom</p>"
+
+    def test_non_ascii_body_utf8(self):
+        from tools.gmail import _build_message_with_attachments
+        msg = _build_message_with_attachments("Thanks — ₹100", None)
+        for part in msg.get_payload():
+            assert part.get_content_charset() == "utf-8"
+            assert "₹100" in part.get_payload(decode=True).decode()
