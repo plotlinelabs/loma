@@ -10,6 +10,9 @@ Commands:
   4. gmail.py search --user-email EMAIL --query Q [--limit N]
   5. gmail.py create-draft --user-email EMAIL --body B [--to ADDR] [--subject S] [--cc ADDR] [--thread-id TID] [--in-reply-to MSG_ID] [--attachments PATH1,PATH2] [--html-body HTML | --html-body-file PATH]
   6. gmail.py send-draft --user-email EMAIL --draft-id DRAFT_ID
+  7. gmail.py list-drafts --user-email EMAIL [--limit N] [--query Q]
+  8. gmail.py delete-draft --user-email EMAIL --draft-id DRAFT_ID
+     (permanent: Gmail does not move deleted drafts to Trash)
 
   For rich, full-width emails with clickable links, pass --html-body-file (the HTML
   renders as the email; --body becomes the plain-text fallback). Use a file for large
@@ -462,6 +465,35 @@ async def send_draft(user_email: str, draft_id: str) -> dict:
     }
 
 
+async def list_drafts(user_email: str, limit: int = 10, query: str = "") -> dict:
+    """List saved drafts with their IDs, recipients and subjects."""
+    service = await _get_service(user_email)
+    params: dict[str, Any] = {"userId": "me", "maxResults": limit}
+    if query:
+        params["q"] = query
+    result = service.users().drafts().list(**params).execute()
+
+    drafts = []
+    for ref in result.get("drafts", []):
+        draft = service.users().drafts().get(
+            userId="me", id=ref["id"], format="metadata",
+        ).execute()
+        summary = _format_message_summary(draft.get("message", {}))
+        summary["draftId"] = draft.get("id", ref["id"])
+        drafts.append(summary)
+    return {"drafts": drafts, "total": len(drafts)}
+
+
+async def delete_draft(user_email: str, draft_id: str) -> dict:
+    """Permanently delete a Gmail draft. Only drafts can be deleted this way;
+    sent and received messages are untouched."""
+    if not draft_id or not draft_id.strip():
+        raise ValueError("--draft-id is required")
+    service = await _get_service(user_email)
+    service.users().drafts().delete(userId="me", id=draft_id.strip()).execute()
+    return {"deleted": True, "draftId": draft_id.strip()}
+
+
 async def search_emails(user_email: str, query: str, limit: int = 10) -> dict:
     """Search emails using Gmail query syntax."""
     service = await _get_service(user_email)
@@ -527,6 +559,17 @@ def main():
     p_send_draft.add_argument("--user-email", required=True)
     p_send_draft.add_argument("--draft-id", required=True)
 
+    # list-drafts
+    p_list_drafts = sub.add_parser("list-drafts", help="List saved drafts with their IDs")
+    p_list_drafts.add_argument("--user-email", required=True)
+    p_list_drafts.add_argument("--limit", type=int, default=10)
+    p_list_drafts.add_argument("--query", default="", help="Gmail search query to filter drafts")
+
+    # delete-draft
+    p_delete_draft = sub.add_parser("delete-draft", help="Permanently delete a draft")
+    p_delete_draft.add_argument("--user-email", required=True)
+    p_delete_draft.add_argument("--draft-id", required=True)
+
     p_check = sub.add_parser("check-sent", help="Read-only lookup of a bounded action in Sent")
     p_check.add_argument("--user-email", required=True)
     p_check.add_argument("--rfc-message-id", required=True)
@@ -572,6 +615,10 @@ def main():
             ))
         elif args.command == "send-draft":
             result = asyncio.run(send_draft(args.user_email, args.draft_id))
+        elif args.command == "list-drafts":
+            result = asyncio.run(list_drafts(args.user_email, args.limit, args.query))
+        elif args.command == "delete-draft":
+            result = asyncio.run(delete_draft(args.user_email, args.draft_id))
         elif args.command == "check-sent":
             result = asyncio.run(check_sent(args.user_email, args.rfc_message_id))
         elif args.command == "create-draft":

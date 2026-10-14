@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tools.gmail import send_draft, send_email
+from tools.gmail import delete_draft, list_drafts, send_draft, send_email
 
 
 def _sent_body(mock_service):
@@ -70,6 +70,45 @@ async def test_send_draft_sends_by_id():
         userId="me", body={"id": "r-123"},
     )
     assert result == {"sent": True, "messageId": "m9", "threadId": "t9"}
+
+
+@pytest.mark.asyncio
+async def test_delete_draft_calls_drafts_delete():
+    svc = MagicMock()
+    with patch("tools.gmail._get_service", new_callable=AsyncMock, return_value=svc):
+        result = await delete_draft("u@test.com", " r-123 ")
+    svc.users.return_value.drafts.return_value.delete.assert_called_once_with(
+        userId="me", id="r-123",
+    )
+    svc.users.return_value.messages.return_value.delete.assert_not_called()
+    assert result == {"deleted": True, "draftId": "r-123"}
+
+
+@pytest.mark.asyncio
+async def test_delete_draft_rejects_empty_id():
+    with patch("tools.gmail._get_service", new_callable=AsyncMock) as get_service:
+        with pytest.raises(ValueError):
+            await delete_draft("u@test.com", "  ")
+    get_service.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_drafts_returns_ids_and_subjects():
+    svc = MagicMock()
+    drafts = svc.users.return_value.drafts.return_value
+    drafts.list.return_value.execute.return_value = {"drafts": [{"id": "r-1"}]}
+    drafts.get.return_value.execute.return_value = {
+        "id": "r-1",
+        "message": {"id": "m1", "threadId": "t1", "snippet": "hi", "payload": {"headers": [
+            {"name": "Subject", "value": "[Loma test] x"}, {"name": "To", "value": "a@test.com"},
+        ]}},
+    }
+    with patch("tools.gmail._get_service", new_callable=AsyncMock, return_value=svc):
+        result = await list_drafts("u@test.com", limit=5, query="subject:test")
+    drafts.list.assert_called_once_with(userId="me", maxResults=5, q="subject:test")
+    assert result["total"] == 1
+    assert result["drafts"][0]["draftId"] == "r-1"
+    assert result["drafts"][0]["subject"] == "[Loma test] x"
 
 
 class TestPlaintextToHtml:
