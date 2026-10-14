@@ -12,8 +12,8 @@ def _encrypt_webhook_secret(webhook_config: dict) -> dict:
     if not webhook_config:
         return webhook_config
     config = dict(webhook_config)
-    config.pop("auth_secret_encrypted", None)
     if not config.get("auth_secret"):
+        config.pop("auth_secret", None)
         return config
     config["auth_secret_encrypted"] = encrypt_token(config["auth_secret"])
     config.pop("auth_secret", None)
@@ -56,7 +56,8 @@ async def create_flow(db, data: dict) -> dict:
 
         # Webhook config (used by webhook flows)
         "prompt_template": data.get("prompt_template", ""),
-        "webhook_config": _encrypt_webhook_secret(data.get("webhook_config", {})),
+        "webhook_config": _encrypt_webhook_secret(
+            {k: v for k, v in (data.get("webhook_config") or {}).items() if k != "auth_secret_encrypted"}),
 
         # Slack-triggered config (used by slack flows). allow_bot_messages lets the
         # flow respond to messages from bots/automations (e.g. alert channels).

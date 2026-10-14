@@ -365,6 +365,11 @@ async def handle_update_flow(request: web.Request) -> web.Response:
     if "end_time" in body:
         body["end_time"] = _parse_datetime(body["end_time"])
 
+    # Partial webhook_config updates keep the stored fields, including the encrypted secret.
+    if isinstance(body.get("webhook_config"), dict):
+        incoming = {k: v for k, v in body["webhook_config"].items() if k != "auth_secret_encrypted"}
+        body["webhook_config"] = {**(existing.get("webhook_config") or {}), **incoming}
+
     flow = await update_flow(db, flow_id, body)
     if flow is None:
         return web.json_response({"error": "Flow not found"}, status=404)
