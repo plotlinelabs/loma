@@ -23,6 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
         @lishenxydlgzs/aws-athena-mcp \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
+# Go toolchain so agents can build and test Go repos they review or change.
+ARG GO_VERSION=1.24.9
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xz \
+    && /usr/local/go/bin/go version
+ENV PATH="/usr/local/go/bin:${PATH}" \
+    GOPATH=/opt/loma-workspace/go \
+    GOFLAGS=-modcacherw
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
