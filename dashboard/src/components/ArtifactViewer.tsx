@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import PlanReview, { type PlanActions } from "./PlanReview";
+import { markdownComponents } from "./MarkdownCodeBlock";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -145,7 +146,10 @@ function MarkdownRenderer({ content }: { content: string }) {
       <div className="prose prose-sm max-w-[72ch] mx-auto prose-code:before:content-none prose-code:after:content-none">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}
+          components={{
+            ...markdownComponents,
+            a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+          }}
         >
           {content}
         </ReactMarkdown>
@@ -187,10 +191,15 @@ function CodeRenderer({ content, language }: { content: string; language: string
 // ── SVG Renderer ────────────────────────────────────────────────────────────
 
 function SvgRenderer({ content }: { content: string }) {
+  // Agent-written SVG can carry scripts and event handlers; injecting it into
+  // the page ran them as the dashboard. Render it in an isolated frame instead.
+  const srcDoc = `<!doctype html><html><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#fff">${content}</body></html>`;
   return (
-    <div
-      className="p-6 h-full overflow-auto flex items-center justify-center bg-white dark:bg-gray-800 rounded-b-lg"
-      dangerouslySetInnerHTML={{ __html: content }}
+    <iframe
+      srcDoc={srcDoc}
+      sandbox=""
+      className="w-full h-full border-0 bg-white rounded-b-lg"
+      title="SVG Preview"
     />
   );
 }

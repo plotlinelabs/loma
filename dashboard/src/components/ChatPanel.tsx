@@ -23,6 +23,9 @@ import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath,
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
+import { CopyButton } from "./CopyButton";
+import { SlashCommandHint, SlashCommandMenu, slashMatches } from "./composer/SlashCommandMenu";
+import { matchCommand, usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
 import type { Artifact } from "./ArtifactViewer";
 import PetCompanion, { PetRunway } from "./PetCompanion";
@@ -53,6 +56,8 @@ import {
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
+/** A running conversation with no heartbeat for this long is treated as stopped. */
+const DEAD_RUN_AFTER_MS = 5 * 60 * 1000;
 /** Conversation status while its message waits for a deploy to finish. */
 const DEPLOY_QUEUED_STATUS = "queued";
 
@@ -401,6 +406,52 @@ export function rebuildItemsFromConversation(
   turns: Turn[],
   persistedArtifacts?: PersistedArtifact[],
 ): { items: ChatItem[]; artifacts: Artifact[] } {
+  const { items, artifacts } = rebuildTranscript(messages, prompt, finalResponse, turns, persistedArtifacts);
+  return { items: restoreClarifyItems(items), artifacts };
+}
+
+/**
+ * A `:::clarify` block is parsed from live text only, so after a reload it
+ * showed as raw JSON. Rebuild it as a question card; it counts as answered
+ * once the user has sent anything after it.
+ */
+function restoreClarifyItems(items: ChatItem[]): ChatItem[] {
+  const out: ChatItem[] = [];
+  items.forEach((item, i) => {
+    const clarify = item.role === "assistant" ? extractClarifyBlock(item.content) : null;
+    if (!clarify) {
+      out.push(item);
+      return;
+    }
+    const answer = items.slice(i + 1).find((later) => later.role === "user");
+    out.push({
+      ...item,
+      role: "clarify",
+      content: clarify.before,
+      questions: clarify.questions,
+      submitted: !!answer,
+      selectedLabels: answer
+        ? clarify.questions.flatMap((q) => q.options.map((o) => o.label)).filter((label) => answer.content.includes(label))
+        : undefined,
+    });
+    if (clarify.after) out.push({ ...item, content: clarify.after, artifactIds: undefined });
+  });
+  return out;
+}
+
+function rebuildTranscript(
+  messages: Parameters<typeof rebuildItemsFromConversation>[0],
+  prompt: string,
+  finalResponse: string,
+  turns: Turn[],
+  persistedArtifacts?: PersistedArtifact[],
+): { items: ChatItem[]; artifacts: Artifact[] } {
+  // The first message actually sent. A conversation's stored `prompt` can be
+  // empty or stale (e.g. a board draft edited before sending), which used to
+  // leave an empty first bubble that rendered as a typing indicator forever.
+  const firstUserMessage = messages?.find((m) => m.role === "user");
+  const initialPrompt = firstUserMessage?.content || prompt || "";
+
   // If no turns data, fall back to simple message reconstruction
   if (!turns?.length) {
     if (messages?.length) {
@@ -416,7 +467,7 @@ export function rebuildItemsFromConversation(
         artifacts: [],
       };
     }
-    const items: ChatItem[] = [{ role: "user", content: prompt }];
+    const items: ChatItem[] = initialPrompt ? [{ role: "user", content: initialPrompt }] : [];
     if (finalResponse) {
       items.push({ role: "assistant", content: finalResponse });
     }
@@ -443,7 +494,9 @@ export function rebuildItemsFromConversation(
   const insertedFollowUps = new Set<number>();
 
   // Start with the initial user message
-  const items: ChatItem[] = [{ role: "user", content: prompt, ...(firstSender ? { sender: firstSender } : {}) }];
+  const items: ChatItem[] = initialPrompt
+    ? [{ role: "user", content: initialPrompt, ...(firstSender ? { sender: firstSender } : {}) }]
+    : [];
 
   // Where each turn's items begin, so artifacts can find the reply they belong to.
   const turnStartIndex: number[] = [];
@@ -856,6 +909,10 @@ export default function ChatPanel({
   const sendInFlightRef = useRef<string | null>(null);
   // Plan mode: the agent researches read-only and proposes a plan to review.
   const [planMode, setPlanMode] = useState(false);
+  // Slash commands: highlighted row, and the input the menu was dismissed at.
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissedAt, setSlashDismissedAt] = useState<string | null>(null);
+  const { templates: promptTemplates } = usePromptTemplates();
   const handleSendRef = useRef<
     ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] }) => Promise<void>) | null
   >(null);
@@ -936,6 +993,7 @@ export default function ChatPanel({
   // draft safe even when the drawer is closed immediately after the last key.
   const updateComposerInput = (value: string) => {
     setInput(value);
+    setSlashIndex(0);
     if (!draftStorageKey) return;
     try {
       if (value.trim()) window.localStorage.setItem(draftStorageKey, value);
@@ -1070,10 +1128,17 @@ export default function ChatPanel({
         });
         scrollToBottom();
 
-        if (data.conversation.status !== "running" && !waitingForDeploy) {
+        // A run whose heartbeat stopped long ago is dead even if its status
+        // still says running (crash/OOM). Stop waiting instead of showing
+        // "Still working on your request..." forever.
+        const heartbeat = data.conversation.last_heartbeat ? Date.parse(data.conversation.last_heartbeat) : NaN;
+        const deadRun = data.conversation.status === "running"
+          && Number.isFinite(heartbeat) && Date.now() - heartbeat > DEAD_RUN_AFTER_MS;
+        if ((data.conversation.status !== "running" || deadRun) && !waitingForDeploy) {
           setIsRecovering(false);
           setIsStreaming(false);
-          setItems((prev) => withTerminalStatus(prev, data.conversation));
+          setItems((prev) => withTerminalStatus(prev, deadRun ? { status: "interrupted" } : data.conversation));
+          onStreamComplete?.(conversationId);
           // Messages queued while the run was going are sent now, one run at a time.
           const queued = queuedMessagesRef.current;
           if (queued.length > 0) {
@@ -1096,7 +1161,7 @@ export default function ChatPanel({
 
     poll();
     return () => { stopped = true; };
-  }, [isRecovering, conversationId, scrollToBottom]);
+  }, [isRecovering, conversationId, scrollToBottom, onStreamComplete]);
 
   // If page loaded with a running conversation (refresh), enter recovery mode
   useEffect(() => {
@@ -1131,7 +1196,11 @@ export default function ChatPanel({
       planMode: planModeOverride,
     }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[]; planMode?: boolean } = {},
   ) => {
-    const sendInPlanMode = planModeOverride ?? planMode;
+    // A plan-mode command (/plan) turns plan mode on, and keeps it on for
+    // the review that follows, as the Plan toggle does.
+    const commandPlansFirst = !!matchCommand(promptTemplates, (overrideMessage ?? input).trim())?.plan_mode;
+    if (commandPlansFirst && planModeOverride === undefined) setPlanMode(true);
+    const sendInPlanMode = planModeOverride ?? (planMode || commandPlansFirst);
     const displayText = overrideMessage ?? input.trim();
     // Files that rode a queued message are sent with it, not re-read from the composer.
     const carriedFiles = queuedFiles && queuedFiles.length > 0 ? queuedFiles : undefined;
@@ -1526,19 +1595,12 @@ export default function ChatPanel({
   handleSendRef.current = handleSend;
 
   const handleClarifySubmit = useCallback(
-    (itemIndex: number, selectedLabels: string[], otherText: string) => {
+    (itemIndex: number, selectedLabels: string[], answer: string) => {
       setItems((prev) =>
         prev.map((item, i) =>
           i === itemIndex ? { ...item, submitted: true, selectedLabels } : item
         )
       );
-
-      const parts = [...selectedLabels];
-      if (otherText.trim()) {
-        parts.push(otherText.trim());
-      }
-      const answer = parts.join(", ");
-
       handleSend(answer);
     },
     [items, conversationId, session, isStreaming, selectedModel, selectedAgentId, agentLoadState],
@@ -1592,7 +1654,34 @@ export default function ChatPanel({
     setEditingQueuedText("");
   };
 
+  const visibleSlashMatches = slashDismissedAt === input ? [] : slashMatches(promptTemplates, input);
+  const activeCommand = matchCommand(promptTemplates, input);
+  const applyCommand = (template: { name: string }) => {
+    updateComposerInput(`/${template.name} `);
+    setSlashIndex(0);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (visibleSlashMatches.length) {
+      const count = visibleSlashMatches.length;
+      const index = Math.min(slashIndex, count - 1);
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIndex((index + (e.key === "ArrowDown" ? 1 : count - 1)) % count);
+        return;
+      }
+      if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey)) {
+        e.preventDefault();
+        applyCommand(visibleSlashMatches[index]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissedAt(input);
+        return;
+      }
+    }
     // Shift+Tab toggles plan mode, as in Claude Code.
     if (e.key === "Tab" && e.shiftKey && !readOnly) {
       e.preventDefault();
@@ -1798,6 +1887,14 @@ export default function ChatPanel({
             >
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
+              <div className="relative">
+              {activeCommand && !visibleSlashMatches.length && <SlashCommandHint template={activeCommand} />}
+              <SlashCommandMenu
+                matches={visibleSlashMatches}
+                activeIndex={Math.min(slashIndex, Math.max(visibleSlashMatches.length - 1, 0))}
+                onSelect={applyCommand}
+                onHover={setSlashIndex}
+              />
               <div className="relative flex flex-col bg-card border border-border rounded-2xl composer-shadow focus-within:border-input transition-colors">
                 <Textarea
                   ref={inputRef}
@@ -1810,7 +1907,7 @@ export default function ChatPanel({
                     // message in view above the composer.
                     if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? "Type your next message..." : isMobile ? "Ask Loma anything..." : "What do you need to get done?"}
+                  placeholder={isStreaming ? "Type your next message..." : isMobile ? "Ask Loma anything..." : "What do you need to get done? Type / for commands"}
                   rows={isMobile ? 1 : 2}
                   className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-base md:text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
@@ -1850,6 +1947,7 @@ export default function ChatPanel({
                     </Button>
                   </div>
                 </div>
+              </div>
               </div>
             </form>}
           </div>
@@ -2085,10 +2183,22 @@ export default function ChatPanel({
                                 </div>
                               )}
                             </div>
-                            {typeof item.responseTimeSeconds === "number" && (
-                              <span className="shrink-0 text-[10px] text-muted-foreground/60 mt-0.5 opacity-0 group-hover/reply:opacity-100 transition-opacity">
-                                {formatResponseTime(item.responseTimeSeconds)}
-                              </span>
+                            {/* Hover actions: copy the reply's markdown, and how long it took */}
+                            {(item.content || typeof item.responseTimeSeconds === "number") && !(isStreaming && i === items.length - 1) && (
+                              <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/reply:opacity-100 group-focus-within/reply:opacity-100 pointer-coarse:opacity-100">
+                                {typeof item.responseTimeSeconds === "number" && (
+                                  <span className="text-[10px] text-muted-foreground/60">
+                                    {formatResponseTime(item.responseTimeSeconds)}
+                                  </span>
+                                )}
+                                {item.content && (
+                                  <CopyButton
+                                    text={item.content}
+                                    label="Copy reply"
+                                    className="touch-target h-6 w-6 text-muted-foreground hover:text-foreground"
+                                  />
+                                )}
+                              </div>
                             )}
                           </div>
                         );
@@ -2133,6 +2243,14 @@ export default function ChatPanel({
               {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
 
+              <div className="relative">
+              {activeCommand && !visibleSlashMatches.length && <SlashCommandHint template={activeCommand} />}
+              <SlashCommandMenu
+                matches={visibleSlashMatches}
+                activeIndex={Math.min(slashIndex, Math.max(visibleSlashMatches.length - 1, 0))}
+                onSelect={applyCommand}
+                onHover={setSlashIndex}
+              />
               <div className={cn(
                 "flex bg-card border border-border composer-shadow focus-within:border-input transition-colors",
                 isMobile ? "items-end gap-0.5 rounded-[26px] p-1" : "flex-col rounded-2xl",
@@ -2149,7 +2267,7 @@ export default function ChatPanel({
                     // message in view above the composer.
                     if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : "Ask the agent something..."}
+                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : "Ask anything, or type / for commands"}
                   rows={1}
                   className={cn(
                     "bg-transparent text-base md:text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
@@ -2204,6 +2322,7 @@ export default function ChatPanel({
                     </Button>
                   </div>
                 </div>
+              </div>
               </div>
             </form>}
           </div>
@@ -2364,7 +2483,7 @@ function ClarifyingQuestions({
   questions: ClarifyQuestion[];
   submitted: boolean;
   selectedLabels?: string[];
-  onSubmit: (selected: string[], otherText: string) => void;
+  onSubmit: (selected: string[], answer: string) => void;
 }) {
   const [selections, setSelections] = useState<Record<number, Set<string>>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
@@ -2396,14 +2515,19 @@ function ClarifyingQuestions({
 
   const handleSubmit = () => {
     const allSelected: string[] = [];
-    let allOther = "";
-    for (let i = 0; i < questions.length; i++) {
-      const sel = selections[i];
-      if (sel) allSelected.push(...Array.from(sel));
+    const answers: { question: string; answer: string }[] = [];
+    questions.forEach((q, i) => {
+      const picked = Array.from(selections[i] || []);
+      allSelected.push(...picked);
       const other = otherTexts[i]?.trim();
-      if (other) allOther = allOther ? `${allOther}; ${other}` : other;
-    }
-    onSubmit(allSelected, allOther);
+      const parts = other ? [...picked, other] : picked;
+      if (parts.length) answers.push({ question: q.question, answer: parts.join(", ") });
+    });
+    // One line per question, so the agent can tell which answer is which.
+    const answer = questions.length === 1
+      ? answers[0]?.answer ?? ""
+      : answers.map((a) => `- ${a.question} ${a.answer}`).join("\n");
+    onSubmit(allSelected, answer);
   };
 
   const hasAnySelection = Object.values(selections).some((s) => s.size > 0) ||

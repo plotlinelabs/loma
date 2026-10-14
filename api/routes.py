@@ -319,8 +319,17 @@ def _fallback_title(prompt: str) -> str:
 async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
     """Generate a short 5-word conversation title using Claude Haiku.
 
-    Uses the claude CLI (same pattern as observability/confidence.py).
     Falls back to extracting words from the prompt on any failure.
+    """
+    title, _ = await generate_title(prompt, response_snippet, db=db, conversation_id=conversation_id)
+    return title
+
+
+async def generate_title(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> tuple[str, bool]:
+    """Return (title, from_llm). from_llm is False for the word-slice fallback,
+    so callers can mark it and retry on a later run.
+
+    Uses the claude CLI (same pattern as observability/confidence.py).
     """
     context = prompt[:500]
     if response_snippet:
@@ -339,7 +348,8 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=Non
             from isolation.utility import complete
             raw = await complete(message, db=db, conversation_id=conversation_id, timeout=45)
             title = raw.strip().strip('"').strip("'").strip()
-            return ' '.join(title.split()[:8]) or _fallback_title(prompt)
+            title = ' '.join(title.split()[:8])
+            return (title, True) if title else (_fallback_title(prompt), False)
         from agent.pool import background_cli_env
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", message,
@@ -355,7 +365,7 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=Non
         if proc.returncode != 0:
             detail = stderr.decode()[:300].strip() or stdout.decode()[:300].strip()
             logger.warning("Title generation CLI failed (rc=%d): %s", proc.returncode, detail)
-            return _fallback_title(prompt)
+            return _fallback_title(prompt), False
 
         output = stdout.decode().strip()
         try:
@@ -369,14 +379,14 @@ async def _generate_title_llm(prompt: str, response_snippet: str = "", *, db=Non
         words = title.split()
         if len(words) > 8:
             title = " ".join(words[:8])
-        return title or _fallback_title(prompt)
+        return (title, True) if title else (_fallback_title(prompt), False)
 
     except asyncio.TimeoutError:
         logger.warning("Title generation timed out")
-        return _fallback_title(prompt)
+        return _fallback_title(prompt), False
     except Exception as e:
         logger.warning("Title generation failed: %s", e)
-        return _fallback_title(prompt)
+        return _fallback_title(prompt), False
 
 
 async def _classify_topic_llm(prompt: str, response_snippet: str = "", *, db=None, conversation_id=None) -> str:
@@ -1074,7 +1084,7 @@ async def _busy_conversation_response(
 async def _queue_chat_for_deploy(
     db, conversation_id: str, existing, metadata: dict, message: str, files,
     user_email: str, selected_model, tool_config, conversation_context: str,
-    run_tool_config=None,
+    run_tool_config=None, agent_prompt: str | None = None,
 ) -> web.Response:
     """202 for a chat message that arrived while a deploy drains.
 
@@ -1098,7 +1108,8 @@ async def _queue_chat_for_deploy(
         conversation_id=conversation_id,
         user_email=user_email,
         source="dashboard",
-        prompt=message,
+        # A slash command is recorded as typed but runs as its template.
+        prompt=agent_prompt or message,
         files=files or [],
         model=selected_model or "",
         tool_config=run_tool_config or tool_config,
@@ -1185,6 +1196,14 @@ async def handle_chat(request: web.Request) -> web.Response:
     run_id = None
     db = get_db()
     existing_conversation_id = body.get("conversation_id")
+    # `/review <link>` etc.: the transcript keeps what was typed, the agent
+    # gets the template's full instructions (api/prompt_templates.py).
+    agent_prompt = message
+    from api.prompt_templates import expand_command
+    command = await expand_command(db, user_email, message)
+    if command:
+        agent_prompt = command.prompt
+        plan_mode = plan_mode or command.plan_mode
     try:
         if db is not None:
             metadata = {
@@ -1197,7 +1216,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                 # Check if conversation already exists (resume) or is client-generated (start)
                 existing = await db.conversations.find_one(
                     {"conversation_id": existing_conversation_id},
-                    {"_id": 1, "task_status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1,
+                    {"_id": 1, "task_status": 1, "status": 1, "started_at": 1, "metadata": 1, "source": 1, "tool_config": 1,
                      "task_board_id": 1, "task_card_id": 1, "task_assignee": 1, "human_task": 1},
                 )
                 if existing and not _check_conversation_access(
@@ -1295,6 +1314,11 @@ async def handle_chat(request: web.Request) -> web.Response:
                     if not existing.get("started_at"):
                         flip["started_at"] = now
                         flip["task_started_at"] = now
+                    # The first message sent is the thread's prompt. Drafts can
+                    # be staged empty or edited in the composer before sending.
+                    # A draft that never ran has no status; parked chats keep theirs.
+                    if not existing.get("status"):
+                        flip["prompt"] = message
                     await db.conversations.update_one(
                         {"conversation_id": existing_conversation_id},
                         # Draft attachments ride the first message (the client
@@ -1357,6 +1381,7 @@ async def handle_chat(request: web.Request) -> web.Response:
                     db, existing_conversation_id or str(uuid.uuid4()), existing, metadata,
                     message, files, user_email, selected_model, tool_config,
                     conversation_context, run_tool_config=run_tool_config,
+                    agent_prompt=agent_prompt,
                 )
 
             if existing_conversation_id:
@@ -1425,7 +1450,7 @@ async def handle_chat(request: web.Request) -> web.Response:
 
         try:
             async for event in stream_agent(
-                prompt=message,
+                prompt=agent_prompt,
                 conversation_context=conversation_context,
                 files=files,
                 observer=observer,
@@ -2569,6 +2594,8 @@ def setup_api_routes(app: web.Application):
     app.router.add_get("/api/token-usage", handle_token_usage)
     app.router.add_get("/api/persons", handle_list_persons)
     app.router.add_post("/api/conversations/generate-titles", handle_generate_titles)
+    from api.prompt_templates import register_routes as register_prompt_template_routes
+    register_prompt_template_routes(app)
     app.router.add_get("/api/agent-models", handle_agent_models)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_get("/api/skills", handle_list_skills)

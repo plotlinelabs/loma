@@ -176,7 +176,12 @@ async def _run_recovery_check():
 
     # Mark stale conversations older than recovery window as 'interrupted'
     try:
-        stale_filter = {**stale_query, "started_at": {"$lt": recovery_cutoff}}
+        # No started_at can't be resumed by age; without this branch such a
+        # conversation stayed "running" (and its chat on "Still working") forever.
+        stale_filter = {"$and": [stale_query, {"$or": [
+            {"started_at": {"$lt": recovery_cutoff}},
+            {"started_at": None},
+        ]}]}
         # Board tasks flipping out of "running" here bypass the observer, so
         # capture them first to fire their needs-input pushes after the update.
         stale_task_ids = [

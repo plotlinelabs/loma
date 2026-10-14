@@ -42,3 +42,28 @@ def test_other_tools_and_empty_plans_are_ignored():
     assert plan_from_tool_call("Bash", {"plan": "# Plan"}) is None
     assert plan_from_tool_call("ExitPlanMode", {"plan": "   "}) is None
     assert plan_from_tool_call("ExitPlanMode", "not a dict") is None
+
+
+def test_plan_mode_asks_before_planning_and_plans_at_a_high_level():
+    assert ":::clarify" in PLAN_MODE_BLOCK
+    assert "high-level solution document" in PLAN_MODE_BLOCK
+    for section in ("## Scope", "## Proposed solution", "## Risks and edge cases", "## Rollout and verification"):
+        assert section in PLAN_MODE_BLOCK
+
+
+def test_ask_user_question_becomes_a_clarify_block():
+    import json
+
+    from agent.plan_mode import clarify_from_tool_call
+
+    text = clarify_from_tool_call("AskUserQuestion", {"questions": [
+        {"question": "Which platforms?", "header": "Platforms", "multiSelect": True,
+         "options": [{"label": "Web", "description": "SDK"}, {"label": "iOS"}]},
+        {"header": "no question text"},
+    ]})
+    assert text.startswith(":::clarify\n") and text.endswith("\n:::")
+    payload = json.loads(text[len(":::clarify\n"):-len("\n:::")])
+    assert payload == {"questions": [{"question": "Which platforms?", "multiSelect": True,
+                                      "options": [{"label": "Web", "description": "SDK"}, {"label": "iOS"}]}]}
+    assert clarify_from_tool_call("Bash", {"questions": []}) is None
+    assert clarify_from_tool_call("AskUserQuestion", {"questions": []}) is None

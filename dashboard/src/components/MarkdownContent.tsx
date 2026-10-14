@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
+import { CopyButton } from "./CopyButton";
 
 /**
  * Lightweight Markdown + Slack mrkdwn renderer for chat messages.
@@ -412,16 +413,15 @@ function renderBlock(block: Block, key: number): React.ReactElement {
     case "code":
       return (
         <div key={key} className="my-2">
-          {block.lang && (
-            <div className="text-[10px] font-mono text-[#8C857D] bg-[#0A0A0A] rounded-t-lg px-3 py-1">
-              {block.lang}
-            </div>
-          )}
-          <pre
-            className={`bg-[#0A0A0A] text-[#E8E4DD] text-xs p-3 overflow-x-auto font-mono leading-relaxed ${
-              block.lang ? "rounded-b-lg" : "rounded-lg"
-            }`}
-          >
+          <div className="flex items-center justify-between rounded-t-lg bg-[#0A0A0A] pl-3 pr-1 py-0.5 text-[10px] font-mono text-[#8C857D]">
+            <span>{block.lang || "code"}</span>
+            <CopyButton
+              text={block.code || ""}
+              label="Copy code"
+              className="h-6 w-6 text-[#8C857D] hover:bg-white/10 hover:text-[#E8E4DD]"
+            />
+          </div>
+          <pre className="bg-[#0A0A0A] text-[#E8E4DD] text-xs px-3 pb-3 pt-1 overflow-x-auto font-mono leading-relaxed rounded-b-lg">
             <code>{block.code}</code>
           </pre>
         </div>
