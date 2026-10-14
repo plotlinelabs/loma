@@ -143,6 +143,54 @@ def verify_webhook_auth(
 
 
 # ---------------------------------------------------------------------------
+# Event filter
+# ---------------------------------------------------------------------------
+
+_FILTER_OPS = {
+    "eq": lambda v, arg: v == arg,
+    "ne": lambda v, arg: v != arg,
+    "in": lambda v, arg: v in arg,
+    "not_in": lambda v, arg: v not in arg,
+}
+
+
+def _filter_value(path: str, payload: dict, headers: dict):
+    if path.startswith("headers."):
+        name = path[len("headers."):].lower()
+        return next((v for k, v in headers.items() if k.lower() == name), None)
+    from scheduler.webhook_executor import _resolve_jsonpath
+    return _resolve_jsonpath(payload, path)
+
+
+def passes_event_filter(event_filter: dict | None, payload, headers: dict) -> bool:
+    """True if the event should run the flow.
+
+    ``event_filter = {"accept_any": [rule, ...]}``; a rule is a list of
+    ``{"path": ..., "<op>": ...}`` conditions that must all hold. No filter, or a
+    malformed one, accepts everything so a bad config never drops events.
+    """
+    rules = (event_filter or {}).get("accept_any")
+    if not rules:
+        return True
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        for rule in rules:
+            ok = True
+            for cond in rule:
+                op = next(k for k in cond if k in _FILTER_OPS)
+                if not _FILTER_OPS[op](_filter_value(cond["path"], payload, headers), cond[op]):
+                    ok = False
+                    break
+            if ok:
+                return True
+        return False
+    except Exception:
+        logger.warning("[WEBHOOK] Malformed event_filter, accepting event", exc_info=True)
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
@@ -206,6 +254,17 @@ async def handle_incoming_webhook(request: web.Request) -> web.Response:
         return web.json_response({"error": "Unauthorized"}, status=401)
 
     await update_webhook_log(db, log_id, auth_result="success")
+
+    # 4b. Drop events the flow has no use for before spending an agent run on them.
+    try:
+        payload = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = {}
+    if not passes_event_filter(flow.get("webhook_config", {}).get("event_filter"), payload, headers):
+        await update_webhook_log(
+            db, log_id, response_status_code=200, execution_status="filtered",
+        )
+        return web.json_response({"status": "filtered"})
 
     # 5. Fire-and-forget execution. dispatch_webhook_flow supersedes any in-flight
     # run for the same (flow_id, thread_id) so only the latest webhook executes;
