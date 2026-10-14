@@ -1268,10 +1268,11 @@ async def _stream_agent(
         if attempt > 0:
             # Re-acquire a new client (previous was released after rate limit)
             try:
-                client = await pool.acquire()
+                client = await pool.acquire(model=selected_claude_model, extra_env=run_env)
                 account = getattr(client, '_pool_account', {})
                 account_email = account.get('email')
-                logger.info("Retry %d: acquired new client (account=%s)", attempt, account_email)
+                active_claude_model = getattr(client, "_pool_model", None) or selected_claude_model
+                logger.info("Retry %d: acquired new client (account=%s, model=%s)", attempt, account_email, active_claude_model)
                 if observer and account_email:
                     await observer.record_account(account_email)
                 if include_steps:
