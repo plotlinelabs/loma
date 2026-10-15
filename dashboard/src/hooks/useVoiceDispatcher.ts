@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createTask, createVoiceSession, fetchConversation, fetchTasksBoard, fetchVoiceStatus,
-  interruptAgent, sendTaskMessage, updateTask, updateTaskStar, type Task, type ToolConfig,
+  interruptAgent, logVoiceEvent, sendTaskMessage, updateTask, updateTaskStar, type Task, type ToolConfig,
 } from "@/lib/api";
 import {
   announcement, appendTranscript, detectFinished, matchTasks, parseToolCall, planMove, startTaskError, taskLabel, voiceColumn,
@@ -12,7 +12,7 @@ import {
 import { readTaskScreen, scrollTaskScreen, type ScrollAmount, type ScrollDirection } from "@/lib/voice-viewport";
 import { collectLinks, openLinkInNewTab, readTaskLinks, resolveLinkRef } from "@/lib/voice-links";
 import {
-  chatAnnouncement, chatProgress, chatRunOutcome, handoffBriefing, shouldHandOff, shouldPlayWaitingTone, SPEECH_LEVEL, taskBriefing,
+  chatAnnouncement, chatProgress, chatRunOutcome, handoffBriefing, historyChunks, readChat, replyContext, shouldHandOff, shouldPlayWaitingTone, SPEECH_LEVEL, taskBriefing,
   WaitingTone, type BoardRelease, type ChatVoiceTarget, type VoiceHandoff, type WatchedTask,
 } from "@/lib/voice-chat";
 import { isVoiceClaim, otherTabWins, type VoiceClaim } from "@/lib/voice-tabs";
@@ -40,6 +40,12 @@ const SPEAKING_HOLD_MS = 1500;
 const BOARD_POLL_MS = 4000;
 /** An announcement waits for this much quiet from the user. */
 const QUIET_BEFORE_ANNOUNCE_MS = 1500;
+/** A result is never held back longer than this by mic noise alone; only real
+ * speech (a transcript) still holds it. */
+const ANNOUNCE_MAX_WAIT_MS = 8000;
+/** A backend request with no event for this long is treated as over, so a lost
+ * completion event can never hold announcements back for good. */
+const BUSY_STALE_MS = 30_000;
 /** "End voice": how long the goodbye may take to start, and the most it may run. */
 const GOODBYE_WAIT_MS = 4000;
 const GOODBYE_LIMIT_MS = 10_000;
@@ -172,6 +178,14 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
   // Chat mode: the agent run being watched, and its result waiting to be said.
   const runRef = useRef<{ askedAt: number; sawRunning: boolean } | null>(null);
   const chatAnnounceRef = useRef<string | null>(null);
+  // When the queued result was first ready, the last transcript of the user, and the last backend event.
+  const announceSinceRef = useRef(0);
+  const lastUserTranscriptRef = useRef(0);
+  const lastBackendEventRef = useRef(0);
+  // The result sent last, kept so it can be sent again once if the session rejects it.
+  const sentAnnounceRef = useRef<{ id: string; content: string; retried: boolean } | null>(null);
+  // Chat mode: how many chat messages voice has been given as context.
+  const sharedMessagesRef = useRef(0);
   const toneRef = useRef<WaitingTone | null>(null);
   const toneTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mutedRef = useRef(false);
@@ -198,6 +212,9 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
     fromBoardRef.current = null;
     runRef.current = null;
     chatAnnounceRef.current = null;
+    announceSinceRef.current = 0;
+    sentAnnounceRef.current = null;
+    sharedMessagesRef.current = 0;
     mutedRef.current = false;
     if (liveSession === ownerRef.current) liveSession = null;
     ownerRef.current.claim = undefined;
@@ -279,11 +296,14 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
             const running = chat.getState().running;
             chat.send(message);
             runRef.current = { askedAt: Date.now(), sawRunning: running };
-            logAction(running ? "Added to the agent's work" : "Asked the agent", true);
+            logVoiceEvent("delegated", { running });
+            logAction(running ? "Added to the work in progress" : "Started working on it", true);
             return { ok: true, delivery: running ? "added_to_running_work" : "started" };
           }
           case "check_progress":
             return chatProgress(chat.getState(), Date.now());
+          case "read_chat":
+            return readChat(chat.getMessages?.() ?? [], text("query"));
           case "read_reply": {
             const { running, latestReply } = chat.getState();
             if (!latestReply) return { reply: null, running, reason: "The agent has not replied yet." };
@@ -294,7 +314,7 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
             chat.stop();
             // The user stopped it themselves: nothing to announce.
             runRef.current = null;
-            logAction("Stopped the agent", true);
+            logAction("Stopped the work", true);
             return { ok: true, stopped: true };
           }
         }
@@ -497,6 +517,8 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
       const { tasks } = await fetchTasksBoard("", boardIdRef.current);
       if (generation !== generationRef.current) return;
       const finished = detectFinished(watchedRef.current, tasks);
+      // Tasks handed over from a chat are work voice took on itself: report them as such.
+      const handed = new Set(finished.map(({ task }) => task.conversation_id).filter((id) => toneTasksRef.current.has(id)));
       for (const { task } of finished) toneTasksRef.current.delete(task.conversation_id);
       if (!finished.length) return;
       const items = await Promise.all(finished.map(async ({ task, outcome }) => {
@@ -511,7 +533,13 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
           item.outcome !== "failed", item.id);
         onTaskActivityRef.current?.(item.id);
       }
-      announceRef.current.push(...items);
+      const own = items.filter((item) => handed.has(item.id));
+      announceRef.current.push(...items.filter((item) => !handed.has(item.id)));
+      if (own.length) {
+        const said = own.map((item) => `About "${item.title}": ${chatAnnouncement(item.outcome === "failed" ? "failed" : item.outcome === "needs_input" ? "needs_input" : "finished", item.reply)}`);
+        chatAnnounceRef.current = [chatAnnounceRef.current, ...said].filter(Boolean).join(" ");
+        logVoiceEvent("run_finished", { mode: "board", outcome: own[0].outcome });
+      }
       onBoardChangedRef.current();
     } catch {
       // A missed check is fine: the next one compares against the same snapshot.
@@ -523,15 +551,43 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
   /** Speak queued announcements once nobody is talking and no request is in flight. */
   const flushAnnouncements = useCallback((now: number) => {
     const chatUpdate = chatAnnounceRef.current;
-    if ((!announceRef.current.length && !chatUpdate) || busyRef.current > 0 || pendingRef.current.length) return;
-    if (now < speakingUntilRef.current || now - lastUserSpeechRef.current < QUIET_BEFORE_ANNOUNCE_MS) return;
-    const content = chatUpdate ?? announcement(announceRef.current);
+    if (!announceRef.current.length && !chatUpdate) {
+      announceSinceRef.current = 0;
+      return;
+    }
+    announceSinceRef.current ||= now;
+    // A backend request that never reported its end must not block the result forever.
+    if (busyRef.current > 0 && !pendingRef.current.length && now - lastBackendEventRef.current > BUSY_STALE_MS) {
+      busyRef.current = 0;
+      logVoiceEvent("busy_reset");
+    }
+    if (busyRef.current > 0 || pendingRef.current.length) return;
+    if (now < speakingUntilRef.current || now - lastUserTranscriptRef.current < QUIET_BEFORE_ANNOUNCE_MS) return;
+    // Mic level also counts as talking, but steady room noise can't hold the result back for long.
+    const heldByNoise = now - lastUserSpeechRef.current < QUIET_BEFORE_ANNOUNCE_MS;
+    if (heldByNoise && now - announceSinceRef.current < ANNOUNCE_MAX_WAIT_MS) return;
+    const content = [chatUpdate, announcement(announceRef.current)].filter(Boolean).join(" ");
+    const waited = now - announceSinceRef.current;
     announceRef.current = [];
     chatAnnounceRef.current = null;
-    // General session context (no delegation): the voice model says it in its own words.
-    send({ type: "session.commentary.append", delegation_id: null, content });
+    announceSinceRef.current = 0;
+    // Spoken context (no delegation): the voice model says it aloud in its own words.
+    const id = `announce_${now}`;
+    sentAnnounceRef.current = { id, content, retried: sentAnnounceRef.current?.content === content };
+    send({ type: "session.commentary.append", event_id: id, delegation_id: null, content });
+    logVoiceEvent("announced", { waited_ms: waited, chars: content.length });
     speakingUntilRef.current = now + SPEAKING_HOLD_MS;
     lastActivityRef.current = now;
+  }, [send]);
+
+  /** Chat mode: give voice the chat messages it has not seen yet, as unspoken context. */
+  const shareMessages = useCallback(() => {
+    const messages = chatRef.current?.getMessages?.();
+    if (!messages || !readyRef.current) return;
+    const fresh = messages.slice(sharedMessagesRef.current);
+    sharedMessagesRef.current = messages.length;
+    if (!fresh.length) return;
+    for (const content of historyChunks(fresh)) send({ type: "session.thinking.append", delegation_id: null, content });
   }, [send]);
 
   /** Chat mode: follow the agent's run and queue its result when it ends. */
@@ -546,14 +602,18 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
       else runRef.current = { askedAt: now, sawRunning: true };
       return;
     }
+    if (!run && current.running === false) shareMessages();
     if (!run || (!run.sawRunning && now - run.askedAt < RUN_START_GRACE_MS)) return;
     runRef.current = null;
     if (!run.sawRunning) return;
     const outcome = chatRunOutcome(current);
-    logAction(outcome === "failed" ? "Agent stopped with an error" : outcome === "needs_input" ? "Agent has a question" : "Agent finished",
+    logVoiceEvent("run_finished", { outcome });
+    shareMessages();
+    if (current.latestReply) send({ type: "session.thinking.append", delegation_id: null, content: replyContext(current.latestReply) });
+    logAction(outcome === "failed" ? "Stopped with an error" : outcome === "needs_input" ? "Has a question for you" : "Finished",
       outcome !== "failed");
     chatAnnounceRef.current = chatAnnouncement(outcome, current.latestReply);
-  }, [logAction]);
+  }, [logAction, send, shareMessages]);
 
   /** The waiting tone: plays while the agent works (chat) or a handed-over task
    * runs (board), and pauses the moment anyone talks. */
@@ -602,6 +662,11 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
           send({ type: "session.commentary.append", delegation_id: null, content: briefing });
           speakingUntilRef.current = Date.now() + SPEAKING_HOLD_MS;
         }
+        // Chat mode: voice knows the whole chat from the start, so it can answer from it.
+        if (chatRef.current) {
+          shareMessages();
+          logVoiceEvent("session_started", { mode: "chat", messages: sharedMessagesRef.current });
+        }
         return;
       }
       case "session.input_transcript.delta":
@@ -611,15 +676,20 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
           speakingUntilRef.current = Date.now() + SPEAKING_HOLD_MS;
           // Speech after the backend finished is the goodbye, not a "one moment" filler.
           if (endingRef.current && busyRef.current === 0) endingRef.current.spoke = true;
-        } else lastUserSpeechRef.current = Date.now();
+        } else lastUserSpeechRef.current = lastUserTranscriptRef.current = Date.now();
         setLines((prev) => appendTranscript(
           prev, speaker, String(event.delta ?? ""), Number(event.start_ms ?? 0), Number(event.end_ms ?? 0)));
         return;
       }
       case "session.delegation.created":
         busyRef.current = 1;
+        lastBackendEventRef.current = Date.now();
+        return;
+      case "session.commentary.appended":
+        if (sentAnnounceRef.current && event.client_event_id === sentAnnounceRef.current.id) logVoiceEvent("announce_ack");
         return;
       case "response.event": {
+        lastBackendEventRef.current = Date.now();
         const call = parseToolCall(event);
         if (call) {
           if (seenCallsRef.current.has(call.callId)) return;
@@ -628,7 +698,7 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
           return;
         }
         const nested = (event.event as { type?: string } | undefined)?.type;
-        if (nested !== "response.completed" && nested !== "response.failed" && nested !== "response.incomplete") return;
+        if (nested !== "response.completed" && nested !== "response.failed" && nested !== "response.incomplete" && nested !== "response.cancelled") return;
         const pending = pendingRef.current;
         pendingRef.current = [];
         if (nested !== "response.completed" || pending.length === 0) {
@@ -652,8 +722,16 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
         return;
       }
       case "error": {
-        const detail = event.error as { message?: string } | undefined;
+        const detail = event.error as { message?: string; client_event_id?: string; event_id?: string } | undefined;
         console.warn("Voice session error", detail);
+        const sent = sentAnnounceRef.current;
+        // The result was rejected: send it again once rather than stay silent.
+        const failedId = event.client_event_id ?? detail?.client_event_id ?? detail?.event_id;
+        if (sent && failedId === sent.id) {
+          logVoiceEvent("announce_error", { message: String(detail?.message ?? "").slice(0, 200), retried: sent.retried });
+          if (!sent.retried && !chatAnnounceRef.current) chatAnnounceRef.current = sent.content;
+          return;
+        }
         if (detail?.message) setError(detail.message);
         return;
       }
@@ -661,7 +739,7 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
         cleanup();
         return;
     }
-  }, [cleanup, runTool, send]);
+  }, [cleanup, runTool, send, shareMessages]);
 
   const start = useCallback(async () => {
     if (peerRef.current) return;
@@ -852,7 +930,7 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
     const release: BoardRelease = {
       lines: linesRef.current.map(({ speaker, text }) => ({ speaker, text })),
       watching,
-      announcement: chatAnnounceRef.current ?? (announceRef.current.length ? announcement(announceRef.current) : null),
+      announcement: [chatAnnounceRef.current, announcement(announceRef.current)].filter(Boolean).join(" ") || null,
     };
     cleanup();
     return release;

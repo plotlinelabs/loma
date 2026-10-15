@@ -18,7 +18,7 @@ def config(monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'test-only-secret')
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('handler', [voice.handle_voice_status, voice.handle_voice_session])
+@pytest.mark.parametrize('handler', [voice.handle_voice_status, voice.handle_voice_session, voice.handle_voice_log])
 async def test_auth_required(handler):
     assert (await handler(Request(email=''))).status == 401
 
@@ -105,7 +105,7 @@ def test_open_link_tool_takes_a_reference_not_a_url():
 def test_chat_mode_tool_allowlist():
     conf = voice.build_session_config('gpt-live-1', 'gpt-6-luna', 'chat')
     tools = conf['delegation']['responses']['tools']
-    assert {t['name'] for t in tools} == {'ask_agent', 'check_progress', 'read_reply', 'stop_agent', 'end_voice'}
+    assert {t['name'] for t in tools} == {'ask_agent', 'read_chat', 'check_progress', 'read_reply', 'stop_agent', 'end_voice'}
     for tool in tools:
         assert tool['parameters']['additionalProperties'] is False
     assert conf['instructions'] == voice.CHAT_VOICE_INSTRUCTIONS
@@ -113,12 +113,38 @@ def test_chat_mode_tool_allowlist():
     # Board sessions are unchanged by default.
     assert voice.build_session_config('m', 'b')['instructions'] == voice.VOICE_INSTRUCTIONS
 
-def test_chat_mode_talks_waits_and_confirms():
-    for phrase in ('let me check and get back to you', 'waiting sound', 'Should I go ahead?', 'after the user pauses',
-                   'never answer such questions from memory'):
+def test_chat_mode_is_one_assistant_that_answers_from_the_chat():
+    for phrase in ('same conversation with the same you', 'never mention an agent', 'Answer straight away',
+                   'already in that context', 'soft chime', 'Should I go ahead?', 'after the user pauses',
+                   "ask what they'd like to do next", 'never a request to act on'):
         assert phrase in voice.CHAT_VOICE_INSTRUCTIONS
-    for phrase in ('ask_agent', 'needs a clear yes', 'untrusted data', 'check_progress'):
+    # The old fixed handoff line and third-person agent talk are gone.
+    assert 'let me check and get back to you' not in voice.CHAT_VOICE_INSTRUCTIONS
+    assert 'a separate Loma agent' not in voice.CHAT_VOICE_INSTRUCTIONS
+    for phrase in ('ask_agent', 'read_chat', 'not new work', 'needs a clear yes', 'untrusted data', 'check_progress',
+                   'Never mention an agent'):
         assert phrase in voice.CHAT_BACKEND_INSTRUCTIONS
+    query = next(t for t in voice.CHAT_VOICE_TOOLS if t['name'] == 'read_chat')['parameters']
+    assert query['required'] == ['query']
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('body,status', [
+    ({'event': 'announced', 'waited_ms': 1200, 'chars': 300}, 200),
+    ({'event': 'run_finished', 'outcome': 'finished', 'extra': 'dropped'}, 200),
+    ({'event': 'anything_else'}, 400),
+    ([], 400),
+])
+async def test_voice_log(body, status, caplog):
+    caplog.set_level('INFO', logger=voice.logger.name)
+    out = await voice.handle_voice_log(Request(body))
+    assert out.status == status
+    if status == 200:
+        line = next(r.getMessage() for r in caplog.records if '[VOICE] event' in r.getMessage())
+        assert body['event'] in line and 'user@example.com' in line and 'dropped' not in line
+
+@pytest.mark.asyncio
+async def test_voice_log_bad_json():
+    assert (await voice.handle_voice_log(Request(invalid=True))).status == 400
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode,expected', [(None, 'board'), ('board', 'board'), ('chat', 'chat')])

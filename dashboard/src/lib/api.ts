@@ -1750,6 +1750,17 @@ export async function createVoiceSession(sdp: string, mode: "board" | "chat" = "
   return body;
 }
 
+/** Record a key voice moment in the server log (fire and forget), so a silent
+ * or slow voice session can be traced afterwards. */
+export function logVoiceEvent(event: string, detail: Record<string, string | number | boolean | null> = {}): void {
+  void fetch(`${API_BASE}/api/voice/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event, ...detail }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 /** Send a follow-up to a task without watching the reply. A running task
  * takes it mid-run where the runtime allows; an idle one starts a new run,
  * which carries on in the background like any other chat. */
