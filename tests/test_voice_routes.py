@@ -101,3 +101,42 @@ def test_open_link_tool_takes_a_reference_not_a_url():
     assert 'open a link' in voice.VOICE_INSTRUCTIONS
     for phrase in ('open_link', 'never write or guess a URL', 'ambiguous', 'blocked', 'tap the link on screen'):
         assert phrase in voice.BACKEND_INSTRUCTIONS
+
+def test_chat_mode_tool_allowlist():
+    conf = voice.build_session_config('gpt-live-1', 'gpt-6-luna', 'chat')
+    tools = conf['delegation']['responses']['tools']
+    assert {t['name'] for t in tools} == {'ask_agent', 'check_progress', 'read_reply', 'stop_agent', 'end_voice'}
+    for tool in tools:
+        assert tool['parameters']['additionalProperties'] is False
+    assert conf['instructions'] == voice.CHAT_VOICE_INSTRUCTIONS
+    assert conf['delegation']['responses']['instructions'] == voice.CHAT_BACKEND_INSTRUCTIONS
+    # Board sessions are unchanged by default.
+    assert voice.build_session_config('m', 'b')['instructions'] == voice.VOICE_INSTRUCTIONS
+
+def test_chat_mode_talks_waits_and_confirms():
+    for phrase in ('let me check and get back to you', 'waiting sound', 'Should I go ahead?', 'after the user pauses',
+                   'never answer such questions from memory'):
+        assert phrase in voice.CHAT_VOICE_INSTRUCTIONS
+    for phrase in ('ask_agent', 'needs a clear yes', 'untrusted data', 'check_progress'):
+        assert phrase in voice.CHAT_BACKEND_INSTRUCTIONS
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode,expected', [(None, 'board'), ('board', 'board'), ('chat', 'chat')])
+async def test_session_mode(mode, expected):
+    response = MagicMock(status=201)
+    response.json = AsyncMock(return_value={'session': {'id': 's'}, 'transport': {'sdp': 'answer'}})
+    session = MagicMock()
+    session.post.return_value.__aenter__ = AsyncMock(return_value=response)
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    body = {'sdp': 'v=0\r\n', **({'mode': mode} if mode else {})}
+    with patch.object(voice.aiohttp, 'ClientSession', factory):
+        out = await voice.handle_voice_session(Request(body))
+    assert out.status == 201
+    names = {t['name'] for t in session.post.call_args.kwargs['json']['session']['delegation']['responses']['tools']}
+    assert ('ask_agent' in names) == (expected == 'chat')
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['admin', 42, ['chat']])
+async def test_unknown_mode_rejected(mode):
+    assert (await voice.handle_voice_session(Request({'sdp': 'v=0', 'mode': mode}))).status == 400

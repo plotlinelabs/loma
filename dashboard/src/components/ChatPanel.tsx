@@ -19,6 +19,9 @@ import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
 import { useFileDrop } from "./composer/useFileDrop";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
+import { VoiceModeButton, VoicePanel } from "./tasks/VoiceDispatcher";
+import { useVoiceAvailable, useVoiceDispatcher } from "@/hooks/useVoiceDispatcher";
+import type { ChatVoiceState } from "@/lib/voice-chat";
 import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError, ConversationQueuedError, ChatRequestError } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
@@ -165,6 +168,29 @@ function formatToolName(name: string): string {
 }
 
 
+
+const noop = () => {};
+
+/** What voice mode sees of the chat: is the agent running, its current step and latest reply. */
+function chatVoiceState(items: ChatItem[], running: boolean, streamStartedAt: number | null): ChatVoiceState {
+  let latestReply: string | null = null;
+  for (let i = items.length - 1; i >= 0 && latestReply === null; i--) {
+    if (items[i].role === "assistant" && items[i].content.trim()) latestReply = items[i].content;
+  }
+  let currentStep: string | null = null;
+  let waitingForUser = false;
+  for (let i = items.length - 1; i >= 0 && items[i].role !== "user"; i--) {
+    const item = items[i];
+    if (item.role === "clarify" && !item.submitted) waitingForUser = true;
+    if (currentStep) continue;
+    if (item.role === "status" && item.content) currentStep = item.content;
+    const step = item.role === "steps" ? item.steps?.[item.steps.length - 1] : undefined;
+    if (step?.name) currentStep = `${step.status === "running" ? "running" : "ran"} ${formatToolName(step.name)}`;
+  }
+  // streamStartedAt is a performance.now() reading.
+  const startedAt = running && streamStartedAt !== null ? Date.now() - (performance.now() - streamStartedAt) : null;
+  return { running, startedAt, currentStep: running ? currentStep : null, latestReply, waitingForUser };
+}
 
 /** Extract a concise summary from a tool's raw JSON input string (for historical turns) */
 function summarizeToolInput(toolName: string, rawInput: string): string {
@@ -1079,6 +1105,28 @@ export default function ChatPanel({
     });
   }, [isRecovering, conversationId]);
 
+  // Voice mode: voice talks, this chat's agent does the work.
+  const voiceAvailable = useVoiceAvailable();
+  const handleStopRef = useRef(handleStop);
+  const voiceStateRef = useRef<ChatVoiceState>({ running: false, startedAt: null, currentStep: null, latestReply: null, waitingForUser: false });
+  voiceStateRef.current = chatVoiceState(items, isStreaming, streamStartedAt);
+  const voiceChat = useMemo(() => ({
+    getState: () => voiceStateRef.current,
+    send: (message: string) => { void handleSendRef.current?.(message); },
+    stop: () => handleStopRef.current(),
+    conversationId: () => voiceConversationRef.current ?? null,
+  }), []);
+  // On the tasks board, a task opened while board voice is on takes the session over.
+  const voice = useVoiceDispatcher({ chat: voiceChat, takeOverFromBoard: !readOnly, model: selectedModel || undefined, onBoardChanged: noop });
+  // Opening a different chat ends voice; the new chat getting its id does not.
+  const voiceConversationRef = useRef(conversationId);
+  const stopVoice = voice.stop;
+  useEffect(() => {
+    if (initialConversationId && initialConversationId !== voiceConversationRef.current) stopVoice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialConversationId]);
+  voiceConversationRef.current = conversationId;
+
   useEffect(() => {
     const handleEscapeKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isStreaming && document.activeElement !== inputRef.current) {
@@ -1590,6 +1638,7 @@ export default function ChatPanel({
   };
 
   handleSendRef.current = handleSend;
+  handleStopRef.current = handleStop;
 
   const handleClarifySubmit = useCallback(
     (itemIndex: number, selectedLabels: string[], answer: string) => {
@@ -1883,6 +1932,9 @@ export default function ChatPanel({
               }}
             >
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
+              {voice.active
+                ? <VoicePanel voice={voice} className="mb-1.5 rounded-2xl border border-border bg-card" />
+                : voice.error && <p className="mb-1 text-xs text-destructive">{voice.error}</p>}
 
               <div className="relative">
               {activeCommand && !visibleSlashMatches.length && <SlashCommandHint template={activeCommand} />}
@@ -1914,12 +1966,16 @@ export default function ChatPanel({
                     {composerPickers}
                   </div>
                   <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
-                    <DictationButton
+                    {/* Dictation fills the box; voice mode is a live conversation. Voice replaces the mic while on. */}
+                    {!voice.active && <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
                       mobileProminent
                       hideIdleOnMobile={!!input.trim() || pendingFiles.length > 0}
                       compactMobile
-                    />
+                    />}
+                    {!voice.active && voiceAvailable && (
+                      <VoiceModeButton voice={voice} className={cn((!!input.trim() || pendingFiles.length > 0) && "max-md:hidden")} />
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
@@ -2239,6 +2295,9 @@ export default function ChatPanel({
             >
               {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
+              {voice.active
+                ? <VoicePanel voice={voice} className="mb-1.5 rounded-2xl border border-border bg-card" />
+                : voice.error && <p className="mb-1 text-xs text-destructive">{voice.error}</p>}
 
               <div className="relative">
               {activeCommand && !visibleSlashMatches.length && <SlashCommandHint template={activeCommand} />}
@@ -2277,12 +2336,16 @@ export default function ChatPanel({
                     {composerPickers}
                   </div>}
                   <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
-                    <DictationButton
+                    {/* Dictation fills the box; voice mode is a live conversation. Voice replaces the mic while on. */}
+                    {!voice.active && <DictationButton
                       onText={(t) => setInput((prev) => appendDictation(prev, t))}
                       mobileProminent
                       hideIdleOnMobile={!!input.trim() || pendingFiles.length > 0}
                       compactMobile
-                    />
+                    />}
+                    {!voice.active && voiceAvailable && (
+                      <VoiceModeButton voice={voice} className={cn((!!input.trim() || pendingFiles.length > 0) && "max-md:hidden")} />
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
