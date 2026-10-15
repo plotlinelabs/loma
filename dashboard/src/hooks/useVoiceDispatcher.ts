@@ -11,6 +11,9 @@ import {
 } from "@/lib/voice-dispatcher";
 import { readTaskScreen, scrollTaskScreen, type ScrollAmount, type ScrollDirection } from "@/lib/voice-viewport";
 import { collectLinks, openLinkInNewTab, readTaskLinks, resolveLinkRef } from "@/lib/voice-links";
+import {
+  chatAnnouncement, chatProgress, chatRunOutcome, shouldPlayWaitingTone, SPEECH_LEVEL, WaitingTone, type ChatVoiceTarget,
+} from "@/lib/voice-chat";
 
 export type VoiceState = "idle" | "connecting" | "listening" | "working" | "speaking";
 
@@ -38,11 +41,17 @@ const QUIET_BEFORE_ANNOUNCE_MS = 1500;
 /** "End voice": how long the goodbye may take to start, and the most it may run. */
 const GOODBYE_WAIT_MS = 4000;
 const GOODBYE_LIMIT_MS = 10_000;
+/** Chat mode: how long a handed-over request may take to show up as a run. */
+const RUN_START_GRACE_MS = 8000;
+const TONE_TICK_MS = 100;
 const SCROLL_DIRECTIONS: ScrollDirection[] = ["up", "down", "top", "bottom"];
 const LIST_LIMIT = 30;
 const REPLY_LIMIT = 1500;
 
 type ToolResult = Record<string, unknown>;
+
+/** One mic at a time: starting voice anywhere ends the session already open. */
+let liveSession: { stop: () => void } | null = null;
 
 /** Whether to offer voice mode: the backend has a key and the browser can do WebRTC. */
 export function useVoiceAvailable(): boolean {
@@ -56,13 +65,19 @@ export function useVoiceAvailable(): boolean {
   return available;
 }
 
-/** Voice dispatcher for the tasks board: a live WebRTC session with the
+/** Voice dispatcher for the tasks board, or for one chat when `chat` is given:
+ * there voice talks while the chat's agent does the work, a waiting tone plays
+ * during the run, and the result is reported after the user pauses.
+ *
+ * Board mode: a live WebRTC session with the
  * voice model, whose delegated tool calls run here against the normal task
  * routes. Voice only hands out, reads, steers, stops, moves, opens and closes tasks,
  * scrolls and reads the task that is open, opens a link from its replies, and ends itself when asked.
  * While it is on it also watches the board and announces tasks that stop. */
-export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask, onTaskActivity }: {
+export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask, onTaskActivity }: {
   boardId?: string;
+  /** Chat mode: the chat voice sits in. */
+  chat?: ChatVoiceTarget;
   model?: string;
   toolConfig?: ToolConfig;
   /** Called after voice changes the board so it refreshes right away. */
@@ -83,6 +98,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   const [actions, setActions] = useState<VoiceAction[]>([]);
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agentWorking, setAgentWorking] = useState(false);
 
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<RTCDataChannel | null>(null);
@@ -120,13 +136,30 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
   const lastUserSpeechRef = useRef(0);
   // Set when the user asked to end voice: the session closes once Loma has said goodbye.
   const endingRef = useRef<{ at: number; quietAt: number; spoke: boolean } | null>(null);
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
+  // Chat mode: the agent run being watched, and its result waiting to be said.
+  const runRef = useRef<{ askedAt: number; sawRunning: boolean } | null>(null);
+  const chatAnnounceRef = useRef<string | null>(null);
+  const toneRef = useRef<WaitingTone | null>(null);
+  const toneTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mutedRef = useRef(false);
+  const ownerRef = useRef<{ stop: () => void }>({ stop: () => {} });
 
   const cleanup = useCallback((message?: string) => {
     generationRef.current += 1;
     if (timerRef.current) clearInterval(timerRef.current);
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    if (toneTimerRef.current) clearInterval(toneTimerRef.current);
     timerRef.current = null;
     closeTimerRef.current = null;
+    toneTimerRef.current = null;
+    toneRef.current?.close();
+    toneRef.current = null;
+    runRef.current = null;
+    chatAnnounceRef.current = null;
+    mutedRef.current = false;
+    if (liveSession === ownerRef.current) liveSession = null;
     micRef.current?.getTracks().forEach((t) => t.stop());
     micRef.current = null;
     channelRef.current?.close();
@@ -148,6 +181,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
     busyRef.current = 0;
     readyRef.current = false;
     setMuted(false);
+    setAgentWorking(false);
     setState("idle");
     if (message) setError(message);
   }, []);
@@ -193,6 +227,35 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
     };
 
     try {
+      const chat = chatRef.current;
+      if (chat) {
+        switch (call.name) {
+          case "ask_agent": {
+            const message = text("message");
+            if (!message) return { error: "The message is empty." };
+            const running = chat.getState().running;
+            chat.send(message);
+            runRef.current = { askedAt: Date.now(), sawRunning: running };
+            logAction(running ? "Added to the agent's work" : "Asked the agent", true);
+            return { ok: true, delivery: running ? "added_to_running_work" : "started" };
+          }
+          case "check_progress":
+            return chatProgress(chat.getState(), Date.now());
+          case "read_reply": {
+            const { running, latestReply } = chat.getState();
+            if (!latestReply) return { reply: null, running, reason: "The agent has not replied yet." };
+            return { reply: latestReply.slice(-REPLY_LIMIT), running };
+          }
+          case "stop_agent": {
+            if (!chat.getState().running) return { error: "The agent is not working right now." };
+            chat.stop();
+            // The user stopped it themselves: nothing to announce.
+            runRef.current = null;
+            logAction("Stopped the agent", true);
+            return { ok: true, stopped: true };
+          }
+        }
+      }
       switch (call.name) {
         case "list_tasks": {
           const column = text("column") || "all";
@@ -415,15 +478,38 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
 
   /** Speak queued announcements once nobody is talking and no request is in flight. */
   const flushAnnouncements = useCallback((now: number) => {
-    if (!announceRef.current.length || busyRef.current > 0 || pendingRef.current.length) return;
+    const chatUpdate = chatAnnounceRef.current;
+    if ((!announceRef.current.length && !chatUpdate) || busyRef.current > 0 || pendingRef.current.length) return;
     if (now < speakingUntilRef.current || now - lastUserSpeechRef.current < QUIET_BEFORE_ANNOUNCE_MS) return;
-    const content = announcement(announceRef.current);
+    const content = chatUpdate ?? announcement(announceRef.current);
     announceRef.current = [];
+    chatAnnounceRef.current = null;
     // General session context (no delegation): the voice model says it in its own words.
     send({ type: "session.commentary.append", delegation_id: null, content });
     speakingUntilRef.current = now + SPEAKING_HOLD_MS;
     lastActivityRef.current = now;
   }, [send]);
+
+  /** Chat mode: follow the agent's run and queue its result when it ends. */
+  const watchChat = useCallback((now: number) => {
+    const chatTarget = chatRef.current;
+    if (!chatTarget) return;
+    const current = chatTarget.getState();
+    setAgentWorking(current.running);
+    const run = runRef.current;
+    if (current.running) {
+      if (run) run.sawRunning = true;
+      else runRef.current = { askedAt: now, sawRunning: true };
+      return;
+    }
+    if (!run || (!run.sawRunning && now - run.askedAt < RUN_START_GRACE_MS)) return;
+    runRef.current = null;
+    if (!run.sawRunning) return;
+    const outcome = chatRunOutcome(current);
+    logAction(outcome === "failed" ? "Agent stopped with an error" : outcome === "needs_input" ? "Agent has a question" : "Agent finished",
+      outcome !== "failed");
+    chatAnnounceRef.current = chatAnnouncement(outcome, current.latestReply);
+  }, [logAction]);
 
   const handleEvent = useCallback((event: { type?: string; [key: string]: unknown }) => {
     // Usage ticks arrive on a timer; only talk and task work count as activity.
@@ -494,6 +580,8 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
 
   const start = useCallback(async () => {
     if (peerRef.current) return;
+    if (liveSession && liveSession !== ownerRef.current) liveSession.stop();
+    liveSession = ownerRef.current;
     setError(null);
     setLines([]);
     setActions([]);
@@ -519,6 +607,13 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
       }
       micRef.current = mic;
       for (const track of mic.getAudioTracks()) peer.addTrack(track, mic);
+      if (chatRef.current) {
+        try {
+          toneRef.current = new WaitingTone(mic);
+        } catch {
+          // No Web Audio: voice still works, just without the waiting tone.
+        }
+      }
 
       // The event channel must exist before the offer is created.
       const channel = peer.createDataChannel("oai-events");
@@ -556,7 +651,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
       if (peerRef.current !== peer) return;
       const offer = peer.localDescription?.sdp;
       if (!offer) throw new Error("Could not create the voice connection");
-      const answer = await createVoiceSession(offer);
+      const answer = await createVoiceSession(offer, chatRef.current ? "chat" : "board");
       if (peerRef.current !== peer) return;
       await peer.setRemoteDescription({ type: "answer", sdp: answer.sdp });
 
@@ -566,14 +661,15 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
         const now = Date.now();
         if (now - startedAtRef.current > SESSION_LIMIT_MS) return stop("Voice ended after 20 minutes.");
         // Stay on while a task it is watching still runs, so the finish can be announced.
-        let watching = announceRef.current.length > 0;
+        let watching = announceRef.current.length > 0 || !!chatAnnounceRef.current || !!runRef.current;
         for (const column of watchedRef.current.values()) watching ||= column === "working";
         if (now - lastActivityRef.current > IDLE_LIMIT_MS && busyRef.current === 0 && !watching) return stop("Voice ended after 3 quiet minutes.");
         if (!readyRef.current) {
           if (now - startedAtRef.current > 30_000) stop("Voice connection timed out. Please try again.");
           return;
         }
-        if (now - lastPollRef.current >= BOARD_POLL_MS) {
+        if (chatRef.current) watchChat(now);
+        else if (now - lastPollRef.current >= BOARD_POLL_MS) {
           lastPollRef.current = now;
           void pollBoard();
         }
@@ -591,16 +687,33 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
         flushAnnouncements(now);
         setState(now < speakingUntilRef.current ? "speaking" : busyRef.current > 0 ? "working" : "listening");
       }, 300);
+      // Chat mode: the tone plays while the agent works and pauses the moment anyone talks.
+      if (toneRef.current) {
+        toneTimerRef.current = setInterval(() => {
+          const tone = toneRef.current;
+          if (!tone) return;
+          const now = Date.now();
+          if (!mutedRef.current && tone.level() > SPEECH_LEVEL) lastUserSpeechRef.current = now;
+          tone.set(readyRef.current && !endingRef.current && shouldPlayWaitingTone({
+            agentRunning: !!chatRef.current?.getState().running,
+            now,
+            lastUserSpeechAt: lastUserSpeechRef.current,
+            speakingUntil: speakingUntilRef.current,
+            voiceBusy: busyRef.current > 0 || pendingRef.current.length > 0,
+          }));
+        }, TONE_TICK_MS);
+      }
     } catch (e) {
       if (peerRef.current !== peer) return;
       const denied = e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "NotFoundError");
       cleanup(denied ? "Microphone access is needed for voice mode." : e instanceof Error ? e.message : "Could not start voice mode");
     }
-  }, [cleanup, flushAnnouncements, handleEvent, pollBoard, stop]);
+  }, [cleanup, flushAnnouncements, handleEvent, pollBoard, stop, watchChat]);
 
   const toggleMute = useCallback(() => {
     setMuted((prev) => {
       micRef.current?.getAudioTracks().forEach((t) => { t.enabled = prev; });
+      mutedRef.current = !prev;
       return !prev;
     });
   }, []);
@@ -621,5 +734,7 @@ export function useVoiceDispatcher({ boardId, model, toolConfig, onBoardChanged,
     send({ type: "response.create" });
   }, [send]);
 
-  return { sendText, state, active: state !== "idle", lines, actions, muted, error, start, stop: () => stop(), toggleMute };
+  ownerRef.current.stop = () => stop();
+
+  return { sendText, state, active: state !== "idle", lines, actions, muted, error, agentWorking, start, stop: () => stop(), toggleMute };
 }

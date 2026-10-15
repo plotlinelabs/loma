@@ -89,6 +89,12 @@ export function VoicePanel({ voice, className }: { voice: Voice; className?: str
           </Button>
         </div>
       </div>
+      {voice.agentWorking && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="voice-agent-working">
+          <RiLoader4Line size={12} className="shrink-0 animate-spin" />
+          Agent is working. Talk any time, Loma will report back.
+        </p>
+      )}
       {(lines.length > 0 || actions.length > 0) && (
         <div ref={scrollRef} className="flex max-h-32 flex-col gap-1 overflow-y-auto text-[13px] leading-snug">
           {lines.slice(-6).map((line, i) => (

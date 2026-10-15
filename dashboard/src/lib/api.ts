@@ -1739,11 +1739,11 @@ export async function fetchVoiceStatus(): Promise<{ enabled: boolean; model: str
 }
 
 /** Exchange the browser's WebRTC offer for the voice model's answer. */
-export async function createVoiceSession(sdp: string): Promise<{ session_id: string | null; sdp: string }> {
+export async function createVoiceSession(sdp: string, mode: "board" | "chat" = "board"): Promise<{ session_id: string | null; sdp: string }> {
   const res = await fetch(`${API_BASE}/api/voice/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sdp }),
+    body: JSON.stringify({ sdp, mode }),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `Could not start voice mode: ${res.status}`);
