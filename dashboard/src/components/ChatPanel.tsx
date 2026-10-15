@@ -1114,8 +1114,10 @@ export default function ChatPanel({
     getState: () => voiceStateRef.current,
     send: (message: string) => { void handleSendRef.current?.(message); },
     stop: () => handleStopRef.current(),
+    conversationId: () => voiceConversationRef.current ?? null,
   }), []);
-  const voice = useVoiceDispatcher({ chat: voiceChat, model: selectedModel || undefined, onBoardChanged: noop });
+  // On the tasks board, a task opened while board voice is on takes the session over.
+  const voice = useVoiceDispatcher({ chat: voiceChat, takeOverFromBoard: !readOnly, model: selectedModel || undefined, onBoardChanged: noop });
   // Opening a different chat ends voice; the new chat getting its id does not.
   const voiceConversationRef = useRef(conversationId);
   const stopVoice = voice.stop;

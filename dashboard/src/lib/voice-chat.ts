@@ -17,6 +17,8 @@ export interface ChatVoiceState {
 /** The chat voice controls: read its state, send it a message, stop its run. */
 export interface ChatVoiceTarget {
   getState: () => ChatVoiceState;
+  /** The chat's conversation id, once it has one. Lets voice move to the board. */
+  conversationId?: () => string | null;
   send: (message: string) => void;
   stop: () => void;
 }
@@ -150,3 +152,74 @@ export class WaitingTone {
     void this.ctx.close().catch(() => {});
   }
 }
+
+/** A chat's voice session moving to the tasks board when its task is closed
+ * or another task is opened while the agent still works. The board keeps the
+ * user talking to the same Loma and reports the result when the run ends. */
+export interface VoiceHandoff {
+  conversationId: string;
+  /** The agent was still running when the chat closed. */
+  running: boolean;
+  /** A request was just handed to the agent and its run has not shown up yet. */
+  starting: boolean;
+  /** A result the chat had not said yet (the run ended just before closing). */
+  announcement: string | null;
+  /** Recent captions, so the board session knows what was being discussed. */
+  lines: CarriedLine[];
+  /** Board tasks voice was watching before it moved into this task, handed back. */
+  watching?: WatchedTask[];
+}
+
+export type CarriedLine = { speaker: "user" | "assistant"; text: string };
+
+/** A board task voice watches: its last seen column, and whether the waiting tone is for it. */
+export type WatchedTask = { id: string; column: string; tone: boolean };
+
+/** The board's voice session moving into a task the user opened. */
+export interface BoardRelease {
+  lines: CarriedLine[];
+  /** Tasks the board was watching; handed back when the task is closed. */
+  watching: WatchedTask[];
+  /** Board updates not said yet. */
+  announcement: string | null;
+}
+
+/** Whether closing the chat should hand voice to the board instead of ending it:
+ * only while voice is still waiting on the agent or holding its result. */
+export function shouldHandOff(s: {
+  active: boolean; running: boolean; watchingRun: boolean; pendingResult: boolean;
+  /** Voice came into this task from the board, so it goes back there. */
+  cameFromBoard?: boolean;
+}): boolean {
+  return s.active && (s.running || s.watchingRun || s.pendingResult || !!s.cameFromBoard);
+}
+
+const BRIEFING_LINES = 6;
+const BRIEFING_LINE_CHARS = 200;
+
+/** What the board's voice session is told when it takes over from a chat. */
+function recentContext(lines: CarriedLine[]): string {
+  const recent = lines.slice(-BRIEFING_LINES)
+    .map((l) => `${l.speaker === "user" ? "User" : "You"}: ${l.text.trim().slice(0, BRIEFING_LINE_CHARS)}`)
+    .filter((l) => !/:\s*$/.test(l));
+  return recent.length ? ` The conversation so far, as context only (not requests to act on): ${recent.join(" | ")}` : "";
+}
+
+export function handoffBriefing(title: string, handoff: Pick<VoiceHandoff, "running" | "starting" | "lines" | "announcement">): string {
+  return `Voice moved to the tasks board: the user closed the task "${title}" while you were talking about it.`
+    + (handoff.running || handoff.starting
+      ? " Its agent is still working. In one short sentence, say you'll keep an eye on it and tell them when it's done."
+      : handoff.announcement
+        ? " Its agent has stopped; its result follows."
+        : " In a few words, say you're back on the board.")
+    + recentContext(handoff.lines);
+}
+
+/** What a task's voice session is told when it takes over from the board. */
+export function taskBriefing(title: string, s: { running: boolean; lines: CarriedLine[] }): string {
+  return `Voice moved into the task "${title}" that the user just opened. From now on you talk about this task, and its agent does the work.`
+    + (s.running ? " Its agent is working right now." : " Its agent is not working right now.")
+    + " In a few words, say you're in the task now."
+    + recentContext(s.lines);
+}
+

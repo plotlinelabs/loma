@@ -12,8 +12,10 @@ import {
 import { readTaskScreen, scrollTaskScreen, type ScrollAmount, type ScrollDirection } from "@/lib/voice-viewport";
 import { collectLinks, openLinkInNewTab, readTaskLinks, resolveLinkRef } from "@/lib/voice-links";
 import {
-  chatAnnouncement, chatProgress, chatRunOutcome, shouldPlayWaitingTone, SPEECH_LEVEL, WaitingTone, type ChatVoiceTarget,
+  chatAnnouncement, chatProgress, chatRunOutcome, handoffBriefing, shouldHandOff, shouldPlayWaitingTone, SPEECH_LEVEL, taskBriefing,
+  WaitingTone, type BoardRelease, type ChatVoiceTarget, type VoiceHandoff, type WatchedTask,
 } from "@/lib/voice-chat";
+import { isVoiceClaim, otherTabWins, type VoiceClaim } from "@/lib/voice-tabs";
 
 export type VoiceState = "idle" | "connecting" | "listening" | "working" | "speaking";
 
@@ -50,8 +52,35 @@ const REPLY_LIMIT = 1500;
 
 type ToolResult = Record<string, unknown>;
 
+type SessionOwner = { stop: (message?: string) => void; claim?: VoiceClaim };
+
 /** One mic at a time: starting voice anywhere ends the session already open. */
-let liveSession: { stop: () => void } | null = null;
+let liveSession: SessionOwner | null = null;
+
+/** The board's voice, while a board is on screen. Voice moves between it and
+ * the task drawer: a task opened while board voice is on takes the session
+ * over (release), and a task closed with voice on hands it back (adopt).
+ * Null on pages without a board, where closing a chat simply ends voice. */
+let boardVoice: { adopt: (handoff: VoiceHandoff) => void; release: () => BoardRelease | null } | null = null;
+
+/** One voice session per browser too: the tabs tell each other when voice
+ * starts, and the older session ends (see otherTabWins). */
+const TAB_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let tabChannel: BroadcastChannel | null = null;
+function announceClaim(claim: VoiceClaim) {
+  if (typeof BroadcastChannel === "undefined") return;
+  if (!tabChannel) {
+    tabChannel = new BroadcastChannel("loma-voice");
+    tabChannel.addEventListener("message", ({ data }) => {
+      const mine = liveSession?.claim;
+      if (mine && isVoiceClaim(data) && otherTabWins(mine, data)) liveSession?.stop("Voice moved to another tab.");
+    });
+  }
+  tabChannel.postMessage({ type: "voice-claim", ...claim });
+}
+
+/** Watched value for a handed-over task whose run has not shown up on the board yet. */
+const STARTING = "starting";
 
 /** Whether to offer voice mode: the backend has a key and the browser can do WebRTC. */
 export function useVoiceAvailable(): boolean {
@@ -74,10 +103,12 @@ export function useVoiceAvailable(): boolean {
  * routes. Voice only hands out, reads, steers, stops, moves, opens and closes tasks,
  * scrolls and reads the task that is open, opens a link from its replies, and ends itself when asked.
  * While it is on it also watches the board and announces tasks that stop. */
-export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask, onTaskActivity }: {
+export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, model, toolConfig, onBoardChanged, onOpenTask, onCloseTask, onTaskActivity }: {
   boardId?: string;
   /** Chat mode: the chat voice sits in. */
   chat?: ChatVoiceTarget;
+  /** Chat mode: when this chat opens while board voice is on, voice moves into it. */
+  takeOverFromBoard?: boolean;
   model?: string;
   toolConfig?: ToolConfig;
   /** Called after voice changes the board so it refreshes right away. */
@@ -144,7 +175,13 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
   const toneRef = useRef<WaitingTone | null>(null);
   const toneTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mutedRef = useRef(false);
-  const ownerRef = useRef<{ stop: () => void }>({ stop: () => {} });
+  // Board mode: tasks handed over from a chat; the waiting tone plays while one still runs.
+  const toneTasksRef = useRef(new Set<string>());
+  // Board mode: what to tell the voice model once a handed-over session connects.
+  const briefingRef = useRef<string | null>(null);
+  // Chat mode: voice came here from the board; these board tasks go back with it.
+  const fromBoardRef = useRef<{ watching: WatchedTask[] } | null>(null);
+  const ownerRef = useRef<SessionOwner>({ stop: () => {} });
 
   const cleanup = useCallback((message?: string) => {
     generationRef.current += 1;
@@ -156,10 +193,14 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
     toneTimerRef.current = null;
     toneRef.current?.close();
     toneRef.current = null;
+    toneTasksRef.current.clear();
+    briefingRef.current = null;
+    fromBoardRef.current = null;
     runRef.current = null;
     chatAnnounceRef.current = null;
     mutedRef.current = false;
     if (liveSession === ownerRef.current) liveSession = null;
+    ownerRef.current.claim = undefined;
     micRef.current?.getTracks().forEach((t) => t.stop());
     micRef.current = null;
     channelRef.current?.close();
@@ -187,7 +228,9 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
   }, []);
 
   // Leaving the board ends the session: no hidden open mic, no idle billing.
-  useEffect(() => () => cleanup(), [cleanup, boardId]);
+  // A chat closed while its agent still works hands voice to the board instead.
+  const handOffRef = useRef<() => boolean>(() => false);
+  useEffect(() => () => { if (!handOffRef.current()) cleanup(); }, [cleanup, boardId]);
 
   const send = useCallback((event: Record<string, unknown>) => {
     const channel = channelRef.current;
@@ -454,6 +497,7 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
       const { tasks } = await fetchTasksBoard("", boardIdRef.current);
       if (generation !== generationRef.current) return;
       const finished = detectFinished(watchedRef.current, tasks);
+      for (const { task } of finished) toneTasksRef.current.delete(task.conversation_id);
       if (!finished.length) return;
       const items = await Promise.all(finished.map(async ({ task, outcome }) => {
         // The reply is a nicety: announce the task even if it can't be read.
@@ -511,14 +555,55 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
     chatAnnounceRef.current = chatAnnouncement(outcome, current.latestReply);
   }, [logAction]);
 
+  /** The waiting tone: plays while the agent works (chat) or a handed-over task
+   * runs (board), and pauses the moment anyone talks. */
+  const startTone = useCallback((mic: MediaStream) => {
+    if (toneRef.current) return;
+    try {
+      toneRef.current = new WaitingTone(mic);
+    } catch {
+      // No Web Audio: voice still works, just without the waiting tone.
+      return;
+    }
+    toneTimerRef.current = setInterval(() => {
+      const tone = toneRef.current;
+      if (!tone) return;
+      const now = Date.now();
+      if (!mutedRef.current && tone.level() > SPEECH_LEVEL) lastUserSpeechRef.current = now;
+      const chatTarget = chatRef.current;
+      let agentRunning = !!chatTarget?.getState().running;
+      if (!chatTarget) {
+        for (const id of toneTasksRef.current) {
+          const column = watchedRef.current.get(id);
+          agentRunning ||= column === "working" || column === STARTING;
+        }
+      }
+      tone.set(readyRef.current && !endingRef.current && shouldPlayWaitingTone({
+        agentRunning,
+        now,
+        lastUserSpeechAt: lastUserSpeechRef.current,
+        speakingUntil: speakingUntilRef.current,
+        voiceBusy: busyRef.current > 0 || pendingRef.current.length > 0,
+      }));
+    }, TONE_TICK_MS);
+  }, []);
+
   const handleEvent = useCallback((event: { type?: string; [key: string]: unknown }) => {
     // Usage ticks arrive on a timer; only talk and task work count as activity.
     if (event.type !== "session.usage.updated") lastActivityRef.current = Date.now();
     switch (event.type) {
-      case "session.started":
+      case "session.started": {
         readyRef.current = true;
         setState("listening");
+        // Taken over from a chat: catch the voice model up on what was going on.
+        const briefing = briefingRef.current;
+        briefingRef.current = null;
+        if (briefing) {
+          send({ type: "session.commentary.append", delegation_id: null, content: briefing });
+          speakingUntilRef.current = Date.now() + SPEAKING_HOLD_MS;
+        }
         return;
+      }
       case "session.input_transcript.delta":
       case "session.output_transcript.delta": {
         const speaker = event.type === "session.input_transcript.delta" ? "user" : "assistant";
@@ -582,6 +667,8 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
     if (peerRef.current) return;
     if (liveSession && liveSession !== ownerRef.current) liveSession.stop();
     liveSession = ownerRef.current;
+    ownerRef.current.claim = { tab: TAB_ID, at: Date.now() };
+    announceClaim(ownerRef.current.claim);
     setError(null);
     setLines([]);
     setActions([]);
@@ -607,13 +694,7 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
       }
       micRef.current = mic;
       for (const track of mic.getAudioTracks()) peer.addTrack(track, mic);
-      if (chatRef.current) {
-        try {
-          toneRef.current = new WaitingTone(mic);
-        } catch {
-          // No Web Audio: voice still works, just without the waiting tone.
-        }
-      }
+      if (chatRef.current || toneTasksRef.current.size) startTone(mic);
 
       // The event channel must exist before the offer is created.
       const channel = peer.createDataChannel("oai-events");
@@ -662,7 +743,7 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
         if (now - startedAtRef.current > SESSION_LIMIT_MS) return stop("Voice ended after 20 minutes.");
         // Stay on while a task it is watching still runs, so the finish can be announced.
         let watching = announceRef.current.length > 0 || !!chatAnnounceRef.current || !!runRef.current;
-        for (const column of watchedRef.current.values()) watching ||= column === "working";
+        for (const column of watchedRef.current.values()) watching ||= column === "working" || column === STARTING;
         if (now - lastActivityRef.current > IDLE_LIMIT_MS && busyRef.current === 0 && !watching) return stop("Voice ended after 3 quiet minutes.");
         if (!readyRef.current) {
           if (now - startedAtRef.current > 30_000) stop("Voice connection timed out. Please try again.");
@@ -687,28 +768,12 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
         flushAnnouncements(now);
         setState(now < speakingUntilRef.current ? "speaking" : busyRef.current > 0 ? "working" : "listening");
       }, 300);
-      // Chat mode: the tone plays while the agent works and pauses the moment anyone talks.
-      if (toneRef.current) {
-        toneTimerRef.current = setInterval(() => {
-          const tone = toneRef.current;
-          if (!tone) return;
-          const now = Date.now();
-          if (!mutedRef.current && tone.level() > SPEECH_LEVEL) lastUserSpeechRef.current = now;
-          tone.set(readyRef.current && !endingRef.current && shouldPlayWaitingTone({
-            agentRunning: !!chatRef.current?.getState().running,
-            now,
-            lastUserSpeechAt: lastUserSpeechRef.current,
-            speakingUntil: speakingUntilRef.current,
-            voiceBusy: busyRef.current > 0 || pendingRef.current.length > 0,
-          }));
-        }, TONE_TICK_MS);
-      }
     } catch (e) {
       if (peerRef.current !== peer) return;
       const denied = e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "NotFoundError");
       cleanup(denied ? "Microphone access is needed for voice mode." : e instanceof Error ? e.message : "Could not start voice mode");
     }
-  }, [cleanup, flushAnnouncements, handleEvent, pollBoard, stop, watchChat]);
+  }, [cleanup, flushAnnouncements, handleEvent, pollBoard, startTone, stop, watchChat]);
 
   const toggleMute = useCallback(() => {
     setMuted((prev) => {
@@ -734,7 +799,139 @@ export function useVoiceDispatcher({ boardId, chat, model, toolConfig, onBoardCh
     send({ type: "response.create" });
   }, [send]);
 
-  ownerRef.current.stop = () => stop();
+  const linesRef = useRef(lines);
+  linesRef.current = lines;
+
+  /** Board mode: take over a chat's voice session (see VoiceHandoff). Starts a
+   * board session when none is on, watches the task, plays the waiting tone
+   * while it runs, and says its result after the user pauses. */
+  const adopt = useCallback((handoff: VoiceHandoff) => {
+    const id = handoff.conversationId;
+    const waiting = handoff.running || handoff.starting;
+    // Tasks the board watched before voice went into this task: a run that ended meanwhile is announced on the next check.
+    for (const task of handoff.watching ?? []) {
+      if (!watchedRef.current.has(task.id)) watchedRef.current.set(task.id, task.column);
+      if (task.tone) toneTasksRef.current.add(task.id);
+    }
+    // A run already seen counts as working; one still starting is picked up by the next board check.
+    watchedRef.current.set(id, handoff.running ? "working" : handoff.starting ? STARTING : "needs_input");
+    if (waiting) toneTasksRef.current.add(id);
+    if (handoff.announcement) chatAnnounceRef.current = handoff.announcement;
+    const connected = !!peerRef.current;
+    if (!connected) void start();
+    else if (micRef.current && waiting) startTone(micRef.current);
+    // start() clears the panel; carry the conversation over after it.
+    setLines(handoff.lines.map((l) => ({ ...l, endMs: 0 })).slice(-40));
+    logAction(handoff.watching ? "Back on the board" : "Voice moved to the board", true, id);
+    lastActivityRef.current = Date.now();
+    const generation = generationRef.current;
+    const deliver = (title: string) => {
+      if (generation !== generationRef.current) return;
+      const briefing = handoffBriefing(title, handoff);
+      if (readyRef.current) send({ type: "session.commentary.append", delegation_id: null, content: briefing });
+      else briefingRef.current = briefing;
+    };
+    fetchTasksBoard("", boardIdRef.current)
+      .then(({ tasks }) => {
+        const task = tasks.find((t) => t.conversation_id === id);
+        deliver(task ? taskLabel(task) : "this task");
+      })
+      .catch(() => deliver("this task"));
+  }, [logAction, send, start, startTone]);
+  const adoptRef = useRef(adopt);
+  adoptRef.current = adopt;
+
+  /** Board mode: give the live session to a task the user opened. */
+  const releaseRef = useRef<() => BoardRelease | null>(() => null);
+  releaseRef.current = () => {
+    if (chatRef.current || !peerRef.current || endingRef.current) return null;
+    const watching: WatchedTask[] = [];
+    watchedRef.current.forEach((column, id) => {
+      if (column === "working" || column === STARTING) watching.push({ id, column, tone: toneTasksRef.current.has(id) });
+    });
+    const release: BoardRelease = {
+      lines: linesRef.current.map(({ speaker, text }) => ({ speaker, text })),
+      watching,
+      announcement: chatAnnounceRef.current ?? (announceRef.current.length ? announcement(announceRef.current) : null),
+    };
+    cleanup();
+    return release;
+  };
+
+  // Board mode: be where voice goes when a task closes, and where a task opened takes it from.
+  const isChat = !!chat;
+  useEffect(() => {
+    if (isChat) return;
+    const board = {
+      adopt: (handoff: VoiceHandoff) => adoptRef.current(handoff),
+      release: () => releaseRef.current(),
+    };
+    boardVoice = board;
+    return () => { if (boardVoice === board) boardVoice = null; };
+  }, [isChat]);
+
+  /** Chat mode: board voice is on as this task opens, so voice moves into it. */
+  const takeOver = useCallback(() => {
+    const chatTarget = chatRef.current;
+    const board = boardVoice;
+    const id = chatTarget?.conversationId?.();
+    if (!chatTarget || !board || !id || peerRef.current) return;
+    const released = board.release();
+    if (!released) return;
+    void start();
+    // start() resets these; set them after it.
+    fromBoardRef.current = { watching: released.watching };
+    chatAnnounceRef.current = released.announcement;
+    setLines(released.lines.map((l) => ({ ...l, endMs: 0 })).slice(-40));
+    logAction("Voice moved into this task", true);
+    lastActivityRef.current = Date.now();
+    const generation = generationRef.current;
+    const deliver = (title: string) => {
+      if (generation !== generationRef.current) return;
+      const briefing = taskBriefing(title, { running: chatTarget.getState().running, lines: released.lines });
+      if (readyRef.current) send({ type: "session.commentary.append", delegation_id: null, content: briefing });
+      else briefingRef.current = briefing;
+    };
+    fetchConversation(id)
+      .then(({ conversation }) => deliver(conversation.title || "this task"))
+      .catch(() => deliver("this task"));
+  }, [logAction, send, start]);
+  const takeOverRef = useRef(takeOver);
+  takeOverRef.current = takeOver;
+  useEffect(() => {
+    if (!isChat || !takeOverFromBoard) return;
+    // After mount, so the board's drawer state has settled.
+    const timer = setTimeout(() => takeOverRef.current(), 0);
+    return () => clearTimeout(timer);
+  }, [isChat, takeOverFromBoard]);
+
+  // Chat mode: on close, hand the session to the board when the agent's result is still owed.
+  handOffRef.current = () => {
+    const chatTarget = chatRef.current;
+    const adopter = boardVoice?.adopt;
+    if (!chatTarget || !adopter || !peerRef.current || endingRef.current) return false;
+    const id = chatTarget.conversationId?.();
+    if (!id) return false;
+    const current = chatTarget.getState();
+    const run = runRef.current;
+    const fromBoard = fromBoardRef.current;
+    if (!shouldHandOff({
+      active: true, running: current.running, watchingRun: !!run, pendingResult: !!chatAnnounceRef.current, cameFromBoard: !!fromBoard,
+    })) return false;
+    const handoff: VoiceHandoff = {
+      conversationId: id,
+      running: current.running,
+      starting: !current.running && !!run && !run.sawRunning,
+      announcement: chatAnnounceRef.current,
+      lines: linesRef.current.map(({ speaker, text }) => ({ speaker, text })),
+      ...(fromBoard ? { watching: fromBoard.watching } : {}),
+    };
+    cleanup();
+    adopter(handoff);
+    return true;
+  };
+
+  ownerRef.current.stop = (message?: string) => stop(message);
 
   return { sendText, state, active: state !== "idle", lines, actions, muted, error, agentWorking, start, stop: () => stop(), toggleMute };
 }
