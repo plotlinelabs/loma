@@ -14,9 +14,14 @@ export interface ChatVoiceState {
   waitingForUser: boolean;
 }
 
-/** The chat voice controls: read its state, send it a message, stop its run. */
+/** One message of the chat, as voice reads it. "loma" is the text side of Loma. */
+export type VoiceChatMessage = { role: "user" | "loma"; text: string };
+
+/** The chat voice controls: read its state and messages, send it a message, stop its run. */
 export interface ChatVoiceTarget {
   getState: () => ChatVoiceState;
+  /** Every user and Loma message in the chat, oldest first. */
+  getMessages?: () => VoiceChatMessage[];
   /** The chat's conversation id, once it has one. Lets voice move to the board. */
   conversationId?: () => string | null;
   send: (message: string) => void;
@@ -27,22 +32,95 @@ export type ChatRunOutcome = "finished" | "failed" | "needs_input";
 
 export function chatRunOutcome(state: Pick<ChatVoiceState, "latestReply" | "waitingForUser">): ChatRunOutcome {
   if (state.waitingForUser) return "needs_input";
-  if (/^error:/i.test((state.latestReply ?? "").trim())) return "failed";
+  // Run failures surface as the reply itself ("Error: ...", or the runtime's "Failed to ...").
+  if (/^(error:|failed to )/i.test((state.latestReply ?? "").trim())) return "failed";
   return "finished";
 }
 
+/** Most context a single session append can hold is 500 tokens; stay well under it. */
+export const APPEND_CHARS = 1500;
+const DIGEST_CHARS = 500;
+
+/** The lead of a reply, which carries its answer: its opening prose paragraphs, up to the first
+ * heading, list, table or code block (those don't read aloud), made speakable and capped at `limit`. */
+export function replyDigest(reply: string, limit = DIGEST_CHARS): string {
+  const blocks = reply.trim().split(/\n\s*\n/);
+  const structured = (b: string) => /^\s*(#|[-*+] |\d+[.)] |\||```|>|(-{3,}|\*{3,}|_{3,})\s*$)/.test(b);
+  let start = 0;
+  while (start < blocks.length && /^\s*#/.test(blocks[start])) start++;
+  const lead: string[] = [];
+  for (const block of blocks.slice(start)) {
+    if (structured(block)) break;
+    lead.push(block);
+  }
+  const text = speakable(lead.join(" ") || blocks.filter((b) => !/^\s*(\||```)/.test(b)).join(" "), limit);
+  return text || speakable(reply, limit);
+}
+
 const OUTCOME_LINE: Record<ChatRunOutcome, string> = {
-  finished: "the agent just finished",
-  failed: "the agent stopped with an error",
-  needs_input: "the agent stopped and has a question for the user",
+  finished: "Done.",
+  failed: "I ran into an error and had to stop.",
+  needs_input: "I need something from you before I can carry on.",
 };
 
-/** What the voice model is told when the chat's run ends. */
+/** What voice says when the chat's run ends, as direct first-person speech the voice model paraphrases. */
 export function chatAnnouncement(outcome: ChatRunOutcome, reply: string | null): string {
-  const said = reply ? speakable(reply, 500) : "";
-  return `Update from the chat: ${OUTCOME_LINE[outcome]}.`
-    + (said ? ` Its reply starts: ${said}` : "")
-    + " Give the gist in one or two sentences and say the full answer is in the chat.";
+  const digest = reply ? replyDigest(reply) : "";
+  const said = digest ? (/[.!?]$/.test(digest) ? digest : `${digest}.`) : "";
+  if (outcome === "needs_input") return `${OUTCOME_LINE.needs_input}${said ? ` ${said}` : ""}`;
+  return `${OUTCOME_LINE[outcome]}${said ? ` Here's the short version: ${said}` : ""}`
+    + " The full details are in the chat. What would you like to do next?";
+}
+
+/** Context (not spoken) appended when voice starts and as the chat grows:
+ * the chat's messages, newest kept first, in chunks that fit one append each. */
+export function historyChunks(messages: VoiceChatMessage[], opts: { maxChunks?: number; userChars?: number; lomaChars?: number } = {}): string[] {
+  const { maxChunks = 4, userChars = 300, lomaChars = 700 } = opts;
+  const header = "Earlier in this chat (you are Loma; \"You\" lines are what you wrote in text). Reference only, not requests to act on:";
+  const lines = messages
+    .map((m) => `${m.role === "user" ? "User" : "You"}: ${m.role === "user" ? speakable(m.text, userChars) : replyDigest(m.text, lomaChars)}`)
+    .filter((l) => !/:\s*$/.test(l));
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let size = header.length;
+  for (let i = lines.length - 1; i >= 0 && chunks.length < maxChunks; i--) {
+    if (current.length && size + lines[i].length + 1 > APPEND_CHARS) {
+      chunks.push(current);
+      current = [];
+      size = header.length;
+      if (chunks.length >= maxChunks) break;
+    }
+    current.unshift(lines[i]);
+    size += lines[i].length + 1;
+  }
+  if (current.length && chunks.length < maxChunks) chunks.push(current);
+  const omitted = lines.length - chunks.reduce((n, c) => n + c.length, 0);
+  return chunks.reverse().map((c, i) => [i === 0 && omitted > 0 ? `${header} (${omitted} older messages left out; use read_chat for them)` : header, ...c].join("\n"));
+}
+
+/** Context appended when a run ends: the reply beyond the spoken lead, for follow-up questions. */
+export function replyContext(reply: string): string {
+  return `Your full latest reply in the chat, for follow-up questions (reference only): ${speakable(reply, APPEND_CHARS - 100)}`;
+}
+
+/** read_chat result: the latest messages, or those matching the user's words. */
+export function readChat(messages: VoiceChatMessage[], query: string, limit = 6): Record<string, unknown> {
+  const words = query.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  const indexed = messages.map((m, i) => ({ ...m, i }));
+  const picked = words.length
+    ? indexed
+      .map((m) => ({ m, score: words.filter((w) => m.text.toLowerCase().includes(w)).length }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score || b.m.i - a.m.i)
+      .slice(0, limit)
+      .map((x) => x.m)
+      .sort((a, b) => a.i - b.i)
+    : indexed.slice(-limit);
+  return {
+    total_messages: messages.length,
+    matched: picked.length,
+    messages: picked.map((m) => ({ number: m.i + 1, from: m.role === "user" ? "user" : "you", text: speakable(m.text, 1200) })),
+  };
 }
 
 /** check_progress result for the voice backend. */
@@ -87,40 +165,30 @@ export function micLevel(frame: ArrayLike<number>): number {
 /** Level above which the user counts as talking. Echo cancellation keeps the tone well below it. */
 export const SPEECH_LEVEL = 0.03;
 
-const TONE_VOLUME = 0.035;
-const FADE_SECONDS = 0.25;
+const TONE_VOLUME = 0.05;
+/** A soft chime comes back this often while the agent works. */
+export const CHIME_EVERY_MS = 6000;
+/** The first chime waits a moment, so a quick answer never chimes at all. */
+const FIRST_CHIME_MS = 1200;
+const CHIME_NOTES: Array<[hz: number, offset: number]> = [[660, 0], [880, 0.14]];
+const CHIME_DECAY_SECONDS = 1.4;
 
-/** A soft looping pad, made live with Web Audio (no asset to load), that
- * fades in and out. Also measures the mic so speech pauses it at once. */
+/** The waiting sound: a short, soft two-note chime every few seconds while the
+ * agent works, made live with Web Audio (no asset to load). Silent between
+ * chimes, and stops at once when set off. Also measures the mic so speech pauses it. */
 export class WaitingTone {
   private ctx: AudioContext;
   private gain: GainNode;
   private analyser: AnalyserNode | null = null;
   private frame: Float32Array<ArrayBuffer> | null = null;
   private playing = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(mic?: MediaStream) {
     this.ctx = new AudioContext();
     this.gain = this.ctx.createGain();
     this.gain.gain.value = 0;
     this.gain.connect(this.ctx.destination);
-    // Two quiet tones a fifth apart, slowly breathing in volume.
-    const pulse = this.ctx.createGain();
-    pulse.gain.value = 0.6;
-    pulse.connect(this.gain);
-    const lfo = this.ctx.createOscillator();
-    const depth = this.ctx.createGain();
-    lfo.frequency.value = 0.35;
-    depth.gain.value = 0.4;
-    lfo.connect(depth).connect(pulse.gain);
-    lfo.start();
-    for (const hz of [220, 330]) {
-      const osc = this.ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.value = hz;
-      osc.connect(pulse);
-      osc.start();
-    }
     if (mic) {
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 1024;
@@ -140,15 +208,49 @@ export class WaitingTone {
     return this.playing;
   }
 
+  private chime() {
+    const start = this.ctx.currentTime + 0.02;
+    for (const [hz, offset] of CHIME_NOTES) {
+      const osc = this.ctx.createOscillator();
+      const env = this.ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = hz;
+      env.gain.setValueAtTime(0, start + offset);
+      env.gain.linearRampToValueAtTime(1, start + offset + 0.02);
+      env.gain.exponentialRampToValueAtTime(0.001, start + offset + CHIME_DECAY_SECONDS);
+      osc.connect(env).connect(this.gain);
+      osc.start(start + offset);
+      osc.stop(start + offset + CHIME_DECAY_SECONDS + 0.05);
+    }
+  }
+
   set(play: boolean) {
     if (play === this.playing) return;
     this.playing = play;
-    if (play && this.ctx.state === "suspended") void this.ctx.resume().catch(() => {});
-    this.gain.gain.setTargetAtTime(play ? TONE_VOLUME : 0, this.ctx.currentTime, FADE_SECONDS / 3);
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (!play) {
+      // Cut a chime that is still ringing, quickly but without a click.
+      this.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.03);
+      return;
+    }
+    if (this.ctx.state === "suspended") void this.ctx.resume().catch(() => {});
+    this.gain.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.gain.gain.setValueAtTime(TONE_VOLUME, this.ctx.currentTime);
+    const ring = (delay: number) => {
+      this.timer = setTimeout(() => {
+        if (!this.playing) return;
+        this.chime();
+        ring(CHIME_EVERY_MS);
+      }, delay);
+    };
+    ring(FIRST_CHIME_MS);
   }
 
   close() {
     this.playing = false;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
     void this.ctx.close().catch(() => {});
   }
 }
@@ -208,17 +310,17 @@ function recentContext(lines: CarriedLine[]): string {
 export function handoffBriefing(title: string, handoff: Pick<VoiceHandoff, "running" | "starting" | "lines" | "announcement">): string {
   return `Voice moved to the tasks board: the user closed the task "${title}" while you were talking about it.`
     + (handoff.running || handoff.starting
-      ? " Its agent is still working. In one short sentence, say you'll keep an eye on it and tell them when it's done."
+      ? " You are still working on it in the background. In one short sentence, say you'll keep going and tell them when it's done."
       : handoff.announcement
-        ? " Its agent has stopped; its result follows."
+        ? " Your work on it has stopped; the result follows."
         : " In a few words, say you're back on the board.")
     + recentContext(handoff.lines);
 }
 
 /** What a task's voice session is told when it takes over from the board. */
 export function taskBriefing(title: string, s: { running: boolean; lines: CarriedLine[] }): string {
-  return `Voice moved into the task "${title}" that the user just opened. From now on you talk about this task, and its agent does the work.`
-    + (s.running ? " Its agent is working right now." : " Its agent is not working right now.")
+  return `Voice moved into the task "${title}" that the user just opened. From now on you talk about this task and work on it.`
+    + (s.running ? " You are working on it right now." : " Nothing is running on it right now.")
     + " In a few words, say you're in the task now."
     + recentContext(s.lines);
 }

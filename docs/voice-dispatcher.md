@@ -62,6 +62,22 @@ remain authoritative. Tool output goes back to the delegated model, then voice.
 - Audio interruptions do not cancel already-dispatched tasks. Stop is a separate tool.
 - Transcripts/actions are currently session-local, with clickable task links.
 
+## Voice in a chat or task
+
+- Voice and the chat are one assistant: voice speaks as "I" and never mentions an agent or a handoff.
+- When voice starts, the chat's messages go to the voice model with `session.thinking.append` (unspoken
+  context, newest kept, at most four appends of about 1,500 characters each). New messages follow as the
+  chat grows. Voice answers from them without a lookup; `read_chat` reads older or specific messages.
+- New work goes to the chat's text agent through `ask_agent`. While it runs, a soft two-note chime plays
+  every six seconds and stops while anyone talks.
+- When the run ends, the full reply goes in as unspoken context and a first-person update is spoken with
+  `session.commentary.append`: "Done. Here's the short version: <reply's opening prose>. The full details are
+  in the chat. What would you like to do next?" A run that needs the user reads out its question instead.
+- The update waits for a pause (1.5s with no transcript), but steady mic noise holds it at most 8s, and a
+  backend request with no event for 30s no longer blocks it. A rejected update is sent again once.
+- Key moments (`session_started`, `delegated`, `run_finished`, `announced`, `announce_ack`,
+  `announce_error`, `busy_reset`) are written to the server log via `POST /api/voice/log` as `[VOICE] event ...`.
+
 ## Explicitly not complete
 
 This is the core prototype, not the complete rollout. Persistent dispatcher history

@@ -21,7 +21,7 @@ import { useFileDrop } from "./composer/useFileDrop";
 import { DictationButton, appendDictation } from "./composer/DictationButton";
 import { VoiceModeButton, VoicePanel } from "./tasks/VoiceDispatcher";
 import { useVoiceAvailable, useVoiceDispatcher } from "@/hooks/useVoiceDispatcher";
-import type { ChatVoiceState } from "@/lib/voice-chat";
+import type { ChatVoiceState, VoiceChatMessage } from "@/lib/voice-chat";
 import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError, ConversationQueuedError, ChatRequestError } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
@@ -190,6 +190,13 @@ function chatVoiceState(items: ChatItem[], running: boolean, streamStartedAt: nu
   // streamStartedAt is a performance.now() reading.
   const startedAt = running && streamStartedAt !== null ? Date.now() - (performance.now() - streamStartedAt) : null;
   return { running, startedAt, currentStep: running ? currentStep : null, latestReply, waitingForUser };
+}
+
+/** The chat's user and Loma messages, oldest first, for voice to read. */
+function chatVoiceMessages(items: ChatItem[]): VoiceChatMessage[] {
+  return items
+    .filter((item) => (item.role === "user" || item.role === "assistant") && item.content.trim())
+    .map((item) => ({ role: item.role === "user" ? "user" as const : "loma" as const, text: item.content }));
 }
 
 /** Extract a concise summary from a tool's raw JSON input string (for historical turns) */
@@ -1110,8 +1117,11 @@ export default function ChatPanel({
   const handleStopRef = useRef(handleStop);
   const voiceStateRef = useRef<ChatVoiceState>({ running: false, startedAt: null, currentStep: null, latestReply: null, waitingForUser: false });
   voiceStateRef.current = chatVoiceState(items, isStreaming, streamStartedAt);
+  const voiceItemsRef = useRef(items);
+  voiceItemsRef.current = items;
   const voiceChat = useMemo(() => ({
     getState: () => voiceStateRef.current,
+    getMessages: () => chatVoiceMessages(voiceItemsRef.current),
     send: (message: string) => { void handleSendRef.current?.(message); },
     stop: () => handleStopRef.current(),
     conversationId: () => voiceConversationRef.current ?? null,

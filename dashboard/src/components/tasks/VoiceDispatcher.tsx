@@ -92,7 +92,7 @@ export function VoicePanel({ voice, className }: { voice: Voice; className?: str
       {voice.agentWorking && (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="voice-agent-working">
           <RiLoader4Line size={12} className="shrink-0 animate-spin" />
-          Agent is working. Talk any time, Loma will report back.
+          Loma is working on it. Talk any time; Loma will tell you when it is done.
         </p>
       )}
       {(lines.length > 0 || actions.length > 0) && (
