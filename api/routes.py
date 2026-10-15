@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -37,12 +38,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 # ── File serving for dashboard chat attachments ────────────────────────────
-# Files are registered by the agent during streaming and served via /api/files/<id>
+# Files are registered by the agent during streaming and served via /api/files/<id>.
+# docker-compose.yml points this at a named volume so links survive redeploys.
 SERVED_FILES_DIR = Path(os.environ.get("SERVED_FILES_DIR", "/tmp/loma-served-files"))
 SERVED_FILES_DIR.mkdir(parents=True, exist_ok=True)
+SERVED_FILES_TTL = timedelta(days=30)
+_SERVED_FILE_NAME = re.compile(r"[a-f0-9]{32}(?:\.[A-Za-z0-9]{1,10})?")
 
-# Process-local registry. Legacy/unowned entries fail closed; no path-based recovery.
+# Process cache over the durable `served_files` collection. Unowned entries fail
+# closed; there is no path-based recovery.
 _served_files: dict[str, dict] = {}
+_pending_persists: set[asyncio.Task] = set()
 
 
 def register_served_file(
@@ -76,6 +82,7 @@ def register_served_file(
         "size": size,
     }
     _served_files[file_id] = entry
+    _persist_served_file(file_id, entry)
 
     return {
         "file_id": file_id,
@@ -84,6 +91,77 @@ def register_served_file(
         "mime_type": mime_type,
         "size": size,
     }
+
+
+def _persist_served_file(file_id: str, entry: dict) -> None:
+    """Record the registration so the link still works after a restart."""
+    db = get_db()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # sync callers (tests, scripts) keep the process-local entry only
+    if db is None:
+        return
+    now = datetime.now(timezone.utc)
+    doc = {"_id": file_id, "file_name": Path(entry["path"]).name, "owner_email": entry["owner_email"],
+           "original_name": entry["original_name"], "mime_type": entry["mime_type"], "size": entry["size"],
+           "created_at": now, "expires_at": now + SERVED_FILES_TTL}
+
+    async def write():
+        try:
+            await db.served_files.insert_one(doc)
+        except Exception:
+            logger.warning("Could not persist served file %s; it will 404 after a restart", file_id, exc_info=True)
+
+    task = loop.create_task(write())
+    _pending_persists.add(task)
+    task.add_done_callback(_pending_persists.discard)
+
+
+async def _load_served_file(file_id: str, user_email: str) -> dict | None:
+    """The owner's durable registration, or None. Expiry is checked here, not left to the TTL monitor."""
+    db = get_db()
+    if db is None or not re.fullmatch(r"[a-f0-9]{32}", file_id):
+        return None
+    doc = await db.served_files.find_one({
+        "_id": file_id, "owner_email": user_email,
+        "expires_at": {"$gt": datetime.now(timezone.utc)},
+    })
+    if not doc or not _SERVED_FILE_NAME.fullmatch(doc.get("file_name", "")):
+        return None
+    return {"path": str(SERVED_FILES_DIR / doc["file_name"]), "owner_email": doc["owner_email"],
+            "original_name": doc["original_name"], "mime_type": doc["mime_type"], "size": doc["size"]}
+
+
+async def ensure_served_files_store() -> None:
+    """Startup: expire old registrations and delete their files."""
+    db = get_db()
+    if db is not None:
+        try:
+            await db.served_files.create_index("expires_at", expireAfterSeconds=0)
+        except Exception:
+            logger.warning("Could not create served_files TTL index", exc_info=True)
+    cutoff = time.time() - SERVED_FILES_TTL.total_seconds()
+    removed = 0
+    try:
+        dir_fd = os.open(SERVED_FILES_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return
+    try:
+        for name in os.listdir(dir_fd):
+            if not _SERVED_FILE_NAME.fullmatch(name):
+                continue
+            try:
+                info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+                if stat.S_ISREG(info.st_mode) and info.st_mtime <= cutoff:
+                    os.unlink(name, dir_fd=dir_fd)
+                    removed += 1
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(dir_fd)
+    if removed:
+        logger.info("Removed %d served files older than %s", removed, SERVED_FILES_TTL)
 
 
 # MIME types that should be displayed inline (preview) rather than downloaded
@@ -112,6 +190,9 @@ async def handle_serve_file(request: web.Request) -> web.StreamResponse:
         except (ValueError, OSError):
             return web.json_response({"error": "File not found"}, status=404)
         return await _stream_registered_file(request, fd, entry)
+    if not entry:
+        # Registered before the last restart.
+        entry = await _load_served_file(file_id, user_email)
     # Do not disclose whether another user's file exists. No admin/share bypass
     # in containment: sharing requires a separate, explicit artifact policy.
     if not entry or entry.get("owner_email") != user_email:
