@@ -24,6 +24,7 @@ import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, Persisted
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import { CopyButton } from "./CopyButton";
+import { isDeadRun } from "@/lib/server-time";
 import { SlashCommandHint, SlashCommandMenu, slashMatches } from "./composer/SlashCommandMenu";
 import { matchCommand, usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
@@ -56,8 +57,6 @@ import {
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
-/** A running conversation with no heartbeat for this long is treated as stopped. */
-const DEAD_RUN_AFTER_MS = 5 * 60 * 1000;
 /** Conversation status while its message waits for a deploy to finish. */
 const DEPLOY_QUEUED_STATUS = "queued";
 
@@ -1131,9 +1130,7 @@ export default function ChatPanel({
         // A run whose heartbeat stopped long ago is dead even if its status
         // still says running (crash/OOM). Stop waiting instead of showing
         // "Still working on your request..." forever.
-        const heartbeat = data.conversation.last_heartbeat ? Date.parse(data.conversation.last_heartbeat) : NaN;
-        const deadRun = data.conversation.status === "running"
-          && Number.isFinite(heartbeat) && Date.now() - heartbeat > DEAD_RUN_AFTER_MS;
+        const deadRun = isDeadRun(data.conversation.status, data.conversation.last_heartbeat);
         if ((data.conversation.status !== "running" || deadRun) && !waitingForDeploy) {
           setIsRecovering(false);
           setIsStreaming(false);

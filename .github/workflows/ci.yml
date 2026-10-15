@@ -56,6 +56,9 @@ jobs:
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
         working-directory: dashboard
+      - name: Server time parsing (IST)
+        run: npm run test:server-time
+        working-directory: dashboard
       - name: Build
         run: npm run build
         working-directory: dashboard
