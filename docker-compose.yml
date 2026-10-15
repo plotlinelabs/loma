@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      SERVED_FILES_DIR: /var/lib/loma/served-files
     # Loopback only — reached externally through the nginx proxy, not directly.
     # Host port is env-driven so multiple stacks can coexist on one box (preview
     # deployments); unset → 3000, identical to a normal single-stack deploy.
@@ -12,6 +14,9 @@ services:
     volumes:
       - loma-login-socket:/run/loma-login:ro
       - loma-skill-assets:/var/lib/loma/skill-assets
+      # Files the agent produced (PDFs, sheets...). Kept across redeploys so
+      # previews and downloads in older chats keep working (30-day expiry).
+      - loma-served-files:/var/lib/loma/served-files
       # Mount the real .env so the dashboard Environment admin (/api/env) can read & edit it.
       # env_file injects values into the process env, but does not place a file at /app/.env.
       - ./.env:/app/.env
@@ -160,6 +165,7 @@ networks:
 volumes:
   loma-login-socket:
   loma-skill-assets:
+  loma-served-files:
   loma-claude-users:
   loma-codex-users:
   loma-workspace:

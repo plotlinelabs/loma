@@ -107,6 +107,9 @@ async def main():
     # Start periodic recovery loop for interrupted conversations
     start_recovery_loop()
 
+    from api.routes import ensure_served_files_store
+    await ensure_served_files_store()
+
     # In dev mode, skip Slack and scheduled tasks
     is_dev = os.environ.get("ENV", "").upper() == "DEV"
 
