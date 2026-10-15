@@ -15,8 +15,9 @@ from api.auth_helpers import require_maintainer_or_above, get_user_email
 
 logger = logging.getLogger(__name__)
 
-# Path to the .env file (project root, one level up from api/)
-DOTENV_PATH = str(Path(__file__).resolve().parent.parent / ".env")
+# Writable path to the .env file. Docker sets LOMA_ENV_FILE because /app/.env is
+# mounted read-only; elsewhere it is the project root, one level up from api/.
+DOTENV_PATH = os.environ.get("LOMA_ENV_FILE") or str(Path(__file__).resolve().parent.parent / ".env")
 
 # Substrings in key names that indicate a sensitive value
 SENSITIVE_PATTERNS = ("SECRET", "KEY", "TOKEN", "PASSWORD", "COOKIE", "ENCRYPTION")
