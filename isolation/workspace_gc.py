@@ -468,9 +468,9 @@ async def _gc_loop(initial_delay, interval):
             if active is None:
                 logger.warning('[WORKSPACE_GC] no database, cannot see running conversations; skipping')
             else:
+                logger.info('[WORKSPACE_GC] sweep starting (%d running conversations skipped)', len(active))
                 summary = await asyncio.to_thread(run_once, active_conversations=active)
-                if summary:
-                    logger.info('[WORKSPACE_GC] %s', json.dumps(summary))
+                logger.info('[WORKSPACE_GC] %s', json.dumps(summary) if summary else 'sweep skipped')
         except Exception:
             logger.exception('[WORKSPACE_GC] sweep failed')
         await asyncio.sleep(interval)
