@@ -43,6 +43,8 @@ Values Loma writes are marked in `field_meta`; its notes go to a separate
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
 import os
 import re
@@ -687,7 +689,9 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
 
 _TASK_PROJECTION = {
     "human_task": 1,
-    "conversation_id": 1, "title": 1, "prompt": 1, "model": 1, "status": 1, "tool_config": 1,
+    "conversation_id": 1, "title": 1, "model": 1, "status": 1, "tool_config": 1,
+    # Cards show 200 chars; trim in Mongo so full prompts never leave the DB.
+    "prompt": {"$substrCP": [{"$ifNull": ["$prompt", ""]}, 0, 200]},
     "task_status": 1, "task_lane": 1, "task_rank": 1,
     "total_turns": 1, "started_at": 1, "finished_at": 1,
     "task_created_at": 1, "task_staged_at": 1, "task_started_at": 1,
@@ -703,8 +707,20 @@ _TASK_PROJECTION = {
 }
 
 # Done is the only column that grows without bound, so it is the only one we
-# cap. Todo/active cards must never be dropped from the board.
+# cap. Todo/active cards must never be dropped from the board. The board loads
+# one page and asks for more via ?done_limit=; card boards load the max because
+# card progress counts their done tasks.
+DONE_TASKS_PAGE = 50
 DONE_TASKS_LIMIT = 500
+
+
+def _done_limit(raw: str | None, card_mode: bool) -> int:
+    if card_mode:
+        return DONE_TASKS_LIMIT
+    try:
+        return max(1, min(int(raw), DONE_TASKS_LIMIT))
+    except (TypeError, ValueError):
+        return DONE_TASKS_PAGE
 
 
 async def handle_create_task(request: web.Request) -> web.Response:
@@ -1023,17 +1039,21 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
     # live cards, which then only reappeared when a search narrowed the match.
     active_query = {**query, "task_status": {"$in": ["todo", "active"]}}
     done_query = {**query, "task_status": "done"}
+    done_limit = _done_limit(request.query.get("done_limit"), board["card_mode"])
     active_cursor = db.conversations.find(active_query, _TASK_PROJECTION)
+    # One extra row tells us whether a "show more" is needed.
     done_cursor = (
         db.conversations.find(done_query, _TASK_PROJECTION)
         .sort([("task_done_at", -1), ("_id", -1)])
-        .limit(DONE_TASKS_LIMIT)
+        .limit(done_limit + 1)
     )
     active_tasks, done_tasks = await asyncio.gather(
         active_cursor.to_list(None),
-        done_cursor.to_list(DONE_TASKS_LIMIT),
+        done_cursor.to_list(done_limit + 1),
     )
-    tasks = active_tasks + done_tasks
+    # At the hard cap there is no next page to ask for, so never offer one.
+    done_has_more = len(done_tasks) > done_limit and done_limit < DONE_TASKS_LIMIT
+    tasks = active_tasks + done_tasks[:done_limit]
 
     # Stars are private to the caller: shared boards flag the caller's own
     # stars, and the personal board also lists the tasks they starred.
@@ -1062,6 +1082,7 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
         "tags": board["config"]["tags"],
         "tasks": ordered,
         "counts": counts,
+        "done_has_more": done_has_more,
     }
     if board["card_mode"]:
         card_docs = await db.task_cards.find({"board_id": board["id"]}).to_list(MAX_CARDS_PER_BOARD)
@@ -1075,7 +1096,26 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
         payload["cards"] = cards
         payload["counts"] = {lane_id: sum(1 for c in cards if c["lane"] == lane_id)
                              for lane_id in lane_ids}
-    return web.json_response(payload)
+    return _json_with_etag(request, payload)
+
+
+def _json_with_etag(request: web.Request, payload: dict) -> web.Response:
+    """JSON response with an ETag; an unchanged board polls back as a body-less 304."""
+    body = json.dumps(payload)
+    etag = '"' + hashlib.sha1(body.encode()).hexdigest() + '"'
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if _etag_matches(request.headers.get("If-None-Match"), etag):
+        return web.Response(status=304, headers=headers)
+    return web.Response(text=body, content_type="application/json", headers=headers)
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """Weak comparison (RFC 9110): a gzipping proxy rewrites our tag to W/"...",
+    and the browser sends that back, so the W/ prefix must not break the match."""
+    if not header:
+        return False
+    tags = {t.strip().removeprefix("W/") for t in header.split(",")}
+    return "*" in tags or etag in tags
 
 
 async def handle_needs_input_count(request: web.Request) -> web.Response:

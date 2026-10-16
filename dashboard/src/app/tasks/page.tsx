@@ -76,6 +76,9 @@ import { cn } from "@/lib/utils";
 import { BOARD_STORAGE_KEY, useBoards } from "@/lib/BoardsContext";
 
 const POLL_INTERVAL_MS = 5000;
+const DONE_PAGE_SIZE = 50;
+// Server caps done_limit here (DONE_TASKS_LIMIT in api/task_routes.py).
+const DONE_MAX = 500;
 // Card boards: last view (cards or tasks) used on each board.
 const CARD_VIEW_STORAGE_PREFIX = "loma-card-board-view:";
 type CardBoardView = "cards" | "tasks";
@@ -150,6 +153,13 @@ export default function TasksPage() {
   const [includedTagIds, setIncludedTagIds] = useState<string[]>([]);
   const [excludedTagIds, setExcludedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  // Done loads one page; "Show more" raises the limit and later polls keep it.
+  // The limit is tied to the board + search it was raised on and derived in
+  // render, so switching either resets it before the next fetch (an effect
+  // reset would fire one fetch with the old limit first).
+  const doneKey = `${boardId}\u0000${searchQuery}`;
+  const [raisedDone, setRaisedDone] = useState<{ key: string; limit: number } | null>(null);
+  const doneLimit = raisedDone?.key === doneKey ? raisedDone.limit : DONE_PAGE_SIZE;
   // Phones: search is an icon in the top bar; the field only takes a row once opened.
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -249,7 +259,7 @@ export default function TasksPage() {
     if (busyRef.current || (document.hidden && hasBoardRef.current)) return;
     const version = ++refreshVersion.current;
     try {
-      const data = await fetchTasksBoard(searchQuery, boardId);
+      const data = await fetchTasksBoard(searchQuery, boardId, doneLimit);
       hasBoardRef.current = true;
       if (busyRef.current || version !== refreshVersion.current) return;
       setBoard(data);
@@ -273,7 +283,7 @@ export default function TasksPage() {
       }
       // Transient poll failures are fine — keep showing the last board.
     }
-  }, [searchQuery, boardId, selectBoard, loadBoards]);
+  }, [searchQuery, boardId, doneLimit, selectBoard, loadBoards]);
 
   useEffect(() => {
     if (sessionStatus === "authenticated") void loadBoards();
@@ -293,6 +303,10 @@ export default function TasksPage() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [sessionStatus, refresh]);
+
+  const loadMoreDone = board?.done_has_more
+    ? () => setRaisedDone({ key: doneKey, limit: Math.min(doneLimit + DONE_PAGE_SIZE * 2, DONE_MAX) })
+    : undefined;
 
   const dismissAgentWork = async () => {
     ++refreshVersion.current;
@@ -341,7 +355,7 @@ export default function TasksPage() {
         router.push(`${basePath}/chat?continue=${conversationId}&start=1`);
         return;
       }
-      const data = await fetchTasksBoard(searchQuery, boardId);
+      const data = await fetchTasksBoard(searchQuery, boardId, doneLimit);
       setBoard(data);
     } finally {
       busyRef.current = false;
@@ -897,6 +911,7 @@ export default function TasksPage() {
             excludedTagIds={excludedTagIds}
             readOnly={readOnly}
             header={topBar}
+            onLoadMoreDone={loadMoreDone}
           />
         ) : (
           <>
@@ -911,6 +926,7 @@ export default function TasksPage() {
               includedTagIds={includedTagIds}
               excludedTagIds={excludedTagIds}
               readOnly={readOnly}
+              onLoadMoreDone={loadMoreDone}
             />
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task

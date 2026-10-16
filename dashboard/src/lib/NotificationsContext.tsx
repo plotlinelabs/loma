@@ -10,7 +10,7 @@ import {
 import { useSession } from "next-auth/react";
 import { fetchUnreadNotificationCount } from "./notifications-api";
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 15000;
 
 interface NotificationsValue {
   /** Number of the user's notifications that are unread and not dismissed. */
@@ -42,8 +42,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (status !== "authenticated") return;
     refresh();
-    const interval = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => { if (!document.hidden) void refresh(); }, POLL_INTERVAL_MS);
+    const onVisible = () => { if (!document.hidden) void refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [status, refresh]);
 
   return (

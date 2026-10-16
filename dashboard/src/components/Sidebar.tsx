@@ -355,11 +355,11 @@ export default function Sidebar({
     onClose();
   }, [pathname]);
 
-  // Poll pool status every 5 seconds
+  // Poll pool status every 15 seconds while the tab is visible
   useEffect(() => {
     const poll = () => fetchPoolStatus().then(setPoolStatus).catch(() => {});
     poll();
-    const interval = setInterval(poll, 5000);
+    const interval = setInterval(() => { if (!document.hidden) poll(); }, 15000);
     return () => clearInterval(interval);
   }, []);
 

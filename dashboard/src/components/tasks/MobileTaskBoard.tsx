@@ -23,13 +23,15 @@ interface MobileTaskBoardProps {
    * scroll region so it scrolls away with the list instead of squeezing the
    * pinned composer into the bottom nav on short viewports. */
   header?: ReactNode;
+  /** Load more Done tasks; set only while the server has more. */
+  onLoadMoreDone?: () => void;
 }
 
 /** Inbox-style single-column board for phones: a chip scroller switches
  * columns, tap actions replace drag. Desktop keeps the kanban. */
 export function MobileTaskBoard({
   board, onBoardChange, onRefresh, onEditDraft, onAddTask, onError, includedTagIds, excludedTagIds,
-  readOnly = false, header,
+  readOnly = false, header, onLoadMoreDone,
 }: MobileTaskBoardProps) {
   const {
     laneIds, tasksByColumn,
@@ -141,6 +143,15 @@ export function MobileTaskBoard({
             onToggleStar={toggleStar}
           />
         ))}
+        {selectedId === "done" && onLoadMoreDone && (
+          <button
+            data-testid="mobile-done-load-more"
+            onClick={onLoadMoreDone}
+            className="rounded-md px-2 py-2 text-xs text-muted-foreground/70 active:bg-muted"
+          >
+            Show more
+          </button>
+        )}
         {tasks.length === 0 && (
           <p className="py-6 text-center text-xs text-muted-foreground">Nothing here</p>
         )}

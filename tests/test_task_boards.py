@@ -28,6 +28,7 @@ SHARED = {
 
 class FakeRequest:
     method = "POST"
+    headers: dict = {}
 
     def __init__(self, body=None, query=None, match_info=None):
         self._body = body or {}

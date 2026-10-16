@@ -14,10 +14,12 @@ interface TaskColumnProps {
   droppable?: boolean;
   /** Staging lanes only: create a task directly in this lane. */
   onAddTask?: () => void;
+  /** Done only: more tasks exist than are loaded. */
+  onLoadMore?: () => void;
   children: React.ReactNode;
 }
 
-export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: TaskColumnProps) {
+export function TaskColumn({ id, name, tasks, droppable, onAddTask, onLoadMore, children }: TaskColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
     id,
     disabled: droppable === false,
@@ -29,7 +31,7 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: 
         <span className="text-[13px] font-semibold text-foreground">
           {name}
         </span>
-        <span className="text-[11px] tabular-nums text-muted-foreground/80">{tasks.length}</span>
+        <span className="text-[11px] tabular-nums text-muted-foreground/80">{tasks.length}{onLoadMore ? "+" : ""}</span>
       </div>
       <SortableContext
         items={tasks.map((t) => t.conversation_id)}
@@ -44,6 +46,15 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, children }: 
           )}
         >
           {children}
+          {onLoadMore && (
+            <button
+              data-testid="task-column-load-more"
+              onClick={onLoadMore}
+              className="rounded-md px-2 py-1.5 text-xs text-muted-foreground/70 hover:bg-muted hover:text-foreground"
+            >
+              Show more
+            </button>
+          )}
           {onAddTask && (
             <button
               onClick={onAddTask}
