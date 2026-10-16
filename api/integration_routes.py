@@ -303,6 +303,7 @@ async def _discover_oauth_metadata(
                                             "token_endpoint": metadata.get("token_endpoint"),
                                             "registration_endpoint": metadata.get("registration_endpoint"),
                                             "scopes_supported": resource_scopes or metadata.get("scopes_supported", []),
+                                            "token_endpoint_auth_methods_supported": metadata.get("token_endpoint_auth_methods_supported") or [],
                                         }
                             except Exception:
                                 continue
@@ -321,6 +322,7 @@ async def _discover_oauth_metadata(
                         "token_endpoint": metadata.get("token_endpoint"),
                         "registration_endpoint": metadata.get("registration_endpoint"),
                         "scopes_supported": metadata.get("scopes_supported", []),
+                        "token_endpoint_auth_methods_supported": metadata.get("token_endpoint_auth_methods_supported") or [],
                     }
         except Exception:
             pass
@@ -424,6 +426,7 @@ async def _add_custom_connector(request: web.Request) -> web.Response:
                     if url.rstrip("/") == "https://mcp.figma.com/mcp"
                     else "Loma"
                 ),
+                auth_methods_supported=oauth_config.get("token_endpoint_auth_methods_supported") or None,
             )
             if reg_result is None:
                 return web.json_response(
@@ -644,6 +647,7 @@ async def _org_oauth_authorize(request: web.Request) -> web.Response:
             registration_endpoint=metadata["registration_endpoint"],
             redirect_uri=redirect_uri,
             client_name=oauth_spec.get("client_name", "Loma"),
+            auth_methods_supported=metadata.get("token_endpoint_auth_methods_supported") or None,
         )
         if reg is None or "error" in reg:
             detail = (reg or {}).get("error", "network error")

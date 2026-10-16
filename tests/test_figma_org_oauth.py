@@ -117,6 +117,7 @@ async def test_authorize_registers_as_claude_code_and_reuses_client(db, monkeypa
         registration_endpoint=FIGMA_META["registration_endpoint"],
         redirect_uri=REDIRECT,
         client_name="Claude Code",
+        auth_methods_supported=None,
     )
     url = urlparse(json.loads(resp.body)["authorize_url"])
     params = parse_qs(url.query)
