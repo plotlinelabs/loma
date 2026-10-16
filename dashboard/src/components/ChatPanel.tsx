@@ -22,7 +22,7 @@ import { DictationButton, appendDictation } from "./composer/DictationButton";
 import { VoiceModeButton, VoicePanel } from "./tasks/VoiceDispatcher";
 import { useVoiceAvailable, useVoiceDispatcher } from "@/hooks/useVoiceDispatcher";
 import type { ChatVoiceState, VoiceChatMessage } from "@/lib/voice-chat";
-import { streamChat, fetchConversation, injectMessage, interruptAgent, basePath, ConversationBusyError, ConversationQueuedError, ChatRequestError } from "../lib/api";
+import { streamChat, fetchConversation, injectMessage, interruptAgent, rewindConversation, branchConversation, basePath, ConversationBusyError, ConversationQueuedError, ChatRequestError } from "../lib/api";
 import type { ChatEvent, ChatFile, ChatMessage, ClarifyQuestion, Turn, PersistedArtifact } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
@@ -58,6 +58,8 @@ import {
   RiEditLine,
   RiDeleteBinLine,
   RiListCheck3,
+  RiRefreshLine,
+  RiGitBranchLine,
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
@@ -950,12 +952,18 @@ export default function ChatPanel({
   const [slashDismissedAt, setSlashDismissedAt] = useState<string | null>(null);
   const { templates: promptTemplates } = usePromptTemplates();
   const handleSendRef = useRef<
-    ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[] }) => Promise<void>) | null
+    ((message?: string, opts?: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[]; baseItems?: ChatItem[] }) => Promise<void>) | null
   >(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const [editingQueuedIndex, setEditingQueuedIndex] = useState<number | null>(null);
   const [editingQueuedText, setEditingQueuedText] = useState("");
   const editingQueuedIndexRef = useRef<number | null>(null);
+  // Editing a message already sent: Loma reruns from it.
+  const [editingSentIndex, setEditingSentIndex] = useState<number | null>(null);
+  const [editingSentText, setEditingSentText] = useState("");
+  const [rewindError, setRewindError] = useState<string | null>(null);
+  const [rewinding, setRewinding] = useState(false);
+  const [branched, setBranched] = useState<{ id: string; error?: string } | null>(null);
 
   // Tracks whether the user is pinned to (near) the bottom of the message list.
   // When they scroll up to read earlier messages, streaming auto-scroll is
@@ -1254,7 +1262,12 @@ export default function ChatPanel({
       includePendingFiles,
       files: queuedFiles,
       planMode: planModeOverride,
-    }: { fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[]; planMode?: boolean } = {},
+      baseItems,
+    }: {
+      fromQueue?: boolean; includePendingFiles?: boolean; files?: ChatFile[]; planMode?: boolean;
+      /** Edit/retry: the thread cut back to before the resent message. */
+      baseItems?: ChatItem[];
+    } = {},
   ) => {
     // A plan-mode command (/plan) turns plan mode on, and keeps it on for
     // the review that follows, as the Plan toggle does.
@@ -1313,7 +1326,7 @@ export default function ChatPanel({
       );
       return;
     }
-    const message = systemContext && overrideMessage
+    const message = systemContext && overrideMessage && !baseItems
       ? `[Context: ${systemContext}]\n\n${displayText}`
       : displayText;
 
@@ -1324,7 +1337,7 @@ export default function ChatPanel({
     const fileNames = filesToSend?.map((f) => f.name);
     const displayMessage = displayText || `[${fileNames?.join(", ")}]`;
 
-    const history = buildHistory(items);
+    const history = buildHistory(baseItems ?? items);
     const responseStartedAt = performance.now();
 
     // Generate conversation ID client-side for new conversations so the URL
@@ -1345,7 +1358,7 @@ export default function ChatPanel({
       setPendingFiles([]);
     }
     if (!fromQueue) {
-      setItems((prev) => [...prev, {
+      setItems((prev) => [...(baseItems ?? prev), {
         role: "user", content: displayMessage, fileNames, files: filesToSend,
         replyAgentName: selectedAgent?.name || DEFAULT_AGENT_NAME,
         replyAgentId: selectedAgent?.agent_id ?? null,
@@ -1715,6 +1728,59 @@ export default function ChatPanel({
     setEditingQueuedText("");
   };
 
+  /** Which of the sent user messages (as the server counts them) item i is. */
+  const userIndexOf = (itemIndex: number) =>
+    items.slice(0, itemIndex).filter((item) => item.role === "user" && !item.queued).length;
+  const canRewrite = !readOnly && !!conversationId && !isStreaming && !isRecovering && !rewinding;
+  const lastSentUserIndex = items.findLastIndex((item) => item.role === "user" && !item.queued && !item.deployQueued);
+  const lastReplyIndex = items.findLastIndex((item) => item.role === "assistant");
+
+  const startEditSent = (itemIndex: number) => {
+    setEditingSentIndex(itemIndex);
+    setEditingSentText(items[itemIndex].content);
+    setRewindError(null);
+  };
+  const cancelEditSent = () => {
+    setEditingSentIndex(null);
+    setRewindError(null);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  /** Edit or retry: cut the stored chat back to message itemIndex, then send text in its place. */
+  const rerunFrom = async (itemIndex: number, text: string) => {
+    const item = items[itemIndex];
+    if (!conversationId || !item || !text.trim() || !canRewrite) return;
+    setRewinding(true);
+    setRewindError(null);
+    try {
+      await rewindConversation(conversationId, userIndexOf(itemIndex), item.content);
+    } catch (error) {
+      setRewindError(error instanceof Error ? error.message : "Couldn't rerun from here");
+      if (editingSentIndex === null) startEditSent(itemIndex);
+      return;
+    } finally {
+      setRewinding(false);
+    }
+    setEditingSentIndex(null);
+    setBranched(null);
+    onArtifactClose?.();
+    await handleSend(text.trim(), { baseItems: items.slice(0, itemIndex), files: item.files });
+  };
+
+  const branchFrom = async (replyIndex: number) => {
+    if (!conversationId) return;
+    const next = items.findIndex((item, i) => i > replyIndex && item.role === "user" && !item.queued);
+    try {
+      const { conversation_id } = await branchConversation(
+        conversationId,
+        next >= 0 ? { userIndex: userIndexOf(next), content: items[next].content } : undefined,
+      );
+      setBranched({ id: conversation_id });
+    } catch (error) {
+      setBranched({ id: "", error: error instanceof Error ? error.message : "Couldn't branch this chat" });
+    }
+  };
+
   const visibleSlashMatches = slashDismissedAt === input ? [] : slashMatches(promptTemplates, input);
   const activeCommand = matchCommand(promptTemplates, input);
   const applyCommand = (template: { name: string }) => {
@@ -1742,6 +1808,12 @@ export default function ChatPanel({
         setSlashDismissedAt(input);
         return;
       }
+    }
+    // Up in an empty composer edits your last message, as in Claude.
+    if (e.key === "ArrowUp" && !input && pendingFiles.length === 0 && canRewrite && lastSentUserIndex >= 0) {
+      e.preventDefault();
+      startEditSent(lastSentUserIndex);
+      return;
     }
     // Shift+Tab toggles plan mode, as in Claude Code.
     if (e.key === "Tab" && e.shiftKey && !readOnly) {
@@ -2054,8 +2126,19 @@ export default function ChatPanel({
                           </button>
                         </div>
                       )}
+                      {editingSentIndex === i ? (
+                        <SentMessageEditor
+                          value={editingSentText}
+                          onChange={setEditingSentText}
+                          onCancel={cancelEditSent}
+                          onSend={() => rerunFrom(i, editingSentText)}
+                          busy={rewinding}
+                          error={rewindError}
+                        />
+                      ) : (
+                      <div className="flex min-w-0 max-w-[88%] md:max-w-[75%] flex-col items-end gap-1">
                       <div className={cn(
-                        "rounded-[20px] px-4 py-2.5 max-w-[88%] md:max-w-[75%] text-[16px] leading-[1.6] break-words whitespace-pre-wrap",
+                        "max-w-full rounded-[20px] px-4 py-2.5 text-[16px] leading-[1.6] break-words whitespace-pre-wrap",
                         item.queued || item.deployQueued
                           ? "bg-card/60 border border-dashed border-border"
                           : "bg-muted text-foreground"
@@ -2139,6 +2222,28 @@ export default function ChatPanel({
                           </div>
                         )}
                       </div>
+                      {!item.queued && !item.deployQueued && item.content && (
+                        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 pointer-coarse:opacity-100">
+                          <CopyButton
+                            text={item.content}
+                            label="Copy message"
+                            className="touch-target h-7 w-7 text-muted-foreground hover:text-foreground"
+                          />
+                          {canRewrite && (
+                            <button
+                              type="button"
+                              onClick={() => startEditSent(i)}
+                              className="touch-target flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                              title="Edit message"
+                              aria-label="Edit message"
+                            >
+                              <RiEditLine size={15} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      </div>
+                      )}
                     </div>
                   );
                 }
@@ -2211,9 +2316,11 @@ export default function ChatPanel({
                               key={i}
                               kind={terminal}
                               detail={terminal === "error" ? item.content.slice("Error: ".length) : null}
-                              onContinue={() => handleSendRef.current?.(
-                                terminal === "error" ? "That failed. Please try again." : "Continue where you left off.",
-                              )}
+                              onContinue={() => terminal === "error" && canRewrite && lastSentUserIndex >= 0
+                                ? rerunFrom(lastSentUserIndex, items[lastSentUserIndex].content)
+                                : handleSendRef.current?.(
+                                  terminal === "error" ? "That failed. Please try again." : "Continue where you left off.",
+                                )}
                             />
                           );
                         }
@@ -2280,6 +2387,28 @@ export default function ChatPanel({
                                     className="touch-target h-6 w-6 text-muted-foreground hover:text-foreground"
                                   />
                                 )}
+                                {i === lastReplyIndex && canRewrite && lastSentUserIndex >= 0 && lastSentUserIndex < i && (
+                                  <button
+                                    type="button"
+                                    onClick={() => rerunFrom(lastSentUserIndex, items[lastSentUserIndex].content)}
+                                    className="touch-target flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                    title="Retry"
+                                    aria-label="Retry"
+                                  >
+                                    <RiRefreshLine size={14} />
+                                  </button>
+                                )}
+                                {conversationId && !isStreaming && !isRecovering && (
+                                  <button
+                                    type="button"
+                                    onClick={() => branchFrom(i)}
+                                    className="touch-target flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                    title="Branch from here"
+                                    aria-label="Branch from here"
+                                  >
+                                    <RiGitBranchLine size={14} />
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -2315,6 +2444,21 @@ export default function ChatPanel({
 
           {/* Input — the bottom nav below it owns the home-indicator safe area */}
           <div className="sticky bottom-0 bg-background px-3 pt-2.5 pb-2.5 max-md:px-2 max-md:pt-1.5 max-md:pb-1.5 shrink-0">
+            {branched && (
+              <div role="status" className="mx-auto mb-2 flex max-w-3xl items-center gap-3 rounded-xl bg-foreground px-4 py-2.5 text-[14px] text-background">
+                <span className="min-w-0 flex-1">
+                  {branched.error ?? "Branched into a new chat with everything up to this reply."}
+                </span>
+                {!branched.error && (
+                  <a href={`${basePath}/chat?continue=${branched.id}`} className="font-medium text-brand-300 hover:underline">
+                    Open
+                  </a>
+                )}
+                <button type="button" onClick={() => setBranched(null)} aria-label="Dismiss" className="opacity-70 hover:opacity-100">
+                  <RiCloseLine size={16} />
+                </button>
+              </div>
+            )}
             {readOnly ? <ReadOnlyComposerNotice /> : <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -2716,6 +2860,52 @@ function StatusPill({ message, elapsedSeconds }: { message: string; elapsedSecon
 }
 
 /** The end of a run that didn't finish: what happened and one clear next step. */
+/** Edits a message already sent. Sending reruns Loma from it. */
+function SentMessageEditor({ value, onChange, onCancel, onSend, busy, error }: {
+  value: string;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onSend: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="flex w-full max-w-[88%] md:max-w-[80%] flex-col gap-2.5 rounded-[20px] border-[1.5px] border-primary bg-card px-4 pb-3 pt-3.5 shadow-sm">
+      <label htmlFor="edit-sent-message" className="text-[13px] font-medium text-muted-foreground">Edit your message</label>
+      <textarea
+        id="edit-sent-message"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            if (!busy) onSend();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        rows={Math.min(8, Math.max(2, value.split("\n").length))}
+        className="w-full resize-none border-none bg-transparent text-[16px] leading-[1.55] outline-none"
+        autoFocus
+        onFocus={(e) => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length)}
+      />
+      {error && <p role="alert" className="text-[13px] text-destructive">{error}</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="min-w-[220px] flex-1 text-[13px] leading-[1.45] text-muted-foreground">
+          Loma reruns from here, and the replies below go away. Anything it already did, like messages it sent, isn&apos;t undone.
+        </p>
+        <Button type="button" variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+        <Button type="button" size="sm" onClick={onSend} disabled={busy || !value.trim()}>
+          {busy ? <RiLoader4Line size={14} className="animate-spin" /> : null}
+          Send
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function RunStoppedCard({ kind, detail, onContinue }: {
   kind: "interrupted" | "error";
   detail: string | null;

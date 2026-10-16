@@ -2685,6 +2685,8 @@ def setup_api_routes(app: web.Application):
     app.router.add_put("/api/conversations/{conversation_id}/share", handle_share_conversation)
     app.router.add_post("/api/conversations/{conversation_id}/inject", handle_inject_message)
     app.router.add_post("/api/conversations/{conversation_id}/interrupt", handle_interrupt_agent)
+    from api.chat_rewind import setup_chat_rewind_routes
+    setup_chat_rewind_routes(app)
     app.router.add_get("/api/stats", handle_get_stats)
     app.router.add_get("/api/cost-stats", handle_cost_stats)
     app.router.add_get("/api/token-usage", handle_token_usage)

@@ -1045,6 +1045,33 @@ export async function interruptAgent(
   return res.json();
 }
 
+async function postConversation<T>(conversationId: string, action: string, body: object): Promise<T> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
+  return data as T;
+}
+
+/** Cut the stored chat back to just before your userIndex-th message, so it
+ * can be sent again (edited, or as is to retry the reply after it). */
+export function rewindConversation(conversationId: string, userIndex: number, content: string) {
+  return postConversation<{ rewound: boolean; kept_messages: number }>(
+    conversationId, "rewind", { user_index: userIndex, content },
+  );
+}
+
+/** A new chat holding this one up to just before your beforeUserIndex-th
+ * message (the whole chat when omitted). */
+export function branchConversation(conversationId: string, before?: { userIndex: number; content: string }) {
+  return postConversation<{ conversation_id: string; title: string | null }>(
+    conversationId, "branch", before ? { before_user_index: before.userIndex, content: before.content } : {},
+  );
+}
+
 /** 409 from /api/chat: the conversation already has a run in progress. */
 export class ConversationBusyError extends Error {
   /** The message was handed to the running agent mid-stream. */
