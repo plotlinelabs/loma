@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { parseServerTime } from "@/lib/server-time";
 
 type FormatOptions = Intl.DateTimeFormatOptions;
 
@@ -46,7 +47,8 @@ export function useClientTimestamp(
       setFormatted(placeholder);
       return;
     }
-    const date = new Date(iso);
+    // The API's datetimes are UTC without an offset (lib/server-time.ts).
+    const date = new Date(parseServerTime(iso));
     if (isNaN(date.getTime())) {
       setFormatted(placeholder);
       return;

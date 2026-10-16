@@ -7,9 +7,9 @@ import {
 } from "@dnd-kit/core";
 import { RiStackLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
-import ClientTimestamp from "@/components/ClientTimestamp";
 import type { Task, TaskCardItem, TasksBoardResponse } from "@/lib/api";
-import { priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
+import { priorityDisplay, taskDot } from "./taskDisplay";
+import { TaskAge, TaskSummary, WaitingChip } from "./TaskCardParts";
 import { TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
 import { StarButton } from "./TaskStar";
@@ -109,27 +109,29 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, onToggleStar, me, draggab
         {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-1">
-            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[14px] font-medium leading-5">
+            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium leading-[21px]">
               {task.title || task.prompt || "New task"}
             </div>
+            <TaskAge task={task} />
             <StarButton task={task} onToggle={onToggleStar}
-              className={cn("h-5 w-5", !task.starred && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100")} />
+              className={cn("h-6 w-6", !task.starred && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100")} />
           </div>
+          <TaskSummary task={task} className="mt-1" />
           {card && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onOpenCard(card); }}
               title={`Open card: ${card.title}`}
-              className="mt-1.5 inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+              className="mt-1.5 inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs leading-5 text-muted-foreground hover:bg-muted/70 hover:text-foreground"
             >
               <RiStackLine className="h-3 w-3 shrink-0" />
               <span className="truncate">{card.title}</span>
             </button>
           )}
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-4 text-muted-foreground">
-            <ClientTimestamp iso={taskTimestamp(task)} variant="short" placeholder="—" />
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
+            <WaitingChip task={task} />
             {priority && (
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{priority.symbol} {priority.label}</span>
+              <span className="rounded-md bg-muted px-2 py-0.5">{priority.symbol} {priority.label}</span>
             )}
             <TaskDeadlineBadge task={task} />
             {task.assignee && <AssigneeBadge email={task.assignee} me={me} className="ml-auto" />}
@@ -248,8 +250,8 @@ function TaskGroupColumn({ id, name, count, droppable, children }: {
   return (
     <div className="flex min-w-[220px] flex-1 basis-0 flex-col" data-group={name}>
       <div className="mb-2.5 flex items-baseline gap-2 px-2">
-        <span className="text-[13px] font-semibold text-foreground">{name}</span>
-        <span className="text-[11px] tabular-nums text-muted-foreground/80">{count}</span>
+        <span className="text-[14px] font-semibold text-foreground">{name}</span>
+        <span className="text-[13px] tabular-nums text-muted-foreground">{count}</span>
       </div>
       <div
         ref={setNodeRef}
@@ -261,7 +263,7 @@ function TaskGroupColumn({ id, name, count, droppable, children }: {
       >
         {children}
         {count === 0 && (
-          <p className="px-2 py-3 text-center text-[12px] text-muted-foreground/70">No tasks</p>
+          <p className="px-2 py-3 text-center text-[13px] text-muted-foreground">No tasks</p>
         )}
       </div>
     </div>

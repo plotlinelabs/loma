@@ -21,9 +21,9 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import ClientTimestamp from "@/components/ClientTimestamp";
 import type { BoardLane, Task, TaskPriority } from "@/lib/api";
-import { DEPLOY_QUEUED_LABEL, deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
+import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot } from "./taskDisplay";
+import { TaskAge, TaskSummary, WaitingChip } from "./TaskCardParts";
 import { isStoppedColumn } from "./transitions";
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
@@ -61,7 +61,6 @@ export function MobileTaskCard({
   const isDraft = isDraftTask(task);
   const isParked = isStaged && !isDraft;
   const dot = taskDot(task);
-  const timestamp = taskTimestamp(task);
 
   // Same lane targets as the desktop card: staged cards move between other
   // lanes; needs-input and done cards park into any lane.
@@ -72,33 +71,35 @@ export function MobileTaskCard({
     : isStoppedColumn(task.column) || task.column === "done" ? lanes : [];
 
   const { myEmail, onMoveToBoard } = useBoardExtras();
+  const hasChips = (!!task.waiting_reason && task.waiting_reason !== "finished")
+    || !!task.task_priority || !!task.task_deadline || !!task.assignee;
   // Any owner or editor can move a task to another board (view-only hides this menu).
   const canMoveToBoard = !!onMoveToBoard && !task.task_card_id;
 
   return (
     <div
       onClick={() => onOpen(task)}
-      className="group rounded-xl border border-border bg-card px-3 py-2.5 cursor-pointer active:bg-muted/50"
+      className="group rounded-2xl border border-border bg-card px-3.5 py-3 cursor-pointer active:bg-muted/50"
     >
-      <div className="flex items-start gap-2">
-        {dot && <span className={cn("mt-2 h-2 w-2 shrink-0 rounded-full", dot)} />}
-        <div className="min-w-0 flex-1 py-0.5">
-          <div className="line-clamp-2 break-words text-[13px]">
-            {task.title || task.prompt || "New task"}
+      <div className="flex items-start gap-2.5">
+        {dot && <span aria-hidden className={cn("mt-[7px] h-2 w-2 shrink-0 rounded-full", dot)} />}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium leading-[21px]">
+              {task.title || task.prompt || "New task"}
+            </div>
+            {!isStar && <TaskAge task={task} />}
           </div>
-          {isStar ? <div className="mt-1"><StarSource task={task} /></div> : (
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-            <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
-            {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
-            {task.status === "queued" && <span>{DEPLOY_QUEUED_LABEL}</span>}
-          </div>
+          {isStar ? <div className="mt-1.5"><StarSource task={task} /></div> : <TaskSummary task={task} className="mt-1" />}
+          {hasChips && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <WaitingChip task={task} />
+              {/* On a starred card this is your own priority, not the shared task's. */}
+              <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
+              <TaskDeadlineBadge task={task} />
+              {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
+            </div>
           )}
-          <div className="mt-1 flex flex-wrap items-center gap-1">
-            {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
-            {/* On a starred card this is your own priority, not the shared task's. */}
-            <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
-            <TaskDeadlineBadge task={task} />
-          </div>
         </div>
         {(!readOnly || canStar) && <div
           className="flex shrink-0 items-center"

@@ -59,6 +59,7 @@ from agent.prompt import get_prompt_setting
 from api.auth_helpers import get_system_role, get_user_email
 from api.drain import DRAIN_MESSAGE, is_draining
 from api.task_attention import NEEDS_YOU_REASONS, needs_you_filter, waiting_reason
+from api.task_summary import REPLY_HEAD_CHARS, step_label, task_summary
 
 logger = logging.getLogger(__name__)
 
@@ -655,6 +656,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
     """Shape a conversation doc into the board card payload."""
     prompt = task.get("prompt") or ""
     column = derive_column(task, lane_ids)
+    reason = waiting_reason(task)
     return {
         "conversation_id": task.get("conversation_id"),
         "title": task.get("title") or None,
@@ -667,7 +669,10 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "task_lane": task.get("task_lane"),
         "task_rank": _effective_rank(task, column, lane_ids),
         "column": column,
-        "waiting_reason": waiting_reason(task),
+        "waiting_reason": reason,
+        "summary": task_summary(task, reason),
+        # Filled in by the board handler for running tasks (_attach_steps).
+        "step": None,
         "total_turns": task.get("total_turns", 0),
         "started_at": _serialize(task.get("started_at")),
         "finished_at": _serialize(task.get("finished_at")),
@@ -690,9 +695,12 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
 
 _TASK_PROJECTION = {
     "human_task": 1,
-    # Enough of the error to recognise a user stop (api/task_attention.py).
-    "error": {"$substrCP": [{"$ifNull": ["$error", ""]}, 0, 40]},
+    # Enough of the error to recognise a user stop and to summarise a failure.
+    "error": {"$substrCP": [{"$ifNull": ["$error", ""]}, 0, 300]},
     "needs_you_reason": 1,
+    "task_summary": 1,
+    # Older tasks have no stored summary: derive it from the reply's start.
+    "final_response_head": {"$substrCP": [{"$ifNull": ["$final_response", ""]}, 0, REPLY_HEAD_CHARS]},
     "conversation_id": 1, "title": 1, "model": 1, "status": 1, "tool_config": 1,
     # Cards show 200 chars; trim in Mongo so full prompts never leave the DB.
     "prompt": {"$substrCP": [{"$ifNull": ["$prompt", ""]}, 0, 200]},
@@ -1070,6 +1078,8 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
             db, user_email, lane_ids, query.get("$or"),
             tag_ids=[tag["id"] for tag in board["config"]["tags"]])
 
+    await _attach_steps(db, views)
+
     # Every column orders by effective rank (manual rank, or recency fallback
     # baked in by _task_view) — so all columns are manually reorderable.
     ordered = sorted(views, key=lambda view: view["task_rank"])
@@ -1101,6 +1111,32 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
         payload["counts"] = {lane_id: sum(1 for c in cards if c["lane"] == lane_id)
                              for lane_id in lane_ids}
     return _json_with_etag(request, payload)
+
+
+MAX_STEP_LOOKUPS = 30
+
+
+async def _attach_steps(db, views: list[dict]) -> None:
+    """Running tasks show the step they are on: their latest tool call."""
+    running = [v for v in views if v["column"] == "working" and v["status"] == "running"][:MAX_STEP_LOOKUPS]
+    if not running:
+        return
+
+    async def latest(view: dict) -> None:
+        turn = await db.turns.find_one(
+            {"conversation_id": view["conversation_id"], "tool_calls.0": {"$exists": True}},
+            {"tool_calls": {"$slice": -1}},
+            sort=[("turn_number", -1)],
+        )
+        call = ((turn or {}).get("tool_calls") or [None])[-1]
+        if call:
+            view["step"] = step_label(call.get("tool_name"), call.get("input"))
+            view["summary"] = view["step"]
+
+    try:
+        await asyncio.gather(*(latest(view) for view in running))
+    except Exception:
+        logger.warning("Task board: step lookup failed", exc_info=True)
 
 
 def _json_with_etag(request: web.Request, payload: dict) -> web.Response:

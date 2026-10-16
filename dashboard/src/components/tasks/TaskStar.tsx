@@ -51,13 +51,13 @@ export function StarSource({ task }: { task: Task }) {
   const status = starStatus(task);
   const source = [task.star.board_name, task.star.card_title].filter(Boolean).join(" · ");
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1 text-[10px] leading-4">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs leading-5">
       <span title={`Starred from ${source}`}
-        className="inline-flex min-w-0 max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+        className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-muted-foreground">
         <RiTeamLine className="h-3 w-3 shrink-0" />
         <span className="truncate">{source}</span>
       </span>
-      {status && <span className={cn("shrink-0 rounded px-1.5 py-0.5 font-medium", status.className)}>{status.text}</span>}
+      {status && <span className={cn("shrink-0 rounded-md px-2 py-0.5 font-medium", status.className)}>{status.text}</span>}
     </div>
   );
 }

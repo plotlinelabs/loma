@@ -1214,6 +1214,10 @@ export interface Task {
   column: string;
   /** Why a stopped active task waits (api/task_attention.py); null otherwise. */
   waiting_reason: TaskWaitingReason | null;
+  /** One plain line: what happened, what Loma needs, or a draft's instructions. */
+  summary: string | null;
+  /** A running task's current step (its latest tool call), in plain words. */
+  step: string | null;
   total_turns: number;
   started_at: string | null;
   finished_at: string | null;

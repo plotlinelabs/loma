@@ -49,7 +49,7 @@ export function AssigneeBadge({ email, me, className }: { email: string; me?: st
       title={`Assigned to ${isMe ? "you" : email}`}
       aria-label={`Assigned to ${isMe ? "you" : email}`}
       className={cn(
-        "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[9px] font-semibold",
+        "inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-semibold",
         isMe ? "bg-brand-600 text-white" : "bg-muted text-muted-foreground",
         className,
       )}

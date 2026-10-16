@@ -436,12 +436,19 @@ class ConversationObserver:
             # stop, restart) or errored must not keep the stale reason once
             # it completes — the detail page renders `error` verbatim.
             from api.task_attention import reason_in_text
+            from api.task_summary import summarize_reply
             reason = reason_in_text(final_response) or self._needs_you_reason
             update: dict = {"$set": update_fields, "$unset": {"error": ""}}
             if reason:
                 update_fields["needs_you_reason"] = reason
             else:
                 update["$unset"]["needs_you_reason"] = ""
+            # The board card's one-line summary (api/task_summary.py).
+            summary = summarize_reply(final_response, reason)
+            if summary:
+                update_fields["task_summary"] = summary
+            else:
+                update["$unset"]["task_summary"] = ""
             if final_response:
                 update["$push"] = {"messages": {
                     "role": "assistant",
@@ -501,7 +508,7 @@ class ConversationObserver:
                     "total_turns": self.turn_offset + self.turn_count,
                     "error": error[:5000],
                 },
-                 "$unset": {"needs_you_reason": ""}},
+                 "$unset": {"needs_you_reason": "", "task_summary": ""}},
             )
         except Exception as e:
             logger.warning("Observability: failed to record error: %s", e)
@@ -537,7 +544,7 @@ class ConversationObserver:
                     "total_turns": self.turn_offset + self.turn_count,
                     "error": reason[:5000],
                 },
-                 "$unset": {"needs_you_reason": ""}},
+                 "$unset": {"needs_you_reason": "", "task_summary": ""}},
             )
         except Exception as e:
             logger.warning("Observability: failed to mark conversation as interrupted: %s", e)

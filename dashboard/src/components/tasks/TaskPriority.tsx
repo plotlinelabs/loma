@@ -34,13 +34,14 @@ export function PriorityMenuItems({ task, onSetPriority }: {
   );
 }
 
-/** The clickable priority tag on a task card. Always rendered so priority is
- * settable in one click; unset shows a muted "Priority" affordance. */
+/** The clickable priority tag on a task card, shown once a priority is set
+ * (set it from the card's menu). */
 export function TaskPriorityTag({ task, onSetPriority }: {
   task: Task;
   onSetPriority: (task: Task, priority: TaskPriority | null) => void;
 }) {
   const display = priorityDisplay(task.task_priority);
+  if (!display) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -51,14 +52,11 @@ export function TaskPriorityTag({ task, onSetPriority }: {
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           className={cn(
-            "shrink-0 rounded border px-1.5 py-0.5 text-[10px] leading-4 cursor-pointer",
-            "hover:bg-muted",
-            display
-              ? "border-transparent bg-muted text-muted-foreground"
-              : "border-dashed text-muted-foreground/60",
+            "shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs leading-5 text-muted-foreground cursor-pointer",
+            "hover:bg-muted/70",
           )}
         >
-          {display ? `${display.symbol} ${display.label}` : "Priority"}
+          {display.symbol} {display.label}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
