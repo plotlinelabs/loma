@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback, Suspense } from "react";
 import {
   RiLoader4Line,
   RiPushpinFill,
@@ -23,6 +23,7 @@ import { HumanTaskPanel } from "@/components/tasks/HumanTaskPanel";
 import ChatWithArtifacts from "../../components/ChatWithArtifacts";
 import { fetchConversation, fetchFlow, basePath } from "../../lib/api";
 import { useUser } from "../../lib/UserContext";
+import { alertIfAway } from "@/lib/done-alert";
 import { MobileTopBarActions, MobileTopBarTitle, useHideBottomNav } from "@/components/mobile/MobileChrome";
 
 /** Past this, a load is treated as failed and offers Retry instead of spinning forever. */
@@ -102,7 +103,14 @@ function ChatPageContent() {
 
   // After a run, the title is written in the background (an LLM call that
   // can take 15s+). Check a few times with backoff until the LLM title lands.
+  const titleRef = useRef<string | null>(null);
+  titleRef.current = conversationTitle;
   const handleStreamComplete = useCallback((convId: string) => {
+    // A new chat has no title yet when its first run ends: name it by what was asked.
+    if (titleRef.current) alertIfAway(titleRef.current);
+    else fetchConversation(convId)
+      .then((data) => alertIfAway(data.conversation?.title || data.conversation?.prompt?.slice(0, 80) || null))
+      .catch(() => alertIfAway(null));
     const delays = [3000, 7000, 15000, 30000];
     const check = async (attempt: number) => {
       try {
@@ -421,6 +429,7 @@ function ChatPageContent() {
         initialStatus={initialStatus}
         onConversationCreated={handleConversationCreated}
         onStreamComplete={handleStreamComplete}
+        draftStorageKey={flowId ? undefined : `loma-chat-draft:${activeConversationId || "new"}`}
       />}
     </div>
   );

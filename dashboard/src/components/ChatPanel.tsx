@@ -1004,11 +1004,20 @@ export default function ChatPanel({
 
   // Restore an unsent draft (e.g. the task drawer was closed by mistake).
   // Server-provided prompts (staged board drafts) win over the local draft.
+  // Moving to another chat's key (same panel, new ?continue=) shows that
+  // chat's draft instead of carrying this one's text over.
+  const draftKeyRef = useRef(draftStorageKey);
+  const skipDraftSaveRef = useRef(false);
   useEffect(() => {
+    const switched = draftKeyRef.current !== draftStorageKey;
+    draftKeyRef.current = draftStorageKey;
+    // The save below runs in this same commit with the old chat's text.
+    if (switched) skipDraftSaveRef.current = true;
     if (!draftStorageKey || initialPrompt) return;
     try {
       const saved = window.localStorage.getItem(draftStorageKey);
-      if (saved) setInput((prev) => prev || saved);
+      if (switched) setInput(saved || "");
+      else if (saved) setInput((prev) => prev || saved);
     } catch {
       // localStorage unavailable (private mode) — drafts just don't persist.
     }
@@ -1017,6 +1026,10 @@ export default function ChatPanel({
 
   // Persist unsent composer text; sending (or clearing) removes the draft.
   useEffect(() => {
+    if (skipDraftSaveRef.current) {
+      skipDraftSaveRef.current = false;
+      return;
+    }
     if (!draftStorageKey) return;
     try {
       if (input.trim()) window.localStorage.setItem(draftStorageKey, input);
@@ -1326,6 +1339,12 @@ export default function ChatPanel({
 
     const history = buildHistory(items);
     const responseStartedAt = performance.now();
+
+    // Sent: drop the draft now. A new chat's key changes to its id in the same
+    // render, which skips the usual clean-up.
+    if (draftStorageKey && !isOverride) {
+      try { window.localStorage.removeItem(draftStorageKey); } catch { /* private mode */ }
+    }
 
     // Generate conversation ID client-side for new conversations so the URL
     // is updated immediately (before the SSE stream establishes).

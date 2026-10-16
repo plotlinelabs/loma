@@ -35,8 +35,22 @@ import {
   RiLoader4Line,
   RiShareLine,
   RiFileCopyLine,
+  RiMarkdownLine,
 } from "@remixicon/react";
-import { basePath, setConversationShared, updateTask } from "@/lib/api";
+import { basePath, fetchConversation, setConversationShared, updateTask } from "@/lib/api";
+import { conversationToMarkdown, exportFileName } from "@/lib/chat-export";
+
+/** Download the whole chat as a Markdown file. */
+async function exportAsMarkdown(conversationId: string) {
+  const { conversation } = await fetchConversation(conversationId);
+  const blob = new Blob([conversationToMarkdown(conversation)], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = exportFileName(conversation);
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 interface ChatContextMenuProps {
   conversationId: string;
@@ -378,6 +392,17 @@ export default function ChatContextMenu({
                 Add to board
               </>
             )}
+          </DropdownMenuItem>
+
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              setDropdownOpen(false);
+              exportAsMarkdown(conversationId).catch((error) => console.error("Export failed:", error));
+            }}
+          >
+            <RiMarkdownLine size={16} className="text-muted-foreground" />
+            Export as Markdown
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />
