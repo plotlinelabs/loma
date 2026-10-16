@@ -11,7 +11,7 @@ import {
   type TaskBoardSummary,
 } from "./api";
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 15000;
 /** Last board opened on this device; the Tasks page reopens it. */
 export const BOARD_STORAGE_KEY = "loma-task-board";
 

@@ -12,7 +12,7 @@ import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { fetchNeedsInputCount } from "./api";
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 15000;
 
 interface TaskAttentionValue {
   /** Number of the user's board tasks currently waiting on their input. */

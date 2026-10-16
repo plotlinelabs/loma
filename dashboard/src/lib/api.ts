@@ -1347,6 +1347,8 @@ export interface TasksBoardResponse {
   tags: TaskTag[];
   tasks: Task[];
   counts: Record<string, number>;
+  /** More Done tasks exist than were loaded (raise doneLimit to see them). */
+  done_has_more?: boolean;
   /** Card boards only. */
   fields?: BoardField[];
   cards?: TaskCardItem[];
@@ -1366,15 +1368,29 @@ export interface BoardSettings {
 
 export class BoardNotFoundError extends Error {}
 
-export async function fetchTasksBoard(query = "", boardId?: string): Promise<TasksBoardResponse> {
+// Last board per URL + its ETag: an unchanged poll gets a 304 and returns the
+// same object, so React skips the re-render.
+const boardCache = new Map<string, { etag: string; data: TasksBoardResponse }>();
+
+export async function fetchTasksBoard(query = "", boardId?: string, doneLimit?: number): Promise<TasksBoardResponse> {
   const params = new URLSearchParams();
   if (query.trim()) params.set("q", query.trim());
   if (boardId && boardId !== PERSONAL_BOARD_ID) params.set("board", boardId);
+  if (doneLimit) params.set("done_limit", String(doneLimit));
   const qs = params.toString();
-  const res = await fetch(`${API_BASE}/api/tasks${qs ? `?${qs}` : ""}`);
+  const url = `${API_BASE}/api/tasks${qs ? `?${qs}` : ""}`;
+  const cached = boardCache.get(url);
+  const res = await fetch(url, {
+    cache: "no-store",
+    headers: cached ? { "If-None-Match": cached.etag } : undefined,
+  });
+  if (res.status === 304 && cached) return cached.data;
   if (res.status === 404) throw new BoardNotFoundError("Board not found");
   if (!res.ok) throw new Error(`Failed to fetch tasks: ${res.status}`);
-  return res.json();
+  const data: TasksBoardResponse = await res.json();
+  const etag = res.headers.get("ETag");
+  if (etag) boardCache.set(url, { etag, data });
+  return data;
 }
 
 async function boardRequest<T>(path: string, init: RequestInit, fallback: string): Promise<T> {

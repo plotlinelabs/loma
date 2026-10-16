@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import json
+
 import pytest
 
 from api import task_routes
@@ -57,8 +59,9 @@ def _doc(i, status, done_at=None):
 
 
 class FakeRequest:
-    def __init__(self, q=""):
-        self.query = {"q": q} if q else {}
+    def __init__(self, q="", headers=None, **query):
+        self.query = {"q": q, **query} if q else dict(query)
+        self.headers = headers or {}
 
 
 def _patch(monkeypatch, docs):
@@ -76,7 +79,7 @@ def _patch(monkeypatch, docs):
 
 @pytest.mark.asyncio
 async def test_active_tasks_not_dropped_when_done_exceeds_cap(monkeypatch):
-    limit = task_routes.DONE_TASKS_LIMIT
+    limit = task_routes.DONE_TASKS_PAGE
     done = [_doc(i, "done", f"2026-01-{1 + i % 28:02d}T{i % 24:02d}:00:00+00:00") for i in range(limit + 50)]
     live = [_doc(i, "todo") for i in range(3)] + [_doc(i, "active") for i in range(2)]
     # Done docs first, mimicking natural (oldest-first) order that used to fill the cap.
@@ -90,9 +93,52 @@ async def test_active_tasks_not_dropped_when_done_exceeds_cap(monkeypatch):
     for doc in live:
         assert doc["conversation_id"] in ids
     assert body["counts"]["done"] == limit
+    assert body["done_has_more"] is True
     done_cursor = next(c for q, c in conversations.cursors if q["task_status"] == "done")
     assert done_cursor.sort_spec[0] == ("task_done_at", -1)
-    assert done_cursor.limit_n == limit
+    assert done_cursor.limit_n == limit + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw, expected", [
+    (None, task_routes.DONE_TASKS_PAGE),
+    ("120", 120),
+    ("0", 1),
+    ("99999", task_routes.DONE_TASKS_LIMIT),
+    ("abc", task_routes.DONE_TASKS_PAGE),
+])
+async def test_done_limit_param(monkeypatch, raw, expected):
+    done = [_doc(i, "done", f"2026-01-01T00:{i // 60 % 60:02d}:{i % 60:02d}+00:00") for i in range(600)]
+    _patch(monkeypatch, done)
+    query = {"done_limit": raw} if raw is not None else {}
+    body = json.loads((await task_routes.handle_list_tasks(FakeRequest(**query))).body)
+    assert body["counts"]["done"] == expected
+    assert body["done_has_more"] is (expected < 600)
+
+
+@pytest.mark.asyncio
+async def test_done_has_more_false_when_all_loaded(monkeypatch):
+    _patch(monkeypatch, [_doc(i, "done", f"2026-01-0{1 + i}") for i in range(3)])
+    body = json.loads((await task_routes.handle_list_tasks(FakeRequest())).body)
+    assert body["counts"]["done"] == 3
+    assert body["done_has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_unchanged_board_returns_304(monkeypatch):
+    _patch(monkeypatch, [_doc(1, "todo")])
+    first = await task_routes.handle_list_tasks(FakeRequest())
+    etag = first.headers["ETag"]
+    assert first.status == 200 and etag
+    again = await task_routes.handle_list_tasks(FakeRequest(headers={"If-None-Match": etag}))
+    assert again.status == 304 and again.body is None
+    stale = await task_routes.handle_list_tasks(FakeRequest(headers={"If-None-Match": '"old"'}))
+    assert stale.status == 200
+
+
+def test_projection_trims_prompt_in_mongo():
+    assert task_routes._TASK_PROJECTION["prompt"] == {
+        "$substrCP": [{"$ifNull": ["$prompt", ""]}, 0, 200]}
 
 
 @pytest.mark.asyncio

@@ -35,9 +35,11 @@ interface TaskBoardProps {
   excludedTagIds: string[];
   /** View-only member of a shared board: no drag, adds or card actions. */
   readOnly?: boolean;
+  /** Load more Done tasks; set only while the server has more. */
+  onLoadMoreDone?: () => void;
 }
 
-export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds, readOnly = false }: TaskBoardProps) {
+export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds, readOnly = false, onLoadMoreDone }: TaskBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const { models } = useAgentModels();
 
@@ -128,6 +130,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
                 : undefined
             }
             onAddTask={!readOnly && laneIds.includes(column.id) ? () => onAddTask(column.id) : undefined}
+            onLoadMore={column.id === "done" ? onLoadMoreDone : undefined}
           >
             {(tasksByColumn[column.id] ?? []).map((task) => (
               <TaskCard
