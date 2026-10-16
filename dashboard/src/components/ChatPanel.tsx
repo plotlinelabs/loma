@@ -797,6 +797,7 @@ export default function ChatPanel({
   onConversationCreated,
   onStreamComplete,
   readOnly = false,
+  autoFocusComposer = true,
   onPlanStateChange,
   planControlRef,
 }: {
@@ -833,6 +834,8 @@ export default function ChatPanel({
   onStreamComplete?: (conversationId: string) => void;
   /** Show the transcript without a composer (e.g. a teammate's task on a shared board). */
   readOnly?: boolean;
+  /** Focus the composer on mount. Off where keyboard shortcuts drive the page. */
+  autoFocusComposer?: boolean;
   /** Reports plan versions/statuses so the side panel can review them. */
   onPlanStateChange?: (state: PlanState) => void;
   /** Lets the side panel revise or approve a plan through this chat. */
@@ -994,7 +997,8 @@ export default function ChatPanel({
   }, [initialConversationId]);
 
   useEffect(() => {
-    inputRef.current?.focus();
+    if (autoFocusComposer) inputRef.current?.focus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Restore an unsent draft (e.g. the task drawer was closed by mistake).

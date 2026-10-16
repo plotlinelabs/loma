@@ -14,7 +14,7 @@ import {
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type { Task, TasksBoardResponse } from "@/lib/api";
-import { canMove, rankBetween } from "./transitions";
+import { canMove, isStoppedColumn, rankBetween } from "./transitions";
 import { useTaskBoardActions } from "./useTaskBoardActions";
 import { TaskColumn } from "./TaskColumn";
 import { TaskCard } from "./TaskCard";
@@ -100,7 +100,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       markDone(task);
       return;
     }
-    if (target === "needs_input") {
+    if (isStoppedColumn(target)) {
       // Only reachable from Done (see canMove) — same effect as Reopen.
       reopen(task);
       return;

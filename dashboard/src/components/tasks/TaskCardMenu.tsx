@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
 import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay } from "./taskDisplay";
+import { isStoppedColumn } from "./transitions";
 import { PriorityMenuItems } from "./TaskPriority";
 import { DeadlineMenuItems } from "./TaskDeadline";
 import { useBoardExtras } from "./boardExtras";
@@ -61,7 +62,7 @@ export function TaskCardMenu({ task, lanes, tags, models, open, onOpenChange,
     ? lanes.filter((lane) => task.column === "done" || lane.id !== task.column)
     : isStaged
     ? lanes.filter((lane) => lane.id !== task.task_lane)
-    : task.column === "needs_input" || task.column === "done" ? lanes : [];
+    : isStoppedColumn(task.column) || task.column === "done" ? lanes : [];
   const matching = tags.filter((tag) => tag.name.toLowerCase().includes(query.trim().toLowerCase()));
   const canCreate = query.trim() && !tags.some((tag) => tag.name.toLowerCase() === query.trim().toLowerCase());
   const toggleTag = (id: string) => onSetTags(task,

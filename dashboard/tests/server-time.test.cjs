@@ -41,3 +41,28 @@ test('finished, queued or heartbeat-less conversations are never called dead', (
   assert.equal(isDeadRun('queued', naive(NOW - 3 * 3600_000), NOW), false);
   assert.equal(isDeadRun('running', null, NOW), false);
 });
+
+test('date-only values parse as written, not as UTC midnight shifted', () => {
+  assert.equal(parseServerTime('2026-10-16'), Date.parse('2026-10-16'));
+});
+
+test('relative age reads like a list: now, minutes, hours, yesterday, date', () => {
+  const { relativeAge } = mod.exports;
+  const now = Date.parse('2026-10-16T09:00:00Z');
+  assert.equal(relativeAge(naive(now - 20_000), now), 'now');
+  assert.equal(relativeAge(naive(now - 12 * 60_000), now), '12m');
+  assert.equal(relativeAge(naive(now - 3 * 3600_000), now), '3h');
+  assert.equal(relativeAge(naive(now - 26 * 3600_000), now), 'Yesterday');
+  assert.match(relativeAge(naive(now - 9 * 86_400_000), now), /Oct 7/);
+  assert.match(relativeAge(naive(now - 400 * 86_400_000), now), /2025/);
+  assert.equal(relativeAge(null, now), null);
+});
+
+test('elapsed time for running work', () => {
+  const { elapsedSince } = mod.exports;
+  const now = Date.parse('2026-10-16T09:00:00Z');
+  assert.equal(elapsedSince(naive(now - 42_000), now), '42s');
+  assert.equal(elapsedSince(naive(now - 72_000), now), '1m 12s');
+  assert.equal(elapsedSince(naive(now - 14 * 60_000), now), '14m');
+  assert.equal(elapsedSince(naive(now - 125 * 60_000), now), '2h 5m');
+});

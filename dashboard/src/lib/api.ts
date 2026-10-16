@@ -1190,6 +1190,14 @@ export interface TaskTag {
 
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 
+/** Why a stopped task waits. The first six put it under "Needs you". */
+export type TaskWaitingReason =
+  | "question" | "plan" | "approval" | "information" | "failed" | "stopped"
+  | "finished" | "stopped_by_you";
+
+export const NEEDS_YOU_REASONS: readonly TaskWaitingReason[] =
+  ["question", "plan", "approval", "information", "failed", "stopped"];
+
 export interface Task {
   human_task?: HumanTask;
   tool_config?: ToolConfig | null;
@@ -1201,8 +1209,15 @@ export interface Task {
   task_status: "todo" | "active" | "done";
   task_lane: string | null;
   task_rank: number | null;
-  /** Derived column: a lane id, "working", "needs_input", or "done". */
+  /** Derived column: a lane id, "working", "needs_input" (blocked on someone),
+   * "review" (finished, ready to check) or "done". */
   column: string;
+  /** Why a stopped active task waits (api/task_attention.py); null otherwise. */
+  waiting_reason: TaskWaitingReason | null;
+  /** One plain line: what happened, what Loma needs, or a draft's instructions. */
+  summary: string | null;
+  /** A running task's current step (its latest tool call), in plain words. */
+  step: string | null;
   total_turns: number;
   started_at: string | null;
   finished_at: string | null;
@@ -1245,7 +1260,7 @@ export interface TaskStar {
   board_emoji?: string;
   /** Card the task sits in (card boards). */
   card_title?: string | null;
-  /** Where the task really is on its board: a lane id, "working", "needs_input" or "done". */
+  /** Where the task really is on its board: a lane id, "working", "needs_input", "review" or "done". */
   source_column: string;
   /** You moved it into your lane while the task was live: it stays there
    * until the task moves on (a new run, a finished run, done or staged). */
@@ -1315,7 +1330,10 @@ export interface TaskCardItem {
   task_total: number;
   task_done: number;
   task_running: number;
+  /** Tasks blocked on someone (the "Needs you" rule). */
   task_needs_input: number;
+  /** Finished tasks waiting to be checked. */
+  task_review: number;
 }
 
 export interface LomaStamp {
@@ -1502,6 +1520,7 @@ export interface NeedsYouTask {
   conversation_id: string;
   title: string | null;
   status: string;
+  waiting_reason: TaskWaitingReason | null;
   /** "personal" for the caller's own board. */
   board_id: string;
 }

@@ -51,6 +51,9 @@ class ConversationObserver:
         # event id unique per record_usage call and stable across retries.
         self.run_id = uuid.uuid4().hex
         self._usage_seq = 0
+        # Set when this run asks a question or proposes a plan; stored on
+        # finish so the board files the task under Needs you (api/task_attention.py).
+        self._needs_you_reason: str | None = None
 
     async def start(self):
         """Insert initial conversation document with status='running'."""
@@ -156,6 +159,8 @@ class ConversationObserver:
 
     async def record_text(self, turn_number: int, text: str):
         """Record a text block for a given turn."""
+        from api.task_attention import reason_in_text
+        self._needs_you_reason = reason_in_text(text) or self._needs_you_reason
         turn_number = turn_number + self.turn_offset
         truncated_text, was_truncated = _truncate(text)
         turn_doc_update = {
@@ -232,6 +237,9 @@ class ConversationObserver:
           - file_size: int (for file artifacts)
           - file_type: str (for file artifacts)
         """
+        if artifact_data.get("language") == "plan":
+            from api.task_attention import PLAN
+            self._needs_you_reason = PLAN
         try:
             doc = {
                 "conversation_id": self.conversation_id,
@@ -427,7 +435,20 @@ class ConversationObserver:
             # A resumed conversation that was previously interrupted (user
             # stop, restart) or errored must not keep the stale reason once
             # it completes — the detail page renders `error` verbatim.
+            from api.task_attention import reason_in_text
+            from api.task_summary import summarize_reply
+            reason = reason_in_text(final_response) or self._needs_you_reason
             update: dict = {"$set": update_fields, "$unset": {"error": ""}}
+            if reason:
+                update_fields["needs_you_reason"] = reason
+            else:
+                update["$unset"]["needs_you_reason"] = ""
+            # The board card's one-line summary (api/task_summary.py).
+            summary = summarize_reply(final_response, reason)
+            if summary:
+                update_fields["task_summary"] = summary
+            else:
+                update["$unset"]["task_summary"] = ""
             if final_response:
                 update["$push"] = {"messages": {
                     "role": "assistant",
@@ -486,7 +507,8 @@ class ConversationObserver:
                     "status": STATUS_ERROR,
                     "total_turns": self.turn_offset + self.turn_count,
                     "error": error[:5000],
-                }},
+                },
+                 "$unset": {"needs_you_reason": "", "task_summary": ""}},
             )
         except Exception as e:
             logger.warning("Observability: failed to record error: %s", e)
@@ -521,7 +543,8 @@ class ConversationObserver:
                     "status": STATUS_INTERRUPTED,
                     "total_turns": self.turn_offset + self.turn_count,
                     "error": reason[:5000],
-                }},
+                },
+                 "$unset": {"needs_you_reason": "", "task_summary": ""}},
             )
         except Exception as e:
             logger.warning("Observability: failed to mark conversation as interrupted: %s", e)

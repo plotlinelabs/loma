@@ -53,8 +53,10 @@ VOICE_TOOLS = [
             "properties": {
                 "column": {
                     "type": "string",
-                    "enum": ["all", "needs_input", "working", "staged", "done"],
-                    "description": "needs_input = waiting on the user, working = running now, "
+                    "enum": ["all", "needs_input", "review", "working", "staged", "done"],
+                    "description": "needs_input = blocked on the user (a question, a plan or approval "
+                                   "to decide, or a failed/stopped run), review = finished and ready "
+                                   "for the user to check, working = running now, "
                                    "staged = drafts not started yet.",
                 },
             },
@@ -142,7 +144,7 @@ VOICE_TOOLS = [
                 "task": _TASK_REF,
                 "to": {
                     "type": "string",
-                    "description": "\"done\" to mark it done, \"needs_input\" to reopen a done task, "
+                    "description": "\"done\" to mark it done, \"reopen\" to reopen a done task, "
                                    "or the name of a lane as list_tasks returns it.",
                 },
             },
@@ -268,7 +270,7 @@ unclear, ask for that detail instead of guessing.
 - start_task starts an existing draft (also when asked to move a draft to Working). Never create
   a duplicate or send the title as its instructions. For a task that already ran, ask what follow-up to send.
 - stop_task, start_task, steer_task and move_task change real work. Only call them when the user clearly asked.
-- move_task: pass "done", "needs_input" (reopen a done task) or a lane name. If the result has an
+- move_task: pass "done", "reopen" (reopen a done task) or a lane name. If the result has an
   error, say the reason; do not try another column on your own.
 - Moving a starred card changes only the user's bookmark, not the shared task. Say so.
 - Human approval/information cards require their response controls; never treat a move as approval.

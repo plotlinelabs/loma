@@ -16,10 +16,16 @@ import os
 logger = logging.getLogger(__name__)
 
 # Statuses that mean the agent stopped mid-flight rather than finishing.
-_STATUS_TITLES = {
-    "completed": "Task needs your input",
-    "error": "Task hit an error",
-    "interrupted": "Task was interrupted",
+# Push title per waiting reason (api/task_attention.py). A stop the user
+# pressed themselves sends nothing.
+_REASON_TITLES = {
+    "question": "Loma has a question",
+    "plan": "A plan is ready for your review",
+    "approval": "Approval needed",
+    "information": "Loma needs information",
+    "failed": "Task hit an error",
+    "stopped": "Task stopped before finishing",
+    "finished": "Task finished",
 }
 
 
@@ -65,7 +71,8 @@ def _send_one(subscription: dict, payload: str, private_key: str, subject: str):
 
 
 async def send_task_needs_input_push(db, conversation_id: str):
-    """Notify a board task's owner that the agent stopped and awaits them."""
+    """Notify a board task's owner that its run ended: why, and whether it
+    waits on them."""
     try:
         config = _vapid_config()
         if not config or db is None:
@@ -74,9 +81,14 @@ async def send_task_needs_input_push(db, conversation_id: str):
 
         conversation = await db.conversations.find_one(
             {"conversation_id": conversation_id},
-            {"task_status": 1, "status": 1, "title": 1, "prompt": 1, "metadata.user_name": 1},
+            {"task_status": 1, "status": 1, "title": 1, "prompt": 1, "metadata.user_name": 1,
+             "human_task": 1, "needs_you_reason": 1, "error": 1},
         )
         if not conversation or conversation.get("task_status") != "active":
+            return
+        from api.task_attention import waiting_reason
+        title = _REASON_TITLES.get(waiting_reason(conversation) or "")
+        if not title:
             return
         owner = (conversation.get("metadata") or {}).get("user_name")
         if not owner:
@@ -87,10 +99,9 @@ async def send_task_needs_input_push(db, conversation_id: str):
         if not subscriptions:
             return
 
-        status = conversation.get("status") or "completed"
         base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
         payload = json.dumps({
-            "title": _STATUS_TITLES.get(status, _STATUS_TITLES["completed"]),
+            "title": title,
             "body": (conversation.get("title") or conversation.get("prompt") or "")[:120],
             "tag": conversation_id,
             "url": f"{base_url}/chat?continue={conversation_id}",

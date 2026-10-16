@@ -12,9 +12,10 @@ import {
 } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import ClientTimestamp from "@/components/ClientTimestamp";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
-import { DEPLOY_QUEUED_LABEL, isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
+import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot } from "./taskDisplay";
+import { TaskAge, TaskSummary, WaitingChip } from "./TaskCardParts";
+import { isStoppedColumn } from "./transitions";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
 import { TaskDeadlineBadge } from "./TaskDeadline";
@@ -63,9 +64,11 @@ export function TaskCard({
     useSortable({ id: task.conversation_id, data: { task } });
 
   const dot = taskDot(task);
-  const timestamp = taskTimestamp(task);
 
   const assignedTags = tags.filter((tag) => (task.task_tag_ids || []).includes(tag.id));
+  // Chips only for what is set: no empty "Priority" placeholders.
+  const hasChips = (task.starred && !isStar) || (!!task.waiting_reason && task.waiting_reason !== "finished")
+    || !!task.task_priority || !!task.task_deadline || assignedTags.length > 0 || !!task.assignee;
   return (
     <div
       ref={setNodeRef}
@@ -80,49 +83,49 @@ export function TaskCard({
         setMenuOpen(true);
       }}
       className={cn(
-        "group relative rounded-xl border border-border bg-card px-3.5 py-3 cursor-pointer",
+        "group relative rounded-2xl border border-border bg-card px-4 py-3.5 cursor-pointer",
         "hover:border-input transition-colors touch-none select-none",
         isDragging && "opacity-40",
       )}
     >
-      <div className="flex items-start gap-2">
-        {dot && <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />}
+      <div className="flex items-start gap-2.5">
+        {dot && <span aria-hidden className={cn("mt-[7px] h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 break-words text-[14px] font-medium leading-5">
-            {task.title || task.prompt || "New task"}
+          <div className="flex items-baseline gap-2">
+            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium leading-[21px]">
+              {task.title || task.prompt || "New task"}
+            </div>
+            {!isStar && <TaskAge task={task} />}
           </div>
-          {isStar ? <div className="mt-2 pr-12"><StarSource task={task} /></div> : (
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
-            <ClientTimestamp iso={timestamp} variant="short" placeholder="—" />
-            {task.total_turns > 0 && <span>{task.total_turns} turns</span>}
-            {task.status === "queued" && <span>{DEPLOY_QUEUED_LABEL}</span>}
-          </div>
+          {isStar ? <div className="mt-2 pr-16"><StarSource task={task} /></div> : <TaskSummary task={task} className="mt-1" />}
+          {hasChips && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 pr-16">
+              {task.starred && !isStar && <RiStarFill aria-label="Starred" className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+              <WaitingChip task={task} />
+              {/* On a starred card this is your own priority, not the shared task's. */}
+              <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
+              <TaskDeadlineBadge task={task} />
+              {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded-md bg-muted px-2 py-0.5 text-xs leading-5 text-muted-foreground">{tag.name}</span>)}
+              {assignedTags.length > 2 && <span className="text-xs text-muted-foreground">+{assignedTags.length - 2}</span>}
+              {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
+            </div>
           )}
-          <div className="mt-1 flex flex-wrap items-center gap-1 pr-12">
-            {task.starred && !isStar && <RiStarFill aria-label="Starred" className="h-3 w-3 shrink-0 text-amber-500" />}
-            {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
-            {/* On a starred card this is your own priority, not the shared task's. */}
-            <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
-            <TaskDeadlineBadge task={task} />
-            {assignedTags.slice(0, 2).map((tag) => <span key={tag.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag.name}</span>)}
-            {assignedTags.length > 2 && <span className="text-[10px] text-muted-foreground">+{assignedTags.length - 2}</span>}
-          </div>
         </div>
         {(!readOnly || canStar) && <div
           // Hover-revealed on pointer devices; always visible on touch
           // (hover never fires there) and while focused via keyboard.
-          className="absolute bottom-2 right-2 flex shrink-0 items-center gap-0.5 rounded bg-card opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
+          className="absolute bottom-2.5 right-2.5 flex shrink-0 items-center gap-0.5 rounded bg-card opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {canStar && <StarButton task={task} onToggle={onToggleStar} className="h-6 w-6" />}
+          {canStar && <StarButton task={task} onToggle={onToggleStar} className="h-7 w-7" />}
           {isStar && (task.column === "done" ? (
-            <Button variant="ghost" size="icon" className="h-6 w-6" title="Not done (for me)" onClick={() => onReopen(task)}>
-              <RiArrowGoBackLine className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Not done (for me)" onClick={() => onReopen(task)}>
+              <RiArrowGoBackLine className="h-4 w-4" />
             </Button>
           ) : (
-            <Button variant="ghost" size="icon" className="h-6 w-6" title="Mark done (for me only)" onClick={() => onMarkDone(task)}>
-              <RiCheckLine className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Mark done (for me only)" onClick={() => onMarkDone(task)}>
+              <RiCheckLine className="h-4 w-4" />
             </Button>
           ))}
           {isStar && (
@@ -132,28 +135,28 @@ export function TaskCard({
               onRemoveFromBoard={onRemoveFromBoard} onDeleteDraft={onDeleteDraft}
               onFork={onFork}
               onSetModel={onSetModel} onSetPriority={onSetPriority} onSetDeadline={onSetDeadline} onSetTags={onSetTags} onCreateTag={onCreateTag}>
-              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Organize starred task">
-                <RiMoreLine className="h-3.5 w-3.5" />
+              <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Organize starred task">
+                <RiMoreLine className="h-4 w-4" />
               </Button>
             </TaskCardMenu>
           )}
           {!isStar && !readOnly && <>
           {isDraft && !!task.prompt.trim() && (
             <Button
-              variant="ghost" size="icon" className="h-6 w-6"
+              variant="ghost" size="icon" className="h-7 w-7"
               title="Start"
               onClick={() => onStart(task)}
             >
-              <RiPlayLine className="h-3.5 w-3.5" />
+              <RiPlayLine className="h-4 w-4" />
             </Button>
           )}
-          {!task.human_task && (task.column === "working" || task.column === "needs_input" || isParked) && (
+          {!task.human_task && (task.column === "working" || isStoppedColumn(task.column) || isParked) && (
             <Button
-              variant="ghost" size="icon" className="h-6 w-6"
+              variant="ghost" size="icon" className="h-7 w-7"
               title="Mark done"
               onClick={() => onMarkDone(task)}
             >
-              <RiCheckLine className="h-3.5 w-3.5" />
+              <RiCheckLine className="h-4 w-4" />
             </Button>
           )}
           <TaskCardMenu task={task} lanes={lanes} tags={tags} models={models}
@@ -162,8 +165,8 @@ export function TaskCard({
             onRemoveFromBoard={onRemoveFromBoard} onDeleteDraft={onDeleteDraft}
             onFork={onFork}
             onSetModel={onSetModel} onSetPriority={onSetPriority} onSetDeadline={onSetDeadline} onSetTags={onSetTags} onCreateTag={onCreateTag}>
-              <Button variant="ghost" size="icon" className="h-6 w-6">
-                <RiMoreLine className="h-3.5 w-3.5" />
+              <Button variant="ghost" size="icon" className="h-7 w-7">
+                <RiMoreLine className="h-4 w-4" />
               </Button>
           </TaskCardMenu>
           </>}

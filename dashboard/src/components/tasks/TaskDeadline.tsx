@@ -49,12 +49,12 @@ export function TaskDeadlineBadge({ task, className }: { task: Task; className?:
     <span
       title={`Deadline: ${display.fullDate}`}
       className={cn(
-        "flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground",
+        "flex shrink-0 items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs leading-5 text-muted-foreground",
         display.urgent && "bg-destructive/10 text-destructive",
         className,
       )}
     >
-      <RiCalendarLine className="h-3 w-3 shrink-0" />
+      <RiCalendarLine className="h-3.5 w-3.5 shrink-0" />
       {display.dateLabel} · {display.remainingLabel}
     </span>
   );

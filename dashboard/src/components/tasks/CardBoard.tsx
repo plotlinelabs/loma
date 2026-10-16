@@ -77,18 +77,18 @@ function CardTile({ card, fields, readOnly, onOpen, assignees = [], me = null }:
         isDragging && "opacity-40",
       )}
     >
-      <div className="line-clamp-2 break-words text-[14px] font-medium leading-5">{card.title}</div>
+      <div className="line-clamp-2 break-words text-[15px] font-medium leading-[21px]">{card.title}</div>
       {shown.length > 0 && (
-        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12px] leading-4">
+        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[13px] leading-5">
           {shown.map((field) => (
             <Fragment key={field.id}>
-              <dt className="text-[11px] text-muted-foreground">{field.name}</dt>
+              <dt className="text-xs leading-5 text-muted-foreground">{field.name}</dt>
               <dd className="min-w-0 truncate">{formatFieldValue(field, card.fields[field.id])}</dd>
             </Fragment>
           ))}
         </dl>
       )}
-      <div className="mt-3 flex flex-col gap-2 text-[11px] leading-4 text-muted-foreground">
+      <div className="mt-3 flex flex-col gap-2 text-xs leading-5 text-muted-foreground">
         {card.task_total > 0 ? (
           <div className="flex items-center gap-2">
             <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
@@ -111,7 +111,7 @@ function CardTile({ card, fields, readOnly, onOpen, assignees = [], me = null }:
               {card.task_needs_input > 0 && (
                 <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-600">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                  {card.task_needs_input} needs input
+                  {card.task_needs_input} needs you
                 </span>
               )}
             </div>
@@ -154,9 +154,9 @@ function CardColumn({ lane, cards, total, canAdd, onAdd, children }: {
   return (
     <div className="flex min-w-[220px] flex-1 basis-0 flex-col" data-lane={lane.name}>
       <div className="mb-2.5 flex items-baseline gap-2 px-2">
-        <span className="text-[13px] font-semibold text-foreground">{lane.name}</span>
-        <span className="text-[11px] tabular-nums text-muted-foreground/80">{cards.length}</span>
-        {total && <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{total}</span>}
+        <span className="text-[14px] font-semibold text-foreground">{lane.name}</span>
+        <span className="text-[13px] tabular-nums text-muted-foreground">{cards.length}</span>
+        {total && <span className="ml-auto text-[13px] tabular-nums text-muted-foreground">{total}</span>}
       </div>
       <SortableContext items={cards.map((c) => c.card_id)} strategy={verticalListSortingStrategy}>
         <div
@@ -305,7 +305,7 @@ export function CardBoard({ board, onBoardChange, onRefresh, onOpenCard, onError
                   assignees={assigneesByCard[card.card_id]} me={myEmail} />
               ))}
               {filtering && laneCards.length === 0 && (
-                <p className="px-2 py-3 text-center text-[12px] text-muted-foreground/70">No matching cards</p>
+                <p className="px-2 py-3 text-center text-[13px] text-muted-foreground">No matching cards</p>
               )}
             </CardColumn>
           );

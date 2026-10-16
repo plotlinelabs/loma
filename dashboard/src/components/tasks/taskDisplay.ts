@@ -1,12 +1,28 @@
-import type { Task, TaskPriority } from "@/lib/api";
+import type { Task, TaskPriority, TaskWaitingReason } from "@/lib/api";
 
 // Shared card display derivations for the desktop TaskCard and MobileTaskCard.
 
 export const columnDotStyles: Record<string, string> = {
   working: "bg-blue-500 animate-pulse",
   needs_input: "bg-amber-500",
-  done: "bg-emerald-500",
+  review: "bg-emerald-500",
+  done: "bg-muted-foreground/50",
 };
+
+/** Short label for why a stopped task waits. */
+export const WAITING_LABELS: Record<TaskWaitingReason, string> = {
+  question: "Question",
+  plan: "Plan to approve",
+  approval: "Approval",
+  information: "Needs information",
+  failed: "Failed",
+  stopped: "Stopped",
+  finished: "Finished",
+  stopped_by_you: "Stopped by you",
+};
+
+export const isFailedOrStopped = (task: Task) =>
+  task.waiting_reason === "failed" || task.waiting_reason === "stopped";
 
 export const isStaged = (task: Task) => task.task_status === "todo";
 /** Shown while a task's run waits for a deploy to finish (status "queued"). */
@@ -15,10 +31,7 @@ export const isDraft = (task: Task) => isStaged(task) && !task.status;
 export const isParked = (task: Task) => isStaged(task) && !!task.status;
 
 export function taskDot(task: Task): string | undefined {
-  const isError =
-    task.column === "needs_input" &&
-    (task.status === "error" || task.status === "interrupted");
-  if (isError) return "bg-red-500";
+  if (isFailedOrStopped(task)) return "bg-red-500";
   if (isParked(task)) return "bg-muted-foreground/40"; // paused, not demanding attention
   return columnDotStyles[task.column];
 }
@@ -38,7 +51,7 @@ export function priorityDisplay(priority: TaskPriority | null | undefined) {
 
 export function taskTimestamp(task: Task): string | null {
   return task.column === "working" ? task.started_at
-    : task.column === "needs_input" ? task.finished_at
+    : task.column === "needs_input" || task.column === "review" ? task.finished_at
     : task.column === "done" ? task.task_done_at
     : task.task_staged_at;
 }

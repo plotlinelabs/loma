@@ -37,8 +37,9 @@ export function StarButton({ task, onToggle, className, iconClassName = "h-3.5 w
 export function starStatus(task: Task): { text: string; className: string } | null {
   switch (task.star?.source_column) {
     case "working": return { text: "Running", className: "bg-blue-500/10 text-blue-600 dark:text-blue-400" };
-    case "needs_input": return { text: "Needs input", className: "bg-amber-500/10 text-amber-700 dark:text-amber-400" };
-    case "done": return { text: "Done on board", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" };
+    case "needs_input": return { text: "Needs you", className: "bg-amber-500/10 text-amber-700 dark:text-amber-400" };
+    case "review": return { text: "Ready to review", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" };
+    case "done": return { text: "Done on board", className: "bg-muted text-muted-foreground" };
     default: return null;
   }
 }
@@ -50,13 +51,13 @@ export function StarSource({ task }: { task: Task }) {
   const status = starStatus(task);
   const source = [task.star.board_name, task.star.card_title].filter(Boolean).join(" · ");
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1 text-[10px] leading-4">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs leading-5">
       <span title={`Starred from ${source}`}
-        className="inline-flex min-w-0 max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+        className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-muted-foreground">
         <RiTeamLine className="h-3 w-3 shrink-0" />
         <span className="truncate">{source}</span>
       </span>
-      {status && <span className={cn("shrink-0 rounded px-1.5 py-0.5 font-medium", status.className)}>{status.text}</span>}
+      {status && <span className={cn("shrink-0 rounded-md px-2 py-0.5 font-medium", status.className)}>{status.text}</span>}
     </div>
   );
 }

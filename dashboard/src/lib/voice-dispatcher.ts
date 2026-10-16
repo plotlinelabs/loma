@@ -1,7 +1,7 @@
 /** Pure helpers for the tasks-board voice dispatcher (hooks/useVoiceDispatcher.ts).
  * No React or browser APIs, so tests/voice-dispatcher.test.cjs can run them. */
 
-import type { TaskStar, TaskStarUpdate } from "./api";
+import type { TaskStar, TaskStarUpdate, TaskWaitingReason } from "./api";
 
 export type VoiceSpeaker = "user" | "assistant";
 
@@ -34,14 +34,29 @@ export interface VoiceTask {
   title: string | null;
   prompt: string;
   column: string;
+  /** Why a stopped task waits (api/task_attention.py), when the board sent it. */
+  waiting_reason?: TaskWaitingReason | null;
 }
 
-export type VoiceColumn = "needs_input" | "working" | "staged" | "done";
+export type VoiceColumn = "needs_input" | "review" | "working" | "staged" | "done";
 
 /** Board columns as the voice tools name them; every staging lane is "staged". */
 export function voiceColumn(column: string): VoiceColumn {
-  return column === "needs_input" || column === "working" || column === "done" ? column : "staged";
+  return column === "needs_input" || column === "review" || column === "working" || column === "done"
+    ? column : "staged";
 }
+
+const COLUMN_NAMES: Record<string, string> = {
+  working: "Running", needs_input: "Needs you", review: "Ready to review", done: "Done",
+};
+
+// Kept local (no runtime imports): tests load this file on its own.
+// Mirrors NEEDS_YOU_REASONS in api.ts and reopenedColumn in transitions.ts.
+const NEEDS_YOU: readonly string[] = ["question", "plan", "approval", "information", "failed", "stopped"];
+const reopenedColumn = (status: string | null | undefined) =>
+  status === "running" || status === "queued" ? "working"
+    : status === "error" || status === "interrupted" ? "needs_input"
+    : "review";
 
 export function taskLabel(task: VoiceTask): string {
   return task.title || task.prompt.slice(0, 80) || "Untitled task";
@@ -124,7 +139,10 @@ export interface TaskMove {
 }
 
 const DONE_WORDS = new Set(["done", "complete", "completed", "finished", "finish"]);
-const REOPEN_WORDS = new Set(["needs input", "needs_input", "need input", "reopen", "reopened", "open"]);
+const REOPEN_WORDS = new Set([
+  "needs input", "needs_input", "need input", "needs you", "review", "ready to review",
+  "reopen", "reopened", "open",
+]);
 const WORKING_WORDS = new Set(["working", "running", "in progress", "start", "started"]);
 
 function findLane(lanes: VoiceLane[], wanted: string): VoiceLane | undefined {
@@ -141,8 +159,8 @@ function findLane(lanes: VoiceLane[], wanted: string): VoiceLane | undefined {
 
 /** The PATCH that moves a task to a spoken destination, or why the board does
  * not allow it. Mirrors components/tasks/transitions.ts (and the PATCH
- * handler, which stays authoritative): Working and Needs input are derived
- * from the run, so the only way into them is reopening a done task. */
+ * handler, which stays authoritative): Running, Needs you and Ready to review
+ * are derived from the run, so the only way into them is reopening a done task. */
 export function planMove(task: MovableTask, to: string, lanes: VoiceLane[]): TaskMove | { error: string } {
   const wanted = to.trim().toLowerCase();
   if (!wanted) return { error: "Say where to move it." };
@@ -154,9 +172,8 @@ export function planMove(task: MovableTask, to: string, lanes: VoiceLane[]): Tas
     if (REOPEN_WORDS.has(wanted)) {
       if (task.column !== "done") return { error: "That bookmark is not done." };
       const source = task.star.source_column;
-      const column = source === "working" || source === "needs_input" ? source : task.star.lane;
-      const destination = column === "working" ? "Working" : column === "needs_input" ? "Needs input"
-        : lanes.find((l) => l.id === column)?.name || column;
+      const column = source === "working" || source === "needs_input" || source === "review" ? source : task.star.lane;
+      const destination = COLUMN_NAMES[column] ?? lanes.find((l) => l.id === column)?.name ?? column;
       return { updates: {}, starUpdates: { done: false }, destination, column };
     }
     const lane = findLane(lanes, wanted);
@@ -172,13 +189,12 @@ export function planMove(task: MovableTask, to: string, lanes: VoiceLane[]): Tas
     return { updates: { task_status: "done" }, destination: "Done", column: "done" };
   }
   if (WORKING_WORDS.has(wanted)) {
-    return { error: "A task is in Working only while it runs. Use start_task for a draft, or send a follow-up message to resume a task." };
+    return { error: "A task is in Running only while it runs. Use start_task for a draft, or send a follow-up message to resume a task." };
   }
   if (REOPEN_WORDS.has(wanted)) {
-    if (from !== "done") return { error: "Only a done task can be reopened. A task needs input when its run stops to ask." };
-    return { updates: { task_status: "active" },
-      destination: task.status === "running" ? "Working" : "Needs input",
-      column: task.status === "running" ? "working" : "needs_input" };
+    if (from !== "done") return { error: "Only a done task can be reopened. A task needs you when its run stops to ask." };
+    const column = reopenedColumn(task.status);
+    return { updates: { task_status: "active" }, destination: COLUMN_NAMES[column], column };
   }
   const lane = findLane(lanes, wanted);
   if (!lane) {
@@ -226,9 +242,11 @@ export function detectFinished<T extends VoiceTask & { status: string | null }>(
     if (before !== "working" || column === "working") continue;
     // Parked in a lane mid-run is the user's own move, not news.
     if (column === "staged") continue;
+    const reason = task.waiting_reason;
     const outcome: RunOutcome = column === "done" ? "done"
+      : reason === "failed" || task.status === "error" || task.status === "failed" ? "failed"
+      : reason ? (NEEDS_YOU.includes(reason) ? "needs_input" : "finished")
       : task.status === "completed" ? "finished"
-      : task.status === "error" || task.status === "failed" ? "failed"
       : "needs_input";
     finished.push({ task, outcome });
   }

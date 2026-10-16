@@ -28,10 +28,10 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, onLoadMore, 
   return (
     <div className="flex min-w-[200px] flex-1 basis-0 flex-col">
       <div className="mb-2.5 flex items-baseline gap-2 px-2">
-        <span className="text-[13px] font-semibold text-foreground">
+        <span className="text-[14px] font-semibold text-foreground">
           {name}
         </span>
-        <span className="text-[11px] tabular-nums text-muted-foreground/80">{tasks.length}{onLoadMore ? "+" : ""}</span>
+        <span className="text-[13px] tabular-nums text-muted-foreground">{tasks.length}{onLoadMore ? "+" : ""}</span>
       </div>
       <SortableContext
         items={tasks.map((t) => t.conversation_id)}

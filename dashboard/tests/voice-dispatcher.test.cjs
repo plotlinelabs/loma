@@ -156,12 +156,38 @@ test("moves the board forbids come back with a reason", () => {
   assert.match(planMove(card("done"), "", lanes).error, /where/);
   assert.match(planMove(card("needs_input", "completed", { human_task: {} }), "done", lanes).error, /response controls/);
 });
-test("reopening a done task sends it to needs input", () =>
-  assert.deepEqual(planMove(card("done"), "needs_input", lanes), {
+test("reopening a finished done task sends it to Ready to review", () =>
+  assert.deepEqual(planMove(card("done"), "reopen", lanes), {
     updates: { task_status: "active" },
-    destination: "Needs input",
-    column: "needs_input",
+    destination: "Ready to review",
+    column: "review",
   }));
+test("reopening a failed or cut-off done task sends it to Needs you", () => {
+  for (const status of ["error", "interrupted"]) {
+    assert.deepEqual(planMove(card("done", status), "needs_input", lanes), {
+      updates: { task_status: "active" },
+      destination: "Needs you",
+      column: "needs_input",
+    });
+  }
+});
+test("the review column is its own voice column", () => {
+  assert.equal(voiceColumn("review"), "review");
+  assert.match(planMove(card("review"), "reopen", lanes).error, /done task/);
+  assert.deepEqual(planMove(card("review"), "done", lanes).updates, { task_status: "done" });
+});
+test("a run that ends on a question is announced as waiting, a finished one as finished", () => {
+  const announce = (column, reason) => {
+    const watched = new Map([["a", "working"]]);
+    return detectFinished(watched, [{ ...seen("a", column, "completed"), waiting_reason: reason }])
+      .map((t) => t.outcome);
+  };
+  assert.deepEqual(announce("needs_input", "question"), ["needs_input"]);
+  assert.deepEqual(announce("needs_input", "plan"), ["needs_input"]);
+  assert.deepEqual(announce("review", "finished"), ["finished"]);
+  assert.deepEqual(announce("review", "stopped_by_you"), ["finished"]);
+  assert.deepEqual(announce("needs_input", "failed"), ["failed"]);
+});
 const seen = (id, column, status = "running") => ({
   conversation_id: id,
   title: id,
