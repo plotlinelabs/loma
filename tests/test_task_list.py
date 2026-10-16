@@ -113,7 +113,8 @@ async def test_done_limit_param(monkeypatch, raw, expected):
     query = {"done_limit": raw} if raw is not None else {}
     body = json.loads((await task_routes.handle_list_tasks(FakeRequest(**query))).body)
     assert body["counts"]["done"] == expected
-    assert body["done_has_more"] is (expected < 600)
+    # At the hard cap there is nothing more to page to.
+    assert body["done_has_more"] is (expected < task_routes.DONE_TASKS_LIMIT)
 
 
 @pytest.mark.asyncio
@@ -134,6 +135,17 @@ async def test_unchanged_board_returns_304(monkeypatch):
     assert again.status == 304 and again.body is None
     stale = await task_routes.handle_list_tasks(FakeRequest(headers={"If-None-Match": '"old"'}))
     assert stale.status == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header_fmt", ["W/{}", '"old", {}', "W/\"old\", W/{}", "*"])
+async def test_weak_or_listed_etag_still_returns_304(monkeypatch, header_fmt):
+    # nginx gzip turns the strong tag into W/"..."; browsers echo that back.
+    _patch(monkeypatch, [_doc(1, "todo")])
+    etag = (await task_routes.handle_list_tasks(FakeRequest())).headers["ETag"]
+    again = await task_routes.handle_list_tasks(
+        FakeRequest(headers={"If-None-Match": header_fmt.format(etag)}))
+    assert again.status == 304
 
 
 def test_projection_trims_prompt_in_mongo():

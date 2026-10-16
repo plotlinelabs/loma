@@ -1051,7 +1051,8 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
         active_cursor.to_list(None),
         done_cursor.to_list(done_limit + 1),
     )
-    done_has_more = len(done_tasks) > done_limit
+    # At the hard cap there is no next page to ask for, so never offer one.
+    done_has_more = len(done_tasks) > done_limit and done_limit < DONE_TASKS_LIMIT
     tasks = active_tasks + done_tasks[:done_limit]
 
     # Stars are private to the caller: shared boards flag the caller's own
@@ -1103,9 +1104,18 @@ def _json_with_etag(request: web.Request, payload: dict) -> web.Response:
     body = json.dumps(payload)
     etag = '"' + hashlib.sha1(body.encode()).hexdigest() + '"'
     headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
-    if request.headers.get("If-None-Match") == etag:
+    if _etag_matches(request.headers.get("If-None-Match"), etag):
         return web.Response(status=304, headers=headers)
     return web.Response(text=body, content_type="application/json", headers=headers)
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """Weak comparison (RFC 9110): a gzipping proxy rewrites our tag to W/"...",
+    and the browser sends that back, so the W/ prefix must not break the match."""
+    if not header:
+        return False
+    tags = {t.strip().removeprefix("W/") for t in header.split(",")}
+    return "*" in tags or etag in tags
 
 
 async def handle_needs_input_count(request: web.Request) -> web.Response:

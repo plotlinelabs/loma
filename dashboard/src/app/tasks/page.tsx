@@ -77,6 +77,8 @@ import { BOARD_STORAGE_KEY, useBoards } from "@/lib/BoardsContext";
 
 const POLL_INTERVAL_MS = 5000;
 const DONE_PAGE_SIZE = 50;
+// Server caps done_limit here (DONE_TASKS_LIMIT in api/task_routes.py).
+const DONE_MAX = 500;
 // Card boards: last view (cards or tasks) used on each board.
 const CARD_VIEW_STORAGE_PREFIX = "loma-card-board-view:";
 type CardBoardView = "cards" | "tasks";
@@ -152,8 +154,12 @@ export default function TasksPage() {
   const [excludedTagIds, setExcludedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   // Done loads one page; "Show more" raises the limit and later polls keep it.
-  const [doneLimit, setDoneLimit] = useState(DONE_PAGE_SIZE);
-  useEffect(() => setDoneLimit(DONE_PAGE_SIZE), [boardId, searchQuery]);
+  // The limit is tied to the board + search it was raised on and derived in
+  // render, so switching either resets it before the next fetch (an effect
+  // reset would fire one fetch with the old limit first).
+  const doneKey = `${boardId}\u0000${searchQuery}`;
+  const [raisedDone, setRaisedDone] = useState<{ key: string; limit: number } | null>(null);
+  const doneLimit = raisedDone?.key === doneKey ? raisedDone.limit : DONE_PAGE_SIZE;
   // Phones: search is an icon in the top bar; the field only takes a row once opened.
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -299,7 +305,7 @@ export default function TasksPage() {
   }, [sessionStatus, refresh]);
 
   const loadMoreDone = board?.done_has_more
-    ? () => setDoneLimit((limit) => limit + DONE_PAGE_SIZE * 2)
+    ? () => setRaisedDone({ key: doneKey, limit: Math.min(doneLimit + DONE_PAGE_SIZE * 2, DONE_MAX) })
     : undefined;
 
   const dismissAgentWork = async () => {
