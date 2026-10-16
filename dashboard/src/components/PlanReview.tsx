@@ -151,7 +151,9 @@ export default function PlanReview({ plan, actions }: { plan: Artifact; actions?
   const diff = useMemo(() => (previous ? diffPlans(previous.content, plan.content) : null), [previous, plan.content]);
   const [showChanges, setShowChanges] = useState(false);
   const jump = (id: string) => document.getElementById(`plan-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // The RFC meta line (Author is always Loma, so it's left out), or an older plan's chips.
   const chips = [
+    ...doc.meta.filter((field) => field.label !== "Author"),
     doc.size && { label: "Size", value: doc.size },
     doc.risk && { label: "Risk", value: doc.risk },
     doc.touches && { label: "Touches", value: doc.touches },
@@ -215,6 +217,11 @@ export default function PlanReview({ plan, actions }: { plan: Artifact; actions?
         <header className="mx-auto mt-4 max-w-[46rem] space-y-3 @5xl:max-w-[62rem]">
           <h1 className="text-[24px] font-semibold leading-tight text-foreground">{doc.title}</h1>
           {doc.summary && <p className="text-[15px] leading-relaxed text-foreground/85">{doc.summary}</p>}
+          {doc.decision && (
+            <p className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-[14px] leading-snug text-foreground">
+              <b className="font-semibold text-brand-700">Decision asked:</b> {doc.decision}
+            </p>
+          )}
           {(chips.length > 0 || doc.questions.length > 0) && (
             <div className="flex flex-wrap gap-1.5 text-[12px]">
               {chips.map((chip) => (

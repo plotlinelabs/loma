@@ -47,9 +47,24 @@ def test_other_tools_and_empty_plans_are_ignored():
 def test_plan_mode_asks_before_planning_and_plans_at_a_high_level():
     assert ":::clarify" in PLAN_MODE_BLOCK
     assert "high-level solution document" in PLAN_MODE_BLOCK
-    for section in ("## Current state", "## Proposed solution", "## How it flows", "## Key decisions",
-                    "## Phases", "## Risks and edge cases", "## Rollout and verification", "## Open questions"):
-        assert section in PLAN_MODE_BLOCK
+    numbered = ["## 1. Problem statement", "## 2. Goals", "## 3. Non-goals", "## 4. Scale and parameters",
+                "## 5. Requirements and invariants", "## 6. Proposed architecture", "## 7. Components",
+                "## 8. APIs and config", "## 9. Data model", "## 10. Semantics", "## 11. Security and abuse",
+                "## 12. Observability and testing", "## 13. Rollout and migration",
+                "## 14. Alternatives considered", "## 16. Open questions and follow-ups"]
+    positions = [PLAN_MODE_BLOCK.index(section) for section in numbered]
+    assert positions == sorted(positions), "sections out of order"
+    for header in ("**Author** Loma", "**Status**", "**Reviewers**", "**PR**", "**Ticket**", "**Decision asked:**"):
+        assert header in PLAN_MODE_BLOCK
+
+
+def test_plan_tables_use_the_teams_columns():
+    for columns in ("| Parameter | Value | Source |", "| ID | Invariant |", "| Layer | File | Change | PR |",
+                    "| Surface | Before | After |", "| Store | Record | Use in this design |", "| Case | Behaviour |",
+                    "| Threat | Today | With this change | Mitigation |", "| Layer | Where | Cases |",
+                    "| PR | Scope | Safe alone because |", "| Option | What it is | Why not |"):
+        assert columns in PLAN_MODE_BLOCK
+    assert "keep every other\nsection's number" in PLAN_MODE_BLOCK
 
 
 def test_plan_mode_asks_for_evidence_and_diagrams_in_a_four_backtick_fence():
@@ -57,7 +72,7 @@ def test_plan_mode_asks_for_evidence_and_diagrams_in_a_four_backtick_fence():
     for kind in ("flowchart LR", "sequenceDiagram", "stateDiagram-v2", "erDiagram", "```mermaid"):
         assert kind in PLAN_MODE_BLOCK
     assert "````plan" in PLAN_MODE_BLOCK
-    assert "say in one line at the top what changed" in PLAN_MODE_BLOCK
+    assert '"**Changed:** <what changed>"' in PLAN_MODE_BLOCK
 
 
 def test_four_backtick_plan_keeps_its_mermaid_diagrams():

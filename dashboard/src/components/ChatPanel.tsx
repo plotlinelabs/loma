@@ -2000,8 +2000,9 @@ export default function ChatPanel({
                   className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-base md:text-[16px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
                 />
-                <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:gap-0 max-md:px-2 max-md:pb-2">
-                  <div className="flex min-w-0 items-center gap-0.5 max-md:flex-1">
+                {/* In a narrow panel (task drawer, beside a plan) the controls wrap to a second line instead of overlapping. */}
+                <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:gap-0 max-md:px-2 max-md:pb-2 md:flex-wrap md:justify-start md:gap-x-1 md:gap-y-1.5">
+                  <div className="flex min-w-0 items-center gap-0.5 max-md:flex-1 md:contents">
                     {composerPickers}
                   </div>
                   <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">
@@ -2415,8 +2416,8 @@ export default function ChatPanel({
                   )}
                   style={{ maxHeight: "160px" }}
                 />
-                <div className={cn(isMobile ? "contents" : "flex items-center justify-between gap-2 px-2 pb-2")}>
-                  {!isMobile && <div className="flex min-w-0 items-center gap-0.5">
+                <div className={cn(isMobile ? "contents" : "flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2 pb-2")}>
+                  {!isMobile && <div className="contents">
                     {composerPickers}
                   </div>}
                   <div className="ml-auto flex items-center gap-1 max-md:gap-0 shrink-0">

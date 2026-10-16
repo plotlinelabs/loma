@@ -11,7 +11,13 @@ export interface PlanSection {
 
 export interface PlanDoc {
   title: string;
+  /** The lead paragraph (or an older plan's **Summary:** line). */
   summary: string;
+  /** The RFC meta line: **Author** … · **Status** … · **Reviewers** … · **PR** … · **Ticket** … */
+  meta: { label: string; value: string }[];
+  /** **Decision asked:** what the reviewer approves. */
+  decision: string | null;
+  /** Older plans' chips (before the RFC structure). */
   size: string | null;
   risk: string | null;
   touches: string | null;
@@ -42,15 +48,42 @@ function plain(text: string): string {
 
 /** "**Size:** M, about 2 days." from anywhere in the preamble, up to the next bold label. */
 function field(preamble: string, label: string, chip = true): string | null {
-  const match = new RegExp(`\\*\\*${label}:\\*\\*\\s*([\\s\\S]*?)(?=\\s*\\*\\*[A-Z][a-z]+:\\*\\*|\\n\\n|$)`).exec(preamble);
+  const match = new RegExp(`\\*\\*${label}:\\*\\*\\s*([\\s\\S]*?)(?=\\s*\\*\\*[A-Z][a-z]+(?: [a-z]+)?:\\*\\*|\\n\\n|$)`).exec(preamble);
   const value = match ? plain(match[1]).replace(/\s+/g, " ") : "";
   return (chip ? value.replace(/\.$/, "") : value) || null;
+}
+
+const META_LABELS = ["Author", "Status", "Reviewers", "PR", "Ticket"];
+
+/** "**Author** Loma · **Status** Draft · …" (labels with or without a colon). */
+function metaLine(preamble: string): { label: string; value: string }[] {
+  const line = preamble.split("\n").find((l) => META_LABELS.filter((label) => l.includes(`**${label}`)).length >= 2);
+  if (!line) return [];
+  return line.split(/\s+·\s+/).map((part) => {
+    const match = /^\*\*([^*:]+):?\*\*:?\s*(.*)$/.exec(part.trim());
+    return match ? { label: match[1].trim(), value: plain(match[2]) } : null;
+  }).filter((x): x is { label: string; value: string } => !!x && !!x.value);
+}
+
+/** Table body rows as "first cell: second cell". */
+function tableRows(body: string): string[] {
+  const rows = body.split("\n").filter((line) => /^\s*\|/.test(line));
+  return rows.slice(1).filter((row) => !/^\s*\|[\s:|-]+\|?\s*$/.test(row)).map((row) => {
+    const cells = row.split("|").slice(1, -1).map((cell) => plain(cell));
+    return cells.slice(0, 2).filter(Boolean).join(": ");
+  }).filter(Boolean);
 }
 
 /** Lines that are list items, without their markers. */
 function listItems(body: string, numbered: boolean): string[] {
   const re = numbered ? /^\s*\d+[.)]\s+(.+)$/ : /^\s*(?:[-*]|\d+[.)])\s+(.+)$/;
-  return body.split("\n").map((line) => re.exec(line)?.[1]).filter((x): x is string => !!x).map(plain);
+  return body.split("\n").map((line) => re.exec(line)?.[1]).filter((x): x is string => !!x)
+    .map((item) => plain(item.replace(/^\[[ xX]\]\s*/, "")));
+}
+
+/** Task items ("- [ ] …") in a body. */
+function taskItems(body: string): string[] {
+  return body.split("\n").map((line) => /^\s*[-*]\s+\[[ xX]\]\s+(.+)$/.exec(line)?.[1]).filter((x): x is string => !!x).map(plain);
 }
 
 export function parsePlan(content: string): PlanDoc {
@@ -90,6 +123,13 @@ export function parsePlan(content: string): PlanDoc {
   const find = (name: RegExp) => sections.find((s) => name.test(s.heading));
   const summary = field(intro, "Summary", false)
     ?? plain(intro.split(/\n\s*\n/).map((p) => p.trim()).find((p) => p && !p.startsWith("**")) ?? "");
+  // Phases: an older plan's numbered Phases, else the RFC's section 13 (its PR
+  // table, else its checklist). Questions: section 16 up to its follow-ups.
+  const phaseSection = find(/^phases|^steps|^milestones/i) ?? find(/rollout/i);
+  const phaseBody = phaseSection?.body ?? "";
+  const phases = listItems(phaseBody, true).length ? listItems(phaseBody, true)
+    : tableRows(phaseBody).length ? tableRows(phaseBody) : taskItems(phaseBody);
+  const questionBody = (find(/question/i)?.body ?? "").split(/^\s*\*\*(?:Follow-ups|Sources)/m)[0];
   return {
     title: title || "Plan",
     summary,
@@ -97,8 +137,10 @@ export function parsePlan(content: string): PlanDoc {
     risk: field(intro, "Risk"),
     touches: field(intro, "Touches"),
     sections,
-    phases: listItems(find(/^phases|^steps|^milestones/i)?.body ?? "", true),
-    questions: listItems(find(/question/i)?.body ?? "", false),
+    meta: metaLine(intro),
+    decision: field(intro, "Decision asked", false),
+    phases,
+    questions: listItems(questionBody, false),
     diagrams: (content.match(/^\s*(`{3,})mermaid\b/gm) || []).length,
     body: bodyStart >= 0
       ? lines.slice(bodyStart).join("\n")
@@ -113,8 +155,10 @@ export function diffPlans(previous: string, next: string): PlanDiff {
   const old = new Map(before.sections.map((s) => [s.heading.toLowerCase(), s.body]));
   const now = new Map(after.sections.map((s) => [s.heading.toLowerCase(), s.body]));
   const norm = (text: string) => text.replace(/\s+/g, " ").trim();
-  const firstLine = next.trim().split("\n").find((l) => l.trim() && !l.startsWith("#"))?.trim() ?? "";
-  const note = /^(\*\*|_)?(changed|what changed|changes|updated)\b/i.test(firstLine) ? plain(firstLine) : null;
+  // The "**Changed:** …" line a revision carries in its header (any line before the sections).
+  const header = next.split(/^##\s/m)[0].split("\n").map((l) => l.trim());
+  const changedLine = header.find((l) => /^(\*\*|_)?(changed|what changed|changes|updated)\b/i.test(l)) ?? null;
+  const note = changedLine ? plain(changedLine) : null;
   return {
     added: after.sections.filter((s) => !old.has(s.heading.toLowerCase())).map((s) => s.heading),
     removed: before.sections.filter((s) => !now.has(s.heading.toLowerCase())).map((s) => s.heading),
