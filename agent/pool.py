@@ -58,6 +58,13 @@ WARM_RECOVERY_DELAY = 30  # seconds before retrying the whole warm cycle after t
 ACCOUNT_COOLDOWN_SECONDS = 300  # 5 minutes
 
 
+def claude_thinking_config() -> dict:
+    """Adaptive thinking, with its summary returned so the chat can show it.
+    CLAUDE_THINKING_DISPLAY=omitted keeps thinking but stops returning the text."""
+    display = os.environ.get("CLAUDE_THINKING_DISPLAY", "summarized")
+    return {"type": "adaptive", "display": "omitted" if display == "omitted" else "summarized"}
+
+
 def _get_claude_users_dir() -> Path:
     return Path(os.environ.get("CLAUDE_USERS_DIR", "/opt/claude-users"))
 
@@ -409,6 +416,9 @@ class ClientPool:
             cwd=str(Path(__file__).parent.parent),
             max_buffer_size=10 * 1024 * 1024,
             include_partial_messages=True,
+            # Newer Claude models omit thinking text unless asked; the chat
+            # shows it collapsed under "Thought for Ns".
+            thinking=claude_thinking_config(),
         )
 
     async def _create_client(

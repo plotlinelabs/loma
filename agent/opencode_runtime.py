@@ -1445,6 +1445,9 @@ async def _run_opencode_agent(
     assistant_message_ids: set[str] = set()
     emitted_text_part_ids: set[str] = set()
     emitted_text_by_part_id: dict[str, str] = {}
+    # Reasoning streamed per part, and parts already saved with the turn.
+    emitted_reasoning_by_part_id: dict[str, str] = {}
+    recorded_reasoning_part_ids: set[str] = set()
     part_type_by_id: dict[str, str] = {}
     emitted_tool_calls: set[str] = set()
     emitted_tool_results: set[str] = set()
@@ -1507,8 +1510,19 @@ async def _run_opencode_agent(
                 ):
                     yield output_event
         elif part_type == "reasoning":
+            text = part.get("text") or ""
+            previous = emitted_reasoning_by_part_id.get(part_id)
             if include_steps:
-                yield {"type": "status", "message": "OpenCode is reasoning about the next step"}
+                if not text.strip() and previous is None:
+                    # Some models reason without sharing the text.
+                    yield {"type": "status", "message": "OpenCode is reasoning about the next step"}
+                elif text.startswith(previous or "") and len(text) > len(previous or ""):
+                    yield {"type": "thinking", "text": text[len(previous or ""):], "append": previous is not None}
+                    emitted_reasoning_by_part_id[part_id] = text
+            if part.get("time", {}).get("end") and text.strip() and part_id not in recorded_reasoning_part_ids:
+                recorded_reasoning_part_ids.add(part_id)
+                if observer:
+                    await observer.record_thinking(turn_count, text)
         elif part_type in ("step-start", "step-finish"):
             if include_steps and part_type == "step-start":
                 yield {"type": "status", "message": "OpenCode started a work step"}
@@ -1569,8 +1583,14 @@ async def _run_opencode_agent(
             return
 
         # OpenCode streams both reasoning and final text through
-        # message.part.delta. Only final assistant text should be rendered in
-        # dashboard chat; reasoning deltas stay hidden behind status updates.
+        # message.part.delta: reasoning becomes the collapsed thinking block.
+        if part_type_by_id.get(part_id) == "reasoning":
+            if not include_steps:
+                return
+            previous = emitted_reasoning_by_part_id.get(part_id)
+            emitted_reasoning_by_part_id[part_id] = (previous or "") + delta
+            yield {"type": "thinking", "text": delta, "append": previous is not None}
+            return
         if part_type_by_id.get(part_id) != "text":
             return
 

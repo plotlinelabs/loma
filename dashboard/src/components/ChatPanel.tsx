@@ -58,6 +58,7 @@ import {
   RiEditLine,
   RiDeleteBinLine,
   RiListCheck3,
+  RiLightbulbLine,
 } from "@remixicon/react";
 
 const RECOVERY_MESSAGE = "Connection lost — checking on your request...";
@@ -130,7 +131,7 @@ export interface PlanControl {
 }
 
 export interface ChatItem {
-  role: "user" | "assistant" | "steps" | "clarify" | "status";
+  role: "user" | "assistant" | "steps" | "clarify" | "status" | "thinking";
   content: string;
   steps?: Step[];
   fileNames?: string[];
@@ -157,6 +158,9 @@ export interface ChatItem {
   deployQueued?: boolean;
   /** Who sent this user message (shared-board tasks: the run used their accounts). */
   sender?: string;
+  /** Thinking items: when the thought started streaming, and how long it took once done. */
+  thinkingStartedAt?: number;
+  thinkingSeconds?: number;
 }
 
 /** Pretty-print a tool name for display */
@@ -553,6 +557,9 @@ function rebuildTranscript(
     }
 
     turnStartIndex.push(items.length);
+    for (const block of turn.thinking_blocks || []) {
+      if (block.text?.trim()) items.push({ role: "thinking", content: block.text });
+    }
     const toolCalls = turn.tool_calls || [];
     const toolResults = turn.tool_results || [];
     if (toolCalls.length > 0) {
@@ -1618,7 +1625,7 @@ export default function ChatPanel({
       sendInFlightRef.current = null;
       const responseTimeSeconds = Math.max(0.1, (performance.now() - responseStartedAt) / 1000);
       setItems((prev) => {
-        const finalized = removeTransientStatusItems(finalizeSteps(prev));
+        const finalized = removeTransientStatusItems(finalizeSteps(closeThinking(prev)));
         return enteredRecovery
           ? finalized
           : stampLatestAssistantDuration(finalized, responseTimeSeconds);
@@ -2183,6 +2190,18 @@ export default function ChatPanel({
                           return <StepsGroup key={i} steps={item.steps || []} />;
                         }
 
+                        if (item.role === "thinking") {
+                          return (
+                            <ThinkingBlock
+                              key={i}
+                              text={item.content}
+                              seconds={item.thinkingSeconds}
+                              active={isStreaming && item.thinkingSeconds === undefined
+                                && items.slice(i + 1).every((later) => later.role === "status")}
+                            />
+                          );
+                        }
+
                         if (item.role === "status") {
                           // While streaming, the working line carries the latest status.
                           return isStreaming ? null : <StatusPill key={i} message={item.content} elapsedSeconds={item.elapsedSeconds} />;
@@ -2441,10 +2460,35 @@ export default function ChatPanel({
 }
 
 /** Pure function: apply a single event to the items list */
+/** The open thought ends once Loma acts or answers: stamp how long it took. */
+function closeThinking(items: ChatItem[]): ChatItem[] {
+  const i = items.findLastIndex((item) => item.role === "thinking");
+  const item = items[i];
+  if (!item || item.thinkingSeconds !== undefined || item.thinkingStartedAt === undefined) return items;
+  const updated = [...items];
+  updated[i] = { ...item, thinkingSeconds: Math.max(1, Math.round((Date.now() - item.thinkingStartedAt) / 1000)) };
+  return updated;
+}
+
 function applyEvent(items: ChatItem[], event: ChatEvent): ChatItem[] {
-  let updated = [...items];
+  // Always a copy: the cases below push/splice, and React may run this updater twice.
+  let updated = [...(event.type === "text" || event.type === "tool_call" || event.type === "clarify"
+    ? closeThinking(items)
+    : items)];
 
   switch (event.type) {
+    case "thinking": {
+      updated = removeTransientStatusItems(updated);
+      const last = updated[updated.length - 1];
+      if (event.append && last?.role === "thinking" && last.thinkingSeconds === undefined) {
+        updated[updated.length - 1] = { ...last, content: last.content + event.text };
+      } else {
+        updated = [...closeThinking(updated)];
+        updated.push({ role: "thinking", content: event.text, thinkingStartedAt: Date.now() });
+      }
+      break;
+    }
+
     case "status": {
       const message = event.elapsed_seconds
         ? `${event.message} (${event.elapsed_seconds}s)`
@@ -2778,6 +2822,46 @@ function StepLine({ step }: { step: Step }) {
       </span>
       {summary && <span className="shrink-0 font-mono text-[12px] text-muted-foreground/70">{tool}</span>}
     </>
+  );
+}
+
+/** The model's thinking: streams in while it thinks, then folds to one line. */
+function ThinkingBlock({ text, seconds, active }: { text: string; seconds?: number; active: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const previewRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (active && previewRef.current) previewRef.current.scrollTop = previewRef.current.scrollHeight;
+  }, [active, text]);
+  const open = active || expanded;
+  const label = active ? "Thinking…" : seconds ? `Thought for ${seconds}s` : "Thought process";
+
+  return (
+    <div className="animate-message-in" data-chat-thinking="">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={open}
+        className={cn(
+          "flex max-w-full items-center gap-1.5 text-[14px] transition-colors hover:text-foreground",
+          active ? "font-medium text-foreground" : "text-muted-foreground",
+        )}
+      >
+        <RiLightbulbLine size={15} className={cn("shrink-0", active && "animate-pulse text-brand-500")} />
+        <span>{label}</span>
+        <RiArrowDownSLine size={14} className={cn("shrink-0 transition-transform", !open && "-rotate-90")} />
+      </button>
+      {open && (
+        <div
+          ref={previewRef}
+          className={cn(
+            "ml-2 mt-1.5 border-l border-border pl-4 text-muted-foreground [&_*]:text-inherit",
+            active && !expanded && "max-h-24 overflow-hidden [mask-image:linear-gradient(to_bottom,transparent,black_35%)]",
+          )}
+        >
+          <MarkdownContent content={text} className="text-[14px]" />
+        </div>
+      )}
+    </div>
   );
 }
 
