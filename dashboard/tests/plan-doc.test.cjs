@@ -79,3 +79,65 @@ test("diff lists added, removed and changed sections, and the change note", () =
   assert.equal(diff.note, "Changed: batch every 5 minutes; added How it flows.");
   assert.deepEqual(plain(diffPlans(V1, V1)), { added: [], removed: [], changed: [], note: null });
 });
+
+const RFC = `# RFC: Delete option for Custom API segments
+
+**Author** Loma · **Status** Draft, awaiting review · **Reviewers** Vinay · **PR** not raised · **Ticket** not created
+
+Custom API segments get the same Delete action as dynamic segments, behind the same "segment in use" check.
+
+**Decision asked:** approve that a deleted Custom API segment is not recreated by the next sync (section 10).
+
+## 1. Problem statement
+Delete only shows for CSV, Dynamic or Manual sources.
+
+## 6. Proposed architecture
+\`\`\`mermaid
+flowchart LR
+  D["Dashboard"] --> G["deleteCohort"]
+\`\`\`
+
+## 13. Rollout and migration
+| PR | Scope | Safe alone because |
+| --- | --- | --- |
+| 1 | Dashboard gate | Hidden behind the source check |
+| 2 | Sync guard | No behaviour change until a segment is deleted |
+
+**Checklist**
+- [ ] PR 1 merged
+
+## 16. Open questions and follow-ups
+**Open questions**
+- [ ] Should a deleted segment's sync return 410? Suggested: yes.
+- [ ] Notify the customer? Suggested: no.
+
+**Follow-ups (not in this change)**
+- Bulk delete.
+
+**Sources**
+- apps/dashboard/src/pages/segments/index.js`;
+
+test("reads the RFC skeleton: meta line, decision, lead, numbered sections", () => {
+  const doc = parsePlan(RFC);
+  assert.equal(doc.title, "RFC: Delete option for Custom API segments");
+  assert.deepEqual(plain(doc.meta), [
+    { label: "Author", value: "Loma" }, { label: "Status", value: "Draft, awaiting review" },
+    { label: "Reviewers", value: "Vinay" }, { label: "PR", value: "not raised" }, { label: "Ticket", value: "not created" }]);
+  assert.equal(doc.decision, "approve that a deleted Custom API segment is not recreated by the next sync (section 10).");
+  assert.match(doc.summary, /^Custom API segments get the same Delete action/);
+  assert.deepEqual(plain(doc.sections.map((s) => s.id)),
+    ["1-problem-statement", "6-proposed-architecture", "13-rollout-and-migration", "16-open-questions-and-follow-ups"]);
+  assert.equal(doc.diagrams, 1);
+});
+
+test("RFC phases come from section 13's PR table; questions stop at the follow-ups", () => {
+  const doc = parsePlan(RFC);
+  assert.deepEqual(plain(doc.phases), ["1: Dashboard gate", "2: Sync guard"]);
+  assert.deepEqual(plain(doc.questions), [
+    "Should a deleted segment's sync return 410? Suggested: yes.", "Notify the customer? Suggested: no."]);
+});
+
+test("a revision's Changed line under the header is the change note", () => {
+  const v2 = RFC.replace("**Decision asked:**", "**Changed:** sync returns 410 for deleted segments.\n\n**Decision asked:**");
+  assert.equal(diffPlans(RFC, v2).note, "Changed: sync returns 410 for deleted segments.");
+});

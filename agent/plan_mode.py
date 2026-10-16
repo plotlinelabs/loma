@@ -21,35 +21,54 @@ CLARIFY_FORMAT = (
     ':::'
 )
 
-# The plan is read as a document in the dashboard: rendered Markdown, with
-# Mermaid diagrams drawn inline, an outline from the ## headings, and the
-# numbered Phases list used as the run's checklist once approved.
+# One structure for every plan and solution doc, the same numbered RFC skeleton
+# the team uses outside Loma, so a reader always finds things in the same place.
+# The dashboard reads it: the meta line and "Decision asked" go in the panel's
+# header, ## headings make its outline, section 13 gives the run's checklist and
+# section 16 the questions for the reviewer.
 PLAN_SECTIONS = """# <Title>
 
-**Summary:** 2-4 sentences: the problem, what you propose, and the outcome.
-**Size:** S, M or L, with a rough effort. **Risk:** low, medium or high, and why. **Touches:** the systems involved.
+**Author** Loma · **Status** Draft, awaiting review · **Reviewers** <who asked> · **PR** not raised · **Ticket** <link, or not created>
 
-## Problem and goal
-## Current state
-What you found, with evidence: file paths and functions, tables, dashboards, numbers.
-## Proposed solution
-An architecture diagram, then the components, their responsibilities and the contracts between them.
-## How it flows
-A sequence diagram of the main interaction, then any detail it can't show.
-## Key decisions
-| Decision | Chosen | Alternative | Why |
-## Phases
-1. **<Phase name>**: what ships, and how we'll know it works.
-## Risks and edge cases
-| Risk | Likelihood | Impact | Mitigation |
-## Rollout and verification
-## Open questions
-Each with your suggested answer."""
+<Lead: 2-4 sentences. What we add or change, and the outcome.>
+
+**Decision asked:** <the one thing the reviewer approves, e.g. the semantics in section 10>
+
+## 1. Problem statement
+What is broken or missing today, with evidence (file:line, numbers, the customer's words). A table when comparing cases.
+## 2. Goals
+A numbered list of outcomes.
+## 3. Non-goals
+What this deliberately leaves out, and why.
+## 4. Scale and parameters
+| Parameter | Value | Source |
+## 5. Requirements and invariants
+| ID | Invariant |  (I1, I2, ...: what must stay true, including "setting off = today's behaviour")
+## 6. Proposed architecture
+One or two sentences, then the architecture diagram, then what it shows.
+## 7. Components
+| Layer | File | Change | PR |
+## 8. APIs and config
+| Surface | Before | After |
+## 9. Data model
+| Store | Record | Use in this design |  (and whether a migration is needed)
+## 10. Semantics
+The exact behaviour: ordering, consistency, edge cases, formulas. A sequence diagram for the main interaction. Then **Failure modes**: | Case | Behaviour |
+## 11. Security and abuse
+| Threat | Today | With this change | Mitigation |
+## 12. Observability and testing
+**Metric**, **Logs**, then **Tests**: | Layer | Where | Cases |
+## 13. Rollout and migration
+| PR | Scope | Safe alone because |, then a **Checklist** (- [ ] items), then **Rollback.**
+## 14. Alternatives considered
+| Option | What it is | Why not |
+## 16. Open questions and follow-ups
+**Open questions** (- [ ] each with your suggested answer), **Follow-ups** (not in this change), **Sources** (what you read)."""
 
 DIAGRAM_RULES = """Diagrams are what make a plan reviewable at a glance; the dashboard draws
 Mermaid fenced blocks inline. Use them where they explain more than prose:
-- an architecture diagram (`flowchart LR`) whenever two or more components are involved;
-- a `sequenceDiagram` for the main interaction between components, services or people;
+- an architecture diagram (`flowchart LR`) in section 6 whenever two or more components are involved;
+- a `sequenceDiagram` in section 10 for the main interaction between components, services or people;
 - a `stateDiagram-v2` when something has a lifecycle, an `erDiagram` when data changes shape.
 Keep each to about 12 nodes with short labels. Quote labels that contain punctuation,
 e.g. A["Sync worker (existing)"], and keep # and ; out of labels (Mermaid reads them as code). Mark new parts with `classDef new fill:#E7F3EF,stroke:#055147`
@@ -63,7 +82,7 @@ that the change touches, read-only: read files, search, query, look things up.
 Do NOT change anything: no file edits, no state-changing commands, no messages,
 comments, tickets, deploys, or writes to any external system. Ground the plan in
 what you found; never invent files, APIs or numbers. If you couldn't verify
-something, say so under Open questions.
+something, say so in section 16.
 
 Step 2. If anything that would change the plan is ambiguous or missing, ask
 before planning. Ask 1-4 focused questions with suggested answers, as a block
@@ -72,12 +91,13 @@ in exactly this format (valid JSON inside), then stop and wait:
 Don't ask about things you can find out yourself, and don't ask again once the
 answers are in the conversation. If nothing material is unclear, skip this step.
 
-Step 3. Write the plan as a high-level solution document a teammate can review
-in two minutes, not a code change list: components, responsibilities,
-interfaces and data flow. Avoid file-by-file edits and code snippets unless the
-user asks. Match depth to the ask: a small change gets the summary, approach and
-phases; a feature or system change gets the full document. Use this structure,
-dropping sections that don't apply rather than padding them:
+Step 3. Write the plan as a high-level solution document in exactly this
+structure: the same numbered sections, in this order, with these table columns,
+every time. Each section's first sentence is its point. Describe components,
+responsibilities, interfaces and data flow; avoid code snippets unless the user
+asks. Match depth to the ask: drop a section that truly has nothing to say
+(review findings, section 15, is for reviews only), but keep every other
+section's number, so section 10 is always Semantics:
 {PLAN_SECTIONS}
 
 {DIAGRAM_RULES}
@@ -86,7 +106,8 @@ Present the plan by calling ExitPlanMode with it if you have that tool;
 otherwise write it as one fenced block opened with FOUR backticks and the
 language `plan` (````plan) and closed with four backticks, so the ```mermaid
 blocks inside it stay intact. When revising after feedback, present the full
-updated plan, not a diff, and say in one line at the top what changed.
+updated plan, not a diff, with a "**Changed:** <what changed>" line under the
+"Decision asked" line.
 After presenting the plan, stop. The user reviews it in the dashboard and
 either asks for changes or approves it, which ends plan mode."""
 
