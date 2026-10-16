@@ -180,7 +180,7 @@ function renderTokens(tokens: InlineToken[]): (string | React.ReactElement)[] {
         return (
           <code
             key={key++}
-            className="bg-gray-100 text-brand-700 text-xs px-1.5 py-0.5 rounded font-mono"
+            className="bg-gray-100 text-brand-700 text-[0.875em] px-1.5 py-0.5 rounded font-mono"
           >
             {token.value}
           </code>
@@ -205,7 +205,7 @@ function renderTokens(tokens: InlineToken[]): (string | React.ReactElement)[] {
         );
       case "image":
         return (
-          <span key={key++} className="block my-2">
+          <span key={key++} className="block my-[0.6em]">
             <img
               src={token.src}
               alt={token.alt || "Image"}
@@ -396,12 +396,13 @@ function renderBlock(block: Block, key: number): React.ReactElement {
     case "heading": {
       const Tag = `h${Math.min(block.level || 1, 6)}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
       const sizes: Record<number, string> = {
-        1: "text-lg font-bold mt-4 mb-2",
-        2: "text-base font-bold mt-3 mb-1.5",
-        3: "text-[13px] font-semibold mt-2 mb-1",
-        4: "text-[13px] font-semibold mt-2 mb-1",
-        5: "text-xs font-semibold mt-1 mb-0.5",
-        6: "text-xs font-semibold mt-1 mb-0.5",
+        // Sizes are relative to the wrapper, so a caller sets one base size.
+        1: "text-[1.35em] leading-snug font-bold mt-[1.1em] mb-[0.45em]",
+        2: "text-[1.2em] leading-snug font-bold mt-[1em] mb-[0.4em]",
+        3: "text-[1.08em] font-semibold mt-[0.9em] mb-[0.35em]",
+        4: "text-[1em] font-semibold mt-[0.8em] mb-[0.3em]",
+        5: "text-[0.92em] font-semibold mt-[0.6em] mb-[0.2em]",
+        6: "text-[0.92em] font-semibold mt-[0.6em] mb-[0.2em]",
       };
       return (
         <Tag key={key} className={sizes[block.level || 1]}>
@@ -412,8 +413,8 @@ function renderBlock(block: Block, key: number): React.ReactElement {
 
     case "code":
       return (
-        <div key={key} className="my-2">
-          <div className="flex items-center justify-between rounded-t-lg bg-[#0A0A0A] pl-3 pr-1 py-0.5 text-[10px] font-mono text-[#8C857D]">
+        <div key={key} className="my-[0.8em]">
+          <div className="flex items-center justify-between rounded-t-lg bg-[#0A0A0A] pl-3 pr-1 py-0.5 text-xs font-mono text-[#8C857D]">
             <span>{block.lang || "code"}</span>
             <CopyButton
               text={block.code || ""}
@@ -421,7 +422,7 @@ function renderBlock(block: Block, key: number): React.ReactElement {
               className="h-6 w-6 text-[#8C857D] hover:bg-white/10 hover:text-[#E8E4DD]"
             />
           </div>
-          <pre className="bg-[#0A0A0A] text-[#E8E4DD] text-xs px-3 pb-3 pt-1 overflow-x-auto font-mono leading-relaxed rounded-b-lg">
+          <pre className="bg-[#0A0A0A] text-[#E8E4DD] text-[0.875em] px-3.5 pb-3 pt-1 overflow-x-auto font-mono leading-relaxed rounded-b-lg">
             <code>{block.code}</code>
           </pre>
         </div>
@@ -440,8 +441,8 @@ function renderBlock(block: Block, key: number): React.ReactElement {
       };
 
       return (
-        <div key={key} className="my-2 overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-full text-xs">
+        <div key={key} className="my-[0.8em] overflow-x-auto rounded-lg border border-gray-200">
+          <table className="min-w-full text-[0.875em]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
                 {headers.map((h, hi) => (
@@ -475,9 +476,9 @@ function renderBlock(block: Block, key: number): React.ReactElement {
 
     case "ul":
       return (
-        <ul key={key} className="list-disc list-inside my-1 space-y-0.5">
+        <ul key={key} className="list-disc pl-[1.35em] my-[0.6em] space-y-[0.3em] marker:text-muted-foreground">
           {block.items?.map((item, j) => (
-            <li key={j} className="text-[13px]">
+            <li key={j} className="pl-[0.15em]">
               {renderInline(item)}
             </li>
           ))}
@@ -486,9 +487,9 @@ function renderBlock(block: Block, key: number): React.ReactElement {
 
     case "ol":
       return (
-        <ol key={key} className="list-decimal list-inside my-1 space-y-0.5">
+        <ol key={key} className="list-decimal pl-[1.5em] my-[0.6em] space-y-[0.3em] marker:text-muted-foreground">
           {block.items?.map((item, j) => (
-            <li key={j} className="text-[13px]">
+            <li key={j} className="pl-[0.15em]">
               {renderInline(item)}
             </li>
           ))}
@@ -498,7 +499,7 @@ function renderBlock(block: Block, key: number): React.ReactElement {
     case "paragraph":
     default:
       return (
-        <p key={key} className="my-1 text-[13px] leading-relaxed">
+        <p key={key} className="my-[0.6em] first:mt-0 last:mb-0">
           {renderInline(block.text || "")}
         </p>
       );
@@ -509,7 +510,8 @@ export default function MarkdownContent({ content, className }: MarkdownContentP
   const blocks = useMemo(() => parseBlocks(content), [content]);
 
   return (
-    <div className={`break-words ${className ?? ""}`}>
+    // 13px by default; the chat passes its reading size (16px).
+    <div className={`break-words leading-[1.65] ${className?.includes("text-[") ? "" : "text-[13px]"} ${className ?? ""}`}>
       {blocks.map((block, i) => renderBlock(block, i))}
     </div>
   );

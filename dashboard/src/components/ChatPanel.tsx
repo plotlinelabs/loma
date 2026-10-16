@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { withTerminalStatus, STOPPED_BY_USER_MESSAGE } from "../lib/terminal-status";
+import { terminalKind, withTerminalStatus, STOPPED_BY_USER_MESSAGE } from "../lib/terminal-status";
 import { useSession } from "next-auth/react";
 import { useStandalone } from "@/hooks/useStandalone";
 import { useKeyboardVisible } from "@/hooks/useKeyboardVisible";
@@ -48,6 +48,7 @@ import {
   RiArrowDownSLine,
   RiSendPlaneLine,
   RiLoader4Line,
+  RiPauseLine,
   RiAttachmentLine,
   RiCheckLine,
   RiUploadLine,
@@ -285,7 +286,7 @@ function WorkingIndicator({ elapsedSeconds, status, detail }: {
       : `${Math.floor(elapsedSeconds / 60)}m ${Math.floor(elapsedSeconds % 60).toString().padStart(2, "0")}s`;
 
   return (
-    <div className="working-indicator flex items-center gap-2 py-1.5 text-[12px] text-muted-foreground/70" title={detail}>
+    <div className="working-indicator flex items-center gap-2 py-1.5 text-[14px] text-muted-foreground" title={detail}>
       <span className="grid grid-cols-3 gap-[3px]">
         {Array.from({ length: 9 }, (_, i) => (
           <span
@@ -295,7 +296,7 @@ function WorkingIndicator({ elapsedSeconds, status, detail }: {
           />
         ))}
       </span>
-      <span className="tabular-nums font-mono text-[12px]">
+      <span className="tabular-nums font-mono text-[13px]">
         {display}
       </span>
       {status && <span className="truncate max-w-[420px]">{status}</span>}
@@ -1968,7 +1969,7 @@ export default function ChatPanel({
                   }}
                   placeholder={isStreaming ? "Type your next message..." : isMobile ? "Ask Loma anything..." : "What do you need to get done? Type / for commands"}
                   rows={isMobile ? 1 : 2}
-                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-base md:text-[15px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
+                  className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-base md:text-[16px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
                 />
                 <div className="flex items-center justify-between gap-2 px-3 pb-3 max-md:gap-0 max-md:px-2 max-md:pb-2">
@@ -2050,13 +2051,13 @@ export default function ChatPanel({
                         </div>
                       )}
                       <div className={cn(
-                        "chat-text rounded-xl px-3.5 py-2.5 max-w-[88%] md:max-w-[75%] text-[13px] leading-relaxed break-words whitespace-pre-wrap",
+                        "rounded-[20px] px-4 py-2.5 max-w-[88%] md:max-w-[75%] text-[16px] leading-[1.6] break-words whitespace-pre-wrap",
                         item.queued || item.deployQueued
                           ? "bg-card/60 border border-dashed border-border"
-                          : "bg-card border border-border shadow-[0_1px_2px_rgba(6,27,32,0.03)]"
+                          : "bg-muted text-foreground"
                       )}>
                         {multipleSenders && item.sender && (
-                          <div className="mb-1 text-[11px] font-medium text-muted-foreground">{item.sender}</div>
+                          <div className="mb-1 text-[13px] font-medium text-muted-foreground">{item.sender}</div>
                         )}
                         {editingQueuedIndex === i ? (
                           <div className="flex flex-col gap-1.5">
@@ -2072,21 +2073,21 @@ export default function ChatPanel({
                                   handleCancelEditQueued();
                                 }
                               }}
-                              className="w-full bg-transparent border-none outline-none resize-none text-base md:text-[13px] leading-relaxed min-h-[2em]"
+                              className="w-full bg-transparent border-none outline-none resize-none text-base md:text-[16px] leading-relaxed min-h-[2em]"
                               autoFocus
                             />
                             <div className="flex items-center justify-end gap-1.5">
                               <button
                                 type="button"
                                 onClick={handleCancelEditQueued}
-                                className="text-[11px] text-muted-foreground hover:text-foreground px-2 py-0.5 rounded transition-colors"
+                                className="text-[13px] text-muted-foreground hover:text-foreground px-2 py-0.5 rounded transition-colors"
                               >
                                 Cancel
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleSaveEditQueued(i)}
-                                className="text-[11px] text-primary hover:text-primary/80 px-2 py-0.5 rounded transition-colors font-medium"
+                                className="text-[13px] text-primary hover:text-primary/80 px-2 py-0.5 rounded transition-colors font-medium"
                               >
                                 Save
                               </button>
@@ -2096,13 +2097,13 @@ export default function ChatPanel({
                           item.content || <TypingIndicator />
                         )}
                         {item.queued && editingQueuedIndex !== i && (
-                          <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground">
+                          <div className="flex items-center gap-1 mt-1.5 text-[13px] text-muted-foreground">
                             <RiTimeLine size={12} />
                             <span>Queued — will send when agent finishes</span>
                           </div>
                         )}
                         {item.deployQueued && !item.queued && (
-                          <div className="flex items-center gap-1 mt-1.5 text-[11px] text-muted-foreground">
+                          <div className="flex items-center gap-1 mt-1.5 text-[13px] text-muted-foreground">
                             <RiTimeLine size={12} />
                             <span>Queued, Loma is updating. This will start as soon as it&apos;s back.</span>
                           </div>
@@ -2168,18 +2169,18 @@ export default function ChatPanel({
                         const showAuthor = threadHasAgents && author.agentName !== previousAuthorName;
                         previousAuthorName = author.agentName;
                         const authorLabel = showAuthor && (
-                          <div className="not-prose mb-1 text-[11px] font-semibold text-muted-foreground" data-testid="reply-agent">
+                          <div className="not-prose mb-1 text-[13px] font-semibold text-muted-foreground" data-testid="reply-agent">
                             {author.agentName}
                           </div>
                         );
 
                         if (item.role === "clarify") {
                           return (
-                            <div key={i} className="chat-text min-w-0 text-[13px] leading-relaxed break-words">
+                            <div key={i} className="min-w-0 text-[16px] leading-[1.65] break-words">
                               {authorLabel}
                               {item.content && (
                                 <div data-chat-reply="" className="mb-3 [&>*:first-child]:mt-0">
-                                  <MarkdownContent content={item.content} />
+                                  <MarkdownContent content={item.content} className="text-[16px]" />
                                 </div>
                               )}
                               <ClarifyingQuestions
@@ -2198,6 +2199,20 @@ export default function ChatPanel({
                         const itemArtifacts = (item.artifactIds || [])
                           .map((artId) => allArtifacts.find((a) => a.id === artId))
                           .filter((a): a is Artifact => !!a);
+                        // A run that stopped or failed ends on a card with the next step.
+                        const terminal = !isStreaming && !readOnly && i === items.length - 1 ? terminalKind(item.content) : null;
+                        if (terminal) {
+                          return (
+                            <RunStoppedCard
+                              key={i}
+                              kind={terminal}
+                              detail={terminal === "error" ? item.content.slice("Error: ".length) : null}
+                              onContinue={() => handleSendRef.current?.(
+                                terminal === "error" ? "That failed. Please try again." : "Continue where you left off.",
+                              )}
+                            />
+                          );
+                        }
                         const { text: displayText, pending } = withoutArtifactSource(
                           item.content,
                           itemArtifacts,
@@ -2205,10 +2220,10 @@ export default function ChatPanel({
                         );
                         return (
                           <div key={i} className="group/reply flex items-start gap-2">
-                            <div className="chat-text min-w-0 flex-1 text-[13px] leading-relaxed break-words [&>*:first-child]:mt-0">
+                            <div className="min-w-0 flex-1 text-[16px] leading-[1.65] break-words [&>*:first-child]:mt-0">
                               {authorLabel}
                               {displayText ? (
-                                <div data-chat-reply=""><MarkdownContent content={displayText} /></div>
+                                <div data-chat-reply=""><MarkdownContent content={displayText} className="text-[16px]" /></div>
                               ) : (pending || item.artifactIds?.length || item.fileAttachments?.length) ? (
                                 null /* Artifact/file-only message — cards rendered below */
                               ) : (
@@ -2250,7 +2265,7 @@ export default function ChatPanel({
                             {(item.content || typeof item.responseTimeSeconds === "number") && !(isStreaming && i === items.length - 1) && (
                               <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/reply:opacity-100 group-focus-within/reply:opacity-100 pointer-coarse:opacity-100">
                                 {typeof item.responseTimeSeconds === "number" && (
-                                  <span className="text-[10px] text-muted-foreground/60">
+                                  <span className="text-[12px] text-muted-foreground/70">
                                     {formatResponseTime(item.responseTimeSeconds)}
                                   </span>
                                 )}
@@ -2281,7 +2296,7 @@ export default function ChatPanel({
               {/* Recovery polling indicator */}
               {isRecovering && (
                 <div className="flex justify-start animate-message-in mt-3 ml-8">
-                  <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                  <span className="flex items-center gap-2 text-[14px] text-muted-foreground">
                     <RiLoader4Line size={14} className="animate-spin text-brand-500" />
                     {items.some((item) => item.deployQueued)
                       ? "Waiting for Loma to finish updating..."
@@ -2336,7 +2351,7 @@ export default function ChatPanel({
                   placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : "Ask anything, or type / for commands"}
                   rows={1}
                   className={cn(
-                    "bg-transparent text-base md:text-[13px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
+                    "bg-transparent text-base md:text-[16px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
                     isMobile ? "min-w-0 flex-1 self-center px-1 py-2.5 dark:bg-transparent" : "w-full px-3 pt-3 pb-1.5",
                   )}
                   style={{ maxHeight: "160px" }}
@@ -2612,7 +2627,7 @@ function ClarifyingQuestions({
 
         return (
           <div key={qIndex}>
-            <p className="text-[13px] font-medium text-foreground mb-2">{q.question}</p>
+            <p className="text-[15px] font-semibold text-foreground mb-2">{q.question}</p>
             <div className="flex flex-wrap gap-2 mb-2">
               {q.options.map((opt) => {
                 const isSelected = selected.has(opt.label);
@@ -2624,7 +2639,7 @@ function ClarifyingQuestions({
                     disabled={submitted}
                     onClick={() => toggleOption(qIndex, opt.label, q.multiSelect)}
                     className={cn(
-                      "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all duration-150 h-auto",
+                      "inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[14px] font-medium border transition-all duration-150 h-auto",
                       submitted && !isSelected && "opacity-40",
                       isSelected
                         ? "bg-brand-50 border-brand-300 text-brand-700"
@@ -2644,7 +2659,7 @@ function ClarifyingQuestions({
             {!submitted && q.options.some((o) => o.description) && (
               <div className="space-y-0.5 mb-2">
                 {q.options.filter((o) => o.description).map((opt) => (
-                  <p key={opt.label} className="text-xs text-muted-foreground">
+                  <p key={opt.label} className="text-[13px] text-muted-foreground">
                     <span className="font-medium text-foreground/70">{opt.label}</span> — {opt.description}
                   </p>
                 ))}
@@ -2654,10 +2669,10 @@ function ClarifyingQuestions({
               <div className="mt-2">
                 <Input
                   type="text"
-                  placeholder="Other — type your own..."
+                  placeholder="Or type your own answer"
                   value={otherTexts[qIndex] || ""}
                   onChange={(e) => setOtherText(qIndex, e.target.value)}
-                  className="h-7 text-xs"
+                  className="h-10 text-[15px] md:text-[15px]"
                 />
               </div>
             )}
@@ -2666,20 +2681,20 @@ function ClarifyingQuestions({
       })}
 
       {submitted ? (
-        <div className="flex items-center gap-1.5 text-xs text-green-600">
-          <RiCheckLine size={14} />
-          Selection submitted
+        <div className="flex items-center gap-1.5 text-[14px] text-green-700">
+          <RiCheckLine size={16} />
+          Answer sent
         </div>
       ) : (
         <Button
           type="button"
           disabled={!hasAnySelection}
           onClick={handleSubmit}
-          className="bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground text-xs font-medium rounded-lg press-scale"
+          className="bg-primary text-primary-foreground hover:bg-accent-200 hover:text-accent-on disabled:opacity-40 disabled:hover:bg-primary disabled:hover:text-primary-foreground h-10 px-4 text-[15px] font-medium rounded-xl press-scale"
           size="sm"
         >
-          <RiSendPlaneLine size={14} />
-          Submit
+          <RiSendPlaneLine size={16} />
+          Send answer
         </Button>
       )}
     </div>
@@ -2689,41 +2704,76 @@ function ClarifyingQuestions({
 function StatusPill({ message, elapsedSeconds }: { message: string; elapsedSeconds?: number }) {
   const suffix = typeof elapsedSeconds === "number" && elapsedSeconds > 0 ? ` · ${elapsedSeconds}s` : "";
   return (
-    <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
-      <RiLoader4Line size={12} className="animate-spin text-brand-500 flex-shrink-0" />
+    <span className="inline-flex items-center gap-1.5 text-[14px] text-muted-foreground">
+      <RiLoader4Line size={14} className="animate-spin text-brand-500 flex-shrink-0" />
       <span className="truncate max-w-[560px]">{message}{suffix}</span>
     </span>
   );
 }
 
+/** The end of a run that didn't finish: what happened and one clear next step. */
+function RunStoppedCard({ kind, detail, onContinue }: {
+  kind: "interrupted" | "error";
+  detail: string | null;
+  onContinue: () => void;
+}) {
+  const failed = kind === "error";
+  return (
+    <div role="status" className="max-w-[560px] rounded-2xl border border-border bg-card p-4 animate-message-in">
+      <div className="flex items-center gap-2.5">
+        <span aria-hidden className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+          failed ? "bg-destructive/10 text-destructive" : "bg-amber-500/15 text-amber-700 dark:text-amber-300")}>
+          {failed ? <RiCloseLine size={16} /> : <RiPauseLine size={16} />}
+        </span>
+        <span className="text-[16px] font-semibold">{failed ? "Loma hit an error" : "Loma stopped before finishing"}</span>
+      </div>
+      <p className="mt-2 text-[15px] leading-[1.6] text-muted-foreground">
+        {failed ? detail || "The run failed." : "The server restarted while Loma was working. It can pick up where it left off."}
+      </p>
+      <Button type="button" size="sm" className="mt-3 h-9 px-4 text-[14px]" onClick={onContinue}>
+        {failed ? "Try again" : "Continue"}
+      </Button>
+    </div>
+  );
+}
+
 function StepIcon({ status }: { status: Step["status"] }) {
-  if (status === "running") return <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />;
-  if (status === "error") return <RiCloseLine size={10} className="text-red-500 flex-shrink-0" />;
-  return <RiCheckLine size={10} className="text-muted-foreground/50 flex-shrink-0" />;
+  if (status === "running") return <RiLoader4Line size={14} className="animate-spin text-brand-500 flex-shrink-0" />;
+  if (status === "error") return <RiCloseLine size={14} className="text-red-500 flex-shrink-0" />;
+  return <RiCheckLine size={14} className="text-emerald-600/80 flex-shrink-0" />;
+}
+
+/** One step in plain words: what it did first, the tool after it. */
+function StepLine({ step }: { step: Step }) {
+  const tool = formatToolName(step.name || "tool");
+  const summary = step.input ? summarizeToolInput(step.name || "", step.input) : "";
+  return (
+    <>
+      <StepIcon status={step.status} />
+      <span className={cn("min-w-0 truncate", step.status === "error" ? "text-red-600" : "text-foreground/80")}>
+        {summary || tool}
+      </span>
+      {summary && <span className="shrink-0 font-mono text-[12px] text-muted-foreground/70">{tool}</span>}
+    </>
+  );
 }
 
 function StepsGroup({ steps }: { steps: Step[] }) {
   const [expanded, setExpanded] = useState(false);
 
   if (steps.length === 1) {
-    const step = steps[0];
-    const summary = step.input ? summarizeToolInput(step.name || "", step.input) : "";
     return (
-      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground animate-message-in">
-        <StepIcon status={step.status} />
-        <span className={step.status === "error" ? "text-red-600" : ""}>{formatToolName(step.name || "tool")}</span>
-        {summary && <span className="text-muted-foreground/40 truncate max-w-[300px]">· {summary}</span>}
+      <div className="flex min-w-0 max-w-full items-center gap-2 text-[14px] animate-message-in">
+        <StepLine step={steps[0]} />
       </div>
     );
   }
 
   const running = steps.find(s => s.status === "running");
   const errorCount = steps.filter(s => s.status === "error").length;
-  const uniqueNames = [...new Set(steps.map(s => formatToolName(s.name || "tool")))];
-  // While running, the collapsed line follows the live step; afterwards it names the tools used.
-  const preview = running
-    ? [formatToolName(running.name || "tool"), running.input ? summarizeToolInput(running.name || "", running.input) : ""].filter(Boolean).join(" · ")
-    : uniqueNames.slice(0, 4).join(", ") + (uniqueNames.length > 4 ? ", …" : "");
+  // The collapsed line says what Loma is doing now, or what it did last.
+  const shown = running ?? steps[steps.length - 1];
+  const preview = (shown.input ? summarizeToolInput(shown.name || "", shown.input) : "") || formatToolName(shown.name || "tool");
 
   return (
     <div className="animate-message-in">
@@ -2731,29 +2781,24 @@ function StepsGroup({ steps }: { steps: Step[] }) {
         onClick={() => setExpanded(e => !e)}
         type="button"
         aria-expanded={expanded}
-        className="flex max-w-full min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground/80 transition-colors"
+        className="flex max-w-full min-w-0 items-center gap-2 text-[14px] text-muted-foreground hover:text-foreground transition-colors"
       >
         <RiArrowDownSLine
-          size={12}
+          size={14}
           className={cn("transition-transform flex-shrink-0", !expanded && "-rotate-90")}
         />
-        {running && <RiLoader4Line size={10} className="animate-spin text-brand-500 flex-shrink-0" />}
-        <span className="shrink-0">{steps.length} tool calls</span>
-        {errorCount > 0 && <span className="shrink-0 text-red-500">· {errorCount} failed</span>}
-        {!expanded && <span className="truncate text-muted-foreground/40">· {preview}</span>}
+        {running && <RiLoader4Line size={14} className="animate-spin text-brand-500 flex-shrink-0" />}
+        <span className="shrink-0">{steps.length} steps</span>
+        {errorCount > 0 && <span className="shrink-0 text-red-600">· {errorCount} failed</span>}
+        {!expanded && <span className="min-w-0 truncate text-foreground/70">· {preview}</span>}
       </button>
       {expanded && (
-        <div className="ml-4 mt-0.5 space-y-px">
-          {steps.map((step, i) => {
-            const summary = step.input ? summarizeToolInput(step.name || "", step.input) : "";
-            return (
-              <div key={i} className="flex items-center gap-1.5 text-[11px] text-muted-foreground py-px">
-                <StepIcon status={step.status} />
-                <span className={step.status === "error" ? "text-red-600" : ""}>{formatToolName(step.name || "tool")}</span>
-                {summary && <span className="text-muted-foreground/40 truncate max-w-[300px]">{summary}</span>}
-              </div>
-            );
-          })}
+        <div className="ml-5 mt-1 space-y-1">
+          {steps.map((step, i) => (
+            <div key={i} className="flex min-w-0 items-center gap-2 text-[14px]">
+              <StepLine step={step} />
+            </div>
+          ))}
         </div>
       )}
     </div>
