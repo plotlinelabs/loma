@@ -50,9 +50,10 @@ export function withoutArtifactSource(
   content: string,
   artifacts: FencedArtifact[],
   streaming: boolean,
-): { text: string; pending: PendingArtifact } {
+): { text: string; pending: PendingArtifact; sections: string[] } {
   const bodies = new Set(artifacts.map((a) => a.content.trimEnd()));
   let pending: PendingArtifact = null;
+  let sections: string[] = [];
   let text = content.replace(FENCED_BLOCK_RE, (block, _fence: string, lang: string, body: string) => {
     if (bodies.has(body.trimEnd())) return "";
     // The artifact event follows the full text, so a finished block is
@@ -60,15 +61,33 @@ export function withoutArtifactSource(
     const kind = streaming ? pendingKind(lang, body) : null;
     if (kind) {
       pending = kind;
+      if (kind === "plan") sections = planSections(body);
       return "";
     }
     return block;
   });
   const open = streaming ? unclosedFence(text) : null;
   if (open && (open.lang === "plan" || DESIGN_FENCE_LANGUAGES.has(open.lang))) {
+    if (open.lang === "plan") sections = planSections(text.slice(open.index));
     text = text.slice(0, open.index);
     pending = open.lang === "plan" ? "plan" : "design";
   }
   if (text !== content) text = text.replace(/\n{3,}/g, "\n\n").trim();
-  return { text, pending };
+  return { text, pending, sections };
+}
+
+/** The ## sections of a plan written so far, for its "Writing the plan" card. */
+export function planSections(planText: string): string[] {
+  const sections: string[] = [];
+  let fence: string | null = null;
+  for (const line of planText.split("\n").slice(1)) {
+    const marker = /^\s*(`{3,})/.exec(line)?.[1];
+    if (marker && !fence) fence = marker;
+    else if (marker && marker.length >= fence!.length && !line.trim().slice(marker.length)) fence = null;
+    else if (!fence) {
+      const heading = /^##\s+(.+?)\s*#*$/.exec(line);
+      if (heading) sections.push(heading[1].replace(/\*\*/g, ""));
+    }
+  }
+  return sections;
 }

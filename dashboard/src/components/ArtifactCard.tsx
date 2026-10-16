@@ -194,13 +194,13 @@ function ArtifactCardBody({ artifact, isActive, onClick, planStatus }: ArtifactC
         onClick={onClick}
         className={cn(
           "group flex w-full max-w-[460px] flex-col gap-2 rounded-2xl border bg-card px-4 py-3.5 text-left transition-colors",
-          status === "pending" ? "border-primary/70 shadow-sm" : "border-border",
-          isActive && "ring-2 ring-primary/20",
+          status === "pending" ? "border-brand-400 shadow-sm" : "border-border",
+          isActive && "ring-2 ring-brand-200",
           status === "superseded" && "opacity-60",
         )}
       >
         <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          <RiListCheck3 size={13} className="text-primary" />
+          <RiListCheck3 size={13} className="text-brand-600" />
           Plan · v{artifact.version} ·
           <PlanStatusDot status={status} />
           {status === "pending" ? "Awaiting your review" : status === "approved" ? "Approved" : "Superseded"}
