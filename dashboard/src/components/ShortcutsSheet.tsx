@@ -23,7 +23,6 @@ function groups(mac: boolean): { title: string; items: Shortcut[] }[] {
       items: [
         { keys: ["Enter"], label: "Send" },
         { keys: ["Shift", "Enter"], label: "New line" },
-        { keys: ["↑"], label: "Edit your last message (empty composer)" },
         { keys: ["Shift", "Tab"], label: "Plan first on or off" },
         { keys: ["/"], label: "Commands" },
         { keys: ["Esc"], label: "Stop Loma" },
