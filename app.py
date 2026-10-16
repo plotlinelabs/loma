@@ -107,6 +107,10 @@ async def main():
     # Start periodic recovery loop for interrupted conversations
     start_recovery_loop()
 
+    # Agent workspaces only ever grew until the disk filled (scheduler/workspace_sweep.py).
+    from scheduler.workspace_sweep import start_workspace_sweep
+    start_workspace_sweep()
+
     from api.routes import ensure_served_files_store
     await ensure_served_files_store()
 
