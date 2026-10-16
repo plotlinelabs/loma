@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { BoardLane, Task, TaskPriority } from "@/lib/api";
 import { deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot } from "./taskDisplay";
-import { TaskAge, TaskSummary, WaitingChip } from "./TaskCardParts";
+import { TaskAge, TaskPrChips, TaskSummary, WaitingChip } from "./TaskCardParts";
 import { isStoppedColumn } from "./transitions";
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
@@ -72,7 +72,7 @@ export function MobileTaskCard({
 
   const { myEmail, onMoveToBoard } = useBoardExtras();
   const hasChips = (!!task.waiting_reason && task.waiting_reason !== "finished")
-    || !!task.task_priority || !!task.task_deadline || !!task.assignee;
+    || !!task.task_priority || !!task.task_deadline || !!task.assignee || !!task.pull_requests?.length;
   // Any owner or editor can move a task to another board (view-only hides this menu).
   const canMoveToBoard = !!onMoveToBoard && !task.task_card_id;
 
@@ -94,6 +94,7 @@ export function MobileTaskCard({
           {hasChips && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <WaitingChip task={task} />
+              <TaskPrChips task={task} />
               {/* On a starred card this is your own priority, not the shared task's. */}
               <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
               <TaskDeadlineBadge task={task} />
