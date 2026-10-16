@@ -84,7 +84,7 @@ export function TaskCard({
         setMenuOpen(true);
       }}
       className={cn(
-        "group relative rounded-2xl border border-border bg-card px-4 py-3.5 cursor-pointer",
+        "group relative rounded-lg border border-border bg-card px-4 py-3.5 cursor-pointer",
         "hover:border-input transition-colors touch-none select-none",
         isDragging && "opacity-40",
       )}
