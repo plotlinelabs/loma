@@ -2640,8 +2640,10 @@ async def handle_get_pinned_conversations(request: web.Request) -> web.Response:
     if not pinned_ids:
         return web.json_response({"conversations": [], "pinned_ids": []})
 
+    # The sidebar only needs titles; a chat's messages can run to megabytes.
     conversations = await db.conversations.find(
-        {"conversation_id": {"$in": pinned_ids}, "deleted": {"$ne": True}}
+        {"conversation_id": {"$in": pinned_ids}, "deleted": {"$ne": True}},
+        {"messages": 0, "final_response": 0},
     ).to_list(MAX_PINS)
 
     # Role-based access filtering
@@ -2677,6 +2679,8 @@ def setup_api_routes(app: web.Application):
     # API routes
     app.router.add_get("/api/conversations", handle_list_conversations)
     app.router.add_get("/api/conversations/pinned", handle_get_pinned_conversations)
+    from api.chat_search import handle_search_chats
+    app.router.add_get("/api/conversations/search", handle_search_chats)
     app.router.add_get("/api/conversations/{conversation_id}", handle_get_conversation)
     app.router.add_patch("/api/conversations/{conversation_id}", handle_update_conversation)
     app.router.add_delete("/api/conversations/{conversation_id}", handle_delete_conversation)

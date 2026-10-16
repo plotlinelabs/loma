@@ -849,6 +849,28 @@ export async function removeConversationFromProject(
   return res.json();
 }
 
+// --- Chat search (Cmd+K) ---
+
+export interface ChatSearchResult {
+  conversation_id: string;
+  title: string | null;
+  /** The matching text with some context; null when the title matched. */
+  snippet: string | null;
+  snippet_role: "user" | "assistant" | null;
+  task_status: string | null;
+  /** Board tasks only: the board it's on ("personal" for My tasks). */
+  task_board_id: string | null;
+  last_active: string | null;
+}
+
+/** Your chats and tasks matching q in a title or any message; recent chats when q is empty. */
+export async function searchChats(q: string, limit = 8, signal?: AbortSignal): Promise<ChatSearchResult[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  const res = await fetch(`${API_BASE}/api/conversations/search?${params}`, { signal });
+  if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+  return (await res.json()).results;
+}
+
 // --- Pinned Conversations ---
 
 export interface PinnedConversationsResponse {

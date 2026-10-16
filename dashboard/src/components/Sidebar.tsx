@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { Suspense, useEffect, useState, useRef } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -14,6 +14,7 @@ import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { PromptTemplatesDialog } from "./PromptTemplatesDialog";
 import CrosscutIcon from "./CrosscutIcon";
 import { NavBoards, NAV_ACTIVE, NAV_IDLE, NAV_ROW } from "./NavBoards";
+import { NavPinnedChats } from "./NavPinnedChats";
 import { useTheme } from "../lib/ThemeContext";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
@@ -475,6 +476,9 @@ export default function Sidebar({
                 </Tooltip>
               ) : link;
             })}
+            <Suspense fallback={null}>
+              <NavPinnedChats collapsed={collapsed} onNavigate={onClose} />
+            </Suspense>
           </nav>
           </ScrollArea>
 
