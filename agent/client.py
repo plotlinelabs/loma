@@ -371,9 +371,11 @@ _ARTIFACT_LANGUAGES = {
 _ARTIFACT_MIN_CHARS = 200
 _ARTIFACT_MIN_LINES = 8
 
-# Regex to find fenced code blocks in text
+# Fenced code blocks: 3 or more backticks, closed by a fence of the same
+# length. A plan comes in a ````plan fence so the ```mermaid blocks inside it
+# don't end it early.
 _CODE_BLOCK_RE = re.compile(
-    r"```(\w*)\n(.*?)```",
+    r"(?<!`)(`{3,})(\w*)[^\S\n]*\n(.*?)\1(?!`)",
     re.DOTALL,
 )
 
@@ -385,8 +387,8 @@ def _detect_artifacts(text: str) -> list[dict]:
     """
     artifacts = []
     for match in _CODE_BLOCK_RE.finditer(text):
-        lang = match.group(1).lower() or "text"
-        content = match.group(2).rstrip()
+        lang = match.group(2).lower() or "text"
+        content = match.group(3).rstrip()
         if not content:
             continue
 
@@ -1552,6 +1554,15 @@ async def _stream_agent(
                                 }
                                 if plan_artifact["artifact_id"] not in emitted_artifact_ids:
                                     emitted_artifact_ids.add(plan_artifact["artifact_id"])
+                                    # Also as text, as the other runtimes send it: the chat
+                                    # history then carries the plan into revise/approve runs
+                                    # (the dashboard swaps the fence for the plan's card).
+                                    fenced_plan = f"````plan\n{plan_text}\n````"
+                                    if observer:
+                                        await observer.record_text(turn_count, fenced_plan)
+                                    last_text = fenced_plan
+                                    yielded_any = True
+                                    yield {"type": "text", "text": fenced_plan}
                                     if observer:
                                         await observer.record_artifact({**plan_artifact, "artifact_type": "code"})
                                     yield {"type": "artifact", **plan_artifact}

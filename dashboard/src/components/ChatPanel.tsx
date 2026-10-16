@@ -28,6 +28,7 @@ import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import { CopyButton } from "./CopyButton";
 import { isDeadRun } from "@/lib/server-time";
+import { withoutArtifactSource } from "@/lib/artifact-fences";
 import { SlashCommandHint, SlashCommandMenu, slashMatches } from "./composer/SlashCommandMenu";
 import { matchCommand, usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
@@ -161,6 +162,19 @@ export interface ChatItem {
   /** Thinking items: when the thought started streaming, and how long it took once done. */
   thinkingStartedAt?: number;
   thinkingSeconds?: number;
+}
+
+const planModeKey = (conversationId: string | null | undefined) => `loma-plan-mode:${conversationId || "new"}`;
+
+function readPlanMode(key: string): boolean {
+  try { return window.localStorage.getItem(key) === "1"; } catch { return false; }
+}
+
+function writePlanMode(key: string, on: boolean) {
+  try {
+    if (on) window.localStorage.setItem(key, "1");
+    else window.localStorage.removeItem(key);
+  } catch { /* private mode: plan mode just isn't remembered */ }
 }
 
 /** Pretty-print a tool name for display */
@@ -350,61 +364,6 @@ function stampLatestAssistantDuration(items: ChatItem[], responseTimeSeconds: nu
 function removeTransientStatusItems(items: ChatItem[]): ChatItem[] {
   const filtered = items.filter((item) => item.role !== "status");
   return filtered.length === items.length ? items : filtered;
-}
-
-const FENCED_BLOCK_RE = /```(\w*)\n([\s\S]*?)```/g;
-const DESIGN_FENCE_LANGUAGES = new Set(["html", "svg", "jsx", "tsx"]);
-
-/** Mirrors the backend's promotion threshold (agent/client.py _detect_artifacts). */
-function isArtifactSized(body: string): boolean {
-  const content = body.trimEnd();
-  return content.length >= 200 || content.split("\n").length - 1 >= 8;
-}
-
-type PendingArtifact = "design" | "plan" | null;
-
-/** A block the backend will turn into an artifact card. */
-function pendingKind(lang: string, body: string): PendingArtifact {
-  const l = lang.toLowerCase();
-  if (l === "plan") return "plan";
-  return DESIGN_FENCE_LANGUAGES.has(l) && isArtifactSized(body) ? "design" : null;
-}
-
-/**
- * The backend sends a promoted code block twice: inside the message text and
- * as an artifact. Drop the copy from the text, since the card shows it. While
- * streaming, a design or plan block whose card hasn't arrived yet (unfinished,
- * or finished but ahead of its artifact event) is held back and reported as
- * `pending`, so raw source never scrolls past in the chat.
- */
-function withoutArtifactSource(
-  content: string,
-  artifacts: Artifact[],
-  streaming: boolean,
-): { text: string; pending: PendingArtifact } {
-  const bodies = new Set(artifacts.map((a) => a.content.trimEnd()));
-  let pending: PendingArtifact = null;
-  let text = content.replace(FENCED_BLOCK_RE, (block, lang: string, body: string) => {
-    if (bodies.has(body.trimEnd())) return "";
-    // The artifact event follows the full text, so a finished block is
-    // still unmatched for a moment: hold it back if it will be promoted.
-    const kind = streaming ? pendingKind(lang, body) : null;
-    if (kind) {
-      pending = kind;
-      return "";
-    }
-    return block;
-  });
-  if (streaming && (text.match(/```/g) || []).length % 2 === 1) {
-    const open = text.lastIndexOf("```");
-    const lang = text.slice(open + 3).split("\n", 1)[0].trim().toLowerCase();
-    if (lang === "plan" || DESIGN_FENCE_LANGUAGES.has(lang)) {
-      text = text.slice(0, open);
-      pending = lang === "plan" ? "plan" : "design";
-    }
-  }
-  if (text !== content) text = text.replace(/\n{3,}/g, "\n\n").trim();
-  return { text, pending };
 }
 
 /** Extract a :::clarify block from text content */
@@ -951,7 +910,22 @@ export default function ChatPanel({
   // Enter/click in the same render sees a stale `isStreaming`/`input`.
   const sendInFlightRef = useRef<string | null>(null);
   // Plan mode: the agent researches read-only and proposes a plan to review.
-  const [planMode, setPlanMode] = useState(false);
+  // Plan mode is remembered per chat. Toggling writes it; a new chat's choice is
+  // copied to its id when the id is created (handleSend); opening a chat reads it.
+  const [planMode, setPlanModeState] = useState(false);
+  const planKey = planModeKey(conversationId);
+  const planKeyRef = useRef(planKey);
+  planKeyRef.current = planKey;
+  const setPlanMode = useCallback((value: boolean | ((on: boolean) => boolean)) => {
+    setPlanModeState((on) => {
+      const next = typeof value === "function" ? value(on) : value;
+      writePlanMode(planKeyRef.current, next);
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    setPlanModeState(readPlanMode(planKey));
+  }, [planKey]);
   // Slash commands: highlighted row, and the input the menu was dismissed at.
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissedAt, setSlashDismissedAt] = useState<string | null>(null);
@@ -1358,6 +1332,9 @@ export default function ChatPanel({
     let activeConversationId = conversationId;
     if (!activeConversationId) {
       activeConversationId = createConversationId();
+      // The new chat's plan mode becomes this chat's; the next new chat starts fresh.
+      writePlanMode(planModeKey(activeConversationId), planMode);
+      writePlanMode(planModeKey(undefined), false);
       setConversationId(activeConversationId);
       window.history.replaceState(null, "", `${basePath}/chat?continue=${activeConversationId}`);
       onConversationCreated?.(activeConversationId);
@@ -1849,23 +1826,43 @@ export default function ChatPanel({
     <ToolsPicker tools={availableTools} skills={availableSkills} selection={toolsSelection} onSetEnabled={setEnabled} onSetAll={setAll} onOpen={loadToolsCatalog} loadState={toolsLoadState} disabled={isStreaming} />
   );
 
+  // A mode, not a stray button: do the task, or plan it first (Shift+Tab switches).
   const planToggle = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      aria-pressed={planMode}
-      onClick={() => setPlanMode((on) => !on)}
-      title="Plan first: research read-only, then review the plan before anything runs (Shift+Tab)"
-      className={cn(
-        "h-8 gap-1 rounded-md px-2 text-xs font-normal",
-        planMode ? "bg-accent-200 text-accent-on hover:bg-accent-200/80" : "text-muted-foreground hover:text-foreground",
-      )}
+    <div
+      role="radiogroup"
+      aria-label="Mode"
+      title="Plan first: research read-only, then review a plan before anything changes (Shift+Tab)"
+      className="flex shrink-0 rounded-lg bg-muted p-0.5 text-xs"
     >
-      <RiListCheck3 size={14} />
-      Plan
-    </Button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={!planMode}
+        onClick={() => setPlanMode(false)}
+        className={cn("h-7 rounded-md px-2.5 transition-colors", !planMode ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+      >
+        Do it
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={planMode}
+        onClick={() => setPlanMode(true)}
+        className={cn("flex h-7 items-center gap-1 rounded-md px-2.5 transition-colors", planMode ? "bg-brand-700 font-medium text-brand-50 shadow-sm" : "text-muted-foreground hover:text-foreground")}
+      >
+        <RiListCheck3 size={13} />
+        Plan first
+      </button>
+    </div>
   );
+  // While plan mode is on, the composer says what will happen.
+  const planBanner = planMode && !readOnly && (
+    <div role="status" className="mb-1.5 flex items-start gap-2 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2 text-[13px] leading-snug text-brand-700">
+      <RiListCheck3 size={15} className="mt-px shrink-0" />
+      <span><b className="font-semibold">Plan first.</b> Loma researches read-only, then shows you a plan with diagrams. Nothing changes until you approve it.</span>
+    </div>
+  );
+  const planPlaceholder = "What should Loma plan? It researches first and changes nothing";
 
   // Shared by the empty-state and in-conversation composers.
   const composerPickers = (
@@ -1985,7 +1982,8 @@ export default function ChatPanel({
                 onSelect={applyCommand}
                 onHover={setSlashIndex}
               />
-              <div className="relative flex flex-col bg-card border border-border rounded-2xl composer-shadow focus-within:border-input transition-colors">
+              {planBanner}
+              <div className={cn("relative flex flex-col bg-card border border-border rounded-2xl composer-shadow focus-within:border-input transition-colors", planMode && "border-brand-400 focus-within:border-brand-500")}>
                 <Textarea
                   ref={inputRef}
                   value={input}
@@ -1997,7 +1995,7 @@ export default function ChatPanel({
                     // message in view above the composer.
                     if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? "Type your next message..." : isMobile ? "Ask Loma anything..." : "What do you need to get done? Type / for commands"}
+                  placeholder={isStreaming ? "Type your next message..." : planMode ? planPlaceholder : isMobile ? "Ask Loma anything..." : "What do you need to get done? Type / for commands"}
                   rows={isMobile ? 1 : 2}
                   className="w-full bg-transparent px-4 md:px-5 pt-4 md:pt-5 pb-3 text-base md:text-[16px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden leading-relaxed border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0"
                   style={{ maxHeight: "200px" }}
@@ -2036,7 +2034,7 @@ export default function ChatPanel({
                       )}
                       size="icon-sm"
                     >
-                      <span className="sr-only">Send message</span>
+                      <span className="sr-only">{planMode ? "Make a plan" : "Send message"}</span>
                       <RiSendPlaneLine size={16} />
                     </Button>
                   </div>
@@ -2255,7 +2253,7 @@ export default function ChatPanel({
                             />
                           );
                         }
-                        const { text: displayText, pending } = withoutArtifactSource(
+                        const { text: displayText, pending, sections: planSectionsSoFar } = withoutArtifactSource(
                           item.content,
                           itemArtifacts,
                           isStreaming && i === items.length - 1,
@@ -2271,10 +2269,27 @@ export default function ChatPanel({
                               ) : (
                                 <TypingIndicator />
                               )}
-                              {pending && (
+                              {pending === "plan" && (
+                                <div role="status" className={cn("flex w-full max-w-[420px] flex-col gap-1.5 rounded-2xl border border-dashed border-brand-300 bg-brand-50 px-4 py-3", displayText && "mt-3")}>
+                                  <span className="text-[13px] font-semibold text-brand-700">Writing the plan</span>
+                                  {planSectionsSoFar.length === 0 ? (
+                                    <span className="flex items-center gap-2 text-[14px] text-muted-foreground">
+                                      <RiLoader4Line size={14} className="animate-spin text-brand-600" /> Summary
+                                    </span>
+                                  ) : planSectionsSoFar.map((name, n) => (
+                                    <span key={`${n}-${name}`} className="flex items-center gap-2 text-[14px]">
+                                      {n < planSectionsSoFar.length - 1
+                                        ? <RiCheckLine size={14} className="text-brand-600" />
+                                        : <RiLoader4Line size={14} className="animate-spin text-brand-600" />}
+                                      <span className={n < planSectionsSoFar.length - 1 ? "text-foreground" : "font-medium text-foreground"}>{name}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {pending === "design" && (
                                 <div className={cn("flex w-full max-w-[320px] items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-[12px] text-muted-foreground", displayText && "mt-3")}>
                                   <RiLoader4Line size={14} className="animate-spin text-brand-500" />
-                                  {pending === "plan" ? "Writing plan…" : "Designing…"}
+                                  Designing…
                                 </div>
                               )}
                               {/* Inline artifact cards */}
@@ -2374,9 +2389,11 @@ export default function ChatPanel({
                 onSelect={applyCommand}
                 onHover={setSlashIndex}
               />
+              {planBanner}
               <div className={cn(
                 "flex bg-card border border-border composer-shadow focus-within:border-input transition-colors",
                 isMobile ? "items-end gap-0.5 rounded-[26px] p-1" : "flex-col rounded-2xl",
+                planMode && "border-brand-400 focus-within:border-brand-500",
               )}>
                 {isMobile && conversationPlus}
                 <Textarea
@@ -2390,7 +2407,7 @@ export default function ChatPanel({
                     // message in view above the composer.
                     if (standalone || isMobile) scrollToBottom();
                   }}
-                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : "Ask anything, or type / for commands"}
+                  placeholder={isStreaming ? (queuedCount > 0 ? `${queuedCount} message${queuedCount > 1 ? "s" : ""} queued — type another or wait for agent` : (isMobile ? "Type a follow-up..." : "Type a follow-up while agent is working...")) : planMode ? planPlaceholder : "Ask anything, or type / for commands"}
                   rows={1}
                   className={cn(
                     "bg-transparent text-base md:text-[16px] text-foreground placeholder-muted-foreground focus:outline-none resize-none overflow-hidden border-0 focus-visible:ring-0 focus-visible:border-transparent rounded-none min-h-0",
@@ -2444,7 +2461,7 @@ export default function ChatPanel({
                         !input.trim() && pendingFiles.length === 0 && "max-md:hidden",
                       )}
                     >
-                      <span className="sr-only">Send message</span>
+                      <span className="sr-only">{planMode ? "Make a plan" : "Send message"}</span>
                       <RiSendPlaneLine size={16} />
                     </Button>
                   </div>

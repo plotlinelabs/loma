@@ -131,6 +131,9 @@ export default function ChatWithArtifacts({
         canAct: planState.canAct,
         onRevise: (plan, comments) => planControlRef.current?.revise(plan, comments),
         onApprove: (plan, notes) => planControlRef.current?.approve(plan, notes),
+        // The chat numbers every plan in it as the next version, as here.
+        versions: planState.plans,
+        onOpenVersion: (plan) => handleArtifactOpen(plan),
       }
     : undefined;
 

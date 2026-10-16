@@ -6,7 +6,8 @@ remote workers, deploy-queued runs) without new parameters. Claude runs also
 switch the SDK client into its own read-only ``plan`` permission mode.
 
 The plan reaches the dashboard as an artifact with language ``plan``: from a
-fenced ```plan block, or from Claude's ExitPlanMode tool call.
+fenced ````plan block (four backticks, so Mermaid fences inside survive), or
+from Claude's ExitPlanMode tool call.
 """
 
 import json
@@ -20,33 +21,49 @@ CLARIFY_FORMAT = (
     ':::'
 )
 
-# Section order follows the team's solution-document template, trimmed for a
-# plan reviewed in chat. Sections that don't apply are dropped, not padded.
+# The plan is read as a document in the dashboard: rendered Markdown, with
+# Mermaid diagrams drawn inline, an outline from the ## headings, and the
+# numbered Phases list used as the run's checklist once approved.
 PLAN_SECTIONS = """# <Title>
-**Summary:** 3-5 sentences: the problem, the proposed solution, and the outcome.
+
+**Summary:** 2-4 sentences: the problem, what you propose, and the outcome.
+**Size:** S, M or L, with a rough effort. **Risk:** low, medium or high, and why. **Touches:** the systems involved.
+
 ## Problem and goal
-## Scope
-Must have / Nice to have / Out of scope.
 ## Current state
-How it works today, only what the change touches.
+What you found, with evidence: file paths and functions, tables, dashboards, numbers.
 ## Proposed solution
-The high-level design: components, responsibilities, data flow and contracts
-between them. A short diagram (text) if it helps.
+An architecture diagram, then the components, their responsibilities and the contracts between them.
+## How it flows
+A sequence diagram of the main interaction, then any detail it can't show.
 ## Key decisions
-Each with the alternative considered and why it lost.
+| Decision | Chosen | Alternative | Why |
+## Phases
+1. **<Phase name>**: what ships, and how we'll know it works.
 ## Risks and edge cases
 | Risk | Likelihood | Impact | Mitigation |
 ## Rollout and verification
-Order of work, how it ships (flags, migrations, rollback), how we'll know it works.
-## Open questions"""
+## Open questions
+Each with your suggested answer."""
+
+DIAGRAM_RULES = """Diagrams are what make a plan reviewable at a glance; the dashboard draws
+Mermaid fenced blocks inline. Use them where they explain more than prose:
+- an architecture diagram (`flowchart LR`) whenever two or more components are involved;
+- a `sequenceDiagram` for the main interaction between components, services or people;
+- a `stateDiagram-v2` when something has a lifecycle, an `erDiagram` when data changes shape.
+Keep each to about 12 nodes with short labels. Quote labels that contain punctuation,
+e.g. A["Sync worker (existing)"], and keep # and ; out of labels (Mermaid reads them as code). Mark new parts with `classDef new fill:#E7F3EF,stroke:#055147`
+and `class X new`. Write diagrams as ```mermaid fenced blocks inside the plan."""
 
 PLAN_MODE_BLOCK = f"""{PLAN_MODE_MARKER}
 The user turned on plan mode for this message. Plan, do not act.
 
-Step 1. Understand the requirement. Research read-only as needed: read files,
-search, query, look things up. Do NOT change anything: no file edits, no
-state-changing commands, no messages, comments, tickets, deploys, or writes to
-any external system.
+Step 1. Research before you plan. Read the code, configs, docs, tickets and data
+that the change touches, read-only: read files, search, query, look things up.
+Do NOT change anything: no file edits, no state-changing commands, no messages,
+comments, tickets, deploys, or writes to any external system. Ground the plan in
+what you found; never invent files, APIs or numbers. If you couldn't verify
+something, say so under Open questions.
 
 Step 2. If anything that would change the plan is ambiguous or missing, ask
 before planning. Ask 1-4 focused questions with suggested answers, as a block
@@ -55,16 +72,21 @@ in exactly this format (valid JSON inside), then stop and wait:
 Don't ask about things you can find out yourself, and don't ask again once the
 answers are in the conversation. If nothing material is unclear, skip this step.
 
-Step 3. Write the plan as a high-level solution document, not a code change
-list: describe components, responsibilities, interfaces and data flow; avoid
-file-by-file edits, code snippets and line-level detail unless the user asks.
-Use this structure:
+Step 3. Write the plan as a high-level solution document a teammate can review
+in two minutes, not a code change list: components, responsibilities,
+interfaces and data flow. Avoid file-by-file edits and code snippets unless the
+user asks. Match depth to the ask: a small change gets the summary, approach and
+phases; a feature or system change gets the full document. Use this structure,
+dropping sections that don't apply rather than padding them:
 {PLAN_SECTIONS}
 
+{DIAGRAM_RULES}
+
 Present the plan by calling ExitPlanMode with it if you have that tool;
-otherwise write it as a single fenced code block with the language `plan`
-(no ``` fences inside it: indent any diagram by four spaces instead).
-When revising after feedback, present the full updated plan, not a diff.
+otherwise write it as one fenced block opened with FOUR backticks and the
+language `plan` (````plan) and closed with four backticks, so the ```mermaid
+blocks inside it stay intact. When revising after feedback, present the full
+updated plan, not a diff, and say in one line at the top what changed.
 After presenting the plan, stop. The user reviews it in the dashboard and
 either asks for changes or approves it, which ends plan mode."""
 
