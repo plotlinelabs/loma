@@ -15,15 +15,18 @@ import { basePath, fetchConversation, starTask, unstarTask, updateTask, type Cha
 import { AssigneeSelect, useBoardExtras } from "./boardExtras";
 import { StarButton } from "./TaskStar";
 
-/** Loads and renders one conversation inside the drawer. Keyed by
+/** Loads and renders one task's conversation (drawer and list pane). Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
-function DrawerConversation({
+export function TaskConversation({
   conversationId,
   onStreamComplete,
   readOnly = false,
   reloadToken = 0,
+  autoFocusComposer = true,
 }: {
   conversationId: string;
+  /** False in the list pane, where J/K/E drive the page until you reply. */
+  autoFocusComposer?: boolean;
   onStreamComplete?: (conversationId: string) => void;
   readOnly?: boolean;
   /** Bumped by the parent to re-fetch the conversation in place (e.g. voice
@@ -124,6 +127,7 @@ function DrawerConversation({
         draftStorageKey={`loma-task-draft-${conversationId}`}
         onStreamComplete={onStreamComplete}
         readOnly={readOnly}
+        autoFocusComposer={autoFocusComposer}
       />
     </div>
   );
@@ -278,7 +282,7 @@ export function TaskChatDrawer({
         </div>
         {assignError && <p className="border-b border-border px-4 py-1.5 text-xs text-destructive">{assignError}</p>}
         {task && (
-          <DrawerConversation
+          <TaskConversation
             key={task.conversation_id}
             conversationId={task.conversation_id}
             onStreamComplete={handleStreamComplete}
@@ -291,7 +295,14 @@ export function TaskChatDrawer({
   );
 }
 
-function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: (task: Task) => void }) {
+/** Click-to-rename task title. `Title` is the heading element: the drawer's
+ * SheetTitle (dialog-only), or a plain heading elsewhere. */
+export function EditableTaskTitle({ task, onTaskChange, Title = SheetTitle, className }: {
+  task: Task;
+  onTaskChange?: (task: Task) => void;
+  Title?: React.ElementType;
+  className?: string;
+}) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [title, setTitle] = useState(task.title || task.prompt || "New task");
 
@@ -336,13 +347,13 @@ function EditableTaskTitle({ task, onTaskChange }: { task: Task; onTaskChange?: 
               />
             ) : (
               <div className="flex min-w-0 items-center gap-1">
-                <SheetTitle
-                  className="min-w-0 truncate font-heading text-base font-semibold"
+                <Title
+                  className={className ?? "min-w-0 truncate font-heading text-base font-semibold"}
                   onClick={() => setEditingTitle(true)}
                   title="Click to rename"
                 >
                   {task ? task.title || task.prompt || "New task" : "Task"}
-                </SheetTitle>
+                </Title>
                 {task && (
                   <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground" onClick={() => setEditingTitle(true)} aria-label="Rename task">
                     <RiPencilLine size={14} />

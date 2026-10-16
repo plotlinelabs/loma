@@ -56,6 +56,7 @@ import { QuickAddTask } from "@/components/tasks/QuickAddTask";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { AddChatDialog } from "@/components/tasks/AddChatDialog";
 import { TaskChatDrawer } from "@/components/tasks/TaskChatDrawer";
+import { TaskTriageView } from "@/components/tasks/TaskTriageView";
 import { BoardSettingsDialog } from "@/components/tasks/BoardSettingsDialog";
 import { InstallHint } from "@/components/tasks/InstallHint";
 import { AgentAttention } from "@/components/tasks/AgentAttention";
@@ -86,6 +87,13 @@ const readCardView = (id: string): CardBoardView =>
   typeof window !== "undefined" && window.localStorage.getItem(CARD_VIEW_STORAGE_PREFIX + id) === "tasks"
     ? "tasks"
     : "cards";
+// Task boards on desktop: a triage list (default) or the kanban, per board.
+const LAYOUT_STORAGE_PREFIX = "loma-task-board-layout:";
+type TaskBoardLayout = "list" | "board";
+const readLayout = (id: string): TaskBoardLayout =>
+  typeof window !== "undefined" && window.localStorage.getItem(LAYOUT_STORAGE_PREFIX + id) === "board"
+    ? "board"
+    : "list";
 // Card boards: the open view and its (possibly unsaved) filters, per board.
 const VIEW_STORAGE_PREFIX = "loma-board-view:";
 
@@ -170,6 +178,15 @@ export default function TasksPage() {
     setCardView(view);
     window.localStorage.setItem(CARD_VIEW_STORAGE_PREFIX + boardId, view);
   };
+  const [layout, setLayout] = useState<TaskBoardLayout>(() => readLayout(boardId));
+  useEffect(() => { setLayout(readLayout(boardId)); }, [boardId]);
+  const changeLayout = (next: TaskBoardLayout) => {
+    setLayout(next);
+    try { window.localStorage.setItem(LAYOUT_STORAGE_PREFIX + boardId, next); } catch { /* private mode */ }
+  };
+  // List layout: the task to select in the right pane, and the one shown there.
+  const [triageSelect, setTriageSelect] = useState<string | null>(null);
+  const [triageOpen, setTriageOpen] = useState<Task | null>(null);
   // Shared boards: only show tasks (or cards holding tasks) assigned to me.
   const [assignedToMe, setAssignedToMe] = useState(false);
   // Card boards: field filters and saved views (named sets of filters).
@@ -378,8 +395,12 @@ export default function TasksPage() {
         board: boardId,
       });
       setBoard({ ...board, tasks: [task, ...board.tasks] });
-      setChatTask(task);
-      setChatDrawerOpen(true);
+      if (listLayout) {
+        setTriageSelect(task.conversation_id);
+      } else {
+        setChatTask(task);
+        setChatDrawerOpen(true);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not create task");
     } finally {
@@ -415,6 +436,8 @@ export default function TasksPage() {
   const readOnly = currentBoard?.role === "viewer";
   // Card board: columns hold cards (deals, candidates...) with tasks inside.
   const cardMode = !!currentBoard?.card_mode;
+  // Desktop task boards default to the triage list (components/tasks/TaskTriageView).
+  const listLayout = !cardMode && !isMobile && layout === "list";
   const liveCard = board?.cards?.find((c) => c.card_id === panelCard?.card_id) ?? panelCard;
   const canShare = !!currentBoard?.shared && currentBoard.role === "owner";
   const myEmail = session?.user?.email ?? null;
@@ -601,6 +624,24 @@ export default function TasksPage() {
   const viewOnlyBadge = readOnly && (
     <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">View only</span>
   );
+  const layoutToggle = !cardMode && !isMobile && (
+    <div role="group" aria-label="Board layout" className="inline-flex shrink-0 rounded-md bg-muted p-0.5">
+      {(["list", "board"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          aria-pressed={layout === option}
+          onClick={() => changeLayout(option)}
+          className={cn(
+            "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+            layout === option ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {option === "list" ? "List" : "Board"}
+        </button>
+      ))}
+    </div>
+  );
   const viewToggle = cardMode && (
     <div role="group" aria-label="Board view" className="inline-flex shrink-0 rounded-md bg-muted p-0.5">
       {(["cards", "tasks"] as const).map((view) => (
@@ -687,7 +728,7 @@ export default function TasksPage() {
           <h1 className="min-w-0">
             <span className="flex min-w-0 items-center gap-1.5 text-lg font-semibold">
               {boardEmoji && <span aria-hidden className="shrink-0 text-[18px] leading-none">{boardEmoji}</span>}
-              <span className="truncate">{currentBoard?.shared ? currentBoard.name : "Tasks"}</span>
+              <span className="truncate">{currentBoard?.shared ? currentBoard.name : "My tasks"}</span>
               {currentBoard?.shared && <RiTeamLine aria-label="Shared board" className="h-4 w-4 shrink-0 text-muted-foreground" />}
             </span>
           </h1>
@@ -696,6 +737,7 @@ export default function TasksPage() {
         </div>
         <div className="flex items-center gap-1">
           {viewToggle && <div className="mr-1">{viewToggle}</div>}
+          {layoutToggle && <div className="mr-1">{layoutToggle}</div>}
           {currentBoard?.shared && (
             <Button variant={assignedFilterOn ? "secondary" : "ghost"} size="sm" aria-pressed={assignedFilterOn}
               onClick={() => setAssignedToMe((on) => !on)}>
@@ -912,6 +954,33 @@ export default function TasksPage() {
             readOnly={readOnly}
             header={topBar}
             onLoadMoreDone={loadMoreDone}
+          />
+        ) : listLayout ? (
+          <TaskTriageView
+            board={board}
+            onBoardChange={setBoard}
+            onRefresh={refresh}
+            onError={setError}
+            includedTagIds={includedTagIds}
+            excludedTagIds={excludedTagIds}
+            readOnly={readOnly}
+            boardRole={currentBoard?.role}
+            onLoadMoreDone={loadMoreDone}
+            selectId={triageSelect}
+            onSelectedChange={setTriageOpen}
+            reloadToken={drawerReloadToken}
+            footer={!readOnly && (
+              <QuickAddTask
+                onAdded={refresh}
+                boardId={boardId}
+                drawerOpen={false}
+                onOpenTask={(task) => setTriageSelect(task.conversation_id)}
+                onCloseTask={() => null}
+                onTaskActivity={(conversationId) => {
+                  if (triageOpen?.conversation_id === conversationId) setDrawerReloadToken((n) => n + 1);
+                }}
+              />
+            )}
           />
         ) : (
           <>

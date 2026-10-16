@@ -91,6 +91,7 @@ export default function ChatWithArtifacts({
   onStreamComplete,
   draftStorageKey,
   readOnly,
+  autoFocusComposer,
 }: {
   initialItems?: ChatItem[];
   initialArtifacts?: Artifact[];
@@ -109,6 +110,8 @@ export default function ChatWithArtifacts({
   draftStorageKey?: string;
   /** Transcript only, no composer (see ChatPanel) */
   readOnly?: boolean;
+  /** Focus the composer on mount (default true). */
+  autoFocusComposer?: boolean;
 }) {
   // ── Artifact state ──────────────────────────────────────────────────────
   const [artifacts, setArtifacts] = useState<Artifact[]>(initialArtifacts || []);
@@ -228,6 +231,7 @@ export default function ChatWithArtifacts({
           onConversationCreated={onConversationCreated}
           onStreamComplete={onStreamComplete}
           readOnly={readOnly}
+          autoFocusComposer={autoFocusComposer}
           onPlanStateChange={setPlanState}
           planControlRef={planControlRef}
         />
