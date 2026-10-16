@@ -93,7 +93,8 @@ export function TaskCard({
         {dot && <span aria-hidden className={cn("mt-[7px] h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium leading-[21px]">
+            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium leading-[21px]"
+              title={task.title || task.prompt || undefined}>
               {task.title || task.prompt || "New task"}
             </div>
             {!isStar && <TaskAge task={task} />}
