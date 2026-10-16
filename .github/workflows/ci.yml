@@ -59,6 +59,9 @@ jobs:
       - name: Server time parsing (IST)
         run: npm run test:server-time
         working-directory: dashboard
+      - name: Chat export
+        run: npm run test:chat-export
+        working-directory: dashboard
       - name: Build
         run: npm run build
         working-directory: dashboard

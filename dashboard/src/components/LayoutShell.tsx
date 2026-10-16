@@ -6,6 +6,7 @@ import { signOut } from "next-auth/react";
 import Sidebar from "./Sidebar";
 import BottomNav from "./BottomNav";
 import QuickSwitcher from "./QuickSwitcher";
+import ShortcutsSheet from "./ShortcutsSheet";
 import CrosscutIcon from "./CrosscutIcon";
 import ViewportHeightSync from "./ViewportHeightSync";
 import { useUser } from "../lib/UserContext";
@@ -106,6 +107,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       </Suspense>
 
       <QuickSwitcher />
+      <ShortcutsSheet />
       <ViewportHeightSync />
       <MobileTopBar onMenu={toggleSidebar} />
 
