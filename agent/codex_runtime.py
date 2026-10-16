@@ -45,6 +45,7 @@ import time
 from pathlib import Path
 from typing import AsyncGenerator
 
+from agent.plan_mode import PLAN_MODE_MARKER
 from agent.run_processes import PROC_TAG_ENV, new_proc_tag
 
 logger = logging.getLogger(__name__)
@@ -519,8 +520,11 @@ class CodexWorker:
 
     # ── Turn streaming ───────────────────────────────────────────────
 
-    async def run_turn(self, prompt: str) -> AsyncGenerator[dict, None]:
-        """Send one user turn and yield normalized event dicts until completion."""
+    async def run_turn(self, prompt: str, *, read_only: bool = False) -> AsyncGenerator[dict, None]:
+        """Send one user turn and yield normalized event dicts until completion.
+
+        read_only (plan mode) sandboxes the turn's commands read-only. The policy
+        sticks to the thread's later turns, so every turn sets it."""
         if not self.thread_id:
             raise CodexError("Codex worker has no thread")
 
@@ -531,6 +535,7 @@ class CodexWorker:
                 "input": [{"type": "text", "text": prompt}],
                 # Reasoning summaries are what the chat shows as thinking.
                 "summary": codex_reasoning_summary(),
+                "sandboxPolicy": READ_ONLY_SANDBOX if read_only else FULL_ACCESS_SANDBOX,
             },
             timeout=60,
         )
@@ -636,6 +641,12 @@ def codex_reasoning_summary() -> str:
     """auto, concise or detailed; CODEX_REASONING_SUMMARY=none turns summaries off."""
     value = os.environ.get("CODEX_REASONING_SUMMARY", "auto")
     return value if value in ("auto", "concise", "detailed", "none") else "auto"
+
+
+# turn/start sandbox policies (app-server v2). Plan mode reads but can't write;
+# network stays on so research can still look things up.
+READ_ONLY_SANDBOX = {"type": "readOnly", "networkAccess": True}
+FULL_ACCESS_SANDBOX = {"type": "dangerFullAccess"}
 
 
 def _normalize_v2_event(msg: dict, thread_id: str | None) -> list[dict]:
@@ -908,7 +919,8 @@ async def run_codex_agent(
             logger.info("Stop requested before the Codex turn started; skipping turn")
             turn_events = _no_events()
         else:
-            turn_events = worker.run_turn(full_prompt)
+            turn_events = (worker.run_turn(full_prompt, read_only=True) if PLAN_MODE_MARKER in full_prompt
+                           else worker.run_turn(full_prompt))
         async for event in turn_events:
             etype = event.get("type")
 

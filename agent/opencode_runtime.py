@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from agent.plan_mode import PLAN_MODE_MARKER
 from agent.prompt import build_pooled_system_prompt
 from agent.run_processes import PROC_TAG_ENV, clock_ticks_now, kill_tagged, new_proc_tag
 
@@ -209,6 +210,10 @@ def _opencode_session_permission_rules() -> list[dict]:
         {"permission": "*", "pattern": "*", "action": "allow"},
         {"permission": "external_directory", "pattern": "*", "action": "allow"},
     ]
+
+
+# Added to a plan-mode session's rules: OpenCode's file-writing tools ask under "edit".
+PLAN_MODE_DENY_RULES = [{"permission": "edit", "pattern": "*", "action": "deny"}]
 
 
 def _opencode_blocked_tool_name(request: dict) -> str:
@@ -1333,9 +1338,15 @@ async def _run_opencode_agent(
     session_permission = (
         opencode_permission_rules(agent_scope, scope_mcp_names) if enforce_agent_scope else None
     )
+    # Plan mode is read-only: deny file edits outright (rules are last-match-wins).
+    # Shell commands stay allowed for research and are held by the instructions.
+    plan_mode = PLAN_MODE_MARKER in (full_prompt or "")
+    if plan_mode:
+        session_permission = [*(session_permission or _opencode_session_permission_rules()), *PLAN_MODE_DENY_RULES]
+    custom_permission = enforce_agent_scope or plan_mode
     scope_key = (
         "scope:" + _scope_hash({"tools": sorted(map(str, session_permission or []))})
-        if enforce_agent_scope else None
+        if custom_permission else None
     )
 
     session_cache_key = (
@@ -1345,7 +1356,7 @@ async def _run_opencode_agent(
     warm_session_used = False
     reused_session = bool(session_id)
     if not session_id:
-        session_id = None if enforce_agent_scope else await _checkout_warm_session(server, selected_model)
+        session_id = None if custom_permission else await _checkout_warm_session(server, selected_model)
         if session_id is None:
             session_id = await _create_session(
                 full_prompt[:80] or "Dashboard chat", base_url=base_url, permission=session_permission,

@@ -28,6 +28,7 @@ import MarkdownContent from "./MarkdownContent";
 import ArtifactCard from "./ArtifactCard";
 import { CopyButton } from "./CopyButton";
 import { isDeadRun } from "@/lib/server-time";
+import { withoutArtifactSource } from "@/lib/artifact-fences";
 import { SlashCommandHint, SlashCommandMenu, slashMatches } from "./composer/SlashCommandMenu";
 import { matchCommand, usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
@@ -350,61 +351,6 @@ function stampLatestAssistantDuration(items: ChatItem[], responseTimeSeconds: nu
 function removeTransientStatusItems(items: ChatItem[]): ChatItem[] {
   const filtered = items.filter((item) => item.role !== "status");
   return filtered.length === items.length ? items : filtered;
-}
-
-const FENCED_BLOCK_RE = /```(\w*)\n([\s\S]*?)```/g;
-const DESIGN_FENCE_LANGUAGES = new Set(["html", "svg", "jsx", "tsx"]);
-
-/** Mirrors the backend's promotion threshold (agent/client.py _detect_artifacts). */
-function isArtifactSized(body: string): boolean {
-  const content = body.trimEnd();
-  return content.length >= 200 || content.split("\n").length - 1 >= 8;
-}
-
-type PendingArtifact = "design" | "plan" | null;
-
-/** A block the backend will turn into an artifact card. */
-function pendingKind(lang: string, body: string): PendingArtifact {
-  const l = lang.toLowerCase();
-  if (l === "plan") return "plan";
-  return DESIGN_FENCE_LANGUAGES.has(l) && isArtifactSized(body) ? "design" : null;
-}
-
-/**
- * The backend sends a promoted code block twice: inside the message text and
- * as an artifact. Drop the copy from the text, since the card shows it. While
- * streaming, a design or plan block whose card hasn't arrived yet (unfinished,
- * or finished but ahead of its artifact event) is held back and reported as
- * `pending`, so raw source never scrolls past in the chat.
- */
-function withoutArtifactSource(
-  content: string,
-  artifacts: Artifact[],
-  streaming: boolean,
-): { text: string; pending: PendingArtifact } {
-  const bodies = new Set(artifacts.map((a) => a.content.trimEnd()));
-  let pending: PendingArtifact = null;
-  let text = content.replace(FENCED_BLOCK_RE, (block, lang: string, body: string) => {
-    if (bodies.has(body.trimEnd())) return "";
-    // The artifact event follows the full text, so a finished block is
-    // still unmatched for a moment: hold it back if it will be promoted.
-    const kind = streaming ? pendingKind(lang, body) : null;
-    if (kind) {
-      pending = kind;
-      return "";
-    }
-    return block;
-  });
-  if (streaming && (text.match(/```/g) || []).length % 2 === 1) {
-    const open = text.lastIndexOf("```");
-    const lang = text.slice(open + 3).split("\n", 1)[0].trim().toLowerCase();
-    if (lang === "plan" || DESIGN_FENCE_LANGUAGES.has(lang)) {
-      text = text.slice(0, open);
-      pending = lang === "plan" ? "plan" : "design";
-    }
-  }
-  if (text !== content) text = text.replace(/\n{3,}/g, "\n\n").trim();
-  return { text, pending };
 }
 
 /** Extract a :::clarify block from text content */

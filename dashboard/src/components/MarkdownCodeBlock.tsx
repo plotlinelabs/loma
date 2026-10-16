@@ -1,7 +1,8 @@
 "use client";
 
-import { useRef, type ComponentProps } from "react";
+import { isValidElement, useRef, type ComponentProps, type ReactElement } from "react";
 import { CopyButton } from "./CopyButton";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 /** react-markdown `pre` with a copy button, for documents and plans in the side panel. */
 export function CopyablePre(allProps: ComponentProps<"pre"> & { node?: unknown }) {
@@ -23,5 +24,17 @@ export function CopyablePre(allProps: ComponentProps<"pre"> & { node?: unknown }
   );
 }
 
-/** Pass as react-markdown `components` to give fenced code a copy button. */
-export const markdownComponents = { pre: CopyablePre };
+/** A ```mermaid block drawn as a diagram; any other block as copyable code. */
+export function DiagramOrPre(allProps: ComponentProps<"pre"> & { node?: unknown }) {
+  const child = Array.isArray(allProps.children) ? allProps.children[0] : allProps.children;
+  if (isValidElement(child)) {
+    const code = child as ReactElement<{ className?: string; children?: unknown }>;
+    if (/\blanguage-mermaid\b/.test(code.props.className ?? "")) {
+      return <MermaidDiagram source={String(code.props.children ?? "").replace(/\n$/, "")} />;
+    }
+  }
+  return <CopyablePre {...allProps} />;
+}
+
+/** Pass as react-markdown `components`: diagrams for Mermaid, a copy button for other code. */
+export const markdownComponents = { pre: DiagramOrPre };

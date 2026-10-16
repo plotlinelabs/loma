@@ -47,8 +47,30 @@ def test_other_tools_and_empty_plans_are_ignored():
 def test_plan_mode_asks_before_planning_and_plans_at_a_high_level():
     assert ":::clarify" in PLAN_MODE_BLOCK
     assert "high-level solution document" in PLAN_MODE_BLOCK
-    for section in ("## Scope", "## Proposed solution", "## Risks and edge cases", "## Rollout and verification"):
+    for section in ("## Current state", "## Proposed solution", "## How it flows", "## Key decisions",
+                    "## Phases", "## Risks and edge cases", "## Rollout and verification", "## Open questions"):
         assert section in PLAN_MODE_BLOCK
+
+
+def test_plan_mode_asks_for_evidence_and_diagrams_in_a_four_backtick_fence():
+    assert "never invent files" in PLAN_MODE_BLOCK
+    for kind in ("flowchart LR", "sequenceDiagram", "stateDiagram-v2", "erDiagram", "```mermaid"):
+        assert kind in PLAN_MODE_BLOCK
+    assert "````plan" in PLAN_MODE_BLOCK
+    assert "say in one line at the top what changed" in PLAN_MODE_BLOCK
+
+
+def test_four_backtick_plan_keeps_its_mermaid_diagrams():
+    plan = "# Alerts\n\n## How it flows\n```mermaid\nsequenceDiagram\n  A->>B: event\n```\n\n## Phases\n1. **One**: ship"
+    [artifact] = _detect_artifacts(f"Here's the plan.\n\n````plan\n{plan}\n````\n\nApprove when ready.")
+    assert artifact["language"] == "plan" and artifact["content"] == plan
+    assert artifact["title"] == "Alerts"
+
+
+def test_longer_fences_close_only_on_the_same_length():
+    text = "`````markdown\n" + "line\n" * 10 + "````\nstill inside\n`````\n"
+    [artifact] = _detect_artifacts(text)
+    assert artifact["content"].endswith("still inside")
 
 
 def test_ask_user_question_becomes_a_clarify_block():
