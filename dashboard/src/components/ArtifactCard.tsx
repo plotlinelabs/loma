@@ -3,6 +3,7 @@
 import { RiArrowRightSLine, RiListCheck3 } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { parsePlan } from "@/lib/plan-doc";
 import type { Artifact } from "./ArtifactViewer";
 import { PlanStatusDot, type PlanStatus } from "./PlanReview";
 import { CopyButton } from "./CopyButton";
@@ -182,28 +183,44 @@ function ArtifactCardBody({ artifact, isActive, onClick, planStatus }: ArtifactC
 
   if (artifact.language === "plan") {
     const status = planStatus ?? "pending";
-    // The first heading names the plan; the title is the generic fallback.
-    const heading = artifact.content.match(/^#+\s+(.+)$/m)?.[1]?.trim();
+    const doc = parsePlan(artifact.content);
+    const counts = [
+      doc.phases.length && `${doc.phases.length} ${doc.phases.length === 1 ? "phase" : "phases"}`,
+      doc.diagrams && `${doc.diagrams} ${doc.diagrams === 1 ? "diagram" : "diagrams"}`,
+    ].filter(Boolean) as string[];
     return (
       <button
         type="button"
         onClick={onClick}
         className={cn(
-          "group flex w-full max-w-[420px] items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors",
-          isActive ? "border-accent-300 bg-accent-50 shadow-sm" : "border-border bg-muted/50 hover:border-muted-foreground/30 hover:bg-muted",
+          "group flex w-full max-w-[460px] flex-col gap-2 rounded-2xl border bg-card px-4 py-3.5 text-left transition-colors",
+          status === "pending" ? "border-primary/70 shadow-sm" : "border-border",
+          isActive && "ring-2 ring-primary/20",
           status === "superseded" && "opacity-60",
         )}
       >
-        <RiListCheck3 size={18} className="shrink-0 text-muted-foreground" />
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-[13px] font-medium text-foreground">{heading || artifact.title}</span>
-          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <PlanStatusDot status={status} />
-            {status === "pending" ? "Awaiting your review" : status === "approved" ? "Approved" : "Superseded"} · v{artifact.version}
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <RiListCheck3 size={13} className="text-primary" />
+          Plan · v{artifact.version} ·
+          <PlanStatusDot status={status} />
+          {status === "pending" ? "Awaiting your review" : status === "approved" ? "Approved" : "Superseded"}
+        </span>
+        <span className="text-[15px] font-semibold leading-snug text-foreground">{doc.title !== "Plan" ? doc.title : artifact.title}</span>
+        {doc.summary && <span className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">{doc.summary}</span>}
+        <span className="flex flex-wrap items-center gap-1.5 text-[12px]">
+          {counts.map((count) => (
+            <span key={count} className="rounded-full bg-muted px-2 py-0.5 text-foreground/80">{count}</span>
+          ))}
+          {doc.questions.length > 0 && status === "pending" && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">
+              {doc.questions.length} {doc.questions.length === 1 ? "question" : "questions"} for you
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-0.5 font-medium text-foreground/80">
+            {status === "pending" ? "Review" : "Open"}
+            <RiArrowRightSLine size={16} className="text-muted-foreground/60 transition-transform group-hover:translate-x-0.5" />
           </span>
         </span>
-        {status === "pending" && <span className="shrink-0 text-[12px] font-medium text-foreground/80">Review</span>}
-        <RiArrowRightSLine size={16} className="shrink-0 text-muted-foreground/40 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
       </button>
     );
   }

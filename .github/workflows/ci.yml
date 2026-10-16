@@ -65,6 +65,9 @@ jobs:
       - name: Artifact fences
         run: npm run test:artifact-fences
         working-directory: dashboard
+      - name: Plan documents
+        run: npm run test:plan-doc
+        working-directory: dashboard
       - name: Build
         run: npm run build
         working-directory: dashboard

@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { Children, isValidElement, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RiChat3Line, RiCloseLine, RiPlayLine, RiRefreshLine } from "@remixicon/react";
+import { diffPlans, parsePlan, slug } from "@/lib/plan-doc";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,24 @@ export interface PlanActions {
   canAct: boolean;
   onRevise: (plan: Artifact, comments: PlanComment[]) => void;
   onApprove: (plan: Artifact, notes: PlanComment[]) => void;
+  /** Every version of this plan in the chat, oldest first, and how to open one. */
+  versions?: Artifact[];
+  onOpenVersion?: (plan: Artifact) => void;
 }
+
+/** Plain text of rendered heading children, for its id. */
+function textOf(children: ReactNode): string {
+  return Children.toArray(children).map((child) =>
+    typeof child === "string" || typeof child === "number" ? String(child)
+      : isValidElement<{ children?: ReactNode }>(child) ? textOf(child.props.children) : "",
+  ).join("");
+}
+
+/** Headings carry ids so the outline can jump to them. */
+const planComponents = {
+  ...markdownComponents,
+  h2: ({ children }: { children?: ReactNode }) => <h2 id={`plan-${slug(textOf(children))}`} className="scroll-mt-4">{children}</h2>,
+};
 
 const draftKey = (planId: string) => `loma.plan-comments.${planId}`;
 
@@ -126,18 +144,120 @@ export default function PlanReview({ plan, actions }: { plan: Artifact; actions?
     ? [...comments, { id: "note", quote: "", text: note.trim() }]
     : comments;
 
+  const doc = useMemo(() => parsePlan(plan.content), [plan.content]);
+  const versions = actions?.versions ?? [];
+  const index = versions.findIndex((v) => v.id === plan.id);
+  const previous = index > 0 ? versions[index - 1] : null;
+  const diff = useMemo(() => (previous ? diffPlans(previous.content, plan.content) : null), [previous, plan.content]);
+  const [showChanges, setShowChanges] = useState(false);
+  const jump = (id: string) => document.getElementById(`plan-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const chips = [
+    doc.size && { label: "Size", value: doc.size },
+    doc.risk && { label: "Risk", value: doc.risk },
+    doc.touches && { label: "Touches", value: doc.touches },
+  ].filter((chip): chip is { label: string; value: string } => !!chip);
+
   return (
     <div className="flex h-full flex-col">
-      <div ref={bodyRef} className="relative min-h-0 flex-1 overflow-y-auto p-3 md:p-6" onMouseUp={handleMouseUp}>
-        <div className="mx-auto mb-4 flex max-w-[72ch] items-center gap-2 text-[12px] text-muted-foreground">
+      <div ref={bodyRef} className="@container relative min-h-0 flex-1 overflow-y-auto p-3 md:p-6" onMouseUp={handleMouseUp}>
+        <div className="mx-auto flex max-w-[46rem] flex-wrap items-center gap-2 text-[12px] text-muted-foreground @5xl:max-w-[62rem]">
           <PlanStatusDot status={status} />
           <span>{STATUS_LABEL[status]}</span>
-          <span aria-hidden>·</span>
-          <span>v{plan.version}</span>
+          {versions.length > 1 ? (
+            <span role="group" aria-label="Plan versions" className="flex overflow-hidden rounded-md border border-border">
+              {versions.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  aria-pressed={v.id === plan.id}
+                  onClick={() => v.id !== plan.id && actions?.onOpenVersion?.(v)}
+                  className={cn("px-2 py-0.5 text-[12px]", v.id === plan.id ? "bg-foreground text-background" : "hover:bg-muted")}
+                >
+                  v{v.version}
+                </button>
+              ))}
+            </span>
+          ) : (
+            <span>v{plan.version}</span>
+          )}
+          {diff && (
+            <button
+              type="button"
+              aria-expanded={showChanges}
+              onClick={() => setShowChanges((on) => !on)}
+              className="rounded-md bg-muted px-2 py-0.5 text-[12px] text-foreground hover:bg-muted/70"
+            >
+              What changed in v{plan.version}
+            </button>
+          )}
           {reviewable && <span className="ml-auto hidden md:inline">Select text to comment</span>}
         </div>
-        <div className="prose prose-sm mx-auto max-w-[72ch] prose-code:before:content-none prose-code:after:content-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{plan.content}</ReactMarkdown>
+
+        {diff && showChanges && (
+          <div className="mx-auto mt-3 max-w-[46rem] space-y-1.5 rounded-lg border border-border bg-muted/40 p-3 text-[13px] @5xl:max-w-[62rem]">
+            {diff.note && <p className="text-foreground">{diff.note}</p>}
+            {[["Edited", diff.changed], ["Added", diff.added], ["Removed", diff.removed]].map(([label, names]) =>
+              (names as string[]).length ? (
+                <p key={label as string} className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-muted-foreground">{label as string}:</span>
+                  {(names as string[]).map((name) => (
+                    <button key={name} type="button" onClick={() => jump(slug(name))} className="rounded bg-background px-1.5 py-0.5 hover:underline">{name}</button>
+                  ))}
+                </p>
+              ) : null,
+            )}
+            {!diff.note && !diff.changed.length && !diff.added.length && !diff.removed.length && (
+              <p className="text-muted-foreground">Only wording changed.</p>
+            )}
+          </div>
+        )}
+
+        <header className="mx-auto mt-4 max-w-[46rem] space-y-3 @5xl:max-w-[62rem]">
+          <h1 className="text-[24px] font-semibold leading-tight text-foreground">{doc.title}</h1>
+          {doc.summary && <p className="text-[15px] leading-relaxed text-foreground/85">{doc.summary}</p>}
+          {(chips.length > 0 || doc.questions.length > 0) && (
+            <div className="flex flex-wrap gap-1.5 text-[12px]">
+              {chips.map((chip) => (
+                <span key={chip.label} className="rounded-full bg-muted px-2.5 py-1 text-foreground/80">
+                  <span className="text-muted-foreground">{chip.label}:</span> {chip.value}
+                </span>
+              ))}
+              {doc.questions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => jump(slug(doc.sections.find((sec) => /question/i.test(sec.heading))?.heading ?? ""))}
+                  className="rounded-full bg-amber-100 px-2.5 py-1 text-amber-900 hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-200"
+                >
+                  {doc.questions.length} {doc.questions.length === 1 ? "question" : "questions"} for you
+                </button>
+              )}
+            </div>
+          )}
+          {doc.sections.length > 2 && (
+            <nav aria-label="On this plan" className="flex flex-wrap gap-1.5 @5xl:hidden">
+              {doc.sections.map((sec) => (
+                <button key={sec.id} type="button" onClick={() => jump(sec.id)} className="rounded-md border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:text-foreground">
+                  {sec.heading}
+                </button>
+              ))}
+            </nav>
+          )}
+        </header>
+
+        <div className="mx-auto mt-4 flex max-w-[46rem] gap-8 @5xl:max-w-[62rem]">
+          {doc.sections.length > 2 && (
+            <nav aria-label="On this plan" className="sticky top-0 hidden h-fit w-44 shrink-0 space-y-1 pt-2 text-[13px] @5xl:block">
+              <div className="pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">On this plan</div>
+              {doc.sections.map((sec) => (
+                <button key={sec.id} type="button" onClick={() => jump(sec.id)} className="block w-full truncate text-left text-muted-foreground hover:text-foreground">
+                  {sec.heading}
+                </button>
+              ))}
+            </nav>
+          )}
+          <div className="prose prose-sm min-w-0 flex-1 prose-code:before:content-none prose-code:after:content-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={planComponents}>{doc.body}</ReactMarkdown>
+          </div>
         </div>
 
         {selection && draftQuote === null && (
@@ -159,7 +279,7 @@ export default function PlanReview({ plan, actions }: { plan: Artifact; actions?
         )}
 
         {comments.length > 0 && (
-          <div className="mx-auto mt-6 max-w-[72ch] space-y-2">
+          <div className="mx-auto mt-6 max-w-[46rem] space-y-2">
             <div className="text-[11px] uppercase tracking-wider text-muted-foreground">Your comments</div>
             {comments.map((c) => (
               <div key={c.id} className="group/comment flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2 text-[13px]">
@@ -241,7 +361,7 @@ export default function PlanReview({ plan, actions }: { plan: Artifact; actions?
               }}
             >
               <RiRefreshLine size={14} />
-              Revise{pending.length ? ` (${pending.length})` : ""}
+              Request changes{pending.length ? ` (${pending.length})` : ""}
             </Button>
             <Button
               type="button"
@@ -254,7 +374,7 @@ export default function PlanReview({ plan, actions }: { plan: Artifact; actions?
               }}
             >
               <RiPlayLine size={14} />
-              Approve &amp; run
+              Approve and build
             </Button>
           </div>
         </div>
