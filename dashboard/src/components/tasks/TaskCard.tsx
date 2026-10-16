@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
 import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot } from "./taskDisplay";
-import { TaskAge, TaskSummary, WaitingChip } from "./TaskCardParts";
+import { TaskAge, TaskPrChips, TaskSummary, WaitingChip } from "./TaskCardParts";
 import { isStoppedColumn } from "./transitions";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
@@ -68,7 +68,8 @@ export function TaskCard({
   const assignedTags = tags.filter((tag) => (task.task_tag_ids || []).includes(tag.id));
   // Chips only for what is set: no empty "Priority" placeholders.
   const hasChips = (task.starred && !isStar) || (!!task.waiting_reason && task.waiting_reason !== "finished")
-    || !!task.task_priority || !!task.task_deadline || assignedTags.length > 0 || !!task.assignee;
+    || !!task.task_priority || !!task.task_deadline || assignedTags.length > 0 || !!task.assignee
+    || !!task.pull_requests?.length;
   return (
     <div
       ref={setNodeRef}
@@ -102,6 +103,7 @@ export function TaskCard({
             <div className="mt-2 flex flex-wrap items-center gap-1.5 pr-16">
               {task.starred && !isStar && <RiStarFill aria-label="Starred" className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
               <WaitingChip task={task} />
+              <TaskPrChips task={task} />
               {/* On a starred card this is your own priority, not the shared task's. */}
               <TaskPriorityTag task={task} onSetPriority={onSetPriority} />
               <TaskDeadlineBadge task={task} />

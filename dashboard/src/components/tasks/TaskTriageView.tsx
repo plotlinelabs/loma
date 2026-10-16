@@ -17,7 +17,7 @@ import { useAgentModels } from "@/hooks/useAgentModels";
 import { cn } from "@/lib/utils";
 import { AssigneeBadge, AssigneeSelect, useBoardExtras } from "./boardExtras";
 import { EditableTaskTitle, TaskConversation } from "./TaskChatDrawer";
-import { TaskAge, TaskSummary, WaitingChip } from "./TaskCardParts";
+import { TaskAge, TaskPrChips, TaskSummary, WaitingChip } from "./TaskCardParts";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
 import { PriorityMenuItems } from "./TaskPriority";
@@ -285,9 +285,10 @@ function TriageRow({ task, me, selected, onSelect, onStart }: {
             <TaskAge task={task} />
           </span>
           <TaskSummary task={task} className="line-clamp-1" />
-          {(blocked || priority || deadline || task.assignee) && (
+          {(blocked || priority || deadline || task.assignee || !!task.pull_requests?.length) && (
             <span className="mt-1 flex flex-wrap items-center gap-1.5">
               <WaitingChip task={task} />
+              <TaskPrChips task={task} insideButton />
               {priority && <span className="rounded-md bg-muted px-2 py-0.5 text-xs leading-5 text-muted-foreground">{priority.symbol} {priority.label}</span>}
               <TaskDeadlineBadge task={task} />
               {task.assignee && <AssigneeBadge email={task.assignee} me={me} />}
@@ -459,6 +460,7 @@ function TaskPane({
             </button>
           ) : null}
           {!task.human_task && !!task.task_board_id && <StarButton task={task} onToggle={(t) => void toggleStar(t)} className="h-8 w-8" iconClassName="h-4 w-4" />}
+          <TaskPrChips task={task} max={6} />
           {!readOnly && (
             <a href={`${basePath}/chat?continue=${task.conversation_id}`} target="_blank" rel="noopener noreferrer"
               className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] text-muted-foreground hover:bg-muted/60 hover:text-foreground">

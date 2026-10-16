@@ -59,6 +59,7 @@ from agent.prompt import get_prompt_setting
 from api.auth_helpers import get_system_role, get_user_email
 from api.drain import DRAIN_MESSAGE, is_draining
 from api.task_attention import NEEDS_YOU_REASONS, needs_you_filter, waiting_reason
+from api.task_prs import REPLY_PR_MATCHES_PROJECTION, task_prs_view
 from api.task_summary import REPLY_HEAD_CHARS, step_label, task_summary
 
 logger = logging.getLogger(__name__)
@@ -690,6 +691,8 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         # each run uses the accounts of whoever sent the message.
         "owner": (task.get("metadata") or {}).get("user_name") or None,
         "assignee": task.get("task_assignee") or None,
+        # PRs the task opened or linked in its reply (api/task_prs.py).
+        "pull_requests": task_prs_view(task),
     }
 
 
@@ -716,6 +719,8 @@ _TASK_PROJECTION = {
     "task_card_id": 1,
     "task_assignee": 1,
     "metadata.user_name": 1,
+    "task_prs": 1,
+    "reply_pr_matches": REPLY_PR_MATCHES_PROJECTION,
 }
 
 # Done is the only column that grows without bound, so it is the only one we

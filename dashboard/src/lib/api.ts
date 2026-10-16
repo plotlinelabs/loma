@@ -1198,6 +1198,13 @@ export type TaskWaitingReason =
 export const NEEDS_YOU_REASONS: readonly TaskWaitingReason[] =
   ["question", "plan", "approval", "information", "failed", "stopped"];
 
+export interface TaskPullRequest {
+  /** "owner/repo" */
+  repo: string;
+  number: number;
+  url: string;
+}
+
 export interface Task {
   human_task?: HumanTask;
   tool_config?: ToolConfig | null;
@@ -1238,6 +1245,8 @@ export interface Task {
   owner?: string | null;
   /** Shared boards: the owner/editor this task is assigned to. Each run uses the sender's accounts. */
   assignee?: string | null;
+  /** GitHub PRs the task opened or linked in its reply, oldest first. */
+  pull_requests?: TaskPullRequest[];
   /** Shared boards: you starred this task. Private: nobody else sees it. */
   starred?: boolean;
   /** Your own board only: this card is a task you starred on a shared board. */

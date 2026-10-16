@@ -9,7 +9,7 @@ import { RiStackLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import type { Task, TaskCardItem, TasksBoardResponse } from "@/lib/api";
 import { priorityDisplay, taskDot } from "./taskDisplay";
-import { TaskAge, TaskSummary, WaitingChip } from "./TaskCardParts";
+import { TaskAge, TaskPrChips, TaskSummary, WaitingChip } from "./TaskCardParts";
 import { TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
 import { StarButton } from "./TaskStar";
@@ -130,6 +130,7 @@ function TaskRow({ task, card, onOpenTask, onOpenCard, onToggleStar, me, draggab
           )}
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
             <WaitingChip task={task} />
+            <TaskPrChips task={task} />
             {priority && (
               <span className="rounded-md bg-muted px-2 py-0.5">{priority.symbol} {priority.label}</span>
             )}

@@ -54,6 +54,8 @@ class ConversationObserver:
         # Set when this run asks a question or proposes a plan; stored on
         # finish so the board files the task under Needs you (api/task_attention.py).
         self._needs_you_reason: str | None = None
+        # tool_use_ids of PR-opening calls; their result links the PR to the task.
+        self._pr_create_calls: set[str] = set()
 
     async def start(self):
         """Insert initial conversation document with status='running'."""
@@ -222,6 +224,9 @@ class ConversationObserver:
             "tool_name": tool_name,
             "input": input_str[:500],
         })
+        from api.task_prs import is_pr_create_call
+        if is_pr_create_call(tool_name, input_str):
+            self._pr_create_calls.add(tool_use_id)
 
     async def record_artifact(self, artifact_data: dict):
         """Persist an artifact (code or file) to the artifacts collection.
@@ -277,6 +282,12 @@ class ConversationObserver:
             )
         except Exception as e:
             logger.warning("Observability: failed to record tool result: %s", e)
+
+        if tool_use_id in self._pr_create_calls:
+            self._pr_create_calls.discard(tool_use_id)
+            if not is_error:
+                from api.task_prs import extract_prs
+                await self._add_task_prs(extract_prs(output))
 
         # Add to in-memory data (attach to last turn)
         if self._turns_data:
@@ -449,6 +460,10 @@ class ConversationObserver:
                 update_fields["task_summary"] = summary
             else:
                 update["$unset"]["task_summary"] = ""
+            from api.task_prs import extract_prs
+            reply_prs = extract_prs(final_response)
+            if reply_prs:
+                update["$addToSet"] = {"task_prs": {"$each": reply_prs}}
             if final_response:
                 update["$push"] = {"messages": {
                     "role": "assistant",
@@ -476,6 +491,18 @@ class ConversationObserver:
         # Board tasks: notify the owner that the agent awaits their input
         from observability.push import fire_task_push
         fire_task_push(self.db, self.conversation_id)
+
+    async def _add_task_prs(self, prs: list[dict]):
+        """Link PRs to this conversation so the task board shows them as chips."""
+        if not prs:
+            return
+        try:
+            await self.db.conversations.update_one(
+                {"conversation_id": self.conversation_id},
+                {"$addToSet": {"task_prs": {"$each": prs}}},
+            )
+        except Exception as e:
+            logger.warning("Observability: failed to record task PRs: %s", e)
 
     async def record_injected_message(self, content: str):
         """Record a user message injected mid-stream."""

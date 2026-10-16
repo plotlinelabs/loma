@@ -14,6 +14,7 @@ import type { Artifact } from "@/components/ArtifactViewer";
 import { basePath, fetchConversation, starTask, unstarTask, updateTask, type ChatFile, type Task } from "@/lib/api";
 import { AssigneeSelect, useBoardExtras } from "./boardExtras";
 import { StarButton } from "./TaskStar";
+import { TaskPrChips } from "./TaskCardParts";
 
 /** Loads and renders one task's conversation (drawer and list pane). Keyed by
  * conversation_id from the parent so switching tasks resets all state. */
@@ -248,6 +249,7 @@ export function TaskChatDrawer({
               onTaskChange={onTaskChange}
             />
           )}
+          {task && !task.human_task && <TaskPrChips task={task} max={4} className="shrink-0 flex-nowrap" />}
           {task && readOnly && task.owner && (
             <span className="shrink-0 truncate text-xs text-muted-foreground"
               title="You have view-only access to this board, so you can read this task but not message it">by {task.owner}</span>
