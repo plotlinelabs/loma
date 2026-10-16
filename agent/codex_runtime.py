@@ -529,6 +529,8 @@ class CodexWorker:
             {
                 "threadId": self.thread_id,
                 "input": [{"type": "text", "text": prompt}],
+                # Reasoning summaries are what the chat shows as thinking.
+                "summary": codex_reasoning_summary(),
             },
             timeout=60,
         )
@@ -630,6 +632,12 @@ def _item_text(item: dict) -> str:
     return ""
 
 
+def codex_reasoning_summary() -> str:
+    """auto, concise or detailed; CODEX_REASONING_SUMMARY=none turns summaries off."""
+    value = os.environ.get("CODEX_REASONING_SUMMARY", "auto")
+    return value if value in ("auto", "concise", "detailed", "none") else "auto"
+
+
 def _normalize_v2_event(msg: dict, thread_id: str | None) -> list[dict]:
     """Translate app-server v2 notifications into the internal event contract.
 
@@ -649,6 +657,14 @@ def _normalize_v2_event(msg: dict, thread_id: str | None) -> list[dict]:
         delta = params.get("delta") or params.get("text") or ""
         return [{"type": "agent_message_delta", "delta": delta}] if delta else []
 
+    if method == "item/reasoning/summaryTextDelta":
+        delta = params.get("delta") or ""
+        return [{"type": "reasoning_delta", "item_id": params.get("itemId") or "", "delta": delta}] if delta else []
+
+    if method == "item/reasoning/summaryPartAdded":
+        return [{"type": "reasoning_part", "item_id": params.get("itemId") or "",
+                 "index": params.get("summaryIndex") or 0}]
+
     if method in ("item/started", "item/completed"):
         item = params.get("item") or {}
         itype = item.get("type") or ""
@@ -667,6 +683,11 @@ def _normalize_v2_event(msg: dict, thread_id: str | None) -> list[dict]:
                          "query": item.get("query")}]
             return []
         # item/completed
+        if itype == "reasoning":
+            parts = [p for p in (item.get("summary") or []) if isinstance(p, str) and p.strip()]
+            if not parts:
+                parts = [p for p in (item.get("content") or []) if isinstance(p, str) and p.strip()]
+            return [{"type": "reasoning", "item_id": call_id, "text": "\n\n".join(parts)}] if parts else []
         if itype == "agentMessage":
             text = _item_text(item)
             return [{"type": "agent_message", "message": text}] if text else []
@@ -843,6 +864,8 @@ async def run_codex_agent(
 
     last_text = ""
     streamed_text = ""
+    # Reasoning summary text streamed so far, per reasoning item.
+    streamed_reasoning: dict[str, str] = {}
     emitted_artifact_ids: set[str] = set()
     emitted_file_paths: set[str] = set()
     total_usage = {"input_tokens": 0, "output_tokens": 0,
@@ -894,6 +917,28 @@ async def run_codex_agent(
                 if delta:
                     streamed_text += delta
                     yield {"type": "text", "text": delta, "append": True}
+
+            elif etype in ("reasoning_delta", "reasoning_part"):
+                item_id = event.get("item_id") or ""
+                if etype == "reasoning_part":
+                    # A new summary paragraph within the same thought.
+                    if item_id in streamed_reasoning and event.get("index"):
+                        streamed_reasoning[item_id] += "\n\n"
+                        if include_steps:
+                            yield {"type": "thinking", "text": "\n\n", "append": True}
+                    continue
+                delta = event.get("delta") or ""
+                started = item_id in streamed_reasoning
+                streamed_reasoning[item_id] = streamed_reasoning.get(item_id, "") + delta
+                if include_steps:
+                    yield {"type": "thinking", "text": delta, "append": started}
+
+            elif etype == "reasoning":
+                text = event.get("text") or ""
+                if observer:
+                    await observer.record_thinking(turn_count, text)
+                if include_steps and event.get("item_id", "") not in streamed_reasoning:
+                    yield {"type": "thinking", "text": text, "append": False}
 
             elif etype == "agent_message":
                 message = event.get("message") or ""

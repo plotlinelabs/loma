@@ -85,6 +85,8 @@ export interface Turn {
   timestamp: string;
   message_type: string;
   text_blocks?: Array<{ text: string; _truncated?: boolean }>;
+  /** The model's (summarized) thinking during this turn. */
+  thinking_blocks?: Array<{ text: string; _truncated?: boolean }>;
   tool_calls?: Array<{
     tool_name: string;
     tool_use_id: string;
@@ -977,6 +979,8 @@ export interface ClarifyQuestion {
 
 export type ChatEvent =
   | { type: "text"; text: string; append?: boolean }
+  /** The model's thinking; append continues the current thought, else a new one starts. */
+  | { type: "thinking"; text: string; append?: boolean }
   | { type: "status"; message: string; elapsed_seconds?: number }
   | { type: "tool_call"; name: string; tool_use_id: string; input?: string }
   | { type: "tool_result"; tool_use_id: string; is_error: boolean }

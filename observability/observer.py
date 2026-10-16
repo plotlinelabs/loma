@@ -190,6 +190,30 @@ class ConversationObserver:
         self._ensure_turn(turn_number)
         self._turns_data[turn_number - 1].setdefault("text_blocks", []).append({"text": text[:2000]})
 
+    async def record_thinking(self, turn_number: int, text: str):
+        """Record the model's (summarized) thinking for a turn, shown collapsed in the chat."""
+        text = (text or "").strip()
+        if not text:
+            return
+        turn_number = turn_number + self.turn_offset
+        truncated_text, was_truncated = _truncate(text)
+        try:
+            await self.db.turns.update_one(
+                {"conversation_id": self.conversation_id, "turn_number": turn_number},
+                {
+                    "$setOnInsert": {
+                        "conversation_id": self.conversation_id,
+                        "turn_number": turn_number,
+                        "timestamp": datetime.now(timezone.utc),
+                        "message_type": "assistant",
+                    },
+                    "$push": {"thinking_blocks": {"text": truncated_text, "_truncated": was_truncated}},
+                },
+                upsert=True,
+            )
+        except Exception as e:
+            logger.warning("Observability: failed to record thinking: %s", e)
+
     async def record_tool_call(self, turn_number: int, tool_name: str, tool_use_id: str, input_data):
         """Record a tool call for a given turn."""
         turn_number = turn_number + self.turn_offset

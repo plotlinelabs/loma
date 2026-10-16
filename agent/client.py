@@ -27,6 +27,7 @@ from claude_agent_sdk import (
     TaskUpdatedMessage,
     TERMINAL_TASK_STATUSES,
     TextBlock,
+    ThinkingBlock,
     ToolUseBlock,
     ToolResultBlock,
     UserMessage,
@@ -1308,6 +1309,9 @@ async def _stream_agent(
 
             streamed_in_turn = False
             streamed_first_chunk = False
+            # Thinking streamed live this turn; a new block starts a new thought.
+            streamed_thinking_in_turn = False
+            thinking_block_open = False
             # True after the final ResultMessage when Agent sub-agent results
             # are still pending: the stream stays open only to collect them.
             awaiting_subagents = False
@@ -1361,9 +1365,18 @@ async def _stream_agent(
 
                 if isinstance(message, StreamEvent) and include_steps:
                     evt = message.event
-                    if evt.get("type") == "content_block_delta":
+                    if evt.get("type") == "content_block_start":
+                        if (evt.get("content_block") or {}).get("type") == "thinking":
+                            thinking_block_open = False
+                    elif evt.get("type") == "content_block_delta":
                         delta = evt.get("delta", {})
-                        if delta.get("type") == "text_delta":
+                        if delta.get("type") == "thinking_delta":
+                            chunk = delta.get("thinking", "")
+                            if chunk:
+                                yield {"type": "thinking", "text": chunk, "append": thinking_block_open}
+                                thinking_block_open = True
+                                streamed_thinking_in_turn = True
+                        elif delta.get("type") == "text_delta":
                             chunk = delta.get("text", "")
                             if chunk:
                                 if not streamed_first_chunk:
@@ -1406,8 +1419,19 @@ async def _stream_agent(
                     text_already_streamed = streamed_in_turn
                     streamed_in_turn = False
                     streamed_first_chunk = False
+                    thinking_already_streamed = streamed_thinking_in_turn
+                    streamed_thinking_in_turn = False
+                    thinking_block_open = False
 
                     for block in message.content:
+                        if isinstance(block, ThinkingBlock):
+                            # Summarized thinking (empty when the model omits it).
+                            if block.thinking.strip():
+                                if observer:
+                                    await observer.record_thinking(turn_count, block.thinking)
+                                if include_steps and not thinking_already_streamed:
+                                    yield {"type": "thinking", "text": block.thinking, "append": False}
+                            continue
                         if isinstance(block, TextBlock):
                             text = block.text.strip()
                             logger.info("[TEXT] %.300s%s", text, "..." if len(text) > 300 else "")
