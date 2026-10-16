@@ -795,7 +795,7 @@ export default function TasksPage() {
                   ? "Notifications blocked in browser settings"
                   : pushState === "subscribed"
                     ? "Notifications on"
-                    : "Notify me when a task needs input"}
+                    : "Notify me when a task needs me or finishes"}
               </TooltipContent>
             </Tooltip>
           )}

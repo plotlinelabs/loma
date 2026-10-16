@@ -17,8 +17,9 @@ starred, and moving or ticking off the starred card never changes the shared
 board. It is only for organizing your own work: the card still opens the real
 chat, and who can message it follows the task's board as usual.
 
-While the real task is running or waiting for a reply on its board, the
-starred card follows it into Working / Needs input on your board too; once
+While the real task is running, waiting on someone or waiting for review on
+its board, the starred card follows it into Running / Needs you / Ready to
+review on your board too; once
 the task is done, staged or parked there, the card goes back to your lane.
 Ticking the star off as done always wins.
 
@@ -41,7 +42,7 @@ from api import task_routes
 MAX_STARS_PER_USER = 500
 
 # Real-task columns a starred card mirrors on your board.
-LIVE_COLUMNS = ("working", "needs_input")
+LIVE_COLUMNS = ("working", "needs_input", "review")
 
 
 def _live_signature(view: dict, task: dict) -> dict:

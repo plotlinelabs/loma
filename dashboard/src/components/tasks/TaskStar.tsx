@@ -37,8 +37,9 @@ export function StarButton({ task, onToggle, className, iconClassName = "h-3.5 w
 export function starStatus(task: Task): { text: string; className: string } | null {
   switch (task.star?.source_column) {
     case "working": return { text: "Running", className: "bg-blue-500/10 text-blue-600 dark:text-blue-400" };
-    case "needs_input": return { text: "Needs input", className: "bg-amber-500/10 text-amber-700 dark:text-amber-400" };
-    case "done": return { text: "Done on board", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" };
+    case "needs_input": return { text: "Needs you", className: "bg-amber-500/10 text-amber-700 dark:text-amber-400" };
+    case "review": return { text: "Ready to review", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" };
+    case "done": return { text: "Done on board", className: "bg-muted text-muted-foreground" };
     default: return null;
   }
 }

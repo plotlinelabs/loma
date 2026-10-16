@@ -19,9 +19,10 @@ import { useTaskBoardActions } from "./useTaskBoardActions";
 
 /** Status groups of the Tasks view, in board order. */
 export const TASK_GROUPS = [
-  { id: "pending", name: "Pending" },
-  { id: "in_progress", name: "In progress" },
-  { id: "needs_input", name: "Needs input" },
+  { id: "pending", name: "Up next" },
+  { id: "in_progress", name: "Running" },
+  { id: "needs_input", name: "Needs you" },
+  { id: "review", name: "Ready to review" },
   { id: "done", name: "Done" },
 ] as const;
 
@@ -32,6 +33,7 @@ export type TaskGroupId = (typeof TASK_GROUPS)[number]["id"];
 export function taskGroup(task: Task): TaskGroupId {
   if (task.column === "working") return "in_progress";
   if (task.column === "needs_input") return "needs_input";
+  if (task.column === "review") return "review";
   if (task.column === "done") return "done";
   return "pending";
 }
@@ -50,13 +52,13 @@ function targetColumn(task: Task, group: TaskGroupId, laneIds: string[]): string
 /** Whether a task can be dropped on a group. Same rules as the classic board
  * (see transitions.ts), plus the two card-board specifics the backend allows:
  * a card task can be ticked done without a run, and only a task that has run
- * can go back to Needs input. */
+ * can be reopened. */
 export function canDropOnGroup(task: Task, group: TaskGroupId, laneIds: string[]): boolean {
   if (task.human_task || taskGroup(task) === group) return false;
   const to = targetColumn(task, group, laneIds);
   if (!to) return false;
   if (to === "done" && task.task_card_id) return true;
-  if (to === "needs_input" && !task.status) return false;
+  if ((to === "needs_input" || to === "review") && !task.status) return false;
   return canMove(task, task.column, to, laneIds);
 }
 
@@ -150,8 +152,8 @@ export function CardTasksView({
     board, onBoardChange, onRefresh, onError, onEditDraft: () => {}, onOpenChat: onOpenTask,
   });
 
-  // Dragging a task between groups changes its status, e.g. Needs input ->
-  // Pending parks it (it stops counting as needing input until someone replies).
+  // Dragging a task between groups changes its status, e.g. Needs you ->
+  // Up next parks it (it stops counting as needing you until someone replies).
   const handleDragEnd = ({ over }: DragEndEvent) => {
     const task = activeTask;
     setActiveTask(null);
@@ -159,7 +161,7 @@ export function CardTasksView({
     const group = String(over.id) as TaskGroupId;
     if (!canDropOnGroup(task, group, laneIds)) return;
     if (group === "done") void markDone(task);
-    else if (group === "needs_input") void reopen(task);
+    else if (group === "needs_input" || group === "review") void reopen(task);
     else if (group === "pending") void moveToLane(task, targetColumn(task, group, laneIds)!);
   };
 
@@ -180,7 +182,7 @@ export function CardTasksView({
     }
   }
 
-  const groups: Record<TaskGroupId, Task[]> = { pending: [], in_progress: [], needs_input: [], done: [] };
+  const groups: Record<TaskGroupId, Task[]> = { pending: [], in_progress: [], needs_input: [], review: [], done: [] };
   for (const task of board.tasks) {
     if (assignedToMe && task.assignee !== myEmail) continue;
     if (task.task_card_id && hiddenCards.has(task.task_card_id)) continue;

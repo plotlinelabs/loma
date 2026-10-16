@@ -492,7 +492,10 @@ async def test_list_boards_counts_tasks_waiting_on_caller(monkeypatch):
     boards = json.loads(response.body)["boards"]
     assert [(b["id"], b["needs_you"]) for b in boards] == [("personal", 1), ("deals1", 3)]
     match = db.conversations.aggregate.call_args.args[0][0]["$match"]
-    assert match["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
+    assert match["$and"][0]["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
+    # Only tasks blocked on the caller count; finished ones wait for review quietly.
+    from api.task_attention import needs_you_filter
+    assert match["$and"][1] == needs_you_filter()
     assert match["task_status"] == "active"
 
 
@@ -501,8 +504,10 @@ async def test_needs_you_lists_waiting_tasks_across_boards(monkeypatch):
     db = _db()
     cursor = MagicMock()
     cursor.sort.return_value.to_list = AsyncMock(return_value=[
-        {"conversation_id": "c1", "title": "Review report", "status": "completed", "task_board_id": "deals1"},
-        {"conversation_id": "c2", "title": None, "prompt": "Summarise inbox", "status": "error"},
+        {"conversation_id": "c1", "title": "Review report", "status": "completed", "task_board_id": "deals1",
+         "task_status": "active", "needs_you_reason": "question"},
+        {"conversation_id": "c2", "title": None, "prompt": "Summarise inbox", "status": "error",
+         "task_status": "active"},
     ])
     db.conversations.find = MagicMock(return_value=cursor)
     _as(monkeypatch, db, EDITOR)
@@ -510,11 +515,13 @@ async def test_needs_you_lists_waiting_tasks_across_boards(monkeypatch):
     response = await task_routes.handle_needs_you(FakeRequest())
 
     assert json.loads(response.body)["tasks"] == [
-        {"conversation_id": "c1", "title": "Review report", "status": "completed", "board_id": "deals1"},
-        {"conversation_id": "c2", "title": "Summarise inbox", "status": "error", "board_id": "personal"},
+        {"conversation_id": "c1", "title": "Review report", "status": "completed",
+         "waiting_reason": "question", "board_id": "deals1"},
+        {"conversation_id": "c2", "title": "Summarise inbox", "status": "error",
+         "waiting_reason": "failed", "board_id": "personal"},
     ]
     query = db.conversations.find.call_args.args[0]
-    assert query["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
+    assert query["$and"][0]["$or"] == [{"metadata.user_name": EDITOR}, {"task_assignee": EDITOR}]
     assert query["task_status"] == "active"
 
 

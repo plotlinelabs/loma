@@ -42,11 +42,12 @@ export function MobileTaskBoard({
     openActiveInNewTab: false, includedTagIds, excludedTagIds, // window.open is hostile in the standalone PWA
   });
 
-  // Attention-first column order: Needs input, Working, lanes, Done.
+  // Attention-first column order: Needs you, Ready to review, Running, lanes, Done.
   const columns = useMemo(
     () => [
-      { id: "needs_input", name: "Needs input" },
-      { id: "working", name: "Working" },
+      { id: "needs_input", name: "Needs you" },
+      { id: "review", name: "Ready to review" },
+      { id: "working", name: "Running" },
       ...board.lanes,
       { id: "done", name: "Done" },
     ],
@@ -60,12 +61,12 @@ export function MobileTaskBoard({
   useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
-    const needsInput = (tasksByColumn["needs_input"] ?? []).length;
-    const firstBusyLane = board.lanes.find(
-      (lane) => (tasksByColumn[lane.id] ?? []).length > 0,
-    );
+    const hasAny = (id: string) => (tasksByColumn[id] ?? []).length > 0;
+    const firstBusyLane = board.lanes.find((lane) => hasAny(lane.id));
     setSelected(
-      needsInput > 0 ? "needs_input" : firstBusyLane?.id ?? "working",
+      hasAny("needs_input") ? "needs_input"
+        : hasAny("review") ? "review"
+        : firstBusyLane?.id ?? "working",
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

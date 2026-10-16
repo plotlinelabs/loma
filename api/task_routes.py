@@ -6,12 +6,13 @@ A task IS a conversation (1:1) plus board state stored on the conversation doc:
   - task_lane: staging lane id (meaningful only while task_status == "todo")
   - task_rank: float sort key within staged lanes
 
-Board columns are derived — "working" vs "needs input" comes from the live
-conversation status, never stored:
+Board columns are derived from the live conversation status, never stored:
   todo               -> the task's staging lane
   active + running   -> working
-  active + not-running -> needs input
+  active + stopped, blocked on the user -> needs_input ("Needs you")
+  active + stopped, finished            -> review ("Ready to review")
   done               -> done
+Why a stopped task waits is decided in api/task_attention.py.
 
 Per-user board config (staging lanes + personal prompt) lives on the users doc
 under `task_board`; tasks reference lanes by id so renames are config-only.
@@ -57,6 +58,7 @@ from observability.db import get_db
 from agent.prompt import get_prompt_setting
 from api.auth_helpers import get_system_role, get_user_email
 from api.drain import DRAIN_MESSAGE, is_draining
+from api.task_attention import NEEDS_YOU_REASONS, needs_you_filter, waiting_reason
 
 logger = logging.getLogger(__name__)
 
@@ -250,8 +252,6 @@ async def _auto_title_task(db, conversation_id: str, prompt: str):
     except Exception as e:
         logger.warning("Task auto-title failed for %s: %s", conversation_id, e)
 
-# Statuses where the agent is no longer running — the user's turn.
-NEEDS_INPUT_STATUSES = ("completed", "error", "interrupted")
 
 DEFAULT_BOARD = {
     "prompt": "",
@@ -628,7 +628,7 @@ def derive_column(task: dict, lane_ids: list[str]) -> str:
     # means it waits for a deploy to finish (api/pending_runs.py).
     if task.get("status") in (None, "running", "queued"):
         return "working"
-    return "needs_input"
+    return "needs_input" if waiting_reason(task) in NEEDS_YOU_REASONS else "review"
 
 
 def _effective_rank(task: dict, column: str, lane_ids: list[str]) -> float:
@@ -645,7 +645,7 @@ def _effective_rank(task: dict, column: str, lane_ids: list[str]) -> float:
         ts = task.get("started_at")
     elif column == "done":
         ts = task.get("task_done_at")
-    else:  # needs_input
+    else:  # needs_input / review
         ts = task.get("finished_at")
     ts = ts or task.get("task_created_at") or task.get("started_at")
     return -ts.timestamp() if isinstance(ts, datetime) else 0.0
@@ -667,6 +667,7 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "task_lane": task.get("task_lane"),
         "task_rank": _effective_rank(task, column, lane_ids),
         "column": column,
+        "waiting_reason": waiting_reason(task),
         "total_turns": task.get("total_turns", 0),
         "started_at": _serialize(task.get("started_at")),
         "finished_at": _serialize(task.get("finished_at")),
@@ -689,6 +690,9 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
 
 _TASK_PROJECTION = {
     "human_task": 1,
+    # Enough of the error to recognise a user stop (api/task_attention.py).
+    "error": {"$substrCP": [{"$ifNull": ["$error", ""]}, 0, 40]},
+    "needs_you_reason": 1,
     "conversation_id": 1, "title": 1, "model": 1, "status": 1, "tool_config": 1,
     # Cards show 200 chars; trim in Mongo so full prompts never leave the DB.
     "prompt": {"$substrCP": [{"$ifNull": ["$prompt", ""]}, 0, 200]},
@@ -1071,7 +1075,7 @@ async def handle_list_tasks(request: web.Request) -> web.Response:
     ordered = sorted(views, key=lambda view: view["task_rank"])
 
     counts: dict[str, int] = {lane_id: 0 for lane_id in lane_ids}
-    counts.update({"working": 0, "needs_input": 0, "done": 0})
+    counts.update({"working": 0, "needs_input": 0, "review": 0, "done": 0})
     for view in ordered:
         counts[view["column"]] = counts.get(view["column"], 0) + 1
 
@@ -1128,12 +1132,7 @@ async def handle_needs_input_count(request: web.Request) -> web.Response:
     if not user_email:
         return web.json_response({"error": "Authentication required"}, status=401)
 
-    count = await db.conversations.count_documents({
-        "$or": [{"metadata.user_name": user_email}, {"task_assignee": user_email}],
-        "task_status": "active",
-        "status": {"$in": list(NEEDS_INPUT_STATUSES)},
-        "deleted": {"$ne": True},
-    })
+    count = await db.conversations.count_documents(_waiting_on(user_email))
     return web.json_response({"count": count})
 
 
@@ -1634,12 +1633,15 @@ async def handle_delete_tag(request: web.Request) -> web.Response:
 # ── Boards (list / create / share / delete) ──────────────────────────────────
 
 def _waiting_on(user_email: str) -> dict:
-    """Query for tasks waiting on a user: their own or assigned tasks that
-    stopped and need input or review (the nav badge rule)."""
+    """Query for tasks waiting on a user: their own or assigned tasks blocked
+    on them (the nav badge, tab-title and ping rule). Finished tasks waiting
+    for review are not counted."""
     return {
-        "$or": [{"metadata.user_name": user_email}, {"task_assignee": user_email}],
+        "$and": [
+            {"$or": [{"metadata.user_name": user_email}, {"task_assignee": user_email}]},
+            needs_you_filter(),
+        ],
         "task_status": "active",
-        "status": {"$in": list(NEEDS_INPUT_STATUSES)},
         "deleted": {"$ne": True},
     }
 
@@ -1656,12 +1658,15 @@ async def handle_needs_you(request: web.Request) -> web.Response:
 
     docs = await db.conversations.find(
         _waiting_on(user_email),
-        {"conversation_id": 1, "title": 1, "prompt": 1, "status": 1, "task_board_id": 1},
+        {"conversation_id": 1, "title": 1, "prompt": 1, "status": 1, "task_board_id": 1,
+         "task_status": 1, "human_task": 1, "needs_you_reason": 1,
+         "error": {"$substrCP": [{"$ifNull": ["$error", ""]}, 0, 40]}},
     ).sort("finished_at", -1).to_list(50)
     return web.json_response({"tasks": [{
         "conversation_id": doc.get("conversation_id"),
         "title": doc.get("title") or (doc.get("prompt") or "")[:80] or None,
         "status": doc.get("status"),
+        "waiting_reason": waiting_reason(doc),
         "board_id": doc.get("task_board_id") or PERSONAL_BOARD_ID,
     } for doc in docs]})
 
@@ -1960,6 +1965,7 @@ def _card_view(card: dict, lane_ids: list[str], task_views: list[dict] | None = 
         "task_done": sum(1 for t in mine if t["column"] == "done"),
         "task_running": sum(1 for t in mine if t["column"] == "working"),
         "task_needs_input": sum(1 for t in mine if t["column"] == "needs_input"),
+        "task_review": sum(1 for t in mine if t["column"] == "review"),
     }
 
 

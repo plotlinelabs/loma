@@ -24,6 +24,7 @@ import {
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { BoardLane, Task, TaskPriority } from "@/lib/api";
 import { DEPLOY_QUEUED_LABEL, deadlineDisplay, isDraft as isDraftTask, isStaged as isStagedTask, priorityDisplay, taskDot, taskTimestamp } from "./taskDisplay";
+import { isStoppedColumn } from "./transitions";
 import { PriorityMenuItems, TaskPriorityTag } from "./TaskPriority";
 import { DeadlineMenuItems, TaskDeadlineBadge } from "./TaskDeadline";
 import { AssigneeBadge, useBoardExtras } from "./boardExtras";
@@ -68,7 +69,7 @@ export function MobileTaskCard({
     ? lanes.filter((lane) => task.column === "done" || lane.id !== task.column)
     : isStaged
     ? lanes.filter((lane) => lane.id !== task.task_lane)
-    : task.column === "needs_input" || task.column === "done" ? lanes : [];
+    : isStoppedColumn(task.column) || task.column === "done" ? lanes : [];
 
   const { myEmail, onMoveToBoard } = useBoardExtras();
   // Any owner or editor can move a task to another board (view-only hides this menu).
@@ -161,7 +162,7 @@ export function MobileTaskCard({
               <RiPlayLine className="h-4 w-4" />
             </Button>
           )}
-          {!task.human_task && (task.column === "working" || task.column === "needs_input" || isParked) && (
+          {!task.human_task && (task.column === "working" || isStoppedColumn(task.column) || isParked) && (
             <Button
               variant="ghost" size="icon" className="h-8 w-8"
               title="Mark done"

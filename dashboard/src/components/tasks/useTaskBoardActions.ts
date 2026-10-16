@@ -19,11 +19,12 @@ import {
   type TasksBoardResponse,
 } from "@/lib/api";
 import { useBoardExtras } from "./boardExtras";
-import { starLiveColumn } from "./transitions";
+import { isStoppedColumn, reopenedColumn, starLiveColumn } from "./transitions";
 
 export const SYSTEM_COLUMNS = [
-  { id: "working", name: "Working" },
-  { id: "needs_input", name: "Needs input" },
+  { id: "working", name: "Running" },
+  { id: "needs_input", name: "Needs you" },
+  { id: "review", name: "Ready to review" },
   { id: "done", name: "Done" },
 ];
 
@@ -56,8 +57,8 @@ export function useTaskBoardActions({
   const router = useRouter();
 
   const laneIds = useMemo(() => board.lanes.map((lane) => lane.id), [board.lanes]);
-  // Needs input sits leftmost — the attention column is the first thing you
-  // see — then the staging lanes, then Working/Done.
+  // Needs you sits leftmost — the attention column is the first thing you
+  // see — then the staging lanes, then Running, Ready to review and Done.
   const columns: Array<BoardLane | { id: string; name: string }> = useMemo(
     () => [NEEDS_INPUT_COLUMN, ...board.lanes, ...TRAILING_SYSTEM_COLUMNS],
     [board.lanes],
@@ -139,19 +140,19 @@ export function useTaskBoardActions({
     : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
-          ? { ...t, task_status: "active" as const, column: t.status === "running" ? "working" : "needs_input" }
+          ? { ...t, task_status: "active" as const, column: reopenedColumn(t) }
           : t),
       () => updateTask(task.conversation_id, { task_status: "active" }),
     );
 
   // Moving into a staging lane also *parks* active tasks (todo + lane) so a
-  // needs-input chat can be shelved and recontinued later.
+  // stopped chat can be shelved and recontinued later.
   const moveToLane = (task: Task, laneId: string, rank?: number) => task.star
     // Moving it to your lane while the real task runs or needs input parks it
     // there until the task moves on (the backend tracks that).
     ? patchStar(task, { column: laneId, task_lane: laneId, task_rank: rank ?? task.task_rank },
       { lane: laneId, done: false, ...(rank !== undefined ? { rank } : {}) },
-      { parked: ["working", "needs_input"].includes(task.star.source_column) })
+      { parked: ["working", "needs_input", "review"].includes(task.star.source_column) })
     : mutate(
       (tasks) => tasks.map((t) =>
         t.conversation_id === task.conversation_id
@@ -266,10 +267,9 @@ export function useTaskBoardActions({
       return;
     }
     const url = `${basePath}/chat?continue=${task.conversation_id}`;
-    // Running / Needs input / Done cards open in a new tab on desktop so the
-    // board stays put; parked lane chats keep in-place navigation.
-    const isActiveColumn =
-      task.column === "working" || task.column === "needs_input" || task.column === "done";
+    // Running / Needs you / Ready to review / Done cards open in a new tab on
+    // desktop so the board stays put; parked lane chats keep in-place navigation.
+    const isActiveColumn = task.column === "working" || isStoppedColumn(task.column) || task.column === "done";
     if (isActiveColumn && openActiveInNewTab) {
       window.open(url, "_blank", "noopener,noreferrer");
     } else {

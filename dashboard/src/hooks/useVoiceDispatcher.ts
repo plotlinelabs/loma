@@ -410,7 +410,7 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
           if (!result.interrupted) return { error: "The task did not confirm it was stopped. Refresh its status." };
           logAction(`Stopped: ${taskLabel(found.task)}`, true, found.task.conversation_id);
           // The user stopped it themselves: nothing to announce.
-          watched.set(found.task.conversation_id, "needs_input");
+          watched.set(found.task.conversation_id, "review");
           onBoardChangedRef.current();
           onTaskActivityRef.current?.(found.task.conversation_id);
           return { ok: true, title: taskLabel(found.task), stopped: true };
@@ -421,7 +421,7 @@ export function useVoiceDispatcher({ boardId, chat, takeOverFromBoard = false, m
           const board = await loadBoard();
           const wanted = text("to").toLowerCase();
           // "Reopen X" means the finished one, which matchTasks otherwise ranks last.
-          const reopening = wanted === "needs_input" || wanted === "needs input" || wanted === "reopen";
+          const reopening = ["needs_input", "needs input", "needs you", "review", "ready to review", "reopen"].includes(wanted);
           const done = reopening ? matchTasks(board.tasks.filter((t) => t.column === "done"), ref) : [];
           const found = done.length ? done : matchTasks(board.tasks, ref);
           if (found.length === 0) return { error: `No task matches "${ref}".` };

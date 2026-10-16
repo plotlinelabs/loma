@@ -38,7 +38,7 @@ import { DEPLOY_QUEUED_LABEL, isDraft, isParked } from "./taskDisplay";
 import { AssigneeBadge } from "./boardExtras";
 import { StarButton } from "./TaskStar";
 import { AddExistingTaskDialog } from "./MoveTaskDialogs";
-import { rankBetween } from "./transitions";
+import { rankBetween, reopenedColumn } from "./transitions";
 
 const shortName = (email: string) => email.split("@")[0];
 
@@ -147,7 +147,8 @@ function FieldInput({ field, value, disabled, onSave }: {
 function taskLabel(task: Task): { text: string; className: string } | null {
   if (task.status === "queued") return { text: DEPLOY_QUEUED_LABEL, className: "text-muted-foreground" };
   if (task.column === "working") return { text: "Loma running", className: "text-blue-600" };
-  if (task.column === "needs_input") return { text: "Needs input", className: "text-amber-600" };
+  if (task.column === "needs_input") return { text: "Needs you", className: "text-amber-600" };
+  if (task.column === "review") return { text: "Ready to review", className: "text-emerald-600" };
   if (isParked(task)) return { text: "Paused", className: "text-muted-foreground" };
   return null;
 }
@@ -249,7 +250,7 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
     if (task.column === "done") {
       // Un-tick: back to where it was (a task that never ran goes back to a draft).
       const next = task.status ? "active" as const : "todo" as const;
-      void run(patchTask(task.conversation_id, { task_status: next, column: next === "todo" ? (task.task_lane ?? "") : "needs_input" }),
+      void run(patchTask(task.conversation_id, { task_status: next, column: next === "todo" ? (task.task_lane ?? "") : reopenedColumn(task) }),
         () => updateTask(task.conversation_id, { task_status: next }), "Could not update task");
     } else {
       void run(patchTask(task.conversation_id, { task_status: "done", column: "done" }),

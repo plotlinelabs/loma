@@ -111,7 +111,7 @@ function CardTile({ card, fields, readOnly, onOpen, assignees = [], me = null }:
               {card.task_needs_input > 0 && (
                 <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-600">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                  {card.task_needs_input} needs input
+                  {card.task_needs_input} needs you
                 </span>
               )}
             </div>

@@ -56,13 +56,14 @@ TOOLS = [
             "List the authenticated user's Loma task board: staging lanes, tags, "
             "per-column counts, and all tasks with their derived column. Columns are "
             "the user's staging lane ids (e.g. 'todo'), plus 'working' (agent running), "
-            "'needs_input' (agent finished, user's turn) and 'done'."
+            "'needs_input' (blocked on the user: a question, a plan or approval to decide, "
+            "or a failed/stopped run), 'review' (finished, ready for the user to check) and 'done'."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "q": {"type": "string", "description": "Optional text search over title, prompt and messages."},
-                "column": {"type": "string", "description": "Optional filter: only return tasks in this column (a lane id, 'working', 'needs_input' or 'done')."},
+                "column": {"type": "string", "description": "Optional filter: only return tasks in this column (a lane id, 'working', 'needs_input', 'review' or 'done')."},
             },
             "additionalProperties": False,
         },

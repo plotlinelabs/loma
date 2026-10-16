@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import ClientTimestamp from "@/components/ClientTimestamp";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
 import { DEPLOY_QUEUED_LABEL, isDraft as isDraftTask, isStaged as isStagedTask, taskDot, taskTimestamp } from "./taskDisplay";
+import { isStoppedColumn } from "./transitions";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
 import { TaskDeadlineBadge } from "./TaskDeadline";
@@ -147,7 +148,7 @@ export function TaskCard({
               <RiPlayLine className="h-3.5 w-3.5" />
             </Button>
           )}
-          {!task.human_task && (task.column === "working" || task.column === "needs_input" || isParked) && (
+          {!task.human_task && (task.column === "working" || isStoppedColumn(task.column) || isParked) && (
             <Button
               variant="ghost" size="icon" className="h-6 w-6"
               title="Mark done"

@@ -110,6 +110,20 @@ async def main():
     from api.routes import ensure_served_files_store
     await ensure_served_files_store()
 
+    # Tasks that finished on a question or plan before the reason was recorded
+    # stay under Needs you (api/task_attention.py). Idempotent.
+    from api.task_attention import backfill_recorded_reasons
+
+    async def _backfill_task_reasons():
+        try:
+            tagged = await backfill_recorded_reasons(get_db())
+            if tagged:
+                logger.info("Tagged %d waiting tasks with a question/plan reason", tagged)
+        except Exception:
+            logger.warning("Task reason backfill failed", exc_info=True)
+
+    asyncio.create_task(_backfill_task_reasons())
+
     # In dev mode, skip Slack and scheduled tasks
     is_dev = os.environ.get("ENV", "").upper() == "DEV"
 
