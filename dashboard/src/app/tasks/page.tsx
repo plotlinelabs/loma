@@ -641,7 +641,7 @@ export default function TasksPage() {
   );
   const layoutToggle = !cardMode && !isMobile && (
     <div role="group" aria-label="Board layout" className="inline-flex shrink-0 rounded-md bg-muted p-0.5">
-      {(["list", "board"] as const).map((option) => (
+      {(["board", "list"] as const).map((option) => (
         <button
           key={option}
           type="button"
