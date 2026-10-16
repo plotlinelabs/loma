@@ -7,14 +7,14 @@ from observability.observer import ConversationObserver
 
 def test_extract_prs_dedupes_and_keeps_order():
     text = (
-        "Opened https://github.com/plotlinelabs/loma/pull/295 and updated "
-        "https://github.com/plotlinehq/plotline-sdk/pull/12/files, see also "
-        "https://github.com/PlotlineLabs/loma/pull/295#discussion_r1 and "
-        "https://github.com/plotlinehq/plotline-sdk/issues/9"
+        "Opened https://github.com/acme/widgets/pull/295 and updated "
+        "https://github.com/acme/mobile-sdk/pull/12/files, see also "
+        "https://github.com/Acme/Widgets/pull/295#discussion_r1 and "
+        "https://github.com/acme/mobile-sdk/issues/9"
     )
     assert task_prs.extract_prs(text) == [
-        {"repo": "plotlinelabs/loma", "number": 295, "url": "https://github.com/plotlinelabs/loma/pull/295"},
-        {"repo": "plotlinehq/plotline-sdk", "number": 12, "url": "https://github.com/plotlinehq/plotline-sdk/pull/12"},
+        {"repo": "acme/widgets", "number": 295, "url": "https://github.com/acme/widgets/pull/295"},
+        {"repo": "acme/mobile-sdk", "number": 12, "url": "https://github.com/acme/mobile-sdk/pull/12"},
     ]
     assert task_prs.extract_prs(None) == []
     assert task_prs.extract_prs({"not": "text"}) == []
