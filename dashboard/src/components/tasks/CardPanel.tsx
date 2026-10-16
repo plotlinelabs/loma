@@ -9,7 +9,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  RiCheckLine, RiCloseLine, RiDeleteBinLine, RiDraggable, RiExternalLinkLine, RiInboxArchiveLine, RiSparkling2Line,
+  RiArrowRightSLine, RiCheckLine, RiCloseLine, RiDeleteBinLine, RiDraggable, RiExternalLinkLine, RiInboxArchiveLine,
+  RiMoreLine, RiSparkling2Line,
 } from "@remixicon/react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -35,6 +36,9 @@ import {
   type TasksBoardResponse,
 } from "@/lib/api";
 import { DEPLOY_QUEUED_LABEL, isDraft, isParked } from "./taskDisplay";
+import { TaskSummary, WaitingChip } from "./TaskCardParts";
+import { formatFieldValue, isEmptyValue } from "./cardDisplay";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AssigneeBadge } from "./boardExtras";
 import { StarButton } from "./TaskStar";
 import { AddExistingTaskDialog } from "./MoveTaskDialogs";
@@ -212,6 +216,14 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
       || cardOrderKey(a) - cardOrderKey(b)
       || (a.task_created_at ?? "").localeCompare(b.task_created_at ?? ""));
   const done = tasks.filter((task) => task.column === "done").length;
+  // Needs you first, then everything still open, then what's done (folded).
+  const groupOf = (task: Task) => task.column === "needs_input" ? "needs" : task.column === "done" ? "done" : "open";
+  const needsYou = tasks.filter((t) => groupOf(t) === "needs");
+  const openTasks = tasks.filter((t) => groupOf(t) === "open");
+  const doneTasks = tasks.filter((t) => groupOf(t) === "done");
+  const [showDone, setShowDone] = useState(false);
+  // The board's "show on card" fields, as tiles at the top.
+  const keyFields = fields.filter((f) => f.show_on_card && !isEmptyValue(card.fields[f.id])).slice(0, 3);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -262,9 +274,9 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
     if (!over || active.id === over.id) return;
     const task = tasks.find((t) => t.conversation_id === active.id);
     const target = tasks.find((t) => t.conversation_id === over.id);
-    // Done items stay pinned below open ones, so only reorder within a group.
-    if (!task || !target || (task.column === "done") !== (target.column === "done")) return;
-    const group = tasks.filter((t) => (t.column === "done") === (task.column === "done"));
+    // Rows only reorder within their own group (Needs you / Open / Done).
+    if (!task || !target || groupOf(task) !== groupOf(target)) return;
+    const group = tasks.filter((t) => groupOf(t) === groupOf(task));
     const to = group.indexOf(target);
     // Dropping on a row moves the dragged task into that row's slot.
     const moved = arrayMove(group, group.indexOf(task), to);
@@ -340,7 +352,7 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
             if (title !== card.title) void run(patchCard({ title }), () => updateTaskCard(card.card_id, { title }), "Could not rename card");
           }}
           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-          className="h-9 border-transparent px-1 text-base font-medium shadow-none hover:border-border md:text-base"
+          className="h-10 border-transparent px-1 text-[19px] font-semibold shadow-none hover:border-border md:text-[19px]"
         />
         <div className="flex items-center gap-2">
           <Select
@@ -348,37 +360,74 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
             disabled={readOnly}
             onValueChange={(lane) => void run(patchCard({ lane }), () => updateTaskCard(card.card_id, { lane }), "Could not move card")}
           >
-            <SelectTrigger size="sm" className="w-44" aria-label="Column"><SelectValue /></SelectTrigger>
+            <SelectTrigger size="sm" className="h-8 w-44 text-[13px]" aria-label="Column"><SelectValue /></SelectTrigger>
             <SelectContent>
               {board.lanes.map((lane) => <SelectItem key={lane.id} value={lane.id}>{lane.name}</SelectItem>)}
             </SelectContent>
           </Select>
           {!readOnly && (
-            <Button variant="ghost" size="sm" className="ml-auto text-muted-foreground" onClick={() => void remove()}>
-              <RiDeleteBinLine className="h-4 w-4" /> Delete card
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="ml-auto h-8 w-8 text-muted-foreground" aria-label="Card options">
+                  <RiMoreLine className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onClick={() => void remove()}>
+                  <RiDeleteBinLine className="h-4 w-4" /> Delete card
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
+        {keyFields.length > 0 && (
+          <dl className="grid grid-cols-3 gap-2">
+            {keyFields.map((field) => (
+              <div key={field.id} className="min-w-0 rounded-xl bg-muted/60 px-3 py-2">
+                <dt className="truncate text-xs text-muted-foreground">{field.name}</dt>
+                <dd className="mt-0.5 truncate text-[15px] font-semibold">{formatFieldValue(field, card.fields[field.id])}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
       </SheetHeader>
 
       <Tabs defaultValue="tasks" className="min-h-0 flex-1 gap-0">
         <TabsList className="mx-4 mt-3">
           <TabsTrigger value="tasks">Tasks{tasks.length ? ` ${done}/${tasks.length}` : ""}</TabsTrigger>
-          <TabsTrigger value="fields">Fields</TabsTrigger>
+          <TabsTrigger value="fields">All fields</TabsTrigger>
           <TabsTrigger value="notes">Notes for Loma</TabsTrigger>
         </TabsList>
         {error && <p className="px-4 pt-2 text-xs text-destructive">{error}</p>}
 
-        <TabsContent value="tasks" className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        <TabsContent value="tasks" className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 text-[15px]">
           {tasks.length === 0 && (
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-[14px] text-muted-foreground">
               No tasks yet. Add a to-do to tick off yourself, or ask Loma to do it.
             </p>
           )}
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderTask}>
-          <SortableContext items={tasks.map((t) => t.conversation_id)} strategy={verticalListSortingStrategy}>
+          {([
+            ["needs", "Needs you", needsYou],
+            ["open", "Open", openTasks],
+            ["done", "Done", doneTasks],
+          ] as const).map(([group, title, groupTasks]) => groupTasks.length > 0 && (
+          <section key={group} aria-label={title}>
+          {group === "done" ? (
+            <button type="button" onClick={() => setShowDone((v) => !v)} aria-expanded={showDone}
+              className="flex h-9 w-full items-center gap-1.5 border-t border-border pt-1 text-[14px] font-semibold text-foreground/80">
+              <RiArrowRightSLine className={cn("h-4 w-4 transition-transform", showDone && "rotate-90")} />
+              Done <span className="font-normal text-muted-foreground">{groupTasks.length}</span>
+            </button>
+          ) : (
+            <h3 className={cn("mb-1 px-1.5 text-[13px] font-semibold", group === "needs" ? "text-amber-800 dark:text-amber-300" : "text-foreground/80")}>
+              {title} <span className="font-normal text-muted-foreground">{groupTasks.length}</span>
+            </h3>
+          )}
+          {(group !== "done" || showDone) && (
+          <SortableContext items={groupTasks.map((t) => t.conversation_id)} strategy={verticalListSortingStrategy}>
           <ul className="space-y-1">
-            {tasks.map((task) => {
+            {groupTasks.map((task) => {
               const isDone = task.column === "done";
               const label = taskLabel(task);
               const mine = !!myEmail && task.owner === myEmail;
@@ -391,27 +440,27 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
                     aria-label={isDone ? "Mark as not done" : "Mark as done"}
                     aria-pressed={isDone}
                     className={cn(
-                      "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                      "flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border",
                       isDone ? "border-emerald-500 bg-emerald-500 text-white" : "border-input bg-background",
                     )}
                   >
-                    {isDone && <RiCheckLine className="h-3 w-3" />}
+                    {isDone && <RiCheckLine className="h-3.5 w-3.5" />}
                   </button>
                   <button
                     type="button"
                     onClick={() => onOpenTask(task)}
-                    className={cn("min-w-0 flex-1 truncate text-left text-[13px]", isDone && "text-muted-foreground line-through")}
+                    className="flex min-w-0 flex-1 flex-col gap-0.5 py-0.5 text-left"
                   >
-                    {task.title || task.prompt || "New task"}
-                  </button>
-                  {label && !isDone && (
-                    <span className={cn("flex shrink-0 items-center gap-1 text-[11px]", label.className)}>
-                      {task.column === "working" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />}
-                      {label.text}
+                    <span className={cn("truncate text-[15px] leading-[21px]", isDone && "text-muted-foreground line-through")}>
+                      {task.title || task.prompt || "New task"}
                     </span>
+                    {!isDone && <TaskSummary task={task} className="line-clamp-1" />}
+                  </button>
+                  {task.column === "needs_input" ? <WaitingChip task={task} /> : label && !isDone && task.column !== "working" && (
+                    <span className={cn("shrink-0 text-[13px]", label.className)}>{label.text}</span>
                   )}
                   {!mine && task.owner && !task.assignee && (
-                    <span className="shrink-0 text-[11px] text-muted-foreground">{shortName(task.owner)}</span>
+                    <span className="shrink-0 text-[13px] text-muted-foreground">{shortName(task.owner)}</span>
                   )}
                   {task.assignee && <AssigneeBadge email={task.assignee} me={myEmail} />}
                   <StarButton task={task} onToggle={toggleStar}
@@ -431,27 +480,35 @@ function CardPanelBody({ board, card, onOpenChange, onBoardChange, onRefresh, on
             })}
           </ul>
           </SortableContext>
+          )}
+          </section>
+          ))}
           </DndContext>
           {!readOnly && (
-            <div className="space-y-1.5 rounded-lg border border-border p-2">
+            <div className="space-y-2 rounded-2xl border border-border p-3">
               <Input
                 value={newTask}
                 onChange={(e) => setNewTask(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void addTask(false); }}
-                placeholder="Add a task..."
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  // Enter keeps it as a to-do; Cmd/Ctrl+Enter hands it to Loma.
+                  void addTask(e.metaKey || e.ctrlKey);
+                }}
+                placeholder={`Add a task for ${card.title}`}
                 aria-label="New task"
-                className="h-8 border-0 px-1 shadow-none focus-visible:ring-0"
+                className="h-9 border-0 px-1 text-[16px] shadow-none focus-visible:ring-0 md:text-[16px]"
               />
-              <div className="flex items-center justify-end gap-1.5">
+              <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" size="sm" className="mr-auto text-muted-foreground"
                   onClick={() => setAddExistingOpen(true)}>
-                  <RiInboxArchiveLine className="h-4 w-4" /> Add existing task
+                  <RiInboxArchiveLine className="h-4 w-4" /> Add existing chat
                 </Button>
-                <Button variant="ghost" size="sm" disabled={!newTask.trim() || busy} onClick={() => void addTask(false)}>
-                  Add to-do
+                <Button variant="outline" size="sm" disabled={!newTask.trim() || busy} onClick={() => void addTask(false)}
+                  title="Enter">
+                  Add as to-do
                 </Button>
-                <Button size="sm" disabled={!newTask.trim() || busy} onClick={() => void addTask(true)}>
-                  <RiSparkling2Line className="h-4 w-4" /> Ask Loma
+                <Button size="sm" disabled={!newTask.trim() || busy} onClick={() => void addTask(true)} title="⌘/Ctrl + Enter">
+                  <RiSparkling2Line className="h-4 w-4" /> Ask Loma to do it
                 </Button>
               </div>
             </div>
@@ -557,6 +614,8 @@ export function CardPanel({ card, open, onOpenChange, ...rest }: CardPanelProps)
       <SheetContent
         side="right"
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl"
+        // Keep the board visible beside the card, so you can see where it sits.
+        overlayClassName="bg-transparent supports-backdrop-filter:backdrop-blur-none"
         // Don't drop the caret into the title: opening a card is for reading first.
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
