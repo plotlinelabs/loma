@@ -109,3 +109,9 @@ if [ "$ok" != 1 ]; then
   exit 1
 fi
 echo "healthy (dashboard=$d backend=$b via :80)"
+
+# Every build leaves ~1 GB of cache and an untagged old image behind; left alone
+# they helped fill the disk. Keep the last week of cache so builds stay fast.
+docker builder prune -f --filter until=168h >/dev/null || true
+docker image prune -f >/dev/null || true
+df -h / | tail -1 || true
