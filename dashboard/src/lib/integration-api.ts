@@ -46,6 +46,7 @@ export interface ProbeResult {
     token_endpoint: string;
     registration_endpoint?: string;
     scopes_supported: string[];
+    token_endpoint_auth_methods_supported?: string[];
   } | null;
 }
 
@@ -116,6 +117,7 @@ export async function addCustomConnector(input: {
     client_secret?: string;
     scopes?: string[];
     token_endpoint_auth_method?: string;
+    token_endpoint_auth_methods_supported?: string[];
   };
 }): Promise<{ status: string; provider: string; auth_mode?: string }> {
   const res = await fetch(`${API_BASE}/api/integrations/custom`, {

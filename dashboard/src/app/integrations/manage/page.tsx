@@ -890,6 +890,10 @@ export default function IntegrationsPage() {
           client_id: customForm.oauthClientId.trim() || undefined,
           client_secret: customForm.oauthClientSecret.trim() || undefined,
           scopes: customForm.oauthScopes.trim() ? customForm.oauthScopes.trim().split(/\s+/) : undefined,
+          token_endpoint_auth_methods_supported:
+            probeResult?.oauth_metadata?.registration_endpoint === customForm.oauthRegUrl.trim()
+              ? probeResult?.oauth_metadata?.token_endpoint_auth_methods_supported
+              : undefined,
         } : undefined,
       });
       setShowCustomModal(false);

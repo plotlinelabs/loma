@@ -11,6 +11,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timezone
@@ -528,10 +529,49 @@ async def _refresh_oauth_token(
         return None
 
 
+_PREFERRED_AUTH_METHODS = ("client_secret_post", "client_secret_basic", "none")
+
+
+def choose_auth_method(supported: list[str] | None) -> str:
+    """Pick a token endpoint auth method the server advertises, preferring today's default."""
+    if not supported:
+        return "client_secret_post"
+    for method in _PREFERRED_AUTH_METHODS:
+        if method in supported:
+            return method
+    return supported[0]
+
+
+def _is_public_client_rejection(status: int, detail: str) -> bool:
+    text = detail.lower()
+    return status == 400 and ("public client" in text or re.search(r"\bnone\b", text) is not None)
+
+
+async def _post_registration(registration_endpoint: str, body: dict) -> tuple[int, dict | str]:
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            registration_endpoint,
+            json=body,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status not in (200, 201):
+                return resp.status, await resp.text()
+            return resp.status, await resp.json()
+
+
+def _registration_error_detail(text: str) -> str:
+    try:
+        parsed = json.loads(text)
+        return parsed.get("error_description") or parsed.get("error", "")
+    except Exception:
+        return text[:200]
+
+
 async def register_oauth_client(
     registration_endpoint: str,
     redirect_uri: str,
     client_name: str = "Loma",
+    auth_methods_supported: list[str] | None = None,
 ) -> dict | None:
     """Dynamically register as an OAuth client (RFC 7591).
 
@@ -539,40 +579,39 @@ async def register_oauth_client(
     success, or {"error": "..."} on failure for surfacing to the user.
     Returns None only on network-level failures.
     """
+    auth_method = choose_auth_method(auth_methods_supported)
     body = {
         "client_name": client_name,
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
-        "token_endpoint_auth_method": "client_secret_post",
+        "token_endpoint_auth_method": auth_method,
     }
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                registration_endpoint,
-                json=body,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status not in (200, 201):
-                    text = await resp.text()
-                    logger.error("OAuth client registration failed (%d): %s", resp.status, text[:300])
-                    detail = ""
-                    try:
-                        detail = json.loads(text).get("error_description") or json.loads(text).get("error", "")
-                    except Exception:
-                        detail = text[:200]
-                    return {"error": f"Registration rejected ({resp.status}): {detail}".strip(": ")}
-                data = await resp.json()
-                if not data.get("client_id"):
-                    logger.error("OAuth registration returned no client_id")
-                    return {"error": "Registration succeeded but returned no client_id"}
-                return {
-                    "client_id": data["client_id"],
-                    "client_secret": data.get("client_secret", ""),
-                    "token_endpoint_auth_method": data.get(
-                        "token_endpoint_auth_method", "client_secret_post"
-                    ),
-                }
+        status, payload = await _post_registration(registration_endpoint, body)
+        if isinstance(payload, str):
+            detail = _registration_error_detail(payload)
+            # Without advertised methods we guessed post; retry once as a public client.
+            if not auth_methods_supported and auth_method != "none" and _is_public_client_rejection(status, detail):
+                auth_method = "none"
+                body["token_endpoint_auth_method"] = auth_method
+                status, payload = await _post_registration(registration_endpoint, body)
+                if isinstance(payload, str):
+                    detail = _registration_error_detail(payload)
+        if isinstance(payload, str):
+            logger.error("OAuth client registration failed (%d): %s", status, payload[:300])
+            return {"error": f"Registration rejected ({status}): {detail}".strip(": ")}
+        data = payload
+        if not data.get("client_id"):
+            logger.error("OAuth registration returned no client_id")
+            return {"error": "Registration succeeded but returned no client_id"}
+        final_method = data.get("token_endpoint_auth_method") or auth_method
+        logger.info("OAuth client registered with token_endpoint_auth_method=%s", final_method)
+        return {
+            "client_id": data["client_id"],
+            "client_secret": "" if final_method == "none" else data.get("client_secret", ""),
+            "token_endpoint_auth_method": final_method,
+        }
     except Exception as e:
         logger.error("OAuth client registration request failed: %s", e)
         return None
