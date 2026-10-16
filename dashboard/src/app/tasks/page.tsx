@@ -266,8 +266,13 @@ export default function TasksPage() {
     const task = board.tasks.find((t) => t.conversation_id === pendingTaskId.current);
     pendingTaskId.current = null;
     if (!task) return;
+    if (listLayout) {
+      setTriageSelect(task.conversation_id);
+      return;
+    }
     setChatTask(task);
     setChatDrawerOpen(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board]);
 
   const refresh = useCallback(async () => {
