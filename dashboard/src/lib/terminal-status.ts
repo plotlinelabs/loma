@@ -48,3 +48,11 @@ export function withTerminalStatus<T extends { role: string; content: string }>(
   if (last && last.role === item.role && last.content === item.content) return items;
   return [...items, item];
 }
+
+/** Which run outcome a transcript message reports, so the chat can offer the
+ * next step (Continue / Try again) instead of a bare sentence. */
+export function terminalKind(content: string): "interrupted" | "error" | null {
+  if (content === INTERRUPTED_MESSAGE) return "interrupted";
+  if (content.startsWith("Error: ")) return "error";
+  return null;
+}

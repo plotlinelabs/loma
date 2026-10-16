@@ -49,3 +49,11 @@ test("appending is idempotent across recovery polls", () => {
 test("missing error text falls back to a generic label", () => {
   assert.equal(terminalStatusItem({ status: "error", error: null }).content, "Error: Unknown error");
 });
+
+test('terminal messages are recognised so the chat can offer a next step', () => {
+  const { terminalKind } = context.exports;
+  assert.equal(terminalKind(INTERRUPTED_MESSAGE), 'interrupted');
+  assert.equal(terminalKind('Error: Klaviyo API returned 401'), 'error');
+  assert.equal(terminalKind(STOPPED_BY_USER_MESSAGE), null);
+  assert.equal(terminalKind('All done.'), null);
+});

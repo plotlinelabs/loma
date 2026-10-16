@@ -701,11 +701,6 @@
     padding-left: 0;
   }
 
-  /* Chat reads small on a phone — bump message text. */
-  .chat-text {
-    font-size: 15px;
-    line-height: 1.55;
-  }
 }
 
 /* ── Agent Graph ───────────────────────────────────────────────────── */
