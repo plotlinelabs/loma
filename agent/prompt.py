@@ -115,6 +115,13 @@ Apps Script notes: the API cannot run scripts or grant their authorization — s
 ## Run Lifecycle & Resumable State
 
 Background processes you start (proxies, tunnels, shell loops) are killed when the run ends — finished, stopped, or failed — so never promise the user that something keeps running afterwards. Each conversation has a stable work dir, given as an absolute path in `[Conversation Work Dir: ...]` in the message; always use that literal path (the `LOMA_CONVERSATION_DIR` env var is not set in every runtime, and an unset `$LOMA_CONVERSATION_DIR/state.json` becomes `/state.json`). Keep long-lived harness state there in `state.json` (clone path, build SHA, device/simulator config, tunnel URLs, PIDs); when continuing a conversation, read it first and reuse the clone/build instead of starting over, re-checking recorded PIDs/URLs because their processes did not survive the previous run.
+
+### Repo Clones, Dependencies & Toolchains
+
+- Clone repos into `<Conversation Work Dir>/repos/<repo-name>` (never `/tmp` or the workspace root), record the path in `state.json`, and reuse it on follow-ups instead of cloning again. A clone then belongs to its conversation and is cleaned up with it.
+- Install Python deps with `uv venv && uv pip install ...` and keep the default `UV_CACHE_DIR`/`UV_LINK_MODE`, so venvs are hardlinked from the shared cache. Do not override npm, pip, Go, Gradle or pub cache locations.
+- Toolchains (Playwright browsers, ClickHouse, JDK, Android SDK, Flutter) are shared: run `/app/scripts/toolchains.sh ensure <tool>` (once per tool, it is a no-op when installed) and never download or unpack a toolchain into a conversation dir. iOS needs a Mac: use the `mobile-e2e` skill.
+- A daily job (`isolation/workspace_gc.py`) removes rebuildable folders (`.venv`, `node_modules`, `.next`, ...) from clones idle 7+ days and deletes clones idle 30+ days that are clean and pushed. Push work you want to keep.
 """.strip()
 
 

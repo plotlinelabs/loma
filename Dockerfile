@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git curl ca-certificates \
-    poppler-utils tesseract-ocr openssh-client tini \
+    poppler-utils tesseract-ocr openssh-client tini unzip \
     && OPENCODE_INSTALL_DIR=/usr/local/bin sh -c 'curl -fsSL https://opencode.ai/install | bash' \
     && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
     && opencode --version \
@@ -28,8 +28,28 @@ ARG GO_VERSION=1.24.9
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xz \
     && /usr/local/go/bin/go version
 ENV PATH="/usr/local/go/bin:${PATH}" \
-    GOPATH=/opt/loma-workspace/go \
     GOFLAGS=-modcacherw
+
+# Shared caches and toolchains live on the workspace volume, next to the clones.
+# Same filesystem, so uv hardlinks a venv from its cache (a few MB) instead of
+# copying ~700MB per clone. Install toolchains with scripts/toolchains.sh, never
+# per conversation. Dot-dirs are never touched by isolation/workspace_gc.py.
+ENV LOMA_TOOLCHAINS_DIR=/opt/loma-workspace/.toolchains \
+    LOMA_CACHE_DIR=/opt/loma-workspace/.cache \
+    UV_CACHE_DIR=/opt/loma-workspace/.cache/uv \
+    UV_LINK_MODE=hardlink \
+    PIP_CACHE_DIR=/opt/loma-workspace/.cache/pip \
+    npm_config_cache=/opt/loma-workspace/.cache/npm \
+    GOPATH=/opt/loma-workspace/.cache/go \
+    GOMODCACHE=/opt/loma-workspace/.cache/go/pkg/mod \
+    GOCACHE=/opt/loma-workspace/.cache/go-build \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/loma-workspace/.toolchains/ms-playwright \
+    JAVA_HOME=/opt/loma-workspace/.toolchains/jdk \
+    ANDROID_HOME=/opt/loma-workspace/.toolchains/android-sdk \
+    ANDROID_SDK_ROOT=/opt/loma-workspace/.toolchains/android-sdk \
+    GRADLE_USER_HOME=/opt/loma-workspace/.cache/gradle \
+    PUB_CACHE=/opt/loma-workspace/.cache/pub
+ENV PATH="/opt/loma-workspace/.toolchains/bin:/opt/loma-workspace/.toolchains/jdk/bin:/opt/loma-workspace/.toolchains/flutter/bin:/opt/loma-workspace/.toolchains/android-sdk/cmdline-tools/latest/bin:/opt/loma-workspace/.toolchains/android-sdk/platform-tools:${PATH}"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

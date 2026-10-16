@@ -107,6 +107,11 @@ async def main():
     # Start periodic recovery loop for interrupted conversations
     start_recovery_loop()
 
+    # Daily workspace cleanup; dry-run (report only) unless LOMA_WORKSPACE_GC_MODE=delete
+    if os.environ.get("ENV", "").upper() != "DEV":
+        from isolation.workspace_gc import start_workspace_gc_loop
+        start_workspace_gc_loop()
+
     from api.routes import ensure_served_files_store
     await ensure_served_files_store()
 

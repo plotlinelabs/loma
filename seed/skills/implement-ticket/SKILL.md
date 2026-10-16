@@ -14,15 +14,15 @@ When someone shares a Linear ticket (URL or ID) and asks you to implement it, fo
 
 ### BANNED tools after cloning
 
-Once a repo is cloned to `/tmp/<repo-name>-<ticket-id>`, the following tools are **BANNED for the rest of the session**:
+Once a repo is cloned to `<conversation-dir>/repos/<repo-name>`, the following tools are **BANNED for the rest of the session**:
 
 Only use GitHub MCP tools for operations that CANNOT be done locally:
 - `mcp__github__create_branch` — only if not using local `git checkout -b`
 
 | Banned Tool | Use Instead |
 |---|---|
-| `mcp__github__get_file_contents` | `Read` tool on `/tmp/<repo-name>-<ticket-id>/...` |
-| `mcp__github__search_code` | `Grep` tool on `/tmp/<repo-name>-<ticket-id>/...` |
+| `mcp__github__get_file_contents` | `Read` tool on `<conversation-dir>/repos/<repo-name>/...` |
+| `mcp__github__search_code` | `Grep` tool on `<conversation-dir>/repos/<repo-name>/...` |
 
 **Zero tolerance** — every call to a banned tool after cloning is a bug. There are no exceptions.
 
@@ -83,12 +83,12 @@ If you cannot confidently determine the target repo from any of the above, ask t
 
 ## Step 3: Clone the Repo Locally & Understand the Code
 
-Clone the target repo to `/tmp` for local exploration and code changes:
+Clone the target repo into this conversation's work dir (`<conversation-dir>` is the literal path given as `[Conversation Work Dir: ...]` in the message). If `state.json` there already records a clone, reuse it (`git fetch` and check out the default branch) instead of cloning again:
 
 ```bash
 # Clone the repo (shallow clone for speed)
-git clone --depth=50 git@github.com:<owner>/<repo-name>.git /tmp/<repo-name>-<ticket-id>
-cd /tmp/<repo-name>-<ticket-id>
+git clone --depth=50 git@github.com:<owner>/<repo-name>.git <conversation-dir>/repos/<repo-name>
+cd <conversation-dir>/repos/<repo-name>
 
 # Checkout the default branch (confirm the repo's actual default — e.g. `main`, `master`, or `release`)
 git checkout <default-branch>
@@ -136,11 +136,11 @@ Shall I proceed with this implementation?
 
 ## Step 5: Implement Changes Locally
 
-After approval, work on the local clone in `/tmp/<repo-name>-<ticket-id>`. Use ONLY local tools (`Read`, `Grep`, `Glob`, `Edit`, `Write`) — never `mcp__github__get_file_contents`.
+After approval, work on the local clone in `<conversation-dir>/repos/<repo-name>`. Use ONLY local tools (`Read`, `Grep`, `Glob`, `Edit`, `Write`) — never `mcp__github__get_file_contents`.
 
 1. **Create a branch** from the default branch:
    ```bash
-   cd /tmp/<repo-name>-<ticket-id>
+   cd <conversation-dir>/repos/<repo-name>
    git checkout -b <branch-name>
    # Branch naming: ENG-123/short-description or feat/ENG-123-add-webhook-retry
    ```
@@ -153,7 +153,7 @@ After approval, work on the local clone in `/tmp/<repo-name>-<ticket-id>`. Use O
 
 4. **Commit and push**:
    ```bash
-   cd /tmp/<repo-name>-<ticket-id>
+   cd <conversation-dir>/repos/<repo-name>
    git add <specific-files>
    git commit -m "feat: <description> (<ticket-id>)"
    git push -u origin <branch-name>
@@ -174,7 +174,7 @@ After approval, work on the local clone in `/tmp/<repo-name>-<ticket-id>`. Use O
 Use `gh pr create` via Bash with a HEREDOC for the body. Do NOT use `mcp__github__create_pull_request` — the MCP tool's JSON serialization double-escapes newlines (`\\n` instead of actual line breaks), causing PR descriptions to render as broken text on GitHub.
 
 ```bash
-cd /tmp/<repo-name>
+cd <conversation-dir>/repos/<repo-name>
 gh pr create \
   --repo <owner>/<repo-name> \
   --head <branch-name> \
@@ -300,11 +300,7 @@ This is a *draft PR* — please review the changes before marking it ready for r
 
 ## Step 8: Cleanup
 
-After the PR is created, clean up the local clone:
-
-```bash
-rm -rf /tmp/<repo-name>-<ticket-id>
-```
+Keep the clone and record its path and branch in `<conversation-dir>/state.json`, so follow-ups in this conversation reuse it. Do not delete it: the daily workspace cleanup removes its dependency folders after 7 idle days and the clone after 30 idle days once everything is pushed.
 
 ---
 
@@ -317,7 +313,7 @@ rm -rf /tmp/<repo-name>-<ticket-id>
 - *Scope limits* — if the ticket requires a large refactor, touches 10+ files, or needs changes across many repos, explain that it's too complex for automated implementation and suggest breaking it down.
 - *No destructive changes* — don't delete files or remove functionality unless the ticket explicitly asks for it.
 - *Follow existing patterns* — match the repo's code style, don't introduce new frameworks or patterns.
-- *Local clone in /tmp* — always clone to `/tmp/<repo-name>-<ticket-id>` for implementation. This keeps the working directory clean and ensures a fresh codebase state.
+- *Clone in the conversation work dir* — always clone to `<conversation-dir>/repos/<repo-name>` (never `/tmp` or the workspace root), so the clone has an owner and is cleaned up with its conversation.
 
 ---
 
@@ -325,7 +321,7 @@ rm -rf /tmp/<repo-name>-<ticket-id>
 
 When someone replies in a thread where you've created a PR:
 - **First, check if the PR is still open.** If the PR has already been merged, create a new branch from the latest default branch and open a fresh PR for follow-up changes. Do not assume the original PR branch is still open for updates.
-- If they ask for changes to the PR → clone the repo again to `/tmp`, checkout the PR branch, make changes, commit, and push
+- If they ask for changes to the PR → reuse the clone recorded in `state.json` (or clone to `<conversation-dir>/repos/<repo-name>` if missing), checkout the PR branch, make changes, commit, and push
 - If they ask to update the PR description → use `mcp__github__update_pull_request`
 - If they report issues with the code → read the specific feedback, fix the code, push a new commit
 - If they approve → note that they can mark the PR as ready for review on GitHub
@@ -339,10 +335,10 @@ When invoked from a Linear webhook in "modify" mode (a comment mentioning the ag
 1. **FIRST: Distinguish human change requests from automated/bot messages.** If the comment contains no actionable change requests (e.g., it's a bot status update like "⏳ Working on it!", a progress link, or an automated notification), do NOT proceed through the full "update PR" workflow. Instead, immediately respond that the comment contained no specific change requests and skip unnecessary steps. This avoids wasted tool calls.
 2. Find the existing draft PR for the ticket on GitHub (search by ticket ID in title/branch)
 3. Read the comment to understand what changes are requested
-4. **Clone the repo locally** to `/tmp/<repo-name>-<ticket-id>`, checkout the PR branch, and read the current files using local tools (`Read`, `Grep`, `Glob` — NOT `mcp__github__get_file_contents`). Also read the latest ticket description. If the comment says "ticket content was updated, re-implement these changes", perform a detailed diff between the current ticket description and the existing PR code to identify specific deltas. Something must have changed — find exactly what changed and implement only the delta. Pushing an identical commit that re-applies the same files without any actual changes is wasteful and misleading. If after careful comparison you genuinely find no differences, explicitly call that out and ask for clarification rather than pushing a no-op commit.
+4. **Clone the repo locally** to `<conversation-dir>/repos/<repo-name>`, checkout the PR branch, and read the current files using local tools (`Read`, `Grep`, `Glob` — NOT `mcp__github__get_file_contents`). Also read the latest ticket description. If the comment says "ticket content was updated, re-implement these changes", perform a detailed diff between the current ticket description and the existing PR code to identify specific deltas. Something must have changed — find exactly what changed and implement only the delta. Pushing an identical commit that re-applies the same files without any actual changes is wasteful and misleading. If after careful comparison you genuinely find no differences, explicitly call that out and ask for clarification rather than pushing a no-op commit.
 5. Make changes locally, commit, and push to the same branch
 6. Comment on the Linear ticket confirming the changes (with a bot marker comment, e.g. `<!-- agent -->`)
-7. Clean up: `rm -rf /tmp/<repo-name>-<ticket-id>`
+7. Clean up: `rm -rf <conversation-dir>/repos/<repo-name>`
 
 This is different from the initial implementation flow — you are *modifying* an existing PR, not creating a new one.
 
