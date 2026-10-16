@@ -87,13 +87,20 @@ const readCardView = (id: string): CardBoardView =>
   typeof window !== "undefined" && window.localStorage.getItem(CARD_VIEW_STORAGE_PREFIX + id) === "tasks"
     ? "tasks"
     : "cards";
-// Task boards on desktop: a triage list (default) or the kanban, per board.
+// Task boards on desktop: the kanban (default) or a triage list, per board.
+// Only an explicit "list" choice is remembered as list; anything else
+// (nothing saved yet, private mode) opens the kanban.
 const LAYOUT_STORAGE_PREFIX = "loma-task-board-layout:";
 type TaskBoardLayout = "list" | "board";
-const readLayout = (id: string): TaskBoardLayout =>
-  typeof window !== "undefined" && window.localStorage.getItem(LAYOUT_STORAGE_PREFIX + id) === "board"
-    ? "board"
-    : "list";
+const readLayout = (id: string): TaskBoardLayout => {
+  try {
+    return typeof window !== "undefined" && window.localStorage.getItem(LAYOUT_STORAGE_PREFIX + id) === "list"
+      ? "list"
+      : "board";
+  } catch {
+    return "board";
+  }
+};
 // Card boards: the open view and its (possibly unsaved) filters, per board.
 const VIEW_STORAGE_PREFIX = "loma-board-view:";
 
@@ -178,7 +185,10 @@ export default function TasksPage() {
     setCardView(view);
     window.localStorage.setItem(CARD_VIEW_STORAGE_PREFIX + boardId, view);
   };
-  const [layout, setLayout] = useState<TaskBoardLayout>(() => readLayout(boardId));
+  // Start on the default and apply the saved choice after mount: the server
+  // render can't see localStorage, so reading it in the initializer left the
+  // toggle showing the server value while the client rendered the saved one.
+  const [layout, setLayout] = useState<TaskBoardLayout>("board");
   useEffect(() => { setLayout(readLayout(boardId)); }, [boardId]);
   const changeLayout = (next: TaskBoardLayout) => {
     setLayout(next);
@@ -631,7 +641,7 @@ export default function TasksPage() {
   );
   const layoutToggle = !cardMode && !isMobile && (
     <div role="group" aria-label="Board layout" className="inline-flex shrink-0 rounded-md bg-muted p-0.5">
-      {(["list", "board"] as const).map((option) => (
+      {(["board", "list"] as const).map((option) => (
         <button
           key={option}
           type="button"

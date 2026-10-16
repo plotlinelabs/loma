@@ -84,7 +84,7 @@ export function TaskCard({
         setMenuOpen(true);
       }}
       className={cn(
-        "group relative rounded-2xl border border-border bg-card px-4 py-3.5 cursor-pointer",
+        "group relative rounded-lg border border-border bg-card px-4 py-3.5 cursor-pointer",
         "hover:border-input transition-colors touch-none select-none",
         isDragging && "opacity-40",
       )}
@@ -93,7 +93,8 @@ export function TaskCard({
         {dot && <span aria-hidden className={cn("mt-[7px] h-2 w-2 shrink-0 rounded-full", dot)} />}
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium leading-[21px]">
+            <div className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium leading-[21px]"
+              title={task.title || task.prompt || undefined}>
               {task.title || task.prompt || "New task"}
             </div>
             {!isStar && <TaskAge task={task} />}

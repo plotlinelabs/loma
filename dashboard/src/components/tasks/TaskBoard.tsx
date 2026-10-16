@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -39,6 +39,12 @@ interface TaskBoardProps {
   onLoadMoreDone?: () => void;
 }
 
+/** Needs you and Ready to review share one column on the board. */
+const STOPPED_COLUMN = { id: "needs_input", name: "Needs you · Ready to review" };
+
+/** The board column a task's real column is shown in. */
+const displayColumn = (column: string) => (isStoppedColumn(column) ? STOPPED_COLUMN.id : column);
+
 export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds, readOnly = false, onLoadMoreDone }: TaskBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const { models } = useAgentModels();
@@ -55,10 +61,19 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
     toggleStar,
   } = useTaskBoardActions({ board, onBoardChange, onRefresh, onEditDraft, onError, onOpenChat, includedTagIds, excludedTagIds });
 
+  const displayColumns = columns
+    .filter((column) => column.id !== "review")
+    .map((column) => (column.id === STOPPED_COLUMN.id ? STOPPED_COLUMN : column));
+  const tasksByDisplayColumn: Record<string, Task[]> = {
+    ...tasksByColumn,
+    [STOPPED_COLUMN.id]: [...(tasksByColumn.needs_input ?? []), ...(tasksByColumn.review ?? [])],
+  };
+  const firstReviewId = (tasksByColumn.needs_input ?? []).length > 0 ? tasksByColumn.review?.[0]?.conversation_id : undefined;
+
   const resolveColumn = (overId: string): string | null => {
-    if (tasksByColumn[overId] !== undefined) return overId;
+    if (tasksByDisplayColumn[overId] !== undefined) return overId;
     const overTask = board.tasks.find((t) => t.conversation_id === overId);
-    return overTask ? overTask.column : null;
+    return overTask ? displayColumn(overTask.column) : null;
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -73,10 +88,13 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
 
     const overId = String(event.over.id);
     const target = resolveColumn(overId);
-    if (!target || !canMove(task, task.column, target, laneIds)) return;
+    const from = displayColumn(task.column);
+    if (!target || !canMove(task, from, target, laneIds)) return;
 
-    // Position relative to the card we dropped on (or column end).
-    const columnTasks = (tasksByColumn[target] ?? []).filter(
+    // Position relative to the card we dropped on (or column end). Ranks are
+    // per real column, so a reorder in the shared column uses the task's own.
+    const rankColumn = target === from ? task.column : target;
+    const columnTasks = (tasksByColumn[rankColumn] ?? []).filter(
       (t) => t.conversation_id !== task.conversation_id,
     );
     let index = columnTasks.findIndex((t) => t.conversation_id === overId);
@@ -87,7 +105,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
 
     // Same-column drop = manual reorder, in any column — check this before
     // the transition branches or a reorder inside Working would start a task.
-    if (target === task.column) {
+    if (target === from) {
       reorderInColumn(task, rank);
       return;
     }
@@ -118,50 +136,56 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       onDragCancel={() => setActiveTask(null)}
     >
       <div className="flex flex-1 gap-4 overflow-x-auto pb-4">
-        {columns.map((column) => (
+        {displayColumns.map((column) => (
           <TaskColumn
             key={column.id}
             id={column.id}
             name={column.name}
-            tasks={tasksByColumn[column.id] ?? []}
+            tasks={tasksByDisplayColumn[column.id] ?? []}
             droppable={
               activeTask
-                ? canMove(activeTask, activeTask.column, column.id, laneIds)
+                ? canMove(activeTask, displayColumn(activeTask.column), column.id, laneIds)
                 : undefined
             }
             onAddTask={!readOnly && laneIds.includes(column.id) ? () => onAddTask(column.id) : undefined}
             onLoadMore={column.id === "done" ? onLoadMoreDone : undefined}
           >
-            {(tasksByColumn[column.id] ?? []).map((task) => (
-              <TaskCard
-                key={task.conversation_id}
-                task={task}
-                lanes={board.lanes}
-                tags={board.tags}
-                models={models}
-                readOnly={readOnly}
-                onOpen={openTask}
-                onStart={startTask}
-                onMarkDone={markDone}
-                onReopen={reopen}
-                onMoveToLane={moveToLane}
-                onRemoveFromBoard={removeFromBoard}
-                onDeleteDraft={deleteDraft}
-                onFork={forkTask}
-                onSetModel={setTaskModel}
-                onSetPriority={setTaskPriority}
-                onSetDeadline={setTaskDeadline}
-                onSetTags={setTaskTags}
-                onCreateTag={createAndAssignTag}
-                onToggleStar={toggleStar}
-              />
+            {(tasksByDisplayColumn[column.id] ?? []).map((task) => (
+              <Fragment key={task.conversation_id}>
+                {task.conversation_id === firstReviewId && (
+                  <div className="px-2 pt-2 text-xs font-medium text-muted-foreground" data-testid="task-column-review-divider">
+                    Ready to review · {tasksByColumn.review?.length ?? 0}
+                  </div>
+                )}
+                <TaskCard
+                  task={task}
+                  lanes={board.lanes}
+                  tags={board.tags}
+                  models={models}
+                  readOnly={readOnly}
+                  onOpen={openTask}
+                  onStart={startTask}
+                  onMarkDone={markDone}
+                  onReopen={reopen}
+                  onMoveToLane={moveToLane}
+                  onRemoveFromBoard={removeFromBoard}
+                  onDeleteDraft={deleteDraft}
+                  onFork={forkTask}
+                  onSetModel={setTaskModel}
+                  onSetPriority={setTaskPriority}
+                  onSetDeadline={setTaskDeadline}
+                  onSetTags={setTaskTags}
+                  onCreateTag={createAndAssignTag}
+                  onToggleStar={toggleStar}
+                />
+              </Fragment>
             ))}
           </TaskColumn>
         ))}
       </div>
       <DragOverlay>
         {activeTask && (
-          <div className="rounded-md border bg-card px-3 py-2 text-[13px] shadow-md">
+          <div className="rounded-lg border bg-card px-3 py-2 text-[13px] shadow-md">
             <div className="line-clamp-2 break-words">{activeTask.title || activeTask.prompt || "New task"}</div>
           </div>
         )}

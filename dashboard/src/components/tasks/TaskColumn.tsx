@@ -40,7 +40,7 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, onLoadMore, 
         <div
           ref={setNodeRef}
           className={cn(
-            "flex min-h-24 flex-1 flex-col gap-2 rounded-xl p-1.5 bg-foreground/[0.025] transition-colors",
+            "flex min-h-24 flex-1 flex-col gap-2 rounded-[12px] p-1.5 bg-foreground/[0.025] transition-colors",
             isOver && droppable !== false && "bg-foreground/[0.05]",
             droppable === false && "opacity-40",
           )}
