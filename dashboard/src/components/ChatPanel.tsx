@@ -29,6 +29,7 @@ import ArtifactCard from "./ArtifactCard";
 import { CopyButton } from "./CopyButton";
 import { isDeadRun } from "@/lib/server-time";
 import { withoutArtifactSource } from "@/lib/artifact-fences";
+import { isProcessItem, processCounts, processIndices, processLabel, stepsWord } from "@/lib/process-group";
 import { SlashCommandHint, SlashCommandMenu, slashMatches } from "./composer/SlashCommandMenu";
 import { matchCommand, usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { approvalMessage, revisionMessage, type PlanComment, type PlanStatus } from "./PlanReview";
@@ -284,6 +285,8 @@ function buildHistory(items: ChatItem[]): ChatMessage[] {
   }
   return history;
 }
+
+const LIVE_PROCESS_ENTRIES = 4;
 
 function formatResponseTime(seconds: number): string {
   if (seconds < 10) return `${seconds.toFixed(1)}s`;
@@ -2174,6 +2177,10 @@ export default function ChatPanel({
                 const showWorking = isStreaming && !isRecovering && isLastBlock;
                 const firstAuthor = replyAuthor(block.indices[0] ?? items.length);
                 const firstAgent = firstAuthor.agentId ? agentsById[firstAuthor.agentId] : undefined;
+                const process = processIndices(items, block.indices);
+                const activeThought = isStreaming ? process.findIndex((p) => items[p].role === "thinking"
+                  && items[p].thinkingSeconds === undefined
+                  && items.slice(p + 1).every((later) => later.role === "status")) : -1;
                 let previousAuthorName: string | null = null;
                 return (
                   <div key={`a${block.indices[0] ?? "w"}`} data-chat-role="assistant" className="flex justify-start items-start animate-message-in gap-2 mt-5 first:mt-0">
@@ -2185,18 +2192,14 @@ export default function ChatPanel({
                     <div className="min-w-0 flex-1 space-y-2 pt-0.5">
                       {block.indices.map((i) => {
                         const item = items[i];
-                        if (item.role === "steps") {
-                          return <StepsGroup key={i} steps={item.steps || []} />;
-                        }
-
-                        if (item.role === "thinking") {
+                        if (isProcessItem(item)) {
+                          if (i !== process[0]) return null;
                           return (
-                            <ThinkingBlock
+                            <ProcessGroup
                               key={i}
-                              text={item.content}
-                              seconds={item.thinkingSeconds}
-                              active={isStreaming && item.thinkingSeconds === undefined
-                                && items.slice(i + 1).every((later) => later.role === "status")}
+                              items={process.map((p) => items[p])}
+                              activeThought={activeThought}
+                              working={showWorking}
                             />
                           );
                         }
@@ -2883,45 +2886,80 @@ function ThinkingBlock({ text, seconds, active }: { text: string; seconds?: numb
   );
 }
 
-function StepsGroup({ steps }: { steps: Step[] }) {
-  const [expanded, setExpanded] = useState(false);
+type ProcessEntry =
+  | { kind: "thought"; key: string; item: ChatItem; index: number }
+  | { kind: "step"; key: string; step: Step };
 
-  if (steps.length === 1) {
+/** A reply's thoughts and steps in one card, open while Loma works and folded
+ * to one line after, so the reply text reads on its own. */
+function ProcessGroup({ items, activeThought, working }: {
+  items: ChatItem[];
+  /** Index in `items` of the thought still streaming, or -1. */
+  activeThought: number;
+  working: boolean;
+}) {
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  const [showAll, setShowAll] = useState(false);
+
+  const only = items.length === 1 ? items[0] : undefined;
+  if (only?.role === "thinking") {
+    return <ThinkingBlock text={only.content} seconds={only.thinkingSeconds} active={activeThought === 0} />;
+  }
+  if (only?.role === "steps" && only.steps?.length === 1) {
     return (
       <div className="flex min-w-0 max-w-full items-center gap-2 text-[14px] animate-message-in">
-        <StepLine step={steps[0]} />
+        <StepLine step={only.steps[0]} />
       </div>
     );
   }
 
-  const running = steps.find(s => s.status === "running");
-  const errorCount = steps.filter(s => s.status === "error").length;
-  // The collapsed line says what Loma is doing now, or what it did last.
-  const shown = running ?? steps[steps.length - 1];
-  const preview = (shown.input ? summarizeToolInput(shown.name || "", shown.input) : "") || formatToolName(shown.name || "tool");
+  const counts = processCounts(items);
+  const entries = items.flatMap((item, index): ProcessEntry[] => item.role === "thinking"
+    ? [{ kind: "thought", key: `t${index}`, item, index }]
+    : (item.steps || []).map((step, s) => ({ kind: "step", key: `s${index}-${s}`, step })));
+  const open = expanded ?? working;
+  // While working, the latest few entries; the rest are one click away.
+  const hidden = working && !showAll ? Math.max(0, entries.length - LIVE_PROCESS_ENTRIES) : 0;
+  const running = entries.findLast((entry) => entry.kind === "step" && entry.step.status === "running");
+  const current = activeThought >= 0 ? "Thinking…"
+    : running?.kind === "step" ? (running.step.input ? summarizeToolInput(running.step.name || "", running.step.input) : "") || formatToolName(running.step.name || "tool")
+    : "";
 
   return (
-    <div className="animate-message-in">
+    <div data-chat-process="" className="max-w-[640px] rounded-xl border border-border bg-card animate-message-in">
       <button
-        onClick={() => setExpanded(e => !e)}
         type="button"
-        aria-expanded={expanded}
-        className="flex max-w-full min-w-0 items-center gap-2 text-[14px] text-muted-foreground hover:text-foreground transition-colors"
+        onClick={() => setExpanded(!open)}
+        aria-expanded={open}
+        className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-[14px] text-muted-foreground transition-colors hover:text-foreground"
       >
-        <RiArrowDownSLine
-          size={14}
-          className={cn("transition-transform flex-shrink-0", !expanded && "-rotate-90")}
-        />
-        {running && <RiLoader4Line size={14} className="animate-spin text-brand-500 flex-shrink-0" />}
-        <span className="shrink-0">{steps.length} steps</span>
-        {errorCount > 0 && <span className="shrink-0 text-red-600">· {errorCount} failed</span>}
-        {!expanded && <span className="min-w-0 truncate text-foreground/70">· {preview}</span>}
+        {working ? <RiLoader4Line size={14} className="shrink-0 animate-spin text-brand-500" />
+          : <RiCheckLine size={14} className="shrink-0 text-emerald-600/80" />}
+        <span className={cn("shrink-0", working && "font-medium text-foreground")}>
+          {working ? "Working" : processLabel({ ...counts, failed: 0 })}
+        </span>
+        {counts.failed > 0 && <span className="shrink-0 text-red-600">· {counts.failed} failed</span>}
+        {working && counts.steps > 0 && <span className="shrink-0">· {stepsWord(counts.steps)}</span>}
+        {working && !open && current && <span className="min-w-0 truncate text-foreground/70">· {current}</span>}
+        <RiArrowDownSLine size={14} className={cn("ml-auto shrink-0 transition-transform", !open && "-rotate-90")} />
       </button>
-      {expanded && (
-        <div className="ml-5 mt-1 space-y-1">
-          {steps.map((step, i) => (
-            <div key={i} className="flex min-w-0 items-center gap-2 text-[14px]">
-              <StepLine step={step} />
+      {open && (
+        <div className="space-y-1.5 border-t border-border px-3 py-2.5">
+          {hidden > 0 && (
+            <button type="button" onClick={() => setShowAll(true)} className="text-[13px] text-muted-foreground hover:text-foreground">
+              Show {hidden} earlier
+            </button>
+          )}
+          {entries.slice(hidden).map((entry) => entry.kind === "thought" ? (
+            <ThinkingBlock
+              key={entry.key}
+              text={entry.item.content}
+              seconds={entry.item.thinkingSeconds}
+              active={entry.index === activeThought}
+            />
+          ) : (
+            <div key={entry.key} className="flex min-w-0 items-center gap-2 text-[14px]">
+              <StepLine step={entry.step} />
             </div>
           ))}
         </div>
