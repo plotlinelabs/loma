@@ -68,6 +68,9 @@ jobs:
       - name: Plan documents
         run: npm run test:plan-doc
         working-directory: dashboard
+      - name: Reply process group
+        run: npm run test:process-group
+        working-directory: dashboard
       - name: Build
         run: npm run build
         working-directory: dashboard
