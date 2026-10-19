@@ -55,6 +55,7 @@ from datetime import date, datetime, timezone
 from aiohttp import web
 
 from observability.db import get_db
+from observability.observer import attachment_fields
 from agent.prompt import get_prompt_setting
 from api.auth_helpers import get_system_role, get_user_email
 from api.drain import DRAIN_MESSAGE, is_draining
@@ -217,7 +218,7 @@ async def _run_task_headless(db, conversation_id: str, prompt: str,
             },
             conversation_id=conversation_id,
         )
-        await observer.resume()
+        await observer.resume(files=files)
 
         async for _ in stream_agent(
             prompt=prompt,
@@ -825,7 +826,7 @@ async def handle_create_task(request: web.Request) -> web.Response:
             return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
         doc["status"] = pending_runs.CONVERSATION_QUEUED
         doc["messages"] = [{"role": "user", "content": prompt, "sender": user_email,
-                            "timestamp": doc["started_at"]}]
+                            "timestamp": doc["started_at"], **attachment_fields(files)}]
     await db.conversations.insert_one(doc)
 
     # Quick-added tasks (no explicit title) get an LLM title from the prompt.

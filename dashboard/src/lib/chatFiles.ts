@@ -75,6 +75,11 @@ export async function filesToChatFiles(
   return { files, rejected };
 }
 
+/** The composer notice for files that could not be attached, or null if none. */
+export function skippedFilesNotice(rejected: string[]): string | null {
+  return rejected.length ? `Couldn't attach ${rejected.join(", ")}` : null;
+}
+
 /**
  * Extract every file from a clipboard paste (any type, not just images).
  * Clipboard files that arrive without a usable name (e.g. screenshots) are

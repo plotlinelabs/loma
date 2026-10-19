@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 
 from api.drain import is_draining
 from observability.db import get_db
+from observability.observer import attachment_fields
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,8 @@ async def enqueue(db, kind: str, **fields) -> dict:
 
 
 async def record_queued_message(db, conversation_id: str, message: str, *,
-                                sender: str | None, new_conversation: dict | None = None) -> None:
+                                sender: str | None, new_conversation: dict | None = None,
+                                files: list | None = None) -> None:
     """Show a queued dashboard message on its conversation right away.
 
     ``new_conversation`` is the metadata for a conversation that doesn't exist
@@ -87,7 +89,8 @@ async def record_queued_message(db, conversation_id: str, message: str, *,
     the existing one. Status "queued" tells the dashboard to keep polling.
     """
     now = datetime.now(timezone.utc)
-    user_message = {"role": "user", "content": message, "timestamp": now}
+    user_message = {"role": "user", "content": message, "timestamp": now,
+                    **attachment_fields(files)}
     if sender:
         user_message["sender"] = sender
     if new_conversation is not None:

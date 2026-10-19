@@ -13,7 +13,7 @@ import { AgentPicker } from "@/components/composer/AgentPicker";
 import { AgentScope } from "@/components/composer/AgentScope";
 import { AGENT_TOOL_CONFIG } from "@/hooks/agent-scope";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
-import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
+import { filesToChatFiles, filesFromClipboard, skippedFilesNotice } from "@/lib/chatFiles";
 import { ModelPicker } from "./composer/ModelPicker";
 import { ToolsPicker } from "./composer/ToolsPicker";
 import { PendingFilesStrip } from "./composer/PendingFilesStrip";
@@ -398,7 +398,7 @@ function extractClarifyBlock(text: string): {
 export function rebuildItemsFromConversation(
   messages: Array<{
     role: string; content: string; timestamp?: string; sender?: string;
-    agent_id?: string | null; agent_name?: string;
+    files?: { name: string }[]; agent_id?: string | null; agent_name?: string;
   }> | undefined,
   prompt: string,
   finalResponse: string,
@@ -438,6 +438,12 @@ function restoreClarifyItems(items: ChatItem[]): ChatItem[] {
   return out;
 }
 
+/** The attachment chips of a stored user message (names only, so no image previews). */
+function storedFileNames(m?: { files?: { name: string }[] }): { fileNames?: string[] } {
+  const names = (m?.files || []).map((f) => f.name).filter(Boolean);
+  return names.length ? { fileNames: names } : {};
+}
+
 function rebuildTranscript(
   messages: Parameters<typeof rebuildItemsFromConversation>[0],
   prompt: string,
@@ -459,6 +465,7 @@ function rebuildTranscript(
           role: m.role as "user" | "assistant",
           content: m.content,
           ...(m.role === "user" && m.sender ? { sender: m.sender } : {}),
+          ...(m.role === "user" ? storedFileNames(m) : {}),
           ...(m.role === "assistant"
             ? { agentId: m.agent_id ?? null, agentName: m.agent_name || DEFAULT_AGENT_NAME }
             : {}),
@@ -474,7 +481,7 @@ function rebuildTranscript(
   }
 
   // Collect follow-up user messages (skip the first one — it's the initial prompt)
-  const followUpUserMessages: Array<{ content: string; timestamp: string; sender?: string }> = [];
+  const followUpUserMessages: Array<{ content: string; timestamp: string; sender?: string; fileNames?: string[] }> = [];
   if (messages && messages.length > 1) {
     const userMessages = messages.filter((m) => m.role === "user");
     for (let i = 1; i < userMessages.length; i++) {
@@ -483,6 +490,7 @@ function rebuildTranscript(
           content: userMessages[i].content,
           timestamp: userMessages[i].timestamp!,
           sender: userMessages[i].sender,
+          ...storedFileNames(userMessages[i]),
         });
       }
     }
@@ -494,7 +502,10 @@ function rebuildTranscript(
 
   // Start with the initial user message
   const items: ChatItem[] = initialPrompt
-    ? [{ role: "user", content: initialPrompt, ...(firstSender ? { sender: firstSender } : {}) }]
+    ? [{
+        role: "user", content: initialPrompt,
+        ...(firstSender ? { sender: firstSender } : {}), ...storedFileNames(firstUserMessage),
+      }]
     : [];
 
   // Where each turn's items begin, so artifacts can find the reply they belong to.
@@ -512,7 +523,10 @@ function rebuildTranscript(
           (item) => item.role === "user" && item.content === followUpUserMessages[i].content
         );
         if (!exists) {
-          items.push({ role: "user", content: followUpUserMessages[i].content, sender: followUpUserMessages[i].sender });
+          items.push({
+            role: "user", content: followUpUserMessages[i].content,
+            sender: followUpUserMessages[i].sender, fileNames: followUpUserMessages[i].fileNames,
+          });
         }
         insertedFollowUps.add(i);
       }
@@ -565,7 +579,10 @@ function rebuildTranscript(
       (item) => item.role === "user" && item.content === followUpUserMessages[i].content
     );
     if (!exists) {
-      items.push({ role: "user", content: followUpUserMessages[i].content, sender: followUpUserMessages[i].sender });
+      items.push({
+        role: "user", content: followUpUserMessages[i].content,
+        sender: followUpUserMessages[i].sender, fileNames: followUpUserMessages[i].fileNames,
+      });
     }
   }
 
@@ -578,7 +595,7 @@ function rebuildTranscript(
           (item) => item.role === "user" && item.content === userMessages[i].content
         );
         if (!exists) {
-          items.push({ role: "user", content: userMessages[i].content });
+          items.push({ role: "user", content: userMessages[i].content, ...storedFileNames(userMessages[i]) });
         }
       }
     }
@@ -829,6 +846,7 @@ export default function ChatPanel({
   const [streamElapsedSeconds, setStreamElapsedSeconds] = useState(0);
   const [isRecovering, setIsRecovering] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<ChatFile[]>(initialFiles || []);
+  const [skippedFiles, setSkippedFiles] = useState<string | null>(null);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [accountInfo, setAccountInfo] = useState<{
     account_type?: "round_robin";
@@ -1076,9 +1094,7 @@ export default function ChatPanel({
     if (chatFiles.length) {
       setPendingFiles((prev) => [...prev, ...chatFiles]);
     }
-    if (rejected.length) {
-      console.warn("Unsupported files skipped:", rejected);
-    }
+    setSkippedFiles(skippedFilesNotice(rejected));
   }, []);
 
   const removeFile = useCallback((index: number) => {
@@ -1346,6 +1362,7 @@ export default function ChatPanel({
     if (!isOverride) {
       setInput("");
       setPendingFiles([]);
+      setSkippedFiles(null);
       setAccountInfo(null);
     } else if (includePendingFiles && filesToSend) {
       setPendingFiles([]);
@@ -1379,7 +1396,8 @@ export default function ChatPanel({
 
     try {
       for await (const event of streamChat(
-        message,
+        // A files-only send has no text; the server rejects an empty message.
+        message || displayMessage,
         history,
         filesToSend,
         activeConversationId,
@@ -1973,6 +1991,7 @@ export default function ChatPanel({
               }}
             >
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
+              {skippedFiles && <p className="mb-1 text-xs text-destructive">{skippedFiles}</p>}
               {voice.active
                 ? <VoicePanel voice={voice} className="mb-1.5 rounded-2xl border border-border bg-card" />
                 : voice.error && <p className="mb-1 text-xs text-destructive">{voice.error}</p>}
@@ -2381,6 +2400,7 @@ export default function ChatPanel({
             >
               {isStreaming && <PetRunway running={!items.some((item) => item.role === "clarify" && !item.submitted)} />}
               <PendingFilesStrip files={pendingFiles} onRemove={removeFile} onExpandImage={setExpandedImage} />
+              {skippedFiles && <p className="mb-1 text-xs text-destructive">{skippedFiles}</p>}
               {voice.active
                 ? <VoicePanel voice={voice} className="mb-1.5 rounded-2xl border border-border bg-card" />
                 : voice.error && <p className="mb-1 text-xs text-destructive">{voice.error}</p>}

@@ -95,8 +95,13 @@ function ChatPageContent() {
     if (continueId) setActiveConversationId(continueId);
   }, [continueId]);
 
+  // A chat started on this page already holds its messages (and their
+  // attachments); reloading it when the URL gains ?continue= would replace them.
+  const createdHereRef = useRef<string | null>(null);
+
   // Callback for ChatPanel to notify us when a new conversation is created
   const handleConversationCreated = useCallback((newId: string) => {
+    createdHereRef.current = newId;
     setActiveConversationId(newId);
     setConversationOwner(user?.email || null);
   }, [user?.email]);
@@ -127,6 +132,8 @@ function ChatPageContent() {
   useEffect(() => {
     if (flowId) {
       loadFlow();
+    } else if (continueId && continueId === createdHereRef.current) {
+      createdHereRef.current = null;
     } else if (continueId) {
       loadConversation();
     }
