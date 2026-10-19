@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
  * Dock-style icon magnification).
  *
  * Stored per device in localStorage and mirrored onto <html> as
- * `data-sidebar` / `data-sidebar-side`. Left/right is the classic sidebar;
+ * `data-sidebar` / `data-sidebar-side` / `data-sidebar-autohide`. Left/right is the classic sidebar;
  * top is a full-width icon bar and bottom a floating macOS-style dock. The root layout's inline head script
  * sets those attributes before first paint, and globals.css sizes the sidebar
  * and offsets the page from them, so the layout is right on the first frame.
@@ -32,6 +32,7 @@ export const awayFromEdge = (side: SidebarSide) =>
 const COLLAPSED_KEY = "sidebar-collapsed";
 const SIDE_KEY = "sidebar-side";
 const MAGNIFY_KEY = "sidebar-magnify";
+const AUTOHIDE_KEY = "sidebar-autohide";
 
 const listeners = new Set<() => void>();
 
@@ -57,11 +58,22 @@ function readMagnify(): boolean {
   return read(MAGNIFY_KEY) !== "false";
 }
 
+/** macOS "Automatically hide and show the Dock". An explicit choice wins;
+ * with none saved it is on for the top bar and bottom dock (the bar should not
+ * hold page space it is not using) and off for the left/right sidebar, so
+ * existing side-rail users see no change. */
+function readAutohide(): boolean {
+  const v = read(AUTOHIDE_KEY);
+  if (v === "true" || v === "false") return v === "true";
+  return isHorizontalSide(readSide());
+}
+
 /** Keep the <html> attributes the CSS keys off in step with storage. */
 function applyAttributes() {
   const root = document.documentElement;
   root.setAttribute("data-sidebar", readCollapsed() ? "collapsed" : "expanded");
   root.setAttribute("data-sidebar-side", readSide());
+  root.toggleAttribute("data-sidebar-autohide", readAutohide());
 }
 
 function notify() {
@@ -71,7 +83,7 @@ function notify() {
 
 function onStorage(e: StorageEvent) {
   // Another tab changed a preference: follow it here too.
-  if (e.key === COLLAPSED_KEY || e.key === SIDE_KEY || e.key === MAGNIFY_KEY) notify();
+  if (e.key === COLLAPSED_KEY || e.key === SIDE_KEY || e.key === MAGNIFY_KEY || e.key === AUTOHIDE_KEY) notify();
 }
 
 function subscribe(listener: () => void) {
@@ -108,14 +120,38 @@ export function setSidebarMagnify(on: boolean) {
   write(MAGNIFY_KEY, String(on));
 }
 
+export function useSidebarAutohide(): boolean {
+  return useSyncExternalStore(subscribe, readAutohide, () => false);
+}
+
+/** Fired when the user turns auto-hide on or moves the bar to another edge,
+ * so the hidden bar can briefly show where it went (hooks/useDockAutohide).
+ * Not fired on page load or for changes from another tab. */
+export const DOCK_PEEK_EVENT = "loma:dock-peek";
+let peekRequestedAt = 0;
+/** When the last peek was asked for. The change that asks for it also re-runs
+ * the hook (new edge, or auto-hide just enabled), so the event can land
+ * before the new listener exists; the hook checks this on setup. */
+export const dockPeekRequestedAt = () => peekRequestedAt;
+const requestPeek = () => {
+  peekRequestedAt = Date.now();
+  window.dispatchEvent(new Event(DOCK_PEEK_EVENT));
+};
+
+export function setSidebarAutohide(on: boolean) {
+  write(AUTOHIDE_KEY, String(on));
+  if (on) requestPeek();
+}
+
 export function toggleSidebarCollapsed() {
   write(COLLAPSED_KEY, String(!readCollapsed()));
 }
 
 export function setSidebarSide(side: SidebarSide) {
   write(SIDE_KEY, side);
+  requestPeek();
 }
 
 /** Inline <head> script: sets the attributes before first paint. Tiny and
  * dependency-free because it runs before React. */
-export const SIDEBAR_PREFS_SCRIPT = `(function(){try{var d=document.documentElement;d.setAttribute('data-sidebar',localStorage.getItem('${COLLAPSED_KEY}')==='true'?'collapsed':'expanded');var s=localStorage.getItem('${SIDE_KEY}');d.setAttribute('data-sidebar-side',${JSON.stringify(SIDES)}.indexOf(s)>-1?s:'left')}catch(e){}})()`;
+export const SIDEBAR_PREFS_SCRIPT = `(function(){try{var d=document.documentElement;d.setAttribute('data-sidebar',localStorage.getItem('${COLLAPSED_KEY}')==='true'?'collapsed':'expanded');var s=localStorage.getItem('${SIDE_KEY}');if(${JSON.stringify(SIDES)}.indexOf(s)<0)s='left';d.setAttribute('data-sidebar-side',s);var h=localStorage.getItem('${AUTOHIDE_KEY}');if(h==='true'||(h!=='false'&&(s==='top'||s==='bottom')))d.setAttribute('data-sidebar-autohide','')}catch(e){}})()`;

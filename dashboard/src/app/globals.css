@@ -1186,3 +1186,33 @@
 @media (prefers-reduced-motion: reduce) {
   .loma-sidebar [data-dock-item], .loma-sidebar [data-dock-glyph] { --dock-s: 1 !important; --dock-t: 0px !important; }
 }
+
+/* Auto-hide (macOS "Automatically hide and show the Dock"). <html
+   data-sidebar-autohide> comes from the head script, so the page never paints
+   with space reserved for a hidden bar. The bar slides off its edge until
+   hooks/useDockAutohide sets data-dock-shown (pointer at the edge, on the bar,
+   a menu from it open, keyboard focus, or a peek); while shown it floats over
+   the page instead of pushing it. Mouse/trackpad only: on touch screens
+   (hover: none) the bar stays put and keeps its space. Unlayered, after the
+   rules above, so it wins over them and the aside's translate utility. */
+@media (min-width: 48rem) and (hover: hover) {
+  html[data-sidebar-autohide] .loma-dashboard { margin-left: 0; margin-right: 0; padding-top: 0; padding-bottom: 0; }
+  html[data-sidebar-autohide] .loma-sidebar {
+    transition: translate 260ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 200ms ease-out, width 200ms ease-out;
+  }
+  html[data-sidebar-autohide] .loma-sidebar:not([data-dock-shown]) { opacity: 0; pointer-events: none; }
+  html[data-sidebar-autohide][data-sidebar-side="bottom"] .loma-sidebar:not([data-dock-shown]) { translate: 0 calc(100% + 40px); }
+  html[data-sidebar-autohide][data-sidebar-side="top"] .loma-sidebar:not([data-dock-shown]) { translate: 0 calc(-100% - 12px); }
+  html[data-sidebar-autohide][data-sidebar-side="left"] .loma-sidebar:not([data-dock-shown]) { translate: calc(-100% - 12px) 0; }
+  html[data-sidebar-autohide][data-sidebar-side="right"] .loma-sidebar:not([data-dock-shown]) { translate: calc(100% + 12px) 0; }
+  /* Floating over the page now, so the side rail and top bar get a shadow. */
+  html[data-sidebar-autohide]:not([data-sidebar-side="bottom"]) .loma-sidebar[data-dock-shown] {
+    box-shadow: 0 12px 40px -12px rgb(0 0 0 / 0.35);
+  }
+  /* Slide out a touch slower than in, like the Dock. */
+  html[data-sidebar-autohide] .loma-sidebar:not([data-dock-shown]) { transition-duration: 320ms, 260ms, 200ms; }
+}
+@media (min-width: 48rem) and (hover: hover) and (prefers-reduced-motion: reduce) {
+  html[data-sidebar-autohide] .loma-sidebar,
+  html[data-sidebar-autohide] .loma-sidebar:not([data-dock-shown]) { transition: opacity 120ms linear; }
+}

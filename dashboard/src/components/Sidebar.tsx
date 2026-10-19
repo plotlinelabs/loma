@@ -21,11 +21,14 @@ import {
   setSidebarSide,
   useSidebarMagnify,
   setSidebarMagnify,
+  useSidebarAutohide,
+  setSidebarAutohide,
   isHorizontalSide,
   awayFromEdge,
   type SidebarSide,
 } from "../lib/sidebarPrefs";
 import { useDockMagnify } from "@/hooks/useDockMagnify";
+import { useDockAutohide } from "@/hooks/useDockAutohide";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
@@ -404,6 +407,19 @@ export default function Sidebar({
     axis: horizontal ? "x" : "y",
     max: 2.2,
   });
+  // macOS "Automatically hide and show": the bar slides off its edge and
+  // gives the page its space back until the pointer reaches that edge.
+  const autohide = useSidebarAutohide();
+  const peekDock = useDockAutohide(asideRef, { enabled: autohide && !isMobile, side });
+  // New notification: pop the hidden bar up briefly, like an app bouncing in
+  // a hidden Dock. The first count after load is the baseline, not "new".
+  const { unreadCount, loaded: unreadLoaded } = useNotifications();
+  const prevUnread = useRef<number | null>(null);
+  useEffect(() => {
+    if (!unreadLoaded) return;
+    if (prevUnread.current !== null && unreadCount > prevUnread.current) peekDock(2500);
+    prevUnread.current = unreadCount;
+  }, [unreadCount, unreadLoaded, peekDock]);
 
   // Filter nav items by role
   const visibleNav = navigation.filter((item) => !item.minRole || hasRole(item.minRole));
@@ -675,6 +691,15 @@ export default function Sidebar({
                           data-testid="sidebar-magnify"
                         >
                           Magnify icons on hover
+                        </DropdownMenuCheckboxItem>
+                        <DropdownMenuCheckboxItem
+                          checked={autohide}
+                          onCheckedChange={(v) => setSidebarAutohide(v === true)}
+                          onSelect={(e) => e.preventDefault()}
+                          className="text-[13px]"
+                          data-testid="sidebar-autohide"
+                        >
+                          Auto-hide
                         </DropdownMenuCheckboxItem>
                         <DropdownMenuSeparator />
                       </div>
