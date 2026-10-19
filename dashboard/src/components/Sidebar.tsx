@@ -123,7 +123,7 @@ function NotificationBell({ collapsed, onNavigate, railTooltipSide, large = fals
           ))}
         </Link>
       </TooltipTrigger>
-      <TooltipContent side={collapsed ? railTooltipSide : "bottom"}>{label}</TooltipContent>
+      <TooltipContent side={collapsed ? railTooltipSide : "bottom"} sideOffset={6} updatePositionStrategy="always">{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -402,7 +402,7 @@ export default function Sidebar({
   useDockMagnify(asideRef, {
     enabled: magnify && rail && !isMobile,
     axis: horizontal ? "x" : "y",
-    max: horizontal ? 1.55 : 1.6,
+    max: 2.2,
   });
 
   // Filter nav items by role
@@ -464,7 +464,8 @@ export default function Sidebar({
         "flex shrink-0 items-center justify-between",
         horizontal ? "flex-row gap-1" : rail ? "flex-col gap-1 px-2 pt-2 pb-2" : "px-5 pt-6 pb-4",
       )}>
-        <div className={cn("flex items-center gap-2", rail && "justify-center")}>
+        {/* data-dock-bound: magnified dock icons never spread over the logo. */}
+        <div data-dock-bound="" className={cn("flex items-center gap-2", rail && "justify-center")}>
           <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={rail ? 22 : 20} /></Link>} />
           {!rail && (
             <Link href="/tasks" prefetch onClick={onClose} className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
@@ -538,7 +539,7 @@ export default function Sidebar({
               return rail ? (
                 <Tooltip key={item.name}>
                   <TooltipTrigger asChild>{link}</TooltipTrigger>
-                  <TooltipContent side={railTooltipSide}>{item.name}</TooltipContent>
+                  <TooltipContent side={railTooltipSide} sideOffset={6} updatePositionStrategy="always">{item.name}</TooltipContent>
                 </Tooltip>
               ) : link;
             })}

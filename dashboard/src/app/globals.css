@@ -1102,33 +1102,87 @@
   html[data-sidebar-side="top"] .loma-dashboard { margin: 0; padding-top: 52px; }
   html[data-sidebar-side="bottom"] .loma-dashboard { margin: 0; padding-bottom: 84px; }
 
-  /* Dock magnification (hooks/useDockMagnify sets --dock-s per item). */
+  /* Dock magnification, macOS-style. hooks/useDockMagnify sets per item
+     --dock-s (scale, bell curve around the pointer) and --dock-t (shift along
+     the dock so grown icons push neighbours apart), and on the root
+     data-dock-active (pointer inside) and data-dock-pop (icons may grow out
+     of the bar). Transforms only, so hovering never reflows the page. */
   .loma-sidebar [data-dock-item],
   .loma-sidebar [data-dock-glyph] {
-    transition-property: color, background-color, transform, margin;
-    transition-duration: 150ms;
+    transition-property: color, background-color, transform;
+    transition-duration: 220ms;
     transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform;
+  }
+  /* Follow the pointer closely while inside; ease back out on leave. */
+  .loma-sidebar[data-dock-active] [data-dock-item],
+  .loma-sidebar[data-dock-active] [data-dock-glyph] {
+    transition-duration: 90ms;
+    transition-timing-function: ease-out;
   }
   .loma-sidebar[data-dock-measuring] [data-dock-item],
   .loma-sidebar[data-dock-measuring] [data-dock-glyph] { transition: none !important; }
-  /* Side rail: grow the glyph inside its 40px tile, so the narrow rail never
-     clips it. */
-  html:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar [data-dock-glyph] {
+  /* Like the real Dock: no hover tile behind the magnified icon. */
+  .loma-sidebar[data-dock-active][data-dock-pop] [data-dock-item]:not([aria-current="page"]):hover {
+    background-color: transparent;
+  }
+
+  /* Side rail, icons fit: unclip the rail and grow each icon out of it,
+     anchored on the screen edge (left dock grows right, right dock left). */
+  html:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar[data-dock-pop],
+  html:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar[data-dock-pop] [data-slot="scroll-area"],
+  html:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar[data-dock-pop] [data-slot="scroll-area-viewport"] {
+    overflow: visible !important;
+  }
+  html:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar[data-dock-pop] [data-dock-item] {
+    position: relative;
+    z-index: 1;
+    transform-origin: 0% 50%;
+    transform: translateY(var(--dock-t, 0px)) scale(var(--dock-s, 1));
+  }
+  html[data-sidebar-side="right"]:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar[data-dock-pop] [data-dock-item] {
+    transform-origin: 100% 50%;
+  }
+  /* Side rail that has to scroll (long board list): it must clip, so only the
+     glyph grows, inside its tile. */
+  html:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar:not([data-dock-pop]) [data-dock-glyph] {
     display: inline-flex;
     transform: scale(var(--dock-s, 1));
   }
-  /* Top/bottom: grow the whole tile out of the bar and push neighbours apart. */
+
+  /* Top bar / bottom dock: icons grow away from the screen edge and spread
+     sideways; the bottom dock's shelf widens with them. */
   html[data-sidebar-side="bottom"] .loma-sidebar [data-dock-item] {
     transform-origin: 50% 100%;
-    transform: translateY(calc((1 - var(--dock-s, 1)) * 8px)) scale(var(--dock-s, 1));
-    margin-inline: calc((var(--dock-s, 1) - 1) * 14px);
+    transform: translate(var(--dock-t, 0px), calc((1 - var(--dock-s, 1)) * 4px)) scale(var(--dock-s, 1));
   }
   html[data-sidebar-side="top"] .loma-sidebar [data-dock-item] {
     transform-origin: 50% 0%;
-    transform: translateY(calc((var(--dock-s, 1) - 1) * 8px)) scale(var(--dock-s, 1));
-    margin-inline: calc((var(--dock-s, 1) - 1) * 14px);
+    transform: translate(var(--dock-t, 0px), calc((var(--dock-s, 1) - 1) * 4px)) scale(var(--dock-s, 1));
   }
+  html[data-sidebar-side="bottom"] .loma-sidebar {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  html[data-sidebar-side="bottom"] .loma-sidebar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    left: calc(-1 * var(--dock-ext-start, 0px));
+    right: calc(-1 * var(--dock-ext-end, 0px));
+    z-index: -1;
+    border: 1px solid var(--sidebar-border, var(--border));
+    border-radius: 20px;
+    box-shadow: 0 10px 30px -12px rgb(0 0 0 / 0.25), 0 2px 6px -2px rgb(0 0 0 / 0.08);
+    background: color-mix(in oklab, var(--sidebar) 82%, transparent);
+    backdrop-filter: blur(18px) saturate(1.4);
+    transition: left 220ms cubic-bezier(0.2, 0.8, 0.2, 1), right 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    pointer-events: none;
+  }
+  html[data-sidebar-side="bottom"] .loma-sidebar[data-dock-active]::before { transition-duration: 90ms; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .loma-sidebar [data-dock-item], .loma-sidebar [data-dock-glyph] { --dock-s: 1 !important; }
+  .loma-sidebar [data-dock-item], .loma-sidebar [data-dock-glyph] { --dock-s: 1 !important; --dock-t: 0px !important; }
 }

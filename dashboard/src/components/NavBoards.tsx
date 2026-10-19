@@ -182,7 +182,7 @@ export function NavBoards({
               <span data-dock-glyph=""><RiCheckboxLine size={horizontal ? 18 : 16} className={onTasks ? "text-sidebar-primary" : undefined} /></span>
             </Link>
           </TooltipTrigger>
-          <TooltipContent side={tooltipSide}>Tasks</TooltipContent>
+          <TooltipContent side={tooltipSide} sideOffset={6} updatePositionStrategy="always">Tasks</TooltipContent>
         </Tooltip>
         {boards.map((board, index) => {
           const count = board.needs_you ?? 0;
@@ -204,7 +204,7 @@ export function NavBoards({
                   {count > 0 && <span className="absolute right-1.5 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />}
                 </button>
               </TooltipTrigger>
-              <TooltipContent side={tooltipSide}>{hint}</TooltipContent>
+              <TooltipContent side={tooltipSide} sideOffset={6} updatePositionStrategy="always">{hint}</TooltipContent>
             </Tooltip>
           );
         })}
