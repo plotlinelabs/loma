@@ -113,8 +113,26 @@ function NotificationBell({ collapsed, onNavigate }: { collapsed: boolean; onNav
   );
 }
 
-function SidebarSkeleton() {
+function SidebarSkeleton({ collapsed }: { collapsed: boolean }) {
   const widths = [72, 80, 56, 64, 96, 72, 96, 88];
+  // Collapsed rail is 56px wide: icon placeholders only, no label bars.
+  if (collapsed) {
+    return (
+      <>
+        <div className="flex flex-col items-center gap-1 px-2" data-testid="sidebar-skeleton-collapsed">
+          {widths.map((_, i) => (
+            <div key={i} className="flex h-8 w-8 items-center justify-center">
+              <Skeleton className="w-[16px] h-[16px] rounded" />
+            </div>
+          ))}
+        </div>
+        <div className="mt-auto flex flex-col items-center px-2 py-2">
+          <Separator className="mb-3" />
+          <Skeleton className="w-8 h-8 rounded-full" />
+        </div>
+      </>
+    );
+  }
   return (
     <>
       <div className="px-3 space-y-0.5">
@@ -436,7 +454,7 @@ export default function Sidebar({
       </div>
 
       {userLoading ? (
-        <SidebarSkeleton />
+        <SidebarSkeleton collapsed={collapsed} />
       ) : (
         <>
           {/* Tasks with its boards, then Flows. `min-h-0` lets the region

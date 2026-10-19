@@ -37,6 +37,8 @@ interface TaskBoardProps {
   readOnly?: boolean;
   /** Load more Done tasks; set only while the server has more. */
   onLoadMoreDone?: () => void;
+  /** Extra bottom padding so the last card scrolls clear of a floating composer. */
+  bottomInset?: boolean;
 }
 
 /** Needs you and Ready to review share one column on the board. */
@@ -45,7 +47,7 @@ const STOPPED_COLUMN = { id: "needs_input", name: "Needs you · Ready to review"
 /** The board column a task's real column is shown in. */
 const displayColumn = (column: string) => (isStoppedColumn(column) ? STOPPED_COLUMN.id : column);
 
-export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds, readOnly = false, onLoadMoreDone }: TaskBoardProps) {
+export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddTask, onOpenChat, onError, includedTagIds, excludedTagIds, readOnly = false, onLoadMoreDone, bottomInset = false }: TaskBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const { models } = useAgentModels();
 
@@ -135,7 +137,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveTask(null)}
     >
-      <div className="flex flex-1 gap-4 overflow-x-auto pb-4">
+      <div data-testid="task-board-scroller" className="flex flex-1 gap-4 overflow-x-auto pb-4">
         {displayColumns.map((column) => (
           <TaskColumn
             key={column.id}
@@ -149,6 +151,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
             }
             onAddTask={!readOnly && laneIds.includes(column.id) ? () => onAddTask(column.id) : undefined}
             onLoadMore={column.id === "done" ? onLoadMoreDone : undefined}
+            bottomInset={bottomInset}
           >
             {(tasksByDisplayColumn[column.id] ?? []).map((task) => (
               <Fragment key={task.conversation_id}>
