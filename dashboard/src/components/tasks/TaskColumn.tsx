@@ -16,10 +16,12 @@ interface TaskColumnProps {
   onAddTask?: () => void;
   /** Done only: more tasks exist than are loaded. */
   onLoadMore?: () => void;
+  /** Reserve room below the cards so the last one scrolls clear of a floating composer. */
+  bottomInset?: boolean;
   children: React.ReactNode;
 }
 
-export function TaskColumn({ id, name, tasks, droppable, onAddTask, onLoadMore, children }: TaskColumnProps) {
+export function TaskColumn({ id, name, tasks, droppable, onAddTask, onLoadMore, bottomInset = false, children }: TaskColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
     id,
     disabled: droppable === false,
@@ -67,6 +69,8 @@ export function TaskColumn({ id, name, tasks, droppable, onAddTask, onLoadMore, 
               Task
             </button>
           )}
+          {/* Cards overflow this box, so padding would not extend the scroll area; a spacer does. */}
+          {bottomInset && <div aria-hidden className="h-20 shrink-0" />}
         </div>
       </SortableContext>
     </div>

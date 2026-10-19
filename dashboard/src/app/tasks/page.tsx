@@ -156,6 +156,10 @@ export default function TasksPage() {
   // board keeps its tab. Task is kept on close for the exit animation.
   const [chatTask, setChatTask] = useState<Task | null>(null);
   const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
+  // Desktop board scroll: the floating composer slides away until scrolling settles.
+  const [boardScrolling, setBoardScrolling] = useState(false);
+  const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current); }, []);
   // Bumped when voice mode changes the task open in the drawer, so the drawer
   // reloads its transcript in place (no close/reopen).
   const [drawerReloadToken, setDrawerReloadToken] = useState(0);
@@ -918,6 +922,12 @@ export default function TasksPage() {
   // CardBoard on every screen size, so they keep the page-level top bar.
   const boardOwnsTopBar = !!board && isMobile && !cardMode;
 
+  const onBoardScroll = () => {
+    setBoardScrolling(true);
+    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+    scrollIdleTimer.current = setTimeout(() => setBoardScrolling(false), 400);
+  };
+
   const handleChatDrawerChange = (open: boolean) => {
     setChatDrawerOpen(open);
     if (!open) {
@@ -998,7 +1008,8 @@ export default function TasksPage() {
             )}
           />
         ) : (
-          <>
+          // Scroll events don't bubble; capture them from the board's scroller.
+          <div className="relative flex min-h-0 flex-1 flex-col" onScrollCapture={!readOnly ? onBoardScroll : undefined}>
             <TaskBoard
               board={board}
               onBoardChange={setBoard}
@@ -1011,12 +1022,16 @@ export default function TasksPage() {
               excludedTagIds={excludedTagIds}
               readOnly={readOnly}
               onLoadMoreDone={loadMoreDone}
+              bottomInset={!readOnly}
             />
+            {!readOnly && <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-16 bg-gradient-to-t from-background to-transparent" />}
             {/* Desktop capture box — mirrors the PWA. Mobile renders its own
                 inside MobileTaskBoard, so only add it here. Fires the task
                 immediately (start: true); it lands in Working on refresh. */}
             {!readOnly && (
               <QuickAddTask
+                floating
+                scrollHidden={boardScrolling}
                 onAdded={refresh}
                 boardId={boardId}
                 drawerOpen={chatDrawerOpen}
@@ -1034,7 +1049,7 @@ export default function TasksPage() {
                 }}
               />
             )}
-          </>
+          </div>
         )
       ) : (
         <div className="flex gap-4">
