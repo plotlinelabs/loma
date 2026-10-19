@@ -127,7 +127,18 @@ function BoardRow({
 
 /** "Tasks" plus the user's boards (emoji, needs-you count, drag to reorder).
  * Collapsed rail: just the board emojis, with an amber dot when one needs you. */
-export function NavBoards({ collapsed, onNavigate, tooltipSide = "right" }: { collapsed: boolean; onNavigate: () => void; tooltipSide?: "left" | "right" }) {
+export function NavBoards({
+  collapsed,
+  horizontal = false,
+  onNavigate,
+  tooltipSide = "right",
+}: {
+  collapsed: boolean;
+  /** Top bar / bottom dock: the collapsed icons laid out as a row. */
+  horizontal?: boolean;
+  onNavigate: () => void;
+  tooltipSide?: "left" | "right" | "top" | "bottom";
+}) {
   const pathname = usePathname();
   const isMobile = useIsMobile();
   const { boards, currentBoardId, openBoard, createBoard, reorder } = useBoards();
@@ -157,7 +168,7 @@ export function NavBoards({ collapsed, onNavigate, tooltipSide = "right" }: { co
 
   if (collapsed) {
     return (
-      <div className="flex flex-col items-center gap-0.5">
+      <div className={cn("flex items-center", horizontal ? "flex-row gap-1" : "flex-col gap-0.5")}>
         <Tooltip>
           <TooltipTrigger asChild>
             <Link
@@ -165,9 +176,10 @@ export function NavBoards({ collapsed, onNavigate, tooltipSide = "right" }: { co
               prefetch
               onClick={onNavigate}
               aria-label="Tasks"
-              className={cn(NAV_ROW, "mx-auto w-10 justify-center py-1.5", onTasks ? NAV_ACTIVE : NAV_IDLE)}
+              data-dock-item=""
+              className={cn(NAV_ROW, "mx-auto w-10 justify-center", horizontal ? "h-10" : "py-1.5", onTasks ? NAV_ACTIVE : NAV_IDLE)}
             >
-              <RiCheckboxLine size={16} className={onTasks ? "text-sidebar-primary" : undefined} />
+              <span data-dock-glyph=""><RiCheckboxLine size={horizontal ? 18 : 16} className={onTasks ? "text-sidebar-primary" : undefined} /></span>
             </Link>
           </TooltipTrigger>
           <TooltipContent side={tooltipSide}>Tasks</TooltipContent>
@@ -185,9 +197,10 @@ export function NavBoards({ collapsed, onNavigate, tooltipSide = "right" }: { co
                   onClick={() => open_(board.id)}
                   aria-label={hint}
                   aria-current={active ? "page" : undefined}
-                  className={cn(NAV_ROW, "mx-auto h-8 w-10 justify-center", active ? NAV_ACTIVE : NAV_IDLE)}
+                  data-dock-item=""
+                  className={cn(NAV_ROW, "mx-auto w-10 justify-center", horizontal ? "h-10 text-[18px]" : "h-8", active ? NAV_ACTIVE : NAV_IDLE)}
                 >
-                  <BoardEmoji emoji={board.emoji} />
+                  <span data-dock-glyph=""><BoardEmoji emoji={board.emoji} /></span>
                   {count > 0 && <span className="absolute right-1.5 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />}
                 </button>
               </TooltipTrigger>

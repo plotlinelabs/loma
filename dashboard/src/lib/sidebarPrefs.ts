@@ -2,10 +2,12 @@
 
 import { useSyncExternalStore } from "react";
 
-/** Desktop sidebar preferences (collapsed rail, which edge it docks to).
+/** Desktop sidebar preferences (collapsed rail, which edge it docks to, and
+ * Dock-style icon magnification).
  *
  * Stored per device in localStorage and mirrored onto <html> as
- * `data-sidebar` / `data-sidebar-side`. The root layout's inline head script
+ * `data-sidebar` / `data-sidebar-side`. Left/right is the classic sidebar;
+ * top is a full-width icon bar and bottom a floating macOS-style dock. The root layout's inline head script
  * sets those attributes before first paint, and globals.css sizes the sidebar
  * and offsets the page from them, so the layout is right on the first frame.
  *
@@ -16,10 +18,20 @@ import { useSyncExternalStore } from "react";
  * patch mismatched attributes, so the page kept the expanded 220px offset next
  * to a collapsed 56px rail. */
 
-export type SidebarSide = "left" | "right";
+export type SidebarSide = "left" | "right" | "top" | "bottom";
+
+const SIDES: readonly SidebarSide[] = ["left", "right", "top", "bottom"];
+
+/** Top and bottom lay the nav out as a row of icons (no labels). */
+export const isHorizontalSide = (side: SidebarSide) => side === "top" || side === "bottom";
+
+/** Where tooltips and popovers should open: away from the docked edge. */
+export const awayFromEdge = (side: SidebarSide) =>
+  ({ left: "right", right: "left", top: "bottom", bottom: "top" } as const)[side];
 
 const COLLAPSED_KEY = "sidebar-collapsed";
 const SIDE_KEY = "sidebar-side";
+const MAGNIFY_KEY = "sidebar-magnify";
 
 const listeners = new Set<() => void>();
 
@@ -36,7 +48,13 @@ function readCollapsed(): boolean {
 }
 
 function readSide(): SidebarSide {
-  return read(SIDE_KEY) === "right" ? "right" : "left";
+  const v = read(SIDE_KEY);
+  return (SIDES as readonly string[]).includes(v ?? "") ? (v as SidebarSide) : "left";
+}
+
+/** On by default; only an explicit "false" turns it off. */
+function readMagnify(): boolean {
+  return read(MAGNIFY_KEY) !== "false";
 }
 
 /** Keep the <html> attributes the CSS keys off in step with storage. */
@@ -53,7 +71,7 @@ function notify() {
 
 function onStorage(e: StorageEvent) {
   // Another tab changed a preference: follow it here too.
-  if (e.key === COLLAPSED_KEY || e.key === SIDE_KEY) notify();
+  if (e.key === COLLAPSED_KEY || e.key === SIDE_KEY || e.key === MAGNIFY_KEY) notify();
 }
 
 function subscribe(listener: () => void) {
@@ -82,6 +100,14 @@ export function useSidebarSide(): SidebarSide {
   return useSyncExternalStore(subscribe, readSide, () => "left" as SidebarSide);
 }
 
+export function useSidebarMagnify(): boolean {
+  return useSyncExternalStore(subscribe, readMagnify, () => true);
+}
+
+export function setSidebarMagnify(on: boolean) {
+  write(MAGNIFY_KEY, String(on));
+}
+
 export function toggleSidebarCollapsed() {
   write(COLLAPSED_KEY, String(!readCollapsed()));
 }
@@ -92,4 +118,4 @@ export function setSidebarSide(side: SidebarSide) {
 
 /** Inline <head> script: sets the attributes before first paint. Tiny and
  * dependency-free because it runs before React. */
-export const SIDEBAR_PREFS_SCRIPT = `(function(){try{var d=document.documentElement;d.setAttribute('data-sidebar',localStorage.getItem('${COLLAPSED_KEY}')==='true'?'collapsed':'expanded');d.setAttribute('data-sidebar-side',localStorage.getItem('${SIDE_KEY}')==='right'?'right':'left')}catch(e){}})()`;
+export const SIDEBAR_PREFS_SCRIPT = `(function(){try{var d=document.documentElement;d.setAttribute('data-sidebar',localStorage.getItem('${COLLAPSED_KEY}')==='true'?'collapsed':'expanded');var s=localStorage.getItem('${SIDE_KEY}');d.setAttribute('data-sidebar-side',${JSON.stringify(SIDES)}.indexOf(s)>-1?s:'left')}catch(e){}})()`;

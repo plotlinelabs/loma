@@ -1069,3 +1069,66 @@
     html[data-sidebar-side="right"][data-sidebar="collapsed"] .loma-dashboard { margin-right: 56px; }
   }
 }
+
+/* Top bar and bottom dock (desktop). Unlayered on purpose: they have to beat
+   the <aside>'s h-dvh / flex-col / overflow-x-hidden utilities and <main>'s
+   md:pt-0, which a rule in @layer base cannot. Top is a full-width icon bar;
+   bottom is a floating, centred macOS-style dock. The page is padded (not
+   offset) so <main> keeps its fixed --app-h height. */
+@media (min-width: 48rem) {
+  html[data-sidebar-side="top"] .loma-sidebar,
+  html[data-sidebar-side="bottom"] .loma-sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0 0.75rem;
+    overflow: visible;
+  }
+  html[data-sidebar-side="top"] .loma-sidebar {
+    top: 0; left: 0; right: 0; bottom: auto;
+    width: auto; height: 52px;
+    border-bottom: 1px solid var(--sidebar-border, var(--border));
+  }
+  html[data-sidebar-side="bottom"] .loma-sidebar {
+    top: auto; bottom: 12px; left: 0; right: 0;
+    margin-inline: auto;
+    width: fit-content; max-width: calc(100vw - 24px); height: 60px;
+    border: 1px solid var(--sidebar-border, var(--border));
+    border-radius: 20px;
+    box-shadow: 0 10px 30px -12px rgb(0 0 0 / 0.25), 0 2px 6px -2px rgb(0 0 0 / 0.08);
+    background: color-mix(in oklab, var(--sidebar) 82%, transparent);
+    backdrop-filter: blur(18px) saturate(1.4);
+  }
+  html[data-sidebar-side="top"] .loma-dashboard { margin: 0; padding-top: 52px; }
+  html[data-sidebar-side="bottom"] .loma-dashboard { margin: 0; padding-bottom: 84px; }
+
+  /* Dock magnification (hooks/useDockMagnify sets --dock-s per item). */
+  .loma-sidebar [data-dock-item],
+  .loma-sidebar [data-dock-glyph] {
+    transition-property: color, background-color, transform, margin;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .loma-sidebar[data-dock-measuring] [data-dock-item],
+  .loma-sidebar[data-dock-measuring] [data-dock-glyph] { transition: none !important; }
+  /* Side rail: grow the glyph inside its 40px tile, so the narrow rail never
+     clips it. */
+  html:not([data-sidebar-side="top"]):not([data-sidebar-side="bottom"]) .loma-sidebar [data-dock-glyph] {
+    display: inline-flex;
+    transform: scale(var(--dock-s, 1));
+  }
+  /* Top/bottom: grow the whole tile out of the bar and push neighbours apart. */
+  html[data-sidebar-side="bottom"] .loma-sidebar [data-dock-item] {
+    transform-origin: 50% 100%;
+    transform: translateY(calc((1 - var(--dock-s, 1)) * 8px)) scale(var(--dock-s, 1));
+    margin-inline: calc((var(--dock-s, 1) - 1) * 14px);
+  }
+  html[data-sidebar-side="top"] .loma-sidebar [data-dock-item] {
+    transform-origin: 50% 0%;
+    transform: translateY(calc((var(--dock-s, 1) - 1) * 8px)) scale(var(--dock-s, 1));
+    margin-inline: calc((var(--dock-s, 1) - 1) * 14px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loma-sidebar [data-dock-item], .loma-sidebar [data-dock-glyph] { --dock-s: 1 !important; }
+}

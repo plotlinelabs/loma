@@ -16,7 +16,17 @@ import CrosscutIcon from "./CrosscutIcon";
 import { NavBoards, NAV_ACTIVE, NAV_IDLE, NAV_ROW } from "./NavBoards";
 import { NavPinnedChats } from "./NavPinnedChats";
 import { useTheme } from "../lib/ThemeContext";
-import { useSidebarSide, setSidebarSide, type SidebarSide } from "../lib/sidebarPrefs";
+import {
+  useSidebarSide,
+  setSidebarSide,
+  useSidebarMagnify,
+  setSidebarMagnify,
+  isHorizontalSide,
+  awayFromEdge,
+  type SidebarSide,
+} from "../lib/sidebarPrefs";
+import { useDockMagnify } from "@/hooks/useDockMagnify";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -25,7 +35,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   RiRobot2Line,
@@ -80,7 +90,9 @@ const userMenuNav: NavItem[] = [
 ];
 
 /** Notifications bell beside the logo, with the unread count. */
-function NotificationBell({ collapsed, onNavigate, railTooltipSide }: { collapsed: boolean; onNavigate: () => void; railTooltipSide: "left" | "right" }) {
+type Edge = "left" | "right" | "top" | "bottom";
+
+function NotificationBell({ collapsed, onNavigate, railTooltipSide, large = false }: { collapsed: boolean; onNavigate: () => void; railTooltipSide: Edge; large?: boolean }) {
   const pathname = usePathname();
   const { unreadCount } = useNotifications();
   const active = pathname.startsWith("/notifications");
@@ -94,12 +106,14 @@ function NotificationBell({ collapsed, onNavigate, railTooltipSide }: { collapse
           onClick={onNavigate}
           aria-label={label}
           aria-current={active ? "page" : undefined}
+          data-dock-item=""
           className={cn(
             "relative flex h-7 w-7 items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring max-md:h-9 max-md:w-9",
+            large && "h-10 w-10 rounded-lg",
             active ? "bg-sidebar-accent text-sidebar-primary" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
           )}
         >
-          <RiNotification3Line size={16} className="max-md:h-5 max-md:w-5" />
+          <span data-dock-glyph=""><RiNotification3Line size={16} className="max-md:h-5 max-md:w-5" /></span>
           {unreadCount > 0 && (collapsed ? (
             <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
           ) : (
@@ -114,8 +128,16 @@ function NotificationBell({ collapsed, onNavigate, railTooltipSide }: { collapse
   );
 }
 
-function SidebarSkeleton({ collapsed }: { collapsed: boolean }) {
+function SidebarSkeleton({ collapsed, horizontal }: { collapsed: boolean; horizontal: boolean }) {
   const widths = [72, 80, 56, 64, 96, 72, 96, 88];
+  if (horizontal) {
+    return (
+      <div className="flex flex-1 items-center gap-2 px-2" data-testid="sidebar-skeleton-horizontal">
+        {widths.slice(0, 5).map((_, i) => <Skeleton key={i} className="h-[18px] w-[18px] rounded" />)}
+        <Skeleton className="ml-auto h-7 w-7 rounded-full" />
+      </div>
+    );
+  }
   // Collapsed rail is 56px wide: icon placeholders only, no label bars.
   if (collapsed) {
     return (
@@ -165,7 +187,7 @@ function SidebarSkeleton({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; collapsed: boolean }) {
+function PoolStatusWidget({ poolStatus, collapsed, horizontal = false }: { poolStatus: PoolStatus; collapsed: boolean; horizontal?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const accountCount = poolStatus.accounts?.length || 0;
   const cooldownCount = poolStatus.accounts_on_cooldown?.length || 0;
@@ -200,7 +222,7 @@ function PoolStatusWidget({ poolStatus, collapsed }: { poolStatus: PoolStatus; c
 
   if (collapsed) {
     return (
-      <div className="px-2.5 py-1 flex flex-col items-center gap-1 opacity-70">
+      <div className={cn("px-2.5 py-1 flex items-center gap-1 opacity-70", horizontal ? "flex-row" : "flex-col")} title="Agent pools">
         <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", statusColor)} />
         {opencode && (
           <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", opencodeColor)} />
@@ -368,8 +390,20 @@ export default function Sidebar({
   const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
   // Desktop dock edge (phones always use the left drawer). Rail tooltips open
   // toward the page, and the fold icon points at the edge it folds into.
+  // Top/bottom render the icon-only rail laid out as a row; there is no
+  // expanded form there, so the collapse toggle is hidden.
+  const isMobile = useIsMobile();
   const side = useSidebarSide();
-  const railTooltipSide = side === "right" ? "left" : "right";
+  const horizontal = !isMobile && isHorizontalSide(side);
+  const rail = collapsed || horizontal;
+  const railTooltipSide = awayFromEdge(side);
+  const magnify = useSidebarMagnify();
+  const asideRef = useRef<HTMLElement>(null);
+  useDockMagnify(asideRef, {
+    enabled: magnify && rail && !isMobile,
+    axis: horizontal ? "x" : "y",
+    max: horizontal ? 1.55 : 1.6,
+  });
 
   // Filter nav items by role
   const visibleNav = navigation.filter((item) => !item.minRole || hasRole(item.minRole));
@@ -426,22 +460,25 @@ export default function Sidebar({
   const sidebarContent = (
     <>
       {/* Logo, notifications bell, collapse toggle and (phones) close button */}
-      <div className={cn("flex shrink-0 items-center justify-between", collapsed ? "flex-col gap-1 px-2 pt-2 pb-2" : "px-5 pt-6 pb-4")}>
-        <div className={cn("flex items-center gap-2", collapsed && "justify-center")}>
-          <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={collapsed ? 22 : 20} /></Link>} />
-          {!collapsed && (
+      <div className={cn(
+        "flex shrink-0 items-center justify-between",
+        horizontal ? "flex-row gap-1" : rail ? "flex-col gap-1 px-2 pt-2 pb-2" : "px-5 pt-6 pb-4",
+      )}>
+        <div className={cn("flex items-center gap-2", rail && "justify-center")}>
+          <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={rail ? 22 : 20} /></Link>} />
+          {!rail && (
             <Link href="/tasks" prefetch onClick={onClose} className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
               Loma
             </Link>
           )}
         </div>
-        <div className={cn("flex items-center gap-0.5", collapsed && "flex-col")}>
-          <NotificationBell collapsed={collapsed} onNavigate={onClose} railTooltipSide={railTooltipSide} />
+        <div className={cn("flex items-center gap-0.5", rail && !horizontal && "flex-col")}>
+          {!horizontal && <NotificationBell collapsed={rail} onNavigate={onClose} railTooltipSide={railTooltipSide} />}
           <Button
             variant="ghost"
             size="icon-xs"
             onClick={onToggleCollapse}
-            className="hidden md:flex text-muted-foreground hover:text-foreground"
+            className={cn("hidden text-muted-foreground hover:text-foreground", !horizontal && "md:flex")}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {collapsed
@@ -461,15 +498,16 @@ export default function Sidebar({
       </div>
 
       {userLoading ? (
-        <SidebarSkeleton collapsed={collapsed} />
+        <SidebarSkeleton collapsed={rail} horizontal={horizontal} />
       ) : (
         <>
           {/* Tasks with its boards, then Flows. `min-h-0` lets the region
               shrink and scroll on short screens (and long board lists)
               instead of pushing the account row off-screen. */}
-          <ScrollArea className="flex-1 min-h-0">
-          <nav aria-label="Main" className="px-3 space-y-0.5 pb-2">
-            <NavBoards collapsed={collapsed} onNavigate={onClose} tooltipSide={railTooltipSide} />
+          {(() => {
+          const nav = (
+          <nav aria-label="Main" className={cn(horizontal ? "flex items-center gap-1 px-1" : "px-3 space-y-0.5 pb-2")}>
+            <NavBoards collapsed={rail} horizontal={horizontal} onNavigate={onClose} tooltipSide={railTooltipSide} />
             {visibleNav.map((item) => {
               const isActive = pathname.startsWith(item.href);
               const link = (
@@ -478,23 +516,26 @@ export default function Sidebar({
                   href={item.href}
                   prefetch
                   onClick={onClose}
+                  data-dock-item={rail ? "" : undefined}
                   className={cn(
                     NAV_ROW,
-                    collapsed
+                    horizontal
+                      ? "h-10 w-10 justify-center px-0"
+                      : rail
                       ? "justify-center px-0 py-1.5 mx-auto w-10"
                       : "px-3 py-2 gap-2.5 max-md:py-2.5 max-md:gap-3",
                     isActive ? NAV_ACTIVE : NAV_IDLE,
                   )}
                   aria-current={isActive ? "page" : undefined}
-                  aria-label={collapsed ? item.name : undefined}
+                  aria-label={rail ? item.name : undefined}
                 >
-                  <span className={cn("relative flex-shrink-0 transition-colors", isActive ? "text-sidebar-primary" : "text-current")}>
+                  <span data-dock-glyph={rail ? "" : undefined} className={cn("relative flex-shrink-0 transition-colors", horizontal && "[&_svg]:h-[18px] [&_svg]:w-[18px]", isActive ? "text-sidebar-primary" : "text-current")}>
                     {item.icon}
                   </span>
-                  {!collapsed && <span>{item.name}</span>}
+                  {!rail && <span>{item.name}</span>}
                 </Link>
               );
-              return collapsed ? (
+              return rail ? (
                 <Tooltip key={item.name}>
                   <TooltipTrigger asChild>{link}</TooltipTrigger>
                   <TooltipContent side={railTooltipSide}>{item.name}</TooltipContent>
@@ -502,19 +543,24 @@ export default function Sidebar({
               ) : link;
             })}
             <Suspense fallback={null}>
-              <NavPinnedChats collapsed={collapsed} onNavigate={onClose} />
+              <NavPinnedChats collapsed={rail} onNavigate={onClose} />
             </Suspense>
           </nav>
-          </ScrollArea>
+          );
+          // The row must not clip: magnified tiles grow out of the bar.
+          return horizontal ? <div className="flex min-w-0 flex-1 items-center justify-center">{nav}</div> : <ScrollArea className="flex-1 min-h-0">{nav}</ScrollArea>;
+          })()}
 
           {/* Bottom section: pool status, theme toggle, user */}
-          <div className="mt-auto shrink-0">
+          <div className={cn("shrink-0", horizontal ? "flex items-center gap-1" : "mt-auto")}>
+            {horizontal && <Separator orientation="vertical" className="mx-1 h-7" />}
             {/* Pool status — expandable */}
-            {poolStatus && <PoolStatusWidget poolStatus={poolStatus} collapsed={collapsed} />}
+            {poolStatus && <PoolStatusWidget poolStatus={poolStatus} collapsed={rail} horizontal={horizontal} />}
 
             {/* Theme toggle */}
-            <div className="px-2.5 py-1">
-              {collapsed ? (
+            {horizontal && <NotificationBell collapsed large onNavigate={onClose} railTooltipSide={railTooltipSide} />}
+            <div className={cn(horizontal ? "px-0.5" : "px-2.5 py-1")}>
+              {rail ? (
                 <div className="flex flex-col items-center gap-1">
                   <Button
                     variant="ghost"
@@ -524,10 +570,11 @@ export default function Sidebar({
                       const idx = modes.indexOf(theme);
                       setTheme(modes[(idx + 1) % modes.length]);
                     }}
-                    className="text-muted-foreground hover:text-foreground"
+                    className={cn("text-muted-foreground hover:text-foreground", horizontal && "h-10 w-10 rounded-lg")}
                     aria-label="Toggle theme"
+                    data-dock-item=""
                   >
-                    {theme === "light" ? <RiSunLine size={14} /> : theme === "dark" ? <RiMoonLine size={14} /> : <RiComputerLine size={14} />}
+                    <span data-dock-glyph="" className={cn(horizontal && "[&_svg]:h-[18px] [&_svg]:w-[18px]")}>{theme === "light" ? <RiSunLine size={14} /> : theme === "dark" ? <RiMoonLine size={14} /> : <RiComputerLine size={14} />}</span>
                   </Button>
                 </div>
               ) : (
@@ -571,20 +618,20 @@ export default function Sidebar({
             {/* User section with dropdown */}
             {status === "authenticated" && session?.user && (
               <>
-                <Separator />
-                <div className={cn("px-2.5 py-2", collapsed && "flex justify-center")}>
+                {!horizontal && <Separator />}
+                <div className={cn(horizontal ? "px-0.5" : "px-2.5 py-2", rail && "flex justify-center")}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button aria-label="Account menu" className={cn(
+                      <button aria-label="Account menu" data-dock-item={rail ? "" : undefined} className={cn(
                         "flex items-center w-full rounded-lg transition-colors hover:bg-muted",
-                        collapsed ? "justify-center p-1" : "gap-2 px-1 py-1"
+                        rail ? "justify-center p-1" : "gap-2 px-1 py-1"
                       )}>
                         <Avatar size="sm" className="w-7 h-7 shrink-0">
                           <AvatarFallback className="bg-sidebar-primary/90 text-sidebar-primary-foreground text-xs font-medium">
                             {session.user.email?.charAt(0).toUpperCase() || "U"}
                           </AvatarFallback>
                         </Avatar>
-                        {!collapsed && (
+                        {!rail && (
                           <>
                             <div className="min-w-0 flex-1 text-left">
                               <div className="text-xs font-medium text-foreground truncate">
@@ -599,7 +646,7 @@ export default function Sidebar({
                         )}
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent side="top" align="start" className="w-[200px]">
+                    <DropdownMenuContent side={horizontal ? railTooltipSide : "top"} align={horizontal ? "end" : "start"} className="w-[200px]">
                       {userMenuNav.filter((item) => !item.minRole || hasRole(item.minRole)).map((item) => (
                         <DropdownMenuItem key={item.href} asChild>
                           <Link href={item.href} onClick={onClose} className="flex items-center gap-2 text-[13px]">
@@ -615,7 +662,18 @@ export default function Sidebar({
                         <DropdownMenuRadioGroup value={side} onValueChange={(v) => setSidebarSide(v as SidebarSide)}>
                           <DropdownMenuRadioItem value="left" className="text-[13px]" data-testid="sidebar-side-left">Left</DropdownMenuRadioItem>
                           <DropdownMenuRadioItem value="right" className="text-[13px]" data-testid="sidebar-side-right">Right</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="top" className="text-[13px]" data-testid="sidebar-side-top">Top</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="bottom" className="text-[13px]" data-testid="sidebar-side-bottom">Bottom (dock)</DropdownMenuRadioItem>
                         </DropdownMenuRadioGroup>
+                        <DropdownMenuCheckboxItem
+                          checked={magnify}
+                          onCheckedChange={(v) => setSidebarMagnify(v === true)}
+                          onSelect={(e) => e.preventDefault()}
+                          className="text-[13px]"
+                          data-testid="sidebar-magnify"
+                        >
+                          Magnify icons on hover
+                        </DropdownMenuCheckboxItem>
                         <DropdownMenuSeparator />
                       </div>
                       <DropdownMenuItem onSelect={() => { openPetSettings(); onClose(); }} className="text-[13px]">
@@ -656,13 +714,14 @@ export default function Sidebar({
       )}
 
       <aside
+        ref={asideRef}
         aria-label="Navigation"
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
         className={cn(
           // Safe-area padding on both ends so the brand row clears the notch
           // and the account row clears the iPhone home indicator.
-          // Desktop width and dock edge (left/right) come from globals.css,
+          // Desktop width and dock edge (left/right/top/bottom) come from globals.css,
           // keyed on <html data-sidebar data-sidebar-side>, so they are right
           // before hydration. overflow-x-hidden keeps the server-rendered
           // (expanded) content inside a collapsed rail for that first frame.
