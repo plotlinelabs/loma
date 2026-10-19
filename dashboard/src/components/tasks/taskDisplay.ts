@@ -93,3 +93,16 @@ export function deadlineDisplay(deadline: string | null | undefined) {
     urgent: daysLeft < 2,
   };
 }
+
+/** Short names for repos whose name alone is too long for a card chip. */
+const SHORT_REPO_NAMES: Record<string, string> = {
+  "plotline-documentation": "docs",
+  "plotline-services": "services",
+  "plotline-sdk": "sdk",
+};
+
+/** "owner/plotline-documentation" -> "docs"; unmapped repos just drop a "plotline-" prefix. */
+export function shortRepoName(repo: string): string {
+  const name = (repo.split("/").pop() || repo).toLowerCase();
+  return SHORT_REPO_NAMES[name] ?? (name.replace(/^plotline-/, "") || name);
+}

@@ -14,7 +14,8 @@
     "test:chat-export": "TZ=Asia/Kolkata node --test tests/chat-export.test.cjs",
     "test:artifact-fences": "node --test tests/artifact-fences.test.cjs",
     "test:plan-doc": "node --test tests/plan-doc.test.cjs",
-    "test:process-group": "node --test tests/process-group.test.cjs"
+    "test:process-group": "node --test tests/process-group.test.cjs",
+    "test:pr-chip-label": "node --test tests/pr-chip-label.test.cjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

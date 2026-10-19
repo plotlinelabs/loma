@@ -5,7 +5,7 @@ import { RiGitPullRequestLine, RiLoader4Line } from "@remixicon/react";
 import type { Task } from "@/lib/api";
 import { elapsedSince, relativeAge } from "@/lib/server-time";
 import { cn } from "@/lib/utils";
-import { DEPLOY_QUEUED_LABEL, WAITING_LABELS, taskTimestamp } from "./taskDisplay";
+import { DEPLOY_QUEUED_LABEL, WAITING_LABELS, shortRepoName, taskTimestamp } from "./taskDisplay";
 
 /** Re-render every `ms` while mounted (client only), for ages and timers. */
 function useNow(ms: number): number | null {
@@ -74,8 +74,8 @@ export function WaitingChip({ task }: { task: Task }) {
 }
 
 /** Linked chips for the PRs a task opened or linked, so a card shows which PR
- * belongs to which request. "#123" when every PR is in one repo, "repo#123"
- * otherwise. Clicks open GitHub and never open or drag the card. */
+ * belongs to which request. "#123" when every PR is in one repo, "docs #123"
+ * otherwise; a chip never grows wider than its row. Clicks open GitHub, not the card. */
 export function TaskPrChips({ task, max = 3, className, insideButton = false }: {
   task: Task;
   max?: number;
@@ -90,12 +90,12 @@ export function TaskPrChips({ task, max = 3, className, insideButton = false }: 
   const hidden = prs.slice(max);
   const stop = (event: React.SyntheticEvent) => event.stopPropagation();
   return (
-    <span className={cn("inline-flex min-w-0 flex-wrap items-center gap-1.5", className)}>
+    <span className={cn("inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5", className)}>
       {shown.map((pr) => {
         const label = (
           <>
             <RiGitPullRequestLine aria-hidden className="h-3 w-3 shrink-0 text-emerald-600" />
-            {oneRepo ? "" : pr.repo.split("/").pop()}#{pr.number}
+            <span className="min-w-0 truncate">{oneRepo ? "" : `${shortRepoName(pr.repo)} `}#{pr.number}</span>
           </>
         );
         const props = {
@@ -103,7 +103,7 @@ export function TaskPrChips({ task, max = 3, className, insideButton = false }: 
           "data-pr-chip": `${pr.repo}#${pr.number}`,
           onPointerDown: stop,
           onKeyDown: stop,
-          className: "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-xs font-medium leading-4 text-foreground/80 tabular-nums hover:border-input hover:bg-muted hover:text-foreground",
+          className: "inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-xs font-medium leading-4 text-foreground/80 tabular-nums hover:border-input hover:bg-muted hover:text-foreground",
         };
         return insideButton ? (
           <span key={props["data-pr-chip"]} {...props} role="link" onClick={(event) => {
@@ -116,7 +116,7 @@ export function TaskPrChips({ task, max = 3, className, insideButton = false }: 
         );
       })}
       {hidden.length > 0 && (
-        <span className="text-xs text-muted-foreground" title={hidden.map((pr) => `${pr.repo}#${pr.number}`).join(", ")}>
+        <span className="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-xs leading-4 text-muted-foreground" title={hidden.map((pr) => `${pr.repo}#${pr.number}`).join(", ")}>
           +{hidden.length}
         </span>
       )}
