@@ -12,6 +12,8 @@ export interface AttributedMessage {
   content: string;
   timestamp?: string;
   sender?: string;
+  /** Attachments sent with a user message: names and types only, no data. */
+  files?: { name: string; type?: string; mimetype?: string }[];
   agent_id?: string | null;
   agent_name?: string;
   agent_config_version?: number;

@@ -1192,7 +1192,7 @@ async def _queue_chat_for_deploy(
     if not pending_runs.files_fit(files):
         return web.json_response({"error": DRAIN_MESSAGE, "draining": True}, status=503)
     await pending_runs.record_queued_message(
-        db, conversation_id, message, sender=user_email,
+        db, conversation_id, message, sender=user_email, files=files,
         new_conversation=None if existing else metadata,
     )
     if tool_config:
@@ -1486,12 +1486,12 @@ async def handle_chat(request: web.Request) -> web.Response:
                     conversation_id=existing_conversation_id,
                 )
                 if existing:
-                    await observer.resume()
+                    await observer.resume(files=files)
                 else:
-                    await observer.start()
+                    await observer.start(files=files)
             else:
                 observer = ConversationObserver(db, metadata=metadata)
-                await observer.start()
+                await observer.start(files=files)
 
             # Persist tool_config on the conversation document
             if tool_config and observer:

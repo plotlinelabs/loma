@@ -34,6 +34,15 @@ def _safe_json(obj, max_len: int = MAX_CONTENT_LEN) -> tuple[str, bool]:
     return _truncate(s, max_len)
 
 
+def attachment_fields(files: list | None) -> dict:
+    """A user message's `files` field: name and type of each attachment, never the data."""
+    meta = [
+        {k: f[k] for k in ("name", "type", "mimetype") if f.get(k)}
+        for f in files or [] if isinstance(f, dict) and f.get("name")
+    ]
+    return {"files": meta} if meta else {}
+
+
 class ConversationObserver:
     """Captures agent conversation data to MongoDB for observability."""
 
@@ -57,7 +66,7 @@ class ConversationObserver:
         # tool_use_ids of PR-opening calls; their result links the PR to the task.
         self._pr_create_calls: set[str] = set()
 
-    async def start(self):
+    async def start(self, files: list | None = None):
         """Insert initial conversation document with status='running'."""
         self.start_time = datetime.now(timezone.utc)
         try:
@@ -68,6 +77,7 @@ class ConversationObserver:
                     "role": "user",
                     "content": prompt,
                     "timestamp": self.start_time,
+                    **attachment_fields(files),
                 })
             await self.db.conversations.insert_one({
                 "conversation_id": self.conversation_id,
@@ -96,7 +106,7 @@ class ConversationObserver:
         except Exception as e:
             logger.warning("Observability: failed to insert conversation: %s", e)
 
-    async def resume(self, record_prompt: bool = True):
+    async def resume(self, record_prompt: bool = True, files: list | None = None):
         """Resume an existing conversation — set turn offset and mark running."""
         self.start_time = datetime.now(timezone.utc)
         try:
@@ -116,6 +126,7 @@ class ConversationObserver:
                     "role": "user",
                     "content": prompt,
                     "timestamp": self.start_time,
+                    **attachment_fields(files),
                 }
                 # Shared-board tasks can be run by any owner or editor:
                 # record who sent each dashboard message (and so whose

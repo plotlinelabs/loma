@@ -6,7 +6,7 @@ import { RiSendPlaneLine, RiLoader4Line, RiAttachmentLine, RiUploadLine } from "
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { createTask, type ChatFile, type Task } from "@/lib/api";
-import { filesToChatFiles, filesFromClipboard } from "@/lib/chatFiles";
+import { filesToChatFiles, filesFromClipboard, skippedFilesNotice } from "@/lib/chatFiles";
 import { useAgentModels } from "@/hooks/useAgentModels";
 import { useToolsPicker } from "@/hooks/useToolsPicker";
 import { ModelPicker } from "@/components/composer/ModelPicker";
@@ -70,7 +70,7 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask, drawer
   const addFiles = async (fileList: FileList | File[]) => {
     const { files: chatFiles, rejected } = await filesToChatFiles(fileList);
     if (chatFiles.length) setFiles((prev) => [...prev, ...chatFiles]);
-    if (rejected.length) console.warn("Unsupported files skipped:", rejected);
+    setError(skippedFilesNotice(rejected));
   };
 
   const { isDragOver, dropHandlers } = useFileDrop((f) => void addFiles(f));
