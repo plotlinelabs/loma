@@ -29,14 +29,22 @@ import { DOCK_PEEK_EVENT, dockPeekRequestedAt, type SidebarSide } from "@/lib/si
  *   new notifications, and on DOCK_PEEK_EVENT (the user just turned the mode
  *   on or moved the bar) so the bar is not lost the first time.
  *
+ * The shown state is mirrored on `<html data-dock-revealed>` so page content
+ * can make room for the revealed bar (the floating task composer lifts above
+ * the bottom dock, see useDockClearance).
+ *
  * Touch-only screens cannot hover to an edge: the CSS only hides on
  * `(hover: hover)` devices, and this hook does nothing there. No React state:
- * one attribute on the bar, so moving the pointer never re-renders. */
+ * one attribute on the bar (plus its <html> mirror), so moving the pointer never
+ * re-renders. */
 const EDGE_PX = 6;
 const SHOW_DELAY_MS = 120;
 const HIDE_DELAY_MS = 450;
 /** Pointer may wander this far off the bar before it counts as leaving. */
 const SLOP_PX = 10;
+
+/** `<html>` mirror of the bar's shown state, for content that has to clear it. */
+export const DOCK_REVEALED_ATTR = "data-dock-revealed";
 
 export function useDockAutohide(
   ref: RefObject<HTMLElement | null>,
@@ -47,8 +55,13 @@ export function useDockAutohide(
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
+    const html = document.documentElement;
+    const setShown = (on: boolean) => {
+      root.toggleAttribute("data-dock-shown", on);
+      html.toggleAttribute(DOCK_REVEALED_ATTR, on);
+    };
     if (!enabled || !window.matchMedia("(hover: hover)").matches) {
-      root.removeAttribute("data-dock-shown");
+      setShown(false);
       peekRef.current = () => {};
       return;
     }
@@ -88,7 +101,7 @@ export function useDockAutohide(
       window.clearTimeout(showTimer);
       window.clearTimeout(hideTimer);
       showTimer = hideTimer = 0;
-      root.setAttribute("data-dock-shown", "");
+      setShown(true);
     };
     const hideSoon = (delay = HIDE_DELAY_MS) => {
       window.clearTimeout(showTimer);
@@ -97,7 +110,7 @@ export function useDockAutohide(
       hideTimer = window.setTimeout(() => {
         hideTimer = 0;
         if (held() || (last && overBar(last.x, last.y, last.target))) return;
-        root.removeAttribute("data-dock-shown");
+        setShown(false);
       }, delay);
     };
 
@@ -169,7 +182,7 @@ export function useDockAutohide(
       document.documentElement.removeEventListener("mouseleave", onWindowLeave);
       root.removeEventListener("focusin", onFocusIn);
       root.removeEventListener("focusout", onFocusOut);
-      root.removeAttribute("data-dock-shown");
+      setShown(false);
       peekRef.current = () => {};
     };
   }, [ref, enabled, side]);

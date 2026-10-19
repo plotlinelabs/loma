@@ -16,6 +16,7 @@ import { PendingFilesStrip } from "@/components/composer/PendingFilesStrip";
 import { DictationButton, appendDictation } from "@/components/composer/DictationButton";
 import { useFileDrop } from "@/components/composer/useFileDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useDockClearance } from "@/hooks/useDockClearance";
 import { useVoiceAvailable, useVoiceDispatcher } from "@/hooks/useVoiceDispatcher";
 import { VoiceModeButton, VoicePanel } from "./VoiceDispatcher";
 import { cn } from "@/lib/utils";
@@ -54,6 +55,8 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask, drawer
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  // Auto-hidden bottom dock revealed over the pill: lift the pill above it.
+  useDockClearance(rootRef, floating);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Floating pill: toolbar (model, tools, attach) only while the user is engaged.
   const [expanded, setExpanded] = useState(false);
