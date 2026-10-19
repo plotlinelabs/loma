@@ -560,7 +560,9 @@ export default function Sidebar({
 
             {/* Theme toggle */}
             {horizontal && <NotificationBell collapsed large onNavigate={onClose} railTooltipSide={railTooltipSide} />}
-            <div className={cn(horizontal ? "px-0.5" : "px-2.5 py-1")}>
+            {/* data-dock-stop: theme toggle and account are not magnified, and
+                grown dock icons never spread over them. */}
+            <div data-dock-stop={rail ? "" : undefined} className={cn(horizontal ? "px-0.5" : "px-2.5 py-1")}>
               {rail ? (
                 <div className="flex flex-col items-center gap-1">
                   <Button
@@ -573,9 +575,8 @@ export default function Sidebar({
                     }}
                     className={cn("text-muted-foreground hover:text-foreground", horizontal && "h-10 w-10 rounded-lg")}
                     aria-label="Toggle theme"
-                    data-dock-item=""
                   >
-                    <span data-dock-glyph="" className={cn(horizontal && "[&_svg]:h-[18px] [&_svg]:w-[18px]")}>{theme === "light" ? <RiSunLine size={14} /> : theme === "dark" ? <RiMoonLine size={14} /> : <RiComputerLine size={14} />}</span>
+                    <span className={cn(horizontal && "[&_svg]:h-[18px] [&_svg]:w-[18px]")}>{theme === "light" ? <RiSunLine size={14} /> : theme === "dark" ? <RiMoonLine size={14} /> : <RiComputerLine size={14} />}</span>
                   </Button>
                 </div>
               ) : (
@@ -623,7 +624,7 @@ export default function Sidebar({
                 <div className={cn(horizontal ? "px-0.5" : "px-2.5 py-2", rail && "flex justify-center")}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button aria-label="Account menu" data-dock-item={rail ? "" : undefined} className={cn(
+                      <button aria-label="Account menu" className={cn(
                         "flex items-center w-full rounded-lg transition-colors hover:bg-muted",
                         rail ? "justify-center p-1" : "gap-2 px-1 py-1"
                       )}>
