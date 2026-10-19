@@ -11,16 +11,18 @@ const mod = { exports: {} };
 new Function('module', 'exports', 'require', outputText)(mod, mod.exports, require);
 const { shortRepoName } = mod.exports;
 
-test('mapped repos get their short name', () => {
-  assert.equal(shortRepoName('plotlinehq/plotline-documentation'), 'docs');
-  assert.equal(shortRepoName('plotlinehq/plotline-services'), 'services');
-  assert.equal(shortRepoName('plotlinehq/plotline-sdk'), 'sdk');
-  assert.equal(shortRepoName('PlotlineHQ/Plotline-SDK'), 'sdk');
+test('org prefix shared with the owner is dropped', () => {
+  assert.equal(shortRepoName('acmehq/acme-documentation'), 'docs');
+  assert.equal(shortRepoName('acmehq/acme-services'), 'services');
+  assert.equal(shortRepoName('acmehq/acme-sdk'), 'sdk');
+  assert.equal(shortRepoName('AcmeHQ/Acme-SDK'), 'sdk');
+  assert.equal(shortRepoName('acmehq/acme-website'), 'website');
 });
 
-test('unmapped repos drop only the plotline- prefix', () => {
-  assert.equal(shortRepoName('plotlinehq/plotline-website'), 'website');
-  assert.equal(shortRepoName('plotlinelabs/loma'), 'loma');
-  assert.equal(shortRepoName('acme/plotline-'), 'plotline-');
+test('other repos keep their name', () => {
+  assert.equal(shortRepoName('acmelabs/tools'), 'tools');
+  assert.equal(shortRepoName('acme/acme-'), 'acme-');
+  assert.equal(shortRepoName('other/acme-sdk'), 'acme-sdk');
   assert.equal(shortRepoName('no-owner'), 'no-owner');
+  assert.equal(shortRepoName('someone/documentation'), 'docs');
 });

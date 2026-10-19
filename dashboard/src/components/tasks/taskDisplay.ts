@@ -94,15 +94,24 @@ export function deadlineDisplay(deadline: string | null | undefined) {
   };
 }
 
-/** Short names for repos whose name alone is too long for a card chip. */
-const SHORT_REPO_NAMES: Record<string, string> = {
-  "plotline-documentation": "docs",
-  "plotline-services": "services",
-  "plotline-sdk": "sdk",
+/** Generic long words that get a shorter chip label. */
+const SHORT_WORDS: Record<string, string> = {
+  documentation: "docs",
 };
 
-/** "owner/plotline-documentation" -> "docs"; unmapped repos just drop a "plotline-" prefix. */
+/**
+ * Short chip label for a repo. Drops a leading "<org>-" segment when the owner
+ * name starts with it ("acmehq/acme-documentation" -> "docs",
+ * "acmehq/acme-sdk" -> "sdk"), then shortens a few generic long words.
+ * Repos without that prefix keep their name ("acmelabs/tools" -> "tools").
+ */
 export function shortRepoName(repo: string): string {
-  const name = (repo.split("/").pop() || repo).toLowerCase();
-  return SHORT_REPO_NAMES[name] ?? (name.replace(/^plotline-/, "") || name);
+  const parts = repo.toLowerCase().split("/");
+  const name = parts.pop() || repo.toLowerCase();
+  const owner = parts.pop() || "";
+  const dash = name.indexOf("-");
+  const prefix = dash > 0 ? name.slice(0, dash) : "";
+  const rest = dash > 0 ? name.slice(dash + 1) : "";
+  const base = prefix.length >= 3 && rest && owner.startsWith(prefix) ? rest : name;
+  return SHORT_WORDS[base] ?? base;
 }
