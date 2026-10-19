@@ -14,6 +14,8 @@ import { useEffect, type RefObject } from "react";
  *   under the pointer stays put, so the row spreads both ways from the cursor.
  *   Larger gaps (between groups, the empty space above the account button)
  *   absorb the push, so far-away icons do not move.
+ * - The theme toggle and account button are not dock items: they stay still,
+ *   and `data-dock-stop` keeps grown icons from spreading over them.
  *
  * Everything is transforms (`--dock-s` scale, `--dock-t` shift along the
  * axis; globals.css applies them), so no layout runs while hovering. Item
@@ -88,6 +90,12 @@ export function useDockMagnify(
       if (bound && bound.width > 0 && items.length) {
         const end = (axis === "x" ? bound.right : bound.bottom) + 4;
         if (end <= items[0].c) lo = Math.max(lo, end);
+      }
+      // ...and off the non-magnified controls after them (theme, account).
+      const stop = root.querySelector<HTMLElement>("[data-dock-stop]")?.getBoundingClientRect();
+      if (stop && stop.width > 0 && items.length) {
+        const start = (axis === "x" ? stop.left : stop.top) - 4;
+        if (start >= items[items.length - 1].c) hi = Math.min(hi, start);
       }
       root.removeAttribute("data-dock-measuring");
     };

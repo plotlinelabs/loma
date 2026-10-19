@@ -21,11 +21,14 @@ import {
   setSidebarSide,
   useSidebarMagnify,
   setSidebarMagnify,
+  useSidebarAutohide,
+  setSidebarAutohide,
   isHorizontalSide,
   awayFromEdge,
   type SidebarSide,
 } from "../lib/sidebarPrefs";
 import { useDockMagnify } from "@/hooks/useDockMagnify";
+import { useDockAutohide } from "@/hooks/useDockAutohide";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
@@ -404,6 +407,19 @@ export default function Sidebar({
     axis: horizontal ? "x" : "y",
     max: 2.2,
   });
+  // macOS "Automatically hide and show": the bar slides off its edge and
+  // gives the page its space back until the pointer reaches that edge.
+  const autohide = useSidebarAutohide();
+  const peekDock = useDockAutohide(asideRef, { enabled: autohide && !isMobile, side });
+  // New notification: pop the hidden bar up briefly, like an app bouncing in
+  // a hidden Dock. The first count after load is the baseline, not "new".
+  const { unreadCount, loaded: unreadLoaded } = useNotifications();
+  const prevUnread = useRef<number | null>(null);
+  useEffect(() => {
+    if (!unreadLoaded) return;
+    if (prevUnread.current !== null && unreadCount > prevUnread.current) peekDock(2500);
+    prevUnread.current = unreadCount;
+  }, [unreadCount, unreadLoaded, peekDock]);
 
   // Filter nav items by role
   const visibleNav = navigation.filter((item) => !item.minRole || hasRole(item.minRole));
@@ -560,7 +576,9 @@ export default function Sidebar({
 
             {/* Theme toggle */}
             {horizontal && <NotificationBell collapsed large onNavigate={onClose} railTooltipSide={railTooltipSide} />}
-            <div className={cn(horizontal ? "px-0.5" : "px-2.5 py-1")}>
+            {/* data-dock-stop: theme toggle and account are not magnified, and
+                grown dock icons never spread over them. */}
+            <div data-dock-stop={rail ? "" : undefined} className={cn(horizontal ? "px-0.5" : "px-2.5 py-1")}>
               {rail ? (
                 <div className="flex flex-col items-center gap-1">
                   <Button
@@ -573,9 +591,8 @@ export default function Sidebar({
                     }}
                     className={cn("text-muted-foreground hover:text-foreground", horizontal && "h-10 w-10 rounded-lg")}
                     aria-label="Toggle theme"
-                    data-dock-item=""
                   >
-                    <span data-dock-glyph="" className={cn(horizontal && "[&_svg]:h-[18px] [&_svg]:w-[18px]")}>{theme === "light" ? <RiSunLine size={14} /> : theme === "dark" ? <RiMoonLine size={14} /> : <RiComputerLine size={14} />}</span>
+                    <span className={cn(horizontal && "[&_svg]:h-[18px] [&_svg]:w-[18px]")}>{theme === "light" ? <RiSunLine size={14} /> : theme === "dark" ? <RiMoonLine size={14} /> : <RiComputerLine size={14} />}</span>
                   </Button>
                 </div>
               ) : (
@@ -623,7 +640,7 @@ export default function Sidebar({
                 <div className={cn(horizontal ? "px-0.5" : "px-2.5 py-2", rail && "flex justify-center")}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button aria-label="Account menu" data-dock-item={rail ? "" : undefined} className={cn(
+                      <button aria-label="Account menu" className={cn(
                         "flex items-center w-full rounded-lg transition-colors hover:bg-muted",
                         rail ? "justify-center p-1" : "gap-2 px-1 py-1"
                       )}>
@@ -674,6 +691,15 @@ export default function Sidebar({
                           data-testid="sidebar-magnify"
                         >
                           Magnify icons on hover
+                        </DropdownMenuCheckboxItem>
+                        <DropdownMenuCheckboxItem
+                          checked={autohide}
+                          onCheckedChange={(v) => setSidebarAutohide(v === true)}
+                          onSelect={(e) => e.preventDefault()}
+                          className="text-[13px]"
+                          data-testid="sidebar-autohide"
+                        >
+                          Auto-hide
                         </DropdownMenuCheckboxItem>
                         <DropdownMenuSeparator />
                       </div>

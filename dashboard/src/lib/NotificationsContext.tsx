@@ -15,11 +15,14 @@ const POLL_INTERVAL_MS = 15000;
 interface NotificationsValue {
   /** Number of the user's notifications that are unread and not dismissed. */
   unreadCount: number;
+  /** The first count has arrived (until then 0 means "unknown", not "none"). */
+  loaded: boolean;
   refresh: () => void;
 }
 
 const NotificationsContext = createContext<NotificationsValue>({
   unreadCount: 0,
+  loaded: false,
   refresh: () => {},
 });
 
@@ -30,10 +33,12 @@ export function useNotifications() {
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setUnreadCount(await fetchUnreadNotificationCount());
+      setLoaded(true);
     } catch {
       // Transient poll failures keep the last known count.
     }
@@ -52,7 +57,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   }, [status, refresh]);
 
   return (
-    <NotificationsContext.Provider value={{ unreadCount, refresh }}>
+    <NotificationsContext.Provider value={{ unreadCount, loaded, refresh }}>
       {children}
     </NotificationsContext.Provider>
   );
