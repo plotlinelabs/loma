@@ -117,10 +117,10 @@ function Shell({ children }: { children: React.ReactNode }) {
         <div className={cn(
           "flex-1 w-full flex flex-col min-h-0",
           pathname.startsWith("/skills") ? "overflow-hidden"
-            // Task board: the columns run down to the window edge (the floating
-            // composer and its fade sit over them), so only a hairline of
-            // bottom padding; the title keeps a normal top margin.
-            : pathname.startsWith("/tasks") ? "px-3 md:px-6 lg:px-8 pt-2 pb-4 md:pt-5 md:pb-2"
+            // Task board (desktop): no top/bottom band. The header row starts
+            // one row-gap (8px) from the top and the columns run to the window
+            // edge; the floating composer and its fade sit over them.
+            : pathname.startsWith("/tasks") ? "px-3 md:px-6 lg:px-8 pt-2 pb-4 md:pb-0"
             : "px-3 md:px-6 lg:px-8 pt-2 pb-4 md:py-6"
         )}>{children}</div>
         <BottomNav />
