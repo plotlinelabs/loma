@@ -16,6 +16,7 @@ import CrosscutIcon from "./CrosscutIcon";
 import { NavBoards, NAV_ACTIVE, NAV_IDLE, NAV_ROW } from "./NavBoards";
 import { NavPinnedChats } from "./NavPinnedChats";
 import { useTheme } from "../lib/ThemeContext";
+import { useSidebarSide, setSidebarSide, type SidebarSide } from "../lib/sidebarPrefs";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   RiRobot2Line,
@@ -79,7 +80,7 @@ const userMenuNav: NavItem[] = [
 ];
 
 /** Notifications bell beside the logo, with the unread count. */
-function NotificationBell({ collapsed, onNavigate }: { collapsed: boolean; onNavigate: () => void }) {
+function NotificationBell({ collapsed, onNavigate, railTooltipSide }: { collapsed: boolean; onNavigate: () => void; railTooltipSide: "left" | "right" }) {
   const pathname = usePathname();
   const { unreadCount } = useNotifications();
   const active = pathname.startsWith("/notifications");
@@ -108,7 +109,7 @@ function NotificationBell({ collapsed, onNavigate }: { collapsed: boolean; onNav
           ))}
         </Link>
       </TooltipTrigger>
-      <TooltipContent side={collapsed ? "right" : "bottom"}>{label}</TooltipContent>
+      <TooltipContent side={collapsed ? railTooltipSide : "bottom"}>{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -365,6 +366,10 @@ export default function Sidebar({
   const { theme, setTheme } = useTheme();
   const pathname = usePathname();
   const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
+  // Desktop dock edge (phones always use the left drawer). Rail tooltips open
+  // toward the page, and the fold icon points at the edge it folds into.
+  const side = useSidebarSide();
+  const railTooltipSide = side === "right" ? "left" : "right";
 
   // Filter nav items by role
   const visibleNav = navigation.filter((item) => !item.minRole || hasRole(item.minRole));
@@ -431,7 +436,7 @@ export default function Sidebar({
           )}
         </div>
         <div className={cn("flex items-center gap-0.5", collapsed && "flex-col")}>
-          <NotificationBell collapsed={collapsed} onNavigate={onClose} />
+          <NotificationBell collapsed={collapsed} onNavigate={onClose} railTooltipSide={railTooltipSide} />
           <Button
             variant="ghost"
             size="icon-xs"
@@ -439,7 +444,9 @@ export default function Sidebar({
             className="hidden md:flex text-muted-foreground hover:text-foreground"
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            {collapsed ? <RiMenuUnfoldLine size={14} /> : <RiMenuFoldLine size={14} />}
+            {collapsed
+              ? <RiMenuUnfoldLine size={14} className={cn(side === "right" && "-scale-x-100")} />
+              : <RiMenuFoldLine size={14} className={cn(side === "right" && "-scale-x-100")} />}
           </Button>
           <Button
             variant="ghost"
@@ -462,7 +469,7 @@ export default function Sidebar({
               instead of pushing the account row off-screen. */}
           <ScrollArea className="flex-1 min-h-0">
           <nav aria-label="Main" className="px-3 space-y-0.5 pb-2">
-            <NavBoards collapsed={collapsed} onNavigate={onClose} />
+            <NavBoards collapsed={collapsed} onNavigate={onClose} tooltipSide={railTooltipSide} />
             {visibleNav.map((item) => {
               const isActive = pathname.startsWith(item.href);
               const link = (
@@ -490,7 +497,7 @@ export default function Sidebar({
               return collapsed ? (
                 <Tooltip key={item.name}>
                   <TooltipTrigger asChild>{link}</TooltipTrigger>
-                  <TooltipContent side="right">{item.name}</TooltipContent>
+                  <TooltipContent side={railTooltipSide}>{item.name}</TooltipContent>
                 </Tooltip>
               ) : link;
             })}
@@ -602,6 +609,15 @@ export default function Sidebar({
                         </DropdownMenuItem>
                       ))}
                       <DropdownMenuSeparator />
+                      {/* Desktop only: phones always use the left drawer. */}
+                      <div className="max-md:hidden">
+                        <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground">Sidebar position</DropdownMenuLabel>
+                        <DropdownMenuRadioGroup value={side} onValueChange={(v) => setSidebarSide(v as SidebarSide)}>
+                          <DropdownMenuRadioItem value="left" className="text-[13px]" data-testid="sidebar-side-left">Left</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="right" className="text-[13px]" data-testid="sidebar-side-right">Right</DropdownMenuRadioItem>
+                        </DropdownMenuRadioGroup>
+                        <DropdownMenuSeparator />
+                      </div>
                       <DropdownMenuItem onSelect={() => { openPetSettings(); onClose(); }} className="text-[13px]">
                         <RiSettings3Line size={16} />Pet settings
                       </DropdownMenuItem>
@@ -646,10 +662,14 @@ export default function Sidebar({
         className={cn(
           // Safe-area padding on both ends so the brand row clears the notch
           // and the account row clears the iPhone home indicator.
-          "loma-sidebar fixed top-0 left-0 h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col z-50 transition-all duration-200 ease-out bg-sidebar",
+          // Desktop width and dock edge (left/right) come from globals.css,
+          // keyed on <html data-sidebar data-sidebar-side>, so they are right
+          // before hydration. overflow-x-hidden keeps the server-rendered
+          // (expanded) content inside a collapsed rail for that first frame.
+          "loma-sidebar fixed top-0 h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col z-50 overflow-x-hidden transition-all duration-200 ease-out bg-sidebar",
+          "max-md:left-0 max-md:w-[300px]",
           isOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
-          collapsed ? "w-[56px]" : "w-[300px] md:w-[220px]"
         )}
       >
         {sidebarContent}

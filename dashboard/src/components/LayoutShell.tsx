@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, Suspense } from "react";
+import { useSidebarCollapsed, toggleSidebarCollapsed } from "@/lib/sidebarPrefs";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import Sidebar from "./Sidebar";
@@ -30,23 +31,12 @@ function Shell({ children }: { children: React.ReactNode }) {
   const { user, loading } = useUser();
   const { barHidden } = useMobileChrome();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem("sidebar-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("sidebar-collapsed", String(sidebarCollapsed));
-    } catch {}
-  }, [sidebarCollapsed]);
+  // Read through a store so hydration matches the server; the page offset
+  // itself comes from CSS keyed on <html data-sidebar> (lib/sidebarPrefs).
+  const sidebarCollapsed = useSidebarCollapsed();
 
   const toggleSidebar = useCallback(() => setSidebarOpen((prev) => !prev), []);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
-  const toggleCollapse = useCallback(() => setSidebarCollapsed((prev) => !prev), []);
   // The phone drawer is always expanded: the collapsed 56px rail hides every
   // section behind `!collapsed` and its expand button is desktop-only, so a
   // sidebar collapsed on desktop would open as an empty strip on a phone.
@@ -102,7 +92,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           isOpen={drawerOpen}
           onClose={closeSidebar}
           collapsed={collapsed}
-          onToggleCollapse={toggleCollapse}
+          onToggleCollapse={toggleSidebarCollapsed}
         />
       </Suspense>
 
@@ -119,10 +109,10 @@ function Shell({ children }: { children: React.ReactNode }) {
         // overflow-x-clip keeps any wide child from panning the whole page.
         // Phones: clear the 48px top bar; the space is handed back to the page
         // while the bar is slid away on a downward scroll.
-        "loma-dashboard ml-0 min-w-0 flex flex-col overflow-x-clip transition-all duration-200 motion-reduce:transition-none md:pt-0 bg-background",
+        "loma-dashboard min-w-0 flex flex-col overflow-x-clip transition-all duration-200 motion-reduce:transition-none md:pt-0 bg-background",
         barHidden ? "pt-[env(safe-area-inset-top)]" : "pt-[calc(env(safe-area-inset-top)+3rem)]",
+        // Desktop left/right offset for the sidebar lives in globals.css.
         "h-[var(--app-h,100dvh)]",
-        sidebarCollapsed ? "md:ml-[56px]" : "md:ml-[220px]"
       )}>
         <div className={cn(
           "flex-1 w-full flex flex-col min-h-0",

@@ -1052,3 +1052,20 @@
   --tw-prose-th-borders: var(--border);
   --tw-prose-td-borders: var(--border);
 }
+
+/* Desktop sidebar size, edge and page offset. Driven by <html data-sidebar
+   data-sidebar-side>, which the head script sets before first paint and
+   lib/sidebarPrefs keeps in sync, so the first frame already matches the saved
+   preference (no 220px gap beside a collapsed rail, no jump on hydration).
+   Phones keep the left drawer and no offset. */
+@layer base {
+  @media (min-width: 48rem) {
+    .loma-sidebar { width: 220px; left: 0; right: auto; }
+    .loma-dashboard { margin-left: 220px; margin-right: 0; }
+    html[data-sidebar="collapsed"] .loma-sidebar { width: 56px; }
+    html[data-sidebar="collapsed"] .loma-dashboard { margin-left: 56px; }
+    html[data-sidebar-side="right"] .loma-sidebar { left: auto; right: 0; }
+    html[data-sidebar-side="right"] .loma-dashboard { margin-left: 0; margin-right: 220px; }
+    html[data-sidebar-side="right"][data-sidebar="collapsed"] .loma-dashboard { margin-right: 56px; }
+  }
+}

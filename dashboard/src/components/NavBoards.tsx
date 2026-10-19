@@ -127,7 +127,7 @@ function BoardRow({
 
 /** "Tasks" plus the user's boards (emoji, needs-you count, drag to reorder).
  * Collapsed rail: just the board emojis, with an amber dot when one needs you. */
-export function NavBoards({ collapsed, onNavigate }: { collapsed: boolean; onNavigate: () => void }) {
+export function NavBoards({ collapsed, onNavigate, tooltipSide = "right" }: { collapsed: boolean; onNavigate: () => void; tooltipSide?: "left" | "right" }) {
   const pathname = usePathname();
   const isMobile = useIsMobile();
   const { boards, currentBoardId, openBoard, createBoard, reorder } = useBoards();
@@ -170,7 +170,7 @@ export function NavBoards({ collapsed, onNavigate }: { collapsed: boolean; onNav
               <RiCheckboxLine size={16} className={onTasks ? "text-sidebar-primary" : undefined} />
             </Link>
           </TooltipTrigger>
-          <TooltipContent side="right">Tasks</TooltipContent>
+          <TooltipContent side={tooltipSide}>Tasks</TooltipContent>
         </Tooltip>
         {boards.map((board, index) => {
           const count = board.needs_you ?? 0;
@@ -191,7 +191,7 @@ export function NavBoards({ collapsed, onNavigate }: { collapsed: boolean; onNav
                   {count > 0 && <span className="absolute right-1.5 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />}
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="right">{hint}</TooltipContent>
+              <TooltipContent side={tooltipSide}>{hint}</TooltipContent>
             </Tooltip>
           );
         })}

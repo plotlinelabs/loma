@@ -83,14 +83,29 @@ export function MobileTaskBoard({
     onRefresh();
   };
 
+  // Same floating composer as the desktop board: it slides away while the
+  // list scrolls and comes back 400ms after scrolling stops.
+  const [scrolling, setScrolling] = useState(false);
+  const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current); }, []);
+  const onListScroll = () => {
+    setScrolling(true);
+    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+    scrollIdleTimer.current = setTimeout(() => setScrolling(false), 400);
+  };
+
   return (
-    <div className="flex flex-1 flex-col min-h-0">
+    <div className="relative flex flex-1 flex-col min-h-0">
       {/* One scroll region for everything above the composer. The header,
           attention card and search are not shrinkable, so if they lived
           outside this region the list would collapse to 0 and the composer
           would overflow the page onto the bottom nav (the nav is in normal
           flow below the page, and `main` does not clip vertically). */}
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-y-contain">
+      <div
+        data-testid="mobile-task-scroll"
+        onScroll={!readOnly ? onListScroll : undefined}
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-y-contain"
+      >
       {header}
       {/* Column chips: stick to the top of the scroll region so the column
           switcher stays reachable while the list scrolls. */}
@@ -165,10 +180,19 @@ export function MobileTaskBoard({
             Task
           </button>
         )}
+        {/* Room for the floating composer, so the last card and "+ Task"
+            scroll clear of it. A spacer, not padding, so it is always part
+            of the scroll height. */}
+        {!readOnly && <div aria-hidden data-testid="mobile-composer-spacer" className="h-20 shrink-0" />}
       </div>
       </div>
 
-      {!readOnly && <QuickAddTask onAdded={handleQuickAdded} boardId={board.board?.id} />}
+      {!readOnly && (
+        <>
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-12 bg-gradient-to-t from-background to-transparent" />
+          <QuickAddTask floating scrollHidden={scrolling} onAdded={handleQuickAdded} boardId={board.board?.id} />
+        </>
+      )}
     </div>
   );
 }
