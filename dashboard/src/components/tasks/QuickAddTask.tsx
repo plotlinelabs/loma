@@ -34,8 +34,9 @@ interface QuickAddTaskProps {
   /** Voice touched a specific task's run/messages — lets the open drawer for
    * that task refresh in place. */
   onTaskActivity?: (conversationId: string) => void;
-  /** Desktop board: render as a slim floating pill over the board instead of a
-   * full-width bar. The toolbar shows only while the composer is in use. */
+  /** Render as a floating pill over the board instead of a pinned bar.
+   * Desktop: the toolbar shows only while the composer is in use. Phones: the
+   * usual one-row composer (options behind "+"), floating over the list. */
   floating?: boolean;
   /** Floating only: the board is scrolling, so slide the pill away unless it is in use. */
   scrollHidden?: boolean;
@@ -239,7 +240,7 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask, drawer
       className={cn(
         floating
           // Floats over the board's bottom edge; the side gutters stay board space.
-          ? "pointer-events-none absolute inset-x-0 bottom-3 z-20 px-4 transition-[transform,opacity] duration-200 ease-out motion-reduce:transition-none"
+          ? "pointer-events-none absolute inset-x-0 bottom-3 z-20 px-4 max-md:bottom-2 max-md:px-0 transition-[transform,opacity] duration-200 ease-out motion-reduce:transition-none"
           : "relative shrink-0 border-t border-border bg-background px-3 pt-2 pb-2 max-md:px-0 max-md:pt-1.5 max-md:pb-0",
         pillHidden && "translate-y-[calc(100%+1rem)] opacity-0",
       )}
@@ -276,7 +277,7 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask, drawer
       {isMobile ? (
         /* Phones: one row. Attach, model, tools and skills sit behind "+",
            so the capture box costs the board one line instead of two. */
-        <div data-slot="task-composer" className="flex items-end gap-0.5 rounded-[26px] border border-border bg-card p-1 focus-within:border-input transition-colors">
+        <div data-slot="task-composer" className={cn("flex items-end gap-0.5 rounded-[26px] border border-border bg-card p-1 focus-within:border-input transition-colors", floating && "shadow-lg ring-1 ring-black/5")}>
           <ComposerSettings trigger="plus" title="Task options" description="Attach files, or choose the model, tools and skills for this task." onAttach={() => fileInputRef.current?.click()}>
             {modelPicker}
             {toolsPicker}
@@ -358,7 +359,7 @@ export function QuickAddTask({ onAdded, boardId, onOpenTask, onCloseTask, drawer
           data-testid="quick-add-task-reveal"
           aria-label="New task"
           onClick={focusPill}
-          className="absolute bottom-4 right-4 z-20 size-11 rounded-full bg-primary text-primary-foreground shadow-lg press-scale animate-in fade-in zoom-in-90"
+          className="absolute bottom-4 right-4 max-md:bottom-2 max-md:right-0 z-20 size-11 rounded-full bg-primary text-primary-foreground shadow-lg press-scale animate-in fade-in zoom-in-90"
         >
           <RiEditLine size={18} />
         </Button>

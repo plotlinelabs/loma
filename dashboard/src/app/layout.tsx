@@ -6,6 +6,7 @@ import Providers from "../components/Providers";
 import LayoutShell from "../components/LayoutShell";
 import ServiceWorkerRegistrar from "../components/ServiceWorkerRegistrar";
 import { cn } from "@/lib/utils";
+import { SIDEBAR_PREFS_SCRIPT } from "@/lib/sidebarPrefs";
 
 // Brand serif — Feature Deck (headings / display).
 const featureDeck = localFont({
@@ -80,6 +81,8 @@ export default function RootLayout({
             __html: `(function(){var t=localStorage.getItem('loma-theme')||'light';if(t==='system'){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',t)})()`,
           }}
         />
+        {/* Sidebar collapsed/side before first paint (see lib/sidebarPrefs). */}
+        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_PREFS_SCRIPT }} />
       </head>
       <body
         // Track the app shell height (--app-h follows the visual viewport on
