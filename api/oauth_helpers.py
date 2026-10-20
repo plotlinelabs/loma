@@ -15,6 +15,7 @@ import re
 import secrets
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 from cryptography.fernet import Fernet, InvalidToken
@@ -452,6 +453,7 @@ async def _exchange_oauth_code(
     redirect_uri: str,
     auth_method: str = "client_secret_post",
     code_verifier: str | None = None,
+    resource: str | None = None,
 ) -> dict | None:
     """Exchange an authorization code for tokens at any OAuth provider."""
     data = {
@@ -461,6 +463,8 @@ async def _exchange_oauth_code(
     }
     if code_verifier:
         data["code_verifier"] = code_verifier
+    if resource:
+        data["resource"] = resource
     headers: dict[str, str] = {}
 
     if auth_method == "client_secret_basic":
@@ -495,12 +499,15 @@ async def _refresh_oauth_token(
     client_id: str,
     client_secret: str,
     auth_method: str = "client_secret_post",
+    resource: str | None = None,
 ) -> dict | None:
     """Exchange a refresh token for a new access token at any OAuth provider."""
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
     }
+    if resource:
+        data["resource"] = resource
     headers: dict[str, str] = {}
 
     if auth_method == "client_secret_basic":
@@ -527,6 +534,41 @@ async def _refresh_oauth_token(
     except Exception as e:
         logger.error("OAuth token refresh request failed: %s", e)
         return None
+
+
+def canonical_mcp_resource(mcp_url: str) -> str:
+    """Canonical resource URI for an MCP server URL (RFC 8707 / MCP auth spec)."""
+    parsed = urlsplit(mcp_url.strip())
+    path = parsed.path.rstrip("/")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, "", ""))
+
+
+async def resolve_mcp_resource(mcp_url: str) -> str:
+    """Resource indicator to request tokens for: the server's advertised one, else its canonical URL.
+
+    Servers that bind tokens to an audience (e.g. Slides MCP) reject tokens
+    issued without it, so the advertised Protected Resource Metadata value wins.
+    """
+    fallback = canonical_mcp_resource(mcp_url)
+    parsed = urlsplit(fallback)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    candidates = []
+    if parsed.path:
+        candidates.append(f"{origin}/.well-known/oauth-protected-resource{parsed.path}")
+    candidates.append(f"{origin}/.well-known/oauth-protected-resource")
+    try:
+        async with aiohttp.ClientSession() as session:
+            for url in candidates:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        continue
+                    meta = await resp.json(content_type=None)
+                    resource = meta.get("resource") if isinstance(meta, dict) else None
+                    if isinstance(resource, str) and resource.startswith(origin):
+                        return resource
+    except Exception as e:
+        logger.warning("Protected resource metadata lookup failed for %s: %s", mcp_url, e)
+    return fallback
 
 
 _PREFERRED_AUTH_METHODS = ("client_secret_post", "client_secret_basic", "none")
@@ -628,6 +670,7 @@ async def store_custom_mcp_tokens(
     refresh_token: str | None,
     expires_in: int | None,
     scopes: list[str],
+    resource: str | None = None,
 ) -> None:
     """Encrypt and store custom MCP OAuth tokens per user."""
     now = datetime.now(timezone.utc)
@@ -646,6 +689,8 @@ async def store_custom_mcp_tokens(
     }
     if refresh_token:
         update_doc["refresh_token"] = encrypt_token(refresh_token)
+    if resource:
+        update_doc["resource"] = resource
 
     await db.oauth_tokens.update_one(
         {"user_email": user_email, "provider": provider},
@@ -713,6 +758,9 @@ async def get_valid_custom_mcp_token(user_email: str, provider: str, db=None) ->
         client_id=client_id,
         client_secret=client_secret,
         auth_method=oauth_cfg.get("token_endpoint_auth_method", "client_secret_post"),
+        # Only tokens issued for a resource are refreshed with it; older grants
+        # without one would be rejected with invalid_target.
+        resource=doc.get("resource"),
     )
 
     if new_token is None:
