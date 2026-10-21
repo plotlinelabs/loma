@@ -1212,6 +1212,15 @@
   /* Slide out a touch slower than in, like the Dock. */
   html[data-sidebar-autohide] .loma-sidebar:not([data-dock-shown]) { transition-duration: 320ms, 260ms, 200ms; }
 }
+/* The auto-hidden bottom dock was revealed where the floating task composer
+   sits: hooks/useDockClearance lifts the composer just clear of it. A
+   transform (Tailwind v4's translate-* utilities use the separate `translate`
+   property, so the scroll-hide slide still composes with this). */
+@media (min-width: 48rem) and (hover: hover) {
+  [data-testid="quick-add-task-floating"][data-dock-lifted] {
+    transform: translateY(calc(-1 * var(--dock-lift, 0px)));
+  }
+}
 @media (min-width: 48rem) and (hover: hover) and (prefers-reduced-motion: reduce) {
   html[data-sidebar-autohide] .loma-sidebar,
   html[data-sidebar-autohide] .loma-sidebar:not([data-dock-shown]) { transition: opacity 120ms linear; }

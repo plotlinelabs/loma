@@ -940,7 +940,9 @@ export default function TasksPage() {
 
   return (
     <BoardExtrasContext.Provider value={boardExtras}>
-    <div className="flex h-full min-h-0 flex-col space-y-2 md:p-4 lg:p-6">
+    {/* Side gutters only: the shell already pads top and bottom (doubling it
+        left a wide empty band above the title and under the board). */}
+    <div className="flex h-full min-h-0 flex-col space-y-2 md:px-4 lg:px-6">
       {mobileTopBar}
       {!boardOwnsTopBar && topBar}
 

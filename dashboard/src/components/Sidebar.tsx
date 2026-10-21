@@ -92,7 +92,10 @@ const userMenuNav: NavItem[] = [
   { name: "Admin", href: "/admin", minRole: "maintainer", icon: <RiShieldCheckLine size={16} /> },
 ];
 
-/** Notifications bell beside the logo, with the unread count. */
+/** Notifications bell beside the logo, with the unread count. Not a dock
+ * item: it never magnifies or gets pushed along by magnified neighbours, so it
+ * stays the same size in the same place (it sits inside the dock's bound/stop
+ * zones, see the Sidebar markup). */
 type Edge = "left" | "right" | "top" | "bottom";
 
 function NotificationBell({ collapsed, onNavigate, railTooltipSide, large = false }: { collapsed: boolean; onNavigate: () => void; railTooltipSide: Edge; large?: boolean }) {
@@ -109,14 +112,13 @@ function NotificationBell({ collapsed, onNavigate, railTooltipSide, large = fals
           onClick={onNavigate}
           aria-label={label}
           aria-current={active ? "page" : undefined}
-          data-dock-item=""
           className={cn(
             "relative flex h-7 w-7 items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring max-md:h-9 max-md:w-9",
             large && "h-10 w-10 rounded-lg",
             active ? "bg-sidebar-accent text-sidebar-primary" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
           )}
         >
-          <span data-dock-glyph=""><RiNotification3Line size={16} className="max-md:h-5 max-md:w-5" /></span>
+          <RiNotification3Line size={16} className={cn("max-md:h-5 max-md:w-5", large && "h-[18px] w-[18px]")} />
           {unreadCount > 0 && (collapsed ? (
             <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
           ) : (
@@ -475,13 +477,14 @@ export default function Sidebar({
 
   const sidebarContent = (
     <>
-      {/* Logo, notifications bell, collapse toggle and (phones) close button */}
-      <div className={cn(
+      {/* Logo, notifications bell, collapse toggle and (phones) close button.
+          data-dock-bound: magnified dock icons never spread over this header
+          (logo and, on the side rail, the bell under it). */}
+      <div data-dock-bound={rail ? "" : undefined} className={cn(
         "flex shrink-0 items-center justify-between",
         horizontal ? "flex-row gap-1" : rail ? "flex-col gap-1 px-2 pt-2 pb-2" : "px-5 pt-6 pb-4",
       )}>
-        {/* data-dock-bound: magnified dock icons never spread over the logo. */}
-        <div data-dock-bound="" className={cn("flex items-center gap-2", rail && "justify-center")}>
+        <div className={cn("flex items-center gap-2", rail && "justify-center")}>
           <PetCompanion size={32} onOpen={onClose} fallback={<Link href="/tasks" prefetch onClick={onClose} aria-label="Loma home"><CrosscutIcon size={rail ? 22 : 20} /></Link>} />
           {!rail && (
             <Link href="/tasks" prefetch onClick={onClose} className="font-[family-name:var(--font-logo)] text-base font-bold tracking-[0.5px] text-foreground/80">
@@ -568,17 +571,17 @@ export default function Sidebar({
           return horizontal ? <div className="flex min-w-0 flex-1 items-center justify-center">{nav}</div> : <ScrollArea className="flex-1 min-h-0">{nav}</ScrollArea>;
           })()}
 
-          {/* Bottom section: pool status, theme toggle, user */}
-          <div className={cn("shrink-0", horizontal ? "flex items-center gap-1" : "mt-auto")}>
+          {/* Bottom section: pool status, bell (top/bottom dock), theme toggle,
+              user. data-dock-stop: nothing here magnifies, and grown dock
+              icons never spread over any of it (separator and bell included). */}
+          <div data-dock-stop={rail ? "" : undefined} className={cn("shrink-0", horizontal ? "flex items-center gap-1" : "mt-auto")}>
             {horizontal && <Separator orientation="vertical" className="mx-1 h-7" />}
             {/* Pool status — expandable */}
             {poolStatus && <PoolStatusWidget poolStatus={poolStatus} collapsed={rail} horizontal={horizontal} />}
 
             {/* Theme toggle */}
             {horizontal && <NotificationBell collapsed large onNavigate={onClose} railTooltipSide={railTooltipSide} />}
-            {/* data-dock-stop: theme toggle and account are not magnified, and
-                grown dock icons never spread over them. */}
-            <div data-dock-stop={rail ? "" : undefined} className={cn(horizontal ? "px-0.5" : "px-2.5 py-1")}>
+            <div className={cn(horizontal ? "px-0.5" : "px-2.5 py-1")}>
               {rail ? (
                 <div className="flex flex-col items-center gap-1">
                   <Button

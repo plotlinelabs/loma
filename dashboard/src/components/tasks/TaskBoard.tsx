@@ -137,7 +137,7 @@ export function TaskBoard({ board, onBoardChange, onRefresh, onEditDraft, onAddT
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveTask(null)}
     >
-      <div data-testid="task-board-scroller" className="flex flex-1 gap-4 overflow-x-auto pb-4">
+      <div data-testid="task-board-scroller" className="flex min-h-0 flex-1 gap-4 overflow-x-auto">
         {displayColumns.map((column) => (
           <TaskColumn
             key={column.id}
