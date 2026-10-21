@@ -139,6 +139,8 @@ class _DB:
 @pytest.mark.parametrize("stored,expected", [("https://mcp.slides.com", "https://mcp.slides.com"), (None, None)])
 @pytest.mark.asyncio
 async def test_custom_mcp_refresh_uses_resource_from_token(monkeypatch, stored, expected):
+    from cryptography.fernet import Fernet
+    monkeypatch.setenv("OAUTH_ENCRYPTION_KEY", Fernet.generate_key().decode())
     enc = oauth_helpers.encrypt_token
     token_doc = {
         "access_token": enc("old"), "refresh_token": enc("rt"),
