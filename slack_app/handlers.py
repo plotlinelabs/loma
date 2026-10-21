@@ -41,6 +41,54 @@ TASK_CAPTURE_EMOJI = "loma-task"
 
 CONVERSATION_TRACKER_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3001").rstrip("/") + "/conversations"
 
+RESOLVED_EMOJI = "white_check_mark"
+ALERT_STATUS_RE = re_module.compile(r"\*Status\*:\s*(\w+)")
+
+
+def _alert_status(message: dict | None) -> str | None:
+    """Status of an alert message (e.g. Grafana IRM's `*Status*: firing`), or None."""
+    match = ALERT_STATUS_RE.search((message or {}).get("text") or "")
+    return match.group(1).lower() if match else None
+
+
+async def _handle_alert_status_change(client, event):
+    """Mark a monitored alert resolved when its bot edits the message to `resolved`.
+
+    Alerting tools such as Grafana IRM edit the original message in place instead of
+    posting a new one, so this reacts and posts a note without starting an agent run.
+    """
+    channel = event.get("channel", "")
+    new = event.get("message") or {}
+    old = event.get("previous_message") or {}
+    ts = new.get("ts")
+    if not ts or not new.get("bot_id"):
+        return
+    if new.get("thread_ts") and new.get("thread_ts") != ts:
+        return
+    old_status = _alert_status(old)
+    if _alert_status(new) != "resolved" or old_status in (None, "resolved"):
+        return
+    cfg = await get_channel_config(channel)
+    if not (cfg and cfg.get("allow_bot_messages")):
+        return
+
+    # The reaction doubles as the dedup key: Slack retries and repeated IRM edits
+    # both hit `already_reacted`, so the thread note is posted only once.
+    try:
+        await client.reactions_add(channel=channel, timestamp=ts, name=RESOLVED_EMOJI)
+    except Exception as e:
+        if "already_reacted" in str(e):
+            return
+        logger.warning("[SLACK] Failed to add resolved reaction: %s", e)
+
+    logger.info("[SLACK] Alert %s in %s changed %s -> resolved", ts, channel, old_status)
+    await client.chat_postMessage(
+        channel=channel,
+        thread_ts=ts,
+        text=f":white_check_mark: *Resolved*: this alert went from `{old_status}` to "
+             "`resolved` at the source. No action needed.",
+    )
+
 
 def agent_post_identity(observer) -> dict:
     """How a reply shows which agent wrote it in Slack.
@@ -515,6 +563,9 @@ def register_handlers(app):
         # Allow "file_share" so messages with images/files are processed
         # Exception: monitored channels with allow_bot_messages=True (e.g., #alerts)
         subtype = event.get("subtype")
+        if subtype == "message_changed":
+            await _handle_alert_status_change(client, event)
+            return
         is_bot = bool(event.get("bot_id"))
         if is_bot:
             channel_cfg = await get_channel_config(event.get("channel", ""))
