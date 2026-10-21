@@ -38,6 +38,7 @@ from api.oauth_helpers import (
     decrypt_token,
     _exchange_oauth_code,
     store_custom_mcp_tokens,
+    resolve_mcp_resource,
     revoke_custom_mcp_tokens,
 )
 
@@ -745,6 +746,16 @@ async def handle_custom_mcp_authorize(request: web.Request) -> web.Response:
     if scopes:
         params["scope"] = " ".join(scopes)
 
+    # MCP servers may only accept tokens issued for their resource (RFC 8707).
+    resource = oauth_cfg.get("resource")
+    if not resource and integration.get("mcp_url"):
+        resource = await resolve_mcp_resource(integration["mcp_url"])
+        await db.integrations.update_one(
+            {"_id": integration["_id"]}, {"$set": {"oauth_config.resource": resource}},
+        )
+    if resource:
+        params["resource"] = resource
+
     authorize_url = f"{auth_endpoint}?{urlencode(params)}"
     return web.json_response({"authorize_url": authorize_url})
 
@@ -792,6 +803,7 @@ async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
         redirect_uri=redirect_uri,
         auth_method=oauth_cfg.get("token_endpoint_auth_method", "client_secret_post"),
         code_verifier=code_verifier,
+        resource=oauth_cfg.get("resource"),
     )
     if token_data is None:
         return _callback_error("Failed to exchange authorization code", provider=provider)
@@ -811,6 +823,7 @@ async def handle_custom_mcp_callback(request: web.Request) -> web.Response:
         refresh_token=token_data.get("refresh_token"),
         expires_in=token_data.get("expires_in"),
         scopes=scopes,
+        resource=oauth_cfg.get("resource"),
     )
 
     display_name = integration.get("display_name", provider)
