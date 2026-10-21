@@ -6,7 +6,7 @@ personal Google OAuth tokens.
 
 Commands:
   1. google_apps_script.py list-projects --user-email EMAIL [--query Q] [--limit N]
-  2. google_apps_script.py get-content --user-email EMAIL --script-id ID
+  2. google_apps_script.py get-content --user-email EMAIL --script-id ID [--file-name NAME] [--output-dir DIR]
   3. google_apps_script.py create-project --user-email EMAIL --title T [--parent-id FILE_ID]
   4. google_apps_script.py update-content --user-email EMAIL --script-id ID (--files-json J | --files-json-file PATH | --code-file PATH [--file-name NAME])
   5. google_apps_script.py create-version --user-email EMAIL --script-id ID [--description D]
@@ -15,6 +15,11 @@ Commands:
   Pass --parent-id (a Sheet/Doc/Form file ID) to create-project to create a
   BOUND script — it appears under Extensions → Apps Script in that file and can
   use simple triggers like onOpen/onEdit.
+
+  get-content truncates each file's source at MAX_FILE_SOURCE chars by default
+  (truncated files are flagged with "truncated": true). Use --file-name to get
+  one file in full, or --output-dir to write every file in full to disk and
+  print only a summary. Never push truncated source back with update-content.
 
   The API cannot execute scripts or grant their authorization; return the
   editorUrl so the user can run/authorize a script once in the editor.
@@ -143,30 +148,118 @@ async def list_projects(user_email: str, query: str = "", limit: int = 20) -> di
     return {"projects": projects, "total": len(projects)}
 
 
-async def get_content(user_email: str, script_id: str) -> dict:
-    """Read all source files of an Apps Script project."""
+# Local file extension used when writing each Apps Script file type to disk
+_TYPE_EXTENSIONS = {
+    "SERVER_JS": ".gs",
+    "HTML": ".html",
+    "JSON": ".json",
+}
+
+TRUNCATION_HINT = (
+    "One or more files were truncated. Do NOT push truncated source back with "
+    "update-content. Re-run get-content with --file-name NAME to get a single file "
+    "in full, or --output-dir DIR to write every file in full to disk."
+)
+
+
+def _local_filename(name: str, file_type: str) -> str:
+    """Map an Apps Script file to a local filename (Code → Code.gs, appsscript → appsscript.json)."""
+    return name + _TYPE_EXTENSIONS.get(file_type or "", ".gs")
+
+
+def _find_file(files: list[dict], file_name: str) -> dict:
+    """Find a script file by name, accepting an optional local extension (e.g. "Code.gs")."""
+    for f in files:
+        if f.get("name") == file_name:
+            return f
+    base, ext = os.path.splitext(file_name)
+    if ext.lower() in _EXTENSION_TYPES:
+        for f in files:
+            if f.get("name") == base:
+                return f
+    available = ", ".join(str(f.get("name")) for f in files) or "(none)"
+    raise ValueError(f"File not found in script project: {file_name!r}. Available files: {available}")
+
+
+def _write_files(files: list[dict], output_dir: str) -> list[dict]:
+    """Write each file's full source into output_dir; return a per-file summary."""
+    root = os.path.realpath(output_dir)
+    os.makedirs(root, exist_ok=True)
+    summary = []
+    for f in files:
+        name = f.get("name") or ""
+        source = f.get("source", "")
+        path = os.path.realpath(os.path.join(root, _local_filename(name, f.get("type", ""))))
+        # Apps Script names may contain "/" (pseudo-folders) — keep them inside root.
+        if os.path.commonpath([root, path]) != root:
+            raise ValueError(f"Refusing to write file outside --output-dir: {name!r}")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="") as out:
+            out.write(source)
+        summary.append({
+            "name": name,
+            "type": f.get("type"),
+            "chars": len(source),
+            "path": path,
+        })
+    return summary
+
+
+async def get_content(
+    user_email: str,
+    script_id: str,
+    output_dir: str = "",
+    file_name: str = "",
+) -> dict:
+    """Read the source files of an Apps Script project.
+
+    Modes:
+      - default: every file's source inline, each truncated at MAX_FILE_SOURCE
+        chars (truncated files carry "truncated": true and "originalChars", and
+        the result carries a top-level "truncated" flag and "hint").
+      - file_name: only that file, with its full (untruncated) source.
+      - output_dir: write the selected file(s) in full to disk and return only a
+        summary (name, type, chars, path) — no source in the output.
+    """
     service = await _get_service(user_email)
     content = service.projects().getContent(scriptId=script_id).execute()
 
+    raw_files: list[dict] = content.get("files", [])
+    if file_name:
+        raw_files = [_find_file(raw_files, file_name)]
+
+    result: dict[str, Any] = {"scriptId": content.get("scriptId", script_id)}
+
+    if output_dir:
+        result["outputDir"] = os.path.realpath(output_dir)
+        result["files"] = _write_files(raw_files, output_dir)
+        result["editorUrl"] = _editor_url(script_id)
+        return result
+
     files = []
-    for f in content.get("files", []):
+    any_truncated = False
+    for f in raw_files:
         source = f.get("source", "")
         entry: dict[str, Any] = {
             "name": f.get("name"),
             "type": f.get("type"),
             "totalLength": len(source),
         }
-        if len(source) > MAX_FILE_SOURCE:
+        if not file_name and len(source) > MAX_FILE_SOURCE:
             entry["source"] = source[:MAX_FILE_SOURCE] + "\n\n... [truncated — file too large]"
+            entry["truncated"] = True
+            entry["originalChars"] = len(source)
+            any_truncated = True
         else:
             entry["source"] = source
         files.append(entry)
 
-    return {
-        "scriptId": content.get("scriptId", script_id),
-        "files": files,
-        "editorUrl": _editor_url(script_id),
-    }
+    result["files"] = files
+    result["editorUrl"] = _editor_url(script_id)
+    if any_truncated:
+        result["truncated"] = True
+        result["hint"] = TRUNCATION_HINT
+    return result
 
 
 async def create_project(user_email: str, title: str, parent_id: str = "") -> dict:
@@ -335,9 +428,11 @@ def main():
     p_list.add_argument("--limit", type=int, default=20)
 
     # get-content
-    p_get = sub.add_parser("get-content", help="Read all source files of a script project")
+    p_get = sub.add_parser("get-content", help="Read source files of a script project (default output truncates large files)")
     p_get.add_argument("--user-email", required=True)
     p_get.add_argument("--script-id", required=True)
+    p_get.add_argument("--file-name", default="", help="Return only this file (e.g. Code or Code.gs), with full untruncated source")
+    p_get.add_argument("--output-dir", default="", help="Write files in full to this directory and print only a summary (no source)")
 
     # create-project
     p_create = sub.add_parser("create-project", help="Create a script project (optionally bound to a Sheet/Doc/Form)")
@@ -379,7 +474,9 @@ def main():
         if args.command == "list-projects":
             result = asyncio.run(list_projects(args.user_email, args.query, args.limit))
         elif args.command == "get-content":
-            result = asyncio.run(get_content(args.user_email, args.script_id))
+            result = asyncio.run(get_content(
+                args.user_email, args.script_id, args.output_dir, args.file_name,
+            ))
         elif args.command == "create-project":
             result = asyncio.run(create_project(args.user_email, args.title, args.parent_id))
         elif args.command == "update-content":
