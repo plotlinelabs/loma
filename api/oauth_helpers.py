@@ -14,7 +14,7 @@ import os
 import re
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
@@ -710,6 +710,23 @@ async def store_custom_mcp_tokens(
     logger.info("Stored custom MCP OAuth tokens for %s / %s", user_email, provider)
 
 
+CUSTOM_MCP_REFRESH_MARGIN = timedelta(minutes=5)
+
+
+async def get_custom_mcp_token_expiry(user_email: str, provider: str, db=None) -> datetime | None:
+    """When the stored custom MCP access token expires (UTC), or None if it never does."""
+    if db is None:
+        db = get_db()
+    if db is None:
+        return None
+    doc = await db.oauth_tokens.find_one(
+        {"user_email": user_email, "provider": provider, "provider_type": "custom_mcp"},
+        {"token_expiry": 1},
+    )
+    expiry = (doc or {}).get("token_expiry")
+    return expiry.replace(tzinfo=timezone.utc) if expiry is not None else None
+
+
 async def get_valid_custom_mcp_token(user_email: str, provider: str, db=None) -> str | None:
     """Get a valid custom MCP access token for a user, auto-refreshing if expired."""
     if db is None:
@@ -724,14 +741,18 @@ async def get_valid_custom_mcp_token(user_email: str, provider: str, db=None) ->
         return None
 
     expiry = doc.get("token_expiry")
-    if expiry is None or expiry.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc):
+    now = datetime.now(timezone.utc)
+    expiry_utc = expiry.replace(tzinfo=timezone.utc) if expiry is not None else None
+    still_valid = expiry_utc is None or expiry_utc > now
+    refresh_encrypted = doc.get("refresh_token")
+    # Refresh slightly early so a run never starts with a token about to expire.
+    if expiry_utc is None or expiry_utc > now + CUSTOM_MCP_REFRESH_MARGIN or (still_valid and not refresh_encrypted):
         try:
             return decrypt_token(doc["access_token"])
         except ValueError:
             logger.error("Failed to decrypt custom MCP access token for %s / %s", user_email, provider)
             return None
 
-    refresh_encrypted = doc.get("refresh_token")
     if not refresh_encrypted:
         await _mark_custom_mcp_expired(db, user_email, provider)
         return None
@@ -764,6 +785,11 @@ async def get_valid_custom_mcp_token(user_email: str, provider: str, db=None) ->
     )
 
     if new_token is None:
+        if still_valid:
+            try:
+                return decrypt_token(doc["access_token"])
+            except ValueError:
+                return None
         await _mark_custom_mcp_expired(db, user_email, provider)
         return None
 

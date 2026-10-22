@@ -246,7 +246,7 @@ async def get_excluded_integrations_for_user(user_email: str) -> set[str]:
         return set()
 
 
-async def build_user_mcp_overrides(user_email: str) -> dict:
+async def build_user_mcp_overrides(user_email: str, token_expiries: dict | None = None) -> dict:
     """Build per-user MCP server config for OAuth-requiring connectors.
 
     Covers three cases:
@@ -257,11 +257,13 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
        on demand, given to every user. Sharing rules still apply afterwards
        via get_excluded_integrations_for_user.
 
-    Returns a dict of MCP server configs keyed by server name.
+    Returns a dict of MCP server configs keyed by server name. When
+    ``token_expiries`` is given, it is filled with each custom connector's token expiry.
     """
     try:
         from observability.db import get_db
         from api.oauth_helpers import (
+            get_custom_mcp_token_expiry,
             get_valid_custom_mcp_token,
             get_valid_org_oauth_token,
             get_valid_provider_token,
@@ -287,6 +289,8 @@ async def build_user_mcp_overrides(user_email: str) -> dict:
                     "url": integration["mcp_url"],
                     "headers": {header: f"Bearer {token}"},
                 }
+                if token_expiries is not None:
+                    token_expiries[provider] = await get_custom_mcp_token_expiry(user_email, provider, db=db)
                 logger.info("Built per-user MCP config for %s / %s", user_email, provider)
 
         # 2. Catalog providers with personal OAuth (hubspot, notion, grain)
@@ -1031,8 +1035,9 @@ async def _stream_agent(
     # Build per-user MCP overrides for OAuth-requiring custom connectors
     user_mcp_overrides: dict = {}
     excluded_integrations: set[str] = set()
+    token_expiries: dict = {}
     if user_email:
-        user_mcp_overrides = await build_user_mcp_overrides(user_email)
+        user_mcp_overrides = await build_user_mcp_overrides(user_email, token_expiries)
         excluded_integrations = await get_excluded_integrations_for_user(user_email)
 
     if recall_session:
@@ -1303,7 +1308,13 @@ async def _stream_agent(
 
             if observer and observer.conversation_id:
                 from agent.active_streams import register
-                active_stream = await register(observer.conversation_id, client, user_email or "")
+                # Override headers are fixed for this client's life, so injections
+                # must stop once a connector token in them has expired.
+                expiries = [e.timestamp() for e in token_expiries.values() if e is not None]
+                active_stream = await register(
+                    observer.conversation_id, client, user_email or "",
+                    credentials_expire_at=min(expiries) if user_mcp_overrides and expiries else None,
+                )
                 if active_stream.stopped:
                     # Stop arrived before we registered; the query is already
                     # sent, so abort it now.
