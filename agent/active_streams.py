@@ -20,7 +20,7 @@ replica, no multi-worker server), so an in-process claim is authoritative.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from time import monotonic
+from time import monotonic, time
 from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,13 @@ class ActiveStream:
     # Set once the run loop has decided to finish. From then on nothing reads
     # the client, so injections are refused and the caller queues instead.
     closing: bool = False
+    # Epoch seconds when the earliest per-user MCP token baked into this client
+    # expires. Past it, injections are refused so the next run gets fresh tokens.
+    credentials_expire_at: float | None = None
+
+    @property
+    def credentials_expired(self) -> bool:
+        return self.credentials_expire_at is not None and time() >= self.credentials_expire_at
 
     @property
     def live(self) -> bool:
@@ -111,12 +118,15 @@ class RunHandle:
         raise RuntimeError(f"Mid-stream injection is not supported for {self.runtime} runs")
 
 
-async def register(conversation_id: str, client: Any, user_email: str) -> ActiveStream:
+async def register(
+    conversation_id: str, client: Any, user_email: str, credentials_expire_at: float | None = None,
+) -> ActiveStream:
     stream = ActiveStream(
         conversation_id=conversation_id,
         client=client,
         user_email=user_email,
         task=asyncio.current_task(),
+        credentials_expire_at=credentials_expire_at,
     )
     async with _lock:
         existing = _streams.get(conversation_id)
@@ -220,6 +230,10 @@ async def inject(stream: ActiveStream, message: str) -> bool:
     never neither.
     """
     if not supports_injection(stream):
+        return False
+    if stream.credentials_expired:
+        logger.info("Not injecting into %s: its MCP tokens expired; queueing for a fresh run",
+                    stream.conversation_id)
         return False
     async with _lock:
         if stream.closing or not stream.live:
