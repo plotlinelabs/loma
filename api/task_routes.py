@@ -694,6 +694,9 @@ def _task_view(task: dict, lane_ids: list[str]) -> dict:
         "assignee": task.get("task_assignee") or None,
         # PRs the task opened or linked in its reply (api/task_prs.py).
         "pull_requests": task_prs_view(task),
+        # Crew tasks (fleet/service.py): which member works on it and its fleet state.
+        "fleet": ({"member_name": task["fleet"].get("member_name"), "state": task["fleet"].get("state")}
+                  if task.get("fleet") else None),
     }
 
 
@@ -721,6 +724,8 @@ _TASK_PROJECTION = {
     "task_assignee": 1,
     "metadata.user_name": 1,
     "task_prs": 1,
+    "fleet.member_name": 1,
+    "fleet.state": 1,
     "reply_pr_matches": REPLY_PR_MATCHES_PROJECTION,
 }
 
