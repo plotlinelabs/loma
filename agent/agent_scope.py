@@ -178,11 +178,49 @@ async def build_agent_scope(db, agent: dict) -> dict:
 
 
 def scope_is_enforced(scope: dict | None) -> bool:
+    if isinstance(scope, dict) and scope.get("write_guard"):
+        return True
     return bool(
         isinstance(scope, dict)
         and scope.get("enforce")
         and (scope.get("tools_restricted") or scope.get("skills_restricted"))
     )
+
+
+# Write guard (crew runs, fleet/service.py): external writes need a human
+# approval, so these calls are denied even when every tool is otherwise allowed.
+_GUARDED_COMMANDS = re.compile(
+    r"(?:gmail\.py\b[^\n]*\b(?:send-email|send-draft|delete-draft)\b"
+    r"|slack_user\.py\b[^\n]*\b(?:send-message|upload-file)\b"
+    r"|slack_reader\.py\b[^\n]*\b(?:send|post)"
+    r"|telegram\.py\b[^\n]*\bsend-message\b"
+    r"|google_calendar\.py\b[^\n]*\b(?:create-event|update-event|delete-event)\b"
+    r"|\bgh\s+pr\s+merge\b|\bgh\s+api\b[^\n]*/merge\b)"
+)
+# MCP tool-name suffixes that write outside Loma (merge, send, post, schedule).
+GUARDED_MCP_TOOLS = (
+    "merge_pull_request", "send_message", "schedule_message", "send_email", "send_draft",
+    "create_event", "update_event", "delete_event", "post_message", "reply_to_thread",
+)
+
+
+def _write_blocked(scope: dict, target: str) -> dict:
+    return {"kind": "tool", "target": target, "reason": (
+        f"{target} is blocked for crew runs: sending or merging needs the owner's approval. "
+        "Draft the exact action and ask with `fleet.py escalate --kind approval`, then end your turn.")}
+
+
+def check_write_guard(scope: dict | None, tool_name: str, tool_input: Any) -> dict | None:
+    if not (isinstance(scope, dict) and scope.get("write_guard")):
+        return None
+    if tool_name.startswith("mcp__"):
+        tool = tool_name.rsplit("__", 1)[-1]
+        return _write_blocked(scope, tool) if tool.endswith(GUARDED_MCP_TOOLS) else None
+    if tool_name == "Bash":
+        command = str((tool_input if isinstance(tool_input, dict) else {}).get("command") or "")
+        match = _GUARDED_COMMANDS.search(command)
+        return _write_blocked(scope, match.group(0).split()[0]) if match else None
+    return None
 
 
 def _tools_enforced(scope: dict | None) -> bool:
@@ -235,6 +273,9 @@ def check_tool_call(scope: dict | None, tool_name: str, tool_input: Any) -> dict
     """Return a block record if this call is outside the agent's scope, else None."""
     if not scope_is_enforced(scope):
         return None
+    guarded = check_write_guard(scope, tool_name, tool_input)
+    if guarded:
+        return guarded
     tool_input = tool_input if isinstance(tool_input, dict) else {}
 
     if tool_name.startswith("mcp__"):
@@ -327,6 +368,9 @@ def opencode_permission_rules(scope: dict, mcp_server_names) -> list[dict]:
         for server in sorted(set(mcp_server_names or ())):
             if server not in allowed:
                 rules.append({"permission": f"{_opencode_name(server)}_*", "pattern": "*", "action": "deny"})
+    if scope.get("write_guard"):
+        for suffix in GUARDED_MCP_TOOLS:
+            rules.append({"permission": f"*_{suffix}", "pattern": "*", "action": "deny"})
     rules.append({"permission": "bash", "pattern": "*", "action": "ask"})
     if scope.get("skills_restricted"):
         rules.append({"permission": "skill", "pattern": "*", "action": "ask"})

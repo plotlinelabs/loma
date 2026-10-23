@@ -1273,6 +1273,8 @@ export interface Task {
   assignee?: string | null;
   /** GitHub PRs the task opened or linked in its reply, oldest first. */
   pull_requests?: TaskPullRequest[];
+  /** Crew agent tasks: the agent's role and where it is in the crew flow. */
+  fleet?: { role: "cos" | "pm" | "worker" | "reviewer"; state: string } | null;
   /** Shared boards: you starred this task. Private: nobody else sees it. */
   starred?: boolean;
   /** Your own board only: this card is a task you starred on a shared board. */

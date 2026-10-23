@@ -2732,6 +2732,8 @@ def setup_api_routes(app: web.Application):
     setup_task_routes(app)
     from api.human_task_routes import setup_human_task_routes
     setup_human_task_routes(app)
+    from api.crew_routes import setup_crew_routes
+    setup_crew_routes(app)
 
     # Web push subscription routes (tasks-board notifications)
     from api.push_routes import setup_push_routes

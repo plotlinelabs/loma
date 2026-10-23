@@ -61,6 +61,7 @@ import {
   RiMenuUnfoldLine,
   RiExpandUpDownLine,
   RiNotification3Line,
+  RiTeamLine,
 } from "@remixicon/react";
 
 type NavItem = {
@@ -80,6 +81,7 @@ const navigation: NavItem[] = [
     minRole: "analyst",
     icon: <RiTimeLine size={16} />,
   },
+  { name: "Crew", href: "/crew", icon: <RiTeamLine size={16} /> },
 ];
 
 const userMenuNav: NavItem[] = [

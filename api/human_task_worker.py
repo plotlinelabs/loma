@@ -57,6 +57,16 @@ async def run_source(db, source, task):
         if not agent:
             raise ValueError("Originating agent is no longer accessible")
         context.append(await build_agent_context_block(db, agent))
+    tool_config = source.get("tool_config")
+    if source.get("fleet"):
+        from fleet.roles import context_block
+        from fleet.service import crew_view
+        crew = await db.crews.find_one({"crew_id": source["fleet"]["crew_id"], "owner": owner})
+        if crew:
+            context.append(context_block(source, crew_view(crew)))
+        if h["decision"] == "approve" and isinstance(tool_config, dict):
+            # The owner approved this exact request: lift the crew write guard for this turn.
+            tool_config = {k: v for k, v in tool_config.items() if k != "agent_scope"}
     context.append("Original request:\n" + (source.get("prompt") or ""))
     context.extend(f"{m.get('role', 'unknown')}: {m.get('content', '')}" for m in source.get("messages", []))
     prompt = (f"Human task {task['conversation_id']} received a response from {h['responded_by']}.\n"
@@ -77,7 +87,7 @@ async def run_source(db, source, task):
         async for _ in stream_agent(
             prompt=prompt, conversation_context="\n\n".join(context), observer=observer,
             user_email=owner, source="dashboard" if source.get("source") == "dashboard" else "slack",
-            selected_model=source.get("model") or None, tool_config=source.get("tool_config"),
+            selected_model=source.get("model") or None, tool_config=tool_config,
             raise_on_opencode_error=True,
         ):
             pass

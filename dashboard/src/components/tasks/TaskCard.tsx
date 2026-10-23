@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
 import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot } from "./taskDisplay";
 import { TaskAge, TaskPrChips, TaskSummary, WaitingChip } from "./TaskCardParts";
+
+const CREW_ROLE: Record<string, string> = { cos: "Chief of Staff", pm: "PM", worker: "Worker" };
 import { isStoppedColumn } from "./transitions";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
@@ -69,7 +71,7 @@ export function TaskCard({
   // Chips only for what is set: no empty "Priority" placeholders.
   const hasChips = (task.starred && !isStar) || (!!task.waiting_reason && task.waiting_reason !== "finished")
     || !!task.task_priority || !!task.task_deadline || assignedTags.length > 0 || !!task.assignee
-    || !!task.pull_requests?.length;
+    || !!task.pull_requests?.length || !!task.fleet;
   return (
     <div
       ref={setNodeRef}
@@ -103,6 +105,11 @@ export function TaskCard({
           {hasChips && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 pr-16">
               {task.starred && !isStar && <RiStarFill aria-label="Starred" className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+              {task.fleet && (
+                <span className="rounded-md bg-muted px-2 py-0.5 text-xs leading-5 text-muted-foreground" data-testid="task-crew-role">
+                  {CREW_ROLE[task.fleet.role] ?? "Crew"}
+                </span>
+              )}
               <WaitingChip task={task} />
               <TaskPrChips task={task} />
               {/* On a starred card this is your own priority, not the shared task's. */}
