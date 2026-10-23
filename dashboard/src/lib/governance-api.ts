@@ -37,6 +37,7 @@ export interface Team {
   color: string;
   bg_color: string;
   members: string[];
+  agents: string[];
   tool_defaults: Record<string, TeamToolDefault>;
   created_at?: string;
   updated_at?: string;
@@ -117,18 +118,38 @@ export async function fetchTeams(): Promise<Team[]> {
   return data.teams;
 }
 
-export async function fetchTeam(teamId: string): Promise<{ team: Team; members: User[] }> {
+export interface TeamAgentSummary {
+  agent_id: string;
+  name: string;
+  description?: string;
+  avatar?: { seed: number; motif: "round" | "square" | "halo" | "antenna" };
+  visibility?: string;
+  created_by?: string;
+}
+
+/** Lightweight team list any signed-in user can read (used to group skills and flows). */
+export type TeamDirectoryEntry = Pick<Team, "team_id" | "name" | "color" | "bg_color" | "members" | "agents">;
+
+export async function fetchTeamDirectory(): Promise<TeamDirectoryEntry[]> {
+  const res = await fetch(`${API_BASE}/api/governance/team-directory`);
+  if (!res.ok) throw new Error(`Failed to fetch teams: ${res.status}`);
+  const data = await res.json();
+  return data.teams;
+}
+
+export async function fetchTeam(teamId: string): Promise<{ team: Team; members: User[]; agents: TeamAgentSummary[] }> {
   const res = await fetch(`${API_BASE}/api/governance/teams/${encodeURIComponent(teamId)}`);
   if (!res.ok) throw new Error(`Failed to fetch team: ${res.status}`);
   return res.json();
 }
 
 export async function createTeam(team: {
-  team_id: string;
+  team_id?: string;
   name: string;
   color?: string;
   bg_color?: string;
   members?: string[];
+  agents?: string[];
   tool_defaults?: Record<string, TeamToolDefault>;
 }): Promise<Team> {
   const res = await fetch(`${API_BASE}/api/governance/teams`, {
@@ -136,21 +157,27 @@ export async function createTeam(team: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(team),
   });
-  if (!res.ok) throw new Error(`Failed to create team: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to create team: ${res.status}`);
+  }
   const data = await res.json();
   return data.team;
 }
 
 export async function updateTeam(
   teamId: string,
-  updates: Partial<Pick<Team, "name" | "color" | "bg_color" | "members" | "tool_defaults">>,
+  updates: Partial<Pick<Team, "name" | "color" | "bg_color" | "members" | "agents" | "tool_defaults">>,
 ): Promise<Team> {
   const res = await fetch(`${API_BASE}/api/governance/teams/${encodeURIComponent(teamId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
-  if (!res.ok) throw new Error(`Failed to update team: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to update team: ${res.status}`);
+  }
   const data = await res.json();
   return data.team;
 }

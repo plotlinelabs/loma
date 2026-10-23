@@ -1,6 +1,7 @@
 "use client";
 
 import HumanTaskSetup from "./HumanTaskSetup";
+import CreateTeamDialog from "./teams/CreateTeamDialog";
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -877,6 +878,15 @@ export default function AdminPage() {
       {/* ── Teams tab ── */}
       {tab === "teams" && (
         <div className="space-y-2 stagger-children">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[13px] text-muted-foreground">
+              Group people and agents into teams. Skills and flows can be organised by these teams.
+            </p>
+            <CreateTeamDialog />
+          </div>
+          {teams.length === 0 && (
+            <Card className="p-6 text-center text-[13px] text-muted-foreground">No teams yet. Create one to get started.</Card>
+          )}
           {teams.map((team) => {
             const lomaTools = ALL_TOOLS.filter((t) => toolConfigMap[t]?.auth_mode === "loma-managed" && team.tool_defaults[t]?.role);
             const oauthTools = ALL_TOOLS.filter((t) => toolConfigMap[t]?.auth_mode === "tool-managed" && team.tool_defaults[t]?.oauth_required);
@@ -906,7 +916,7 @@ export default function AdminPage() {
                           {team.name}
                         </h3>
                         <Badge variant="secondary" className="text-[10px] bg-gray-100 text-muted-foreground">
-                          {team.members.length} members
+                          {team.members.length} members{(team.agents || []).length > 0 ? ` · ${team.agents.length} agents` : ""}
                         </Badge>
                       </div>
 

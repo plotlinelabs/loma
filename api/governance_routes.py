@@ -17,6 +17,7 @@ from api.auth_helpers import (
     require_maintainer_or_above,
     get_effective_role,
 )
+from api.teams import TEAM_ID_RE, TeamError, clean_string_list, slugify_team_id
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +377,9 @@ async def handle_list_teams(request: web.Request) -> web.Response:
     if db is None:
         return web.json_response({"error": "DB not configured"}, status=503)
 
-    teams = await db.teams.find().sort("name", 1).to_list(50)
+    teams = await db.teams.find().sort("name", 1).to_list(200)
+    for team in teams:
+        team.setdefault("agents", [])
     return web.json_response({"teams": _serialize(teams)})
 
 
@@ -395,12 +398,45 @@ async def handle_get_team(request: web.Request) -> web.Response:
     # Fetch member details
     members = await db.users.find(
         {"email": {"$in": team.get("members", [])}},
-    ).to_list(100)
+    ).to_list(500)
+    team.setdefault("agents", [])
+    agents = await db.agent_identities.find(
+        {"agent_id": {"$in": team["agents"]}, "deleted": {"$ne": True}},
+        {"_id": 0, "agent_id": 1, "name": 1, "description": 1, "avatar": 1, "visibility": 1, "created_by": 1},
+    ).to_list(200)
 
     return web.json_response({
         "team": _serialize(team),
         "members": _serialize(members),
+        "agents": _serialize(agents),
     })
+
+
+async def _clean_team_lists(db, body: dict) -> dict:
+    """Validate members (existing users) and agents (live agent identities)."""
+    out = {}
+    if "members" in body:
+        members = clean_string_list(body["members"], "members")
+        known = {u["email"] for u in await db.users.find({"email": {"$in": members}}, {"email": 1}).to_list(len(members) or 1)}
+        unknown = [m for m in members if m not in known]
+        if unknown:
+            raise TeamError(f"Unknown users: {', '.join(unknown)}")
+        out["members"] = members
+    if "agents" in body:
+        agents = clean_string_list(body["agents"], "agents")
+        known = {a["agent_id"] for a in await db.agent_identities.find(
+            {"agent_id": {"$in": agents}, "deleted": {"$ne": True}}, {"agent_id": 1},
+        ).to_list(len(agents) or 1)}
+        unknown = [a for a in agents if a not in known]
+        if unknown:
+            raise TeamError(f"Unknown agents: {', '.join(unknown)}")
+        out["agents"] = agents
+    if "name" in body:
+        name = body["name"].strip() if isinstance(body["name"], str) else ""
+        if not name or len(name) > 60:
+            raise TeamError("Team name must be 1-60 characters")
+        out["name"] = name
+    return out
 
 
 async def handle_create_team(request: web.Request) -> web.Response:
@@ -411,22 +447,28 @@ async def handle_create_team(request: web.Request) -> web.Response:
         return web.json_response({"error": "DB not configured"}, status=503)
 
     body = await request.json()
-    required = ["team_id", "name"]
-    for field in required:
-        if field not in body:
-            return web.json_response({"error": f"Missing required field: {field}"}, status=400)
+    if "name" not in body:
+        return web.json_response({"error": "Missing required field: name"}, status=400)
+    try:
+        cleaned = await _clean_team_lists(db, {"members": [], "agents": [], **body})
+    except TeamError as exc:
+        return web.json_response({"error": str(exc)}, status=exc.status)
+    team_id = body.get("team_id") or slugify_team_id(cleaned["name"])
+    if not isinstance(team_id, str) or not TEAM_ID_RE.match(team_id):
+        return web.json_response({"error": "Team ID must be lowercase letters, numbers and dashes"}, status=400)
 
-    existing = await db.teams.find_one({"team_id": body["team_id"]})
+    existing = await db.teams.find_one({"team_id": team_id})
     if existing:
         return web.json_response({"error": "Team ID already exists"}, status=409)
 
     now = datetime.now(timezone.utc)
     team = {
-        "team_id": body["team_id"],
-        "name": body["name"],
+        "team_id": team_id,
+        "name": cleaned["name"],
         "color": body.get("color", "#6B7280"),
         "bg_color": body.get("bg_color", "#F3F4F6"),
-        "members": body.get("members", []),
+        "members": cleaned["members"],
+        "agents": cleaned["agents"],
         "tool_defaults": body.get("tool_defaults", {}),
         "created_at": now,
         "updated_at": now,
@@ -445,8 +487,12 @@ async def handle_update_team(request: web.Request) -> web.Response:
     team_id = request.match_info["team_id"]
     body = await request.json()
 
-    allowed = {"name", "color", "bg_color", "members", "tool_defaults"}
+    allowed = {"name", "color", "bg_color", "members", "agents", "tool_defaults"}
     updates = {k: v for k, v in body.items() if k in allowed}
+    try:
+        updates.update(await _clean_team_lists(db, updates))
+    except TeamError as exc:
+        return web.json_response({"error": str(exc)}, status=exc.status)
     updates["updated_at"] = datetime.now(timezone.utc)
 
     result = await db.teams.update_one({"team_id": team_id}, {"$set": updates})
@@ -458,7 +504,7 @@ async def handle_update_team(request: web.Request) -> web.Response:
 
 
 async def handle_delete_team(request: web.Request) -> web.Response:
-    """DELETE /api/governance/teams/{team_id} — delete a team."""
+    """DELETE /api/governance/teams/{team_id} — delete a team and unassign its skills/flows."""
     require_maintainer_or_above(request)
     db = get_db()
     if db is None:
@@ -469,7 +515,23 @@ async def handle_delete_team(request: web.Request) -> web.Response:
     if result.deleted_count == 0:
         return web.json_response({"error": "Team not found"}, status=404)
 
+    await db.skills.update_many({"team_id": team_id}, {"$set": {"team_id": None}})
+    await db.flows.update_many({"team_id": team_id}, {"$set": {"team_id": None}})
     return web.json_response({"deleted": True})
+
+
+async def handle_team_directory(request: web.Request) -> web.Response:
+    """GET /api/governance/team-directory — team names, members and agents for grouping (any user)."""
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+    teams = await db.teams.find(
+        {}, {"_id": 0, "team_id": 1, "name": 1, "color": 1, "bg_color": 1, "members": 1, "agents": 1},
+    ).sort("name", 1).to_list(200)
+    for team in teams:
+        team.setdefault("members", [])
+        team.setdefault("agents", [])
+    return web.json_response({"teams": teams})
 
 
 # ── Tool Configs ───────────────────────────────────────────────────────────
@@ -552,6 +614,7 @@ def setup_governance_routes(app: web.Application):
     app.router.add_post("/api/governance/teams", handle_create_team)
     app.router.add_patch("/api/governance/teams/{team_id}", handle_update_team)
     app.router.add_delete("/api/governance/teams/{team_id}", handle_delete_team)
+    app.router.add_get("/api/governance/team-directory", handle_team_directory)
 
     # Tool configs
     app.router.add_get("/api/governance/tools", handle_list_tool_configs)

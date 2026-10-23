@@ -228,6 +228,7 @@ async def ensure_skill_indexes(db) -> None:
     await db.skills.create_index("enabled")
     await db.skills.create_index("scope")
     await db.skills.create_index("folder")
+    await db.skills.create_index("team_id")
     await db.skills.create_index([("updated_at", -1)])
     await db.skill_files.create_index([("skill_slug", 1), ("path", 1)], unique=True)
     await db.skill_files.create_index("content_hash")
@@ -315,6 +316,7 @@ async def get_skill(db, slug: str) -> dict[str, Any]:
     skill_doc["scope"] = skill_doc.get("scope") or ("system" if skill_doc.get("created_by") in ("system", "import") else "personal")
     skill_doc["folder"] = skill_doc.get("folder") or None
     skill_doc["folder_source"] = skill_doc.get("folder_source") or None
+    skill_doc["team_id"] = skill_doc.get("team_id") or None
     if (skill_doc.get("source") or {}).get("type") in ("google_doc", "google_sheet"):
         from api.skill_sync_service import public_source
         skill_doc["source"] = public_source(skill_doc["source"])
@@ -361,6 +363,7 @@ async def list_skills(db) -> list[dict[str, Any]]:
         doc["scope"] = doc.get("scope") or ("system" if doc.get("created_by") in ("system", "import") else "personal")
         doc["folder"] = doc.get("folder") or None
         doc["folder_source"] = doc.get("folder_source") or None
+        doc["team_id"] = doc.get("team_id") or None
     return docs
 
 
@@ -594,6 +597,28 @@ async def update_skill_folder(
         }},
     )
     msg = f"Moved to folder '{folder}'" if folder else "Removed from folder"
+    await _record_version(db, slug, actor, "dashboard", msg)
+    return await get_skill(db, slug)
+
+
+@_serialize_linked_mutation
+async def update_skill_team(db, *, slug: str, team_id: str | None, actor: str) -> dict[str, Any]:
+    """Assign a skill to a team (or clear it); the team must exist."""
+    from api.teams import TeamError, resolve_team_id
+    slug = slugify(slug)
+    await check_linked_access(db, slug, actor=actor, write=True, owner_only=True)
+    skill = await db.skills.find_one({"slug": slug, "enabled": {"$ne": False}})
+    if not skill:
+        raise SkillError("Skill not found", status=404)
+    try:
+        team_id = await resolve_team_id(db, team_id)
+    except TeamError as exc:
+        raise SkillError(str(exc), status=exc.status) from exc
+    await db.skills.update_one(
+        {"slug": slug},
+        {"$set": {"team_id": team_id, "updated_at": now_utc(), "updated_by": actor}},
+    )
+    msg = f"Assigned to team '{team_id}'" if team_id else "Removed from team"
     await _record_version(db, slug, actor, "dashboard", msg)
     return await get_skill(db, slug)
 

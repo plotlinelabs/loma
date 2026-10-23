@@ -1,12 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   RiAddLine,
+  RiDeleteBinLine,
   RiLoader4Line,
+  RiRobot2Line,
 } from "@remixicon/react";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { fetchAgentIdentities, type AgentIdentity } from "../../../../lib/agents-api";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,10 +26,14 @@ import {
 import { getToolMeta, CATEGORIES } from "../../../mcp/tool-meta";
 import { TOOL_LOGOS } from "../../../mcp/tool-logos";
 import {
+  deleteTeam,
   fetchTeam,
   fetchToolConfigs,
+  fetchUsers,
+  updateTeam,
   type User,
   type Team,
+  type TeamAgentSummary,
   type ToolConfig,
 } from "../../../../lib/governance-api";
 
@@ -37,18 +45,62 @@ const ALL_TOOLS = CATEGORIES.flatMap((c) => c.keys);
 
 export default function TeamDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const teamId = params.id as string;
   const [team, setTeam] = useState<Team | null>(null);
   const [members, setMembers] = useState<User[]>([]);
+  const [agents, setAgents] = useState<TeamAgentSummary[]>([]);
+  const [allUsers, setAllUsers] = useState<User[] | null>(null);
+  const [allAgents, setAllAgents] = useState<AgentIdentity[]>([]);
+  const [memberToAdd, setMemberToAdd] = useState("");
+  const [agentToAdd, setAgentToAdd] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [toolConfigMap, setToolConfigMap] = useState<Record<string, ToolConfig>>({});
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+
+  async function reloadTeam() {
+    const teamData = await fetchTeam(teamId);
+    setTeam(teamData.team);
+    setMembers(teamData.members);
+    setAgents(teamData.agents || []);
+  }
+
+  async function saveTeam(updates: { members?: string[]; agents?: string[] }) {
+    setSaving(true);
+    setActionError(null);
+    try {
+      await updateTeam(teamId, updates);
+      await reloadTeam();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Failed to update team");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteTeam() {
+    if (!team || !confirm(`Delete team "${team.name}"? Its skills and flows will move to "No team".`)) return;
+    try {
+      await deleteTeam(teamId);
+      router.push("/admin");
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Failed to delete team");
+    }
+  }
+
+  useEffect(() => {
+    fetchUsers().then(setAllUsers).catch(() => setAllUsers(null));
+    fetchAgentIdentities().then((d) => setAllAgents(d.agents)).catch(() => setAllAgents([]));
+  }, []);
 
   useEffect(() => {
     Promise.all([fetchTeam(teamId), fetchToolConfigs()])
       .then(([teamData, tc]) => {
         setTeam(teamData.team);
         setMembers(teamData.members);
+        setAgents(teamData.agents || []);
         const map: Record<string, ToolConfig> = {};
         for (const c of tc) map[c.tool_key] = c;
         setToolConfigMap(map);
@@ -88,6 +140,23 @@ export default function TeamDetailPage() {
         </div>
       </div>
     );
+  }
+
+  const teamAgents = team.agents || [];
+  const addableUsers = (allUsers || []).filter((u) => !team.members.includes(u.email));
+  const addableAgents = allAgents.filter((a) => !teamAgents.includes(a.agent_id));
+
+  function addMember() {
+    const email = memberToAdd.trim();
+    if (!email || !team) return;
+    setMemberToAdd("");
+    saveTeam({ members: [...team.members, email] });
+  }
+
+  function addAgent() {
+    if (!agentToAdd || !team) return;
+    setAgentToAdd("");
+    saveTeam({ agents: [...teamAgents, agentToAdd] });
   }
 
   const lomaTools = ALL_TOOLS.filter((t) => toolConfigMap[t]?.auth_mode === "loma-managed");
@@ -134,22 +203,69 @@ export default function TeamDetailPage() {
                 {team.members.length} members
               </Badge>
               <Badge variant="secondary" className="text-[10px] bg-muted text-muted-foreground">
+                {teamAgents.length} agents
+              </Badge>
+              <Badge variant="secondary" className="text-[10px] bg-muted text-muted-foreground">
                 {Object.keys(team.tool_defaults).length} tool defaults
               </Badge>
             </div>
           </div>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={handleDeleteTeam}
+            className="text-muted-foreground hover:text-red-600"
+            data-testid="delete-team-button"
+          >
+            <RiDeleteBinLine size={14} />
+            Delete team
+          </Button>
         </div>
       </div>
+
+      {actionError && (
+        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{actionError}</div>
+      )}
 
       {/* Members */}
       <div className="bg-card rounded-xl border border-border p-2 md:p-3">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-[13px] font-heading font-semibold text-foreground">Members</h2>
-          <Button variant="ghost" size="xs" className="text-brand-600 hover:text-brand-700">
-            <RiAddLine size={14} />
-            Add Member
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {allUsers ? (
+              <Select value={memberToAdd} onValueChange={setMemberToAdd}>
+                <SelectTrigger className="text-[12px] h-7 w-56" data-testid="team-add-member-select">
+                  <SelectValue placeholder={addableUsers.length ? "Choose a person…" : "Everyone is in this team"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {addableUsers.map((u) => (
+                    <SelectItem key={u.email} value={u.email}>{u.name || u.email} · {u.email}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <input
+                value={memberToAdd}
+                onChange={(e) => setMemberToAdd(e.target.value)}
+                placeholder="name@company.com"
+                className="h-7 w-56 rounded-md border border-border bg-background px-2 text-[12px]"
+                data-testid="team-add-member-input"
+              />
+            )}
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-brand-600 hover:text-brand-700"
+              disabled={!memberToAdd || saving}
+              onClick={addMember}
+              data-testid="team-add-member"
+            >
+              <RiAddLine size={14} />
+              Add Member
+            </Button>
+          </div>
         </div>
+        {members.length === 0 && <p className="text-xs text-muted-foreground py-2">No members yet.</p>}
 
         <div className="divide-y divide-border/50">
           {members.map((user) => (
@@ -170,12 +286,73 @@ export default function TeamDetailPage() {
                 variant="ghost"
                 size="xs"
                 className="text-[10px] text-muted-foreground hover:text-red-500"
+                disabled={saving}
+                onClick={() => saveTeam({ members: team.members.filter((m) => m !== user.email) })}
               >
                 Remove
               </Button>
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Agents */}
+      <div className="bg-card rounded-xl border border-border p-2 md:p-3" data-testid="team-agents">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h2 className="text-[13px] font-heading font-semibold text-foreground">Agents</h2>
+            <p className="text-xs text-muted-foreground">Agents this team owns and works with.</p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Select value={agentToAdd} onValueChange={setAgentToAdd}>
+              <SelectTrigger className="text-[12px] h-7 w-56" data-testid="team-add-agent-select">
+                <SelectValue placeholder={addableAgents.length ? "Choose an agent…" : "No more agents to add"} />
+              </SelectTrigger>
+              <SelectContent>
+                {addableAgents.map((a) => (
+                  <SelectItem key={a.agent_id} value={a.agent_id}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-brand-600 hover:text-brand-700"
+              disabled={!agentToAdd || saving}
+              onClick={addAgent}
+              data-testid="team-add-agent"
+            >
+              <RiAddLine size={14} />
+              Add Agent
+            </Button>
+          </div>
+        </div>
+        {agents.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-2 flex items-center gap-1.5">
+            <RiRobot2Line size={14} /> No agents in this team yet.
+          </p>
+        ) : (
+          <div className="divide-y divide-border/50">
+            {agents.map((agent) => (
+              <div key={agent.agent_id} className="flex items-center gap-2 py-3 first:pt-0 last:pb-0">
+                <AgentAvatar avatar={agent.avatar} size={32} className="rounded-full flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-medium text-foreground truncate">{agent.name}</div>
+                  {agent.description && <div className="text-xs text-muted-foreground truncate">{agent.description}</div>}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-[10px] text-muted-foreground hover:text-red-500"
+                  disabled={saving}
+                  onClick={() => saveTeam({ agents: teamAgents.filter((id) => id !== agent.agent_id) })}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Tool Defaults — Loma-managed */}
