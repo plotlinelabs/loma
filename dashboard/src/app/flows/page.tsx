@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { fetchFlows, fetchLabels, pauseFlow, resumeFlow, deleteFlow, triggerFlow } from "../../lib/api";
 import type { Flow } from "../../lib/api";
 import { basePath } from "../../lib/api";
 import ClientTimestamp from "../../components/ClientTimestamp";
+import { useUser } from "../../lib/UserContext";
+import { NO_TEAM, TeamSwatch, orderTeams, useGroupBy, useTeamDirectory } from "../../components/TeamGrouping";
+import FlowTreeSidebar, { flowSectionKey, type FlowSelection } from "./components/FlowTreeSidebar";
+import FlowOrganizeMenu from "./components/FlowOrganizeMenu";
 import { cn } from "@/lib/utils";
 import { statusColors } from "@/lib/status-colors";
 import { Button } from "@/components/ui/button";
@@ -27,6 +31,7 @@ import {
   RiLinksLine,
   RiHashtag,
   RiLockLine,
+  RiFolderLine,
 } from "@remixicon/react";
 import { EmptyState } from "@/components/EmptyState";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -123,6 +128,11 @@ function SkeletonCard() {
 
 export default function FlowsPage() {
   const { data: session } = useSession();
+  const { hasRole } = useUser();
+  const { teams: rawTeams } = useTeamDirectory();
+  const teams = useMemo(() => orderTeams(rawTeams, session?.user?.email || ""), [rawTeams, session?.user?.email]);
+  const [groupBy, setGroupBy] = useGroupBy("loma.flows.groupBy", rawTeams.length > 0 ? "team" : "scope");
+  const [selection, setSelection] = useState<FlowSelection>({ section: null, folder: null });
   const [flows, setFlows] = useState<Flow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
@@ -173,10 +183,34 @@ export default function FlowsPage() {
     catch (e) { console.error("Failed to trigger flow:", e); }
   }
 
+  const isMaintainer = hasRole("maintainer");
+  const teamIds = new Set(teams.map((t) => t.team_id));
+  const teamById = new Map(teams.map((t) => [t.team_id, t]));
+  const allFolders = [...new Set(flows.map((f) => f.folder).filter((f): f is string => !!f))].sort();
+  const canOrganize = (flow: Flow) => !!flow.can_manage || isMaintainer;
+
+  function handleFlowChanged(updated: Flow) {
+    setFlows((prev) => prev.map((f) => (f.flow_id === updated.flow_id ? { ...f, ...updated } : f)));
+  }
+
+  function handleGroupByChange(g: typeof groupBy) {
+    setGroupBy(g);
+    setSelection({ section: null, folder: null });
+  }
+
+  function selectionLabel(): string {
+    if (!selection.section) return "All flows";
+    const [kind, id] = selection.section.split(":");
+    const base = kind === "team" ? (id === NO_TEAM ? "No team" : teamById.get(id)?.name || "Team") : id === "private" ? "Private" : "Shared";
+    return selection.folder ? `${base} / ${selection.folder}` : base;
+  }
+
   function toggleLabel(label: string) { setSelectedLabel((prev) => (prev === label ? null : label)); }
 
-  // Apply status and label filters
-  let filtered = filter === "all" ? flows : flows.filter((f) => f.status === filter);
+  // Apply tree selection, then status and label filters
+  let filtered = !selection.section ? flows : flows.filter((f) =>
+    flowSectionKey(f, groupBy, teamIds) === selection.section && (!selection.folder || f.folder === selection.folder));
+  if (filter !== "all") filtered = filtered.filter((f) => f.status === filter);
   if (selectedLabel) filtered = filtered.filter((f) => (f.labels || []).includes(selectedLabel));
 
   // Apply trigger type filter (client-side)
@@ -204,7 +238,7 @@ export default function FlowsPage() {
 
   if (loading) {
     return (
-      <div className="space-y-2 animate-fade-in-up">
+      <div className="h-full overflow-y-auto px-3 md:px-6 lg:px-8 pt-2 pb-4 md:py-6 space-y-2 animate-fade-in-up">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Flows</h1>
@@ -217,10 +251,25 @@ export default function FlowsPage() {
   }
 
   return (
-    <div className="space-y-2 animate-fade-in-up">
+    <div className="flex h-full">
+      <FlowTreeSidebar
+        flows={flows}
+        teams={teams}
+        groupBy={groupBy}
+        onGroupByChange={handleGroupByChange}
+        selection={selection}
+        onSelect={setSelection}
+        canOrganize={canOrganize}
+        folders={allFolders}
+        onFlowChanged={handleFlowChanged}
+      />
+    <div className="flex-1 min-w-0 h-full overflow-y-auto px-3 md:px-6 lg:px-8 pt-2 pb-4 md:py-6 space-y-2 animate-fade-in-up">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground">Flows</h1>
+          <h1 className="text-lg md:text-xl font-heading font-semibold text-foreground" data-testid="flows-selection-title">
+            <span className="md:hidden">Flows</span>
+            <span className="hidden md:inline">{selectionLabel()}</span>
+          </h1>
           <p className="text-[13px] text-muted-foreground mt-1">Pre-defined steps that run on a schedule</p>
         </div>
         <div className="flex items-center gap-2">
@@ -337,11 +386,11 @@ export default function FlowsPage() {
       {filtered.length === 0 ? (
         <EmptyState
           icon={RiTimeLine}
-          title={filter === "all" && !selectedLabel && viewMode === "all" ? "No flows yet" : viewMode === "mine" ? "No flows created by you" : selectedLabel ? `No flows match the label "${selectedLabel}"` : `No ${filter} flows`}
+          title={selection.section && filter === "all" && !selectedLabel ? `No flows in ${selectionLabel()}` : filter === "all" && !selectedLabel && viewMode === "all" ? "No flows yet" : viewMode === "mine" ? "No flows created by you" : selectedLabel ? `No flows match the label "${selectedLabel}"` : `No ${filter} flows`}
           description={filter === "all" && !selectedLabel && viewMode === "all" ? "Create one via the chat" : undefined}
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 stagger-children">
+        <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-2 stagger-children">
           {filtered.map((flow) => (
             <Card key={flow.flow_id} className="p-3 hover-lift">
               <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-4">
@@ -355,6 +404,18 @@ export default function FlowsPage() {
                       <Badge variant="outline" className="rounded-md bg-gray-100 text-gray-600 border-gray-200">
                         <RiLockLine size={12} />
                         Private
+                      </Badge>
+                    )}
+                    {flow.team_id && teamById.get(flow.team_id) && (
+                      <Badge variant="outline" className="rounded-md gap-1 border-border text-muted-foreground">
+                        <TeamSwatch team={teamById.get(flow.team_id)} size={12} />
+                        {teamById.get(flow.team_id)!.name}
+                      </Badge>
+                    )}
+                    {flow.folder && (
+                      <Badge variant="outline" className="rounded-md gap-1 border-border text-muted-foreground">
+                        <RiFolderLine size={12} className="text-amber-500" />
+                        {flow.folder}
                       </Badge>
                     )}
                     {(flow.labels || []).map((label) => <LabelPill key={label} label={label} small />)}
@@ -448,6 +509,15 @@ export default function FlowsPage() {
                     </TooltipTrigger>
                     <TooltipContent>Delete</TooltipContent>
                   </Tooltip>
+                  {canOrganize(flow) && (
+                    <FlowOrganizeMenu
+                      flow={flow}
+                      teams={teams}
+                      folders={allFolders}
+                      onChanged={handleFlowChanged}
+                      triggerClassName="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted press-scale"
+                    />
+                  )}
                 </div>
               </div>
             </Card>
@@ -456,6 +526,7 @@ export default function FlowsPage() {
       )}
         </>
       )}
+    </div>
     </div>
   );
 }

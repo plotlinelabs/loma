@@ -273,6 +273,7 @@ export interface Skill {
   scope?: "system" | "personal" | "workspace";
   folder?: string | null;
   folder_source?: "manual" | "auto" | null;
+  team_id?: string | null;
 }
 
 export interface SkillFile {
@@ -449,6 +450,19 @@ export async function updateSkillFolder(name: string, folder: string | null): Pr
   return res.json();
 }
 
+export async function updateSkillTeam(name: string, teamId: string | null): Promise<SkillDetailResponse> {
+  const res = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}/team`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ team_id: teamId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to update skill team: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function autoOrganizeSkills(): Promise<{ organized: number; total: number; message: string; errors?: string[] }> {
   const res = await fetch(`${API_BASE}/api/skills-organize`, { method: "POST" });
   if (!res.ok) {
@@ -559,6 +573,8 @@ export interface Flow {
   slack_config?: SlackConfig;
   status: "active" | "paused" | "completed";
   labels: string[];
+  team_id?: string | null;
+  folder?: string | null;
   visibility?: "private" | "shared";
   run_as?: string;
   created_by: {
@@ -685,6 +701,22 @@ export async function updateFlowLabels(
     body: JSON.stringify({ labels }),
   });
   if (!res.ok) throw new Error(`Failed to update flow labels: ${res.status}`);
+  return res.json();
+}
+
+export async function organizeFlow(
+  id: string,
+  updates: { team_id?: string | null; folder?: string | null },
+): Promise<{ flow: Flow }> {
+  const res = await fetch(`${API_BASE}/api/flows/${id}/organize`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to organize flow: ${res.status}`);
+  }
   return res.json();
 }
 

@@ -1974,6 +1974,27 @@ async def handle_update_skill_folder(request: web.Request) -> web.Response:
         return _skill_error_response(exc)
 
 
+async def handle_update_skill_team(request: web.Request) -> web.Response:
+    """PUT /api/skills/{name}/team — assign a skill to a team (null clears it)."""
+    require_analyst_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "MongoDB is not configured"}, status=503)
+    try:
+        body = await request.json()
+        slug = request.match_info["name"]
+        skill = await db.skills.find_one({"slug": skill_service.slugify(slug)})
+        # Shared skills are organised by maintainers; personal skills by their owner.
+        if (skill or {}).get("created_by") != get_user_email(request) or (skill or {}).get("scope") in ("system", "workspace"):
+            require_maintainer_or_above(request)
+        skill = await skill_service.update_skill_team(
+            db, slug=slug, team_id=body.get("team_id"), actor=get_user_email(request),
+        )
+        return web.json_response(skill)
+    except skill_service.SkillError as exc:
+        return _skill_error_response(exc)
+
+
 async def handle_list_skill_folders(request: web.Request) -> web.Response:
     """GET /api/skills-folders — list distinct folder names."""
     require_analyst_or_above(request)
@@ -2707,6 +2728,7 @@ def setup_api_routes(app: web.Application):
     app.router.add_delete("/api/skills/{name}", handle_delete_skill)
     app.router.add_put("/api/skills/{name}/scope", handle_update_skill_scope)
     app.router.add_put("/api/skills/{name}/folder", handle_update_skill_folder)
+    app.router.add_put("/api/skills/{name}/team", handle_update_skill_team)
     app.router.add_get("/api/skills-folders", handle_list_skill_folders)
     app.router.add_post("/api/skills-organize", handle_auto_organize_skills)
     app.router.add_put("/api/skills/{name}/files", handle_update_skill_file)

@@ -5,8 +5,9 @@ import GoogleSkillImport from "./GoogleSkillImport";
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import type { Skill, SkillFile } from "../../../lib/api";
-import { updateSkillScope, updateSkillFolder, deleteSkill, autoOrganizeSkills } from "../../../lib/api";
+import { updateSkillScope, updateSkillFolder, updateSkillTeam, deleteSkill, autoOrganizeSkills } from "../../../lib/api";
 import { useUser } from "../../../lib/UserContext";
+import { GroupByToggle, NO_TEAM, TeamSwatch, orderTeams, useGroupBy, useTeamDirectory } from "../../../components/TeamGrouping";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +40,7 @@ import {
   RiCheckLine,
   RiLoader4Line,
   RiErrorWarningLine,
+  RiTeamLine,
 } from "@remixicon/react";
 
 type ScopeKey = "workspace" | "personal" | "system";
@@ -88,6 +90,8 @@ export default function SkillTreeSidebar({
   const organizing = organizeStatus?.state === "running";
   const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const { teams } = useTeamDirectory();
+  const [groupBy, setGroupBy] = useGroupBy("loma.skills.groupBy", teams.length > 0 ? "team" : "scope");
 
   useEffect(() => () => {
     if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
@@ -117,6 +121,37 @@ export default function SkillTreeSidebar({
     } else {
       target.ungrouped.push(skill);
     }
+  }
+
+  // Team view: Team → Folder → Skills (teams the user is in come first)
+  const orderedTeams = orderTeams(teams, userEmail);
+  const teamById = new Map(teams.map((t) => [t.team_id, t]));
+  const teamGroups = new Map<string, { ungrouped: Skill[]; folders: Map<string, Skill[]> }>();
+  for (const key of [...orderedTeams.map((t) => t.team_id), NO_TEAM]) {
+    teamGroups.set(key, { ungrouped: [], folders: new Map() });
+  }
+  for (const skill of skills) {
+    const target = teamGroups.get(skill.team_id && teamById.has(skill.team_id) ? skill.team_id : NO_TEAM)!;
+    if (skill.folder) {
+      if (!target.folders.has(skill.folder)) target.folders.set(skill.folder, []);
+      target.folders.get(skill.folder)!.push(skill);
+    } else {
+      target.ungrouped.push(skill);
+    }
+  }
+
+  async function handleAssignTeam(slug: string, teamId: string | null) {
+    try {
+      await updateSkillTeam(slug, teamId);
+      onSkillsChanged?.();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to assign team");
+    }
+  }
+
+  function canAssignTeam(skill: Skill, scopeKey: ScopeKey): boolean {
+    if (isMaintainer) return true;
+    return scopeKey === "personal" && skill.created_by === userEmail;
   }
 
   async function handleMoveScope(slug: string, newScope: "personal" | "workspace") {
@@ -185,6 +220,8 @@ export default function SkillTreeSidebar({
     const hasExtraFiles = extraFiles.length > 0;
     const isMovable = scopeKey !== "system";
     const deletable = canDelete(skill, scopeKey);
+    const teamAssignable = canAssignTeam(skill, scopeKey) && teams.length > 0;
+    const team = skill.team_id ? teamById.get(skill.team_id) : undefined;
 
     return (
       <div key={slug}>
@@ -218,7 +255,10 @@ export default function SkillTreeSidebar({
           >
             {skill.name || slug}
           </button>
-          {(isMovable || deletable) && (
+          {groupBy === "scope" && team && (
+            <span title={team.name} className="flex-shrink-0"><TeamSwatch team={team} size={14} /></span>
+          )}
+          {(isMovable || deletable || teamAssignable) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
@@ -293,6 +333,35 @@ export default function SkillTreeSidebar({
                     </DropdownMenuSub>
                   </>
                 )}
+                {teamAssignable && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger onClick={(e) => e.stopPropagation()} data-testid="skill-assign-team">
+                      <RiTeamLine size={14} className="text-muted-foreground" />
+                      {skill.team_id ? "Change team" : "Assign to team"}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="w-48">
+                      {skill.team_id && (
+                        <DropdownMenuItem onClick={() => handleAssignTeam(slug, null)}>
+                          <RiCloseLine size={14} />
+                          Remove from team
+                        </DropdownMenuItem>
+                      )}
+                      {orderedTeams.map((t) => (
+                        <DropdownMenuItem
+                          key={t.team_id}
+                          onClick={() => handleAssignTeam(slug, t.team_id)}
+                          className={t.team_id === skill.team_id ? "text-brand-600 font-medium" : ""}
+                        >
+                          <TeamSwatch team={t} />
+                          <span className="truncate">{t.name}</span>
+                          {t.team_id === skill.team_id && (
+                            <RiCheckLine size={14} className="text-brand-600 ml-auto flex-shrink-0" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
                 {deletable && (
                   <>
                     <DropdownMenuSeparator />
@@ -336,6 +405,57 @@ export default function SkillTreeSidebar({
     );
   }
 
+  function scopeOf(skill: Skill): ScopeKey {
+    return ((skill.scope || "personal") as ScopeKey);
+  }
+
+  function renderGroupBody(
+    groupKey: string,
+    ungrouped: Skill[],
+    folders: Map<string, Skill[]>,
+    emptyLabel: string,
+  ) {
+    const totalCount = ungrouped.length + [...folders.values()].reduce((n, s) => n + s.length, 0);
+    return (
+      <div className="ml-2">
+        {totalCount === 0 ? (
+          <div className="px-4 py-1.5 text-xs text-muted-foreground">{emptyLabel}</div>
+        ) : (
+          <>
+            {/* Folders */}
+            {[...folders.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([folderName, folderSkills]) => {
+              const folderKey = `folder:${groupKey}:${folderName}`;
+              const isFolderOpen = expandedSections.has(folderKey);
+              return (
+                <div key={folderKey}>
+                  <button
+                    onClick={() => onToggleSection(folderKey)}
+                    className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-md mx-1 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  >
+                    {isFolderOpen ? (
+                      <RiFolderOpenLine size={14} className="flex-shrink-0 text-amber-500" />
+                    ) : (
+                      <RiFolderLine size={14} className="flex-shrink-0 text-amber-500" />
+                    )}
+                    <span className="truncate font-medium">{folderName}</span>
+                    <span className="text-muted-foreground/50 text-[11px] ml-auto">{folderSkills.length}</span>
+                  </button>
+                  {isFolderOpen && (
+                    <div className="ml-3">
+                      {folderSkills.map((skill) => renderSkillRow(skill, scopeOf(skill)))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {/* Ungrouped skills */}
+            {ungrouped.map((skill) => renderSkillRow(skill, scopeOf(skill)))}
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex-shrink-0 bg-muted/30 flex flex-col h-full overflow-hidden" style={{ width: width ?? 280 }}>
       {isMaintainer && <div className="px-4 pt-3"><GoogleSkillImport onImported={slug => { onSkillsChanged?.(); onSelectSkill(slug); }} /></div>}
@@ -370,6 +490,10 @@ export default function SkillTreeSidebar({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+      </div>
+      <div className="flex items-center gap-2 px-4 pb-2 text-[11px] text-muted-foreground">
+        <span>Group by</span>
+        <GroupByToggle value={groupBy} onChange={setGroupBy} />
       </div>
 
       {/* Auto-organize status banner */}
@@ -408,7 +532,7 @@ export default function SkillTreeSidebar({
       {/* Tree */}
       <ScrollArea className="flex-1 min-h-0">
         <div className="py-2">
-          {SECTIONS.map(({ key, label, showInfo }) => {
+          {groupBy === "scope" && SECTIONS.map(({ key, label, showInfo }) => {
             const { ungrouped, folders } = grouped[key];
             const totalCount = ungrouped.length + [...folders.values()].reduce((n, s) => n + s.length, 0);
             const isOpen = expandedSections.has(key);
@@ -428,44 +552,31 @@ export default function SkillTreeSidebar({
                   {showInfo && <RiInformationLine size={12} className="text-muted-foreground/50" />}
                 </button>
 
-                {isOpen && (
-                  <div className="ml-2">
-                    {totalCount === 0 ? (
-                      <div className="px-4 py-1.5 text-xs text-muted-foreground">No skills</div>
-                    ) : (
-                      <>
-                        {/* Folders */}
-                        {[...folders.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([folderName, folderSkills]) => {
-                          const folderKey = `folder:${key}:${folderName}`;
-                          const isFolderOpen = expandedSections.has(folderKey);
-                          return (
-                            <div key={folderKey}>
-                              <button
-                                onClick={() => onToggleSection(folderKey)}
-                                className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-md mx-1 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                              >
-                                {isFolderOpen ? (
-                                  <RiFolderOpenLine size={14} className="flex-shrink-0 text-amber-500" />
-                                ) : (
-                                  <RiFolderLine size={14} className="flex-shrink-0 text-amber-500" />
-                                )}
-                                <span className="truncate font-medium">{folderName}</span>
-                                <span className="text-muted-foreground/50 text-[11px] ml-auto">{folderSkills.length}</span>
-                              </button>
-                              {isFolderOpen && (
-                                <div className="ml-3">
-                                  {folderSkills.map((skill) => renderSkillRow(skill, key))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                        {/* Ungrouped skills */}
-                        {ungrouped.map((skill) => renderSkillRow(skill, key))}
-                      </>
-                    )}
-                  </div>
-                )}
+                {isOpen && renderGroupBody(key, ungrouped, folders, "No skills")}
+              </div>
+            );
+          })}
+          {groupBy === "team" && [...teamGroups.entries()].map(([teamKey, { ungrouped, folders }]) => {
+            const team = teamById.get(teamKey);
+            const totalCount = ungrouped.length + [...folders.values()].reduce((n, s) => n + s.length, 0);
+            if (!team && totalCount === 0) return null;
+            const sectionKey = `team:${teamKey}`;
+            const isOpen = !expandedSections.has(`collapsed:${sectionKey}`);
+            return (
+              <div key={sectionKey} className="mb-1" data-testid={`skills-team-section-${teamKey}`}>
+                <button
+                  onClick={() => onToggleSection(`collapsed:${sectionKey}`)}
+                  className="w-full flex items-center gap-1.5 px-4 py-1.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors"
+                >
+                  <RiArrowRightSLine
+                    size={12}
+                    className={cn("transition-transform duration-150", isOpen && "rotate-90")}
+                  />
+                  <TeamSwatch team={team} size={14} />
+                  <span className="truncate">{team ? team.name : "No team"}</span>
+                  <span className="text-muted-foreground/50 font-normal normal-case">({totalCount})</span>
+                </button>
+                {isOpen && renderGroupBody(sectionKey, ungrouped, folders, "No skills yet")}
               </div>
             );
           })}

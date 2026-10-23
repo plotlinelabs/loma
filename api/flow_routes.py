@@ -15,7 +15,10 @@ from scheduler.models import (
 )
 from scheduler.agent_work import prepare_agent_work, validate_agent_work
 from scheduler.engine import add_flow_to_scheduler, remove_flow_from_scheduler, get_next_run_time
-from api.auth_helpers import require_analyst_or_above, require_operator_or_above, get_system_role, get_user_email
+from api.auth_helpers import (
+    ROLE_HIERARCHY, require_analyst_or_above, require_operator_or_above, get_system_role, get_user_email,
+)
+from api.teams import TeamError, clean_folder, resolve_team_id
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +276,13 @@ async def handle_create_flow(request: web.Request) -> web.Response:
     model_error = _normalize_model_field(body)
     if model_error is not None:
         return model_error
+    try:
+        if "team_id" in body:
+            body["team_id"] = await resolve_team_id(db, body["team_id"])
+        if "folder" in body:
+            body["folder"] = clean_folder(body["folder"])
+    except TeamError as exc:
+        return web.json_response({"error": str(exc)}, status=exc.status)
 
     body.pop("agent_snapshot", None)
     if body.get("agent_id") is not None:
@@ -567,6 +577,43 @@ async def handle_update_flow_labels(request: web.Request) -> web.Response:
     return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})})
 
 
+async def handle_organize_flow(request: web.Request) -> web.Response:
+    """PATCH /api/flows/{flow_id}/organize — set team_id and/or folder (metadata only)."""
+    require_operator_or_above(request)
+    db = get_db()
+    if db is None:
+        return web.json_response({"error": "DB not configured"}, status=503)
+
+    flow_id = request.match_info["flow_id"]
+    existing = await get_flow(db, flow_id)
+    if existing is None or not _check_flow_access(existing, request):
+        return web.json_response({"error": "Flow not found"}, status=404)
+    # Maintainers may organise any flow they can see; it never changes how the flow runs.
+    if ROLE_HIERARCHY.get(get_system_role(request), 0) < ROLE_HIERARCHY["maintainer"]:
+        _require_flow_manager(existing, request)
+
+    try:
+        body = await request.json()
+    except Exception as e:
+        return web.json_response({"error": f"Invalid JSON: {e}"}, status=400)
+    if not isinstance(body, dict) or not ({"team_id", "folder"} & body.keys()):
+        return web.json_response({"error": "Body must contain 'team_id' and/or 'folder'"}, status=400)
+
+    updates = {}
+    try:
+        if "team_id" in body:
+            updates["team_id"] = await resolve_team_id(db, body["team_id"])
+        if "folder" in body:
+            updates["folder"] = clean_folder(body["folder"])
+    except TeamError as exc:
+        return web.json_response({"error": str(exc)}, status=exc.status)
+
+    flow = await update_flow(db, flow_id, updates)
+    if flow is None:
+        return web.json_response({"error": "Flow not found"}, status=404)
+    return web.json_response({"flow": _serialize({**_sanitize_flow(flow), "can_manage": _can_manage_flow(flow, request)})})
+
+
 async def handle_list_labels(request: web.Request) -> web.Response:
     """GET /api/labels — return all distinct labels used across flows."""
     db = get_db()
@@ -589,4 +636,5 @@ def setup_flow_routes(app: web.Application):
     app.router.add_post("/api/flows/{flow_id}/run-now", handle_run_now)
     app.router.add_get("/api/flows/{flow_id}/runs", handle_flow_runs)
     app.router.add_patch("/api/flows/{flow_id}/labels", handle_update_flow_labels)
+    app.router.add_patch("/api/flows/{flow_id}/organize", handle_organize_flow)
     app.router.add_get("/api/labels", handle_list_labels)
