@@ -15,8 +15,6 @@ import { Button } from "@/components/ui/button";
 import type { AgentModel, BoardLane, Task, TaskPriority, TaskTag } from "@/lib/api";
 import { isDraft as isDraftTask, isStaged as isStagedTask, taskDot } from "./taskDisplay";
 import { TaskAge, TaskPrChips, TaskSummary, WaitingChip } from "./TaskCardParts";
-
-const CREW_ROLE: Record<string, string> = { cos: "Chief of Staff", pm: "PM", worker: "Worker" };
 import { isStoppedColumn } from "./transitions";
 import { TaskCardMenu } from "./TaskCardMenu";
 import { TaskPriorityTag } from "./TaskPriority";
@@ -107,7 +105,7 @@ export function TaskCard({
               {task.starred && !isStar && <RiStarFill aria-label="Starred" className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
               {task.fleet && (
                 <span className="rounded-md bg-muted px-2 py-0.5 text-xs leading-5 text-muted-foreground" data-testid="task-crew-role">
-                  {CREW_ROLE[task.fleet.role] ?? "Crew"}
+                  {task.fleet.member_name || "Crew"}
                 </span>
               )}
               <WaitingChip task={task} />

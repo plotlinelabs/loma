@@ -1,60 +1,51 @@
 # Personal Crews
 
-A crew is a small team of agents that works on your taskboard without you
-starting each task.
+A crew is a team of agents you design yourself. Loma does not ship any fixed
+roles: you decide who is on the team, what each member may do, and how they
+are wired together. Off unless the server sets `LOMA_CREWS_ENABLED=true` and
+you turn your crew on from the Crew page.
 
-- **Chief of Staff (CoS)** plans your day every morning from your sources
-  (Gmail read only by default, Calendar, the taskboard; Slack and Linear are
-  opt-in), creates one task per goal and sends you a morning brief.
-- **PM** splits a goal into worker tasks with acceptance criteria.
-- **Worker** does one task end to end.
-- **PM review** is a separate run that checks each worker result against its
-  acceptance criteria: accept, rework (up to `max_rework` rounds) or escalate.
-- In the evening the CoS writes a report of the day's tree.
+## Building blocks
 
-Reports go to the Loma inbox and, when enabled, a Slack DM from the bot.
-
-## Turning it on
-
-1. Server: `LOMA_CREWS_ENABLED=true` (default off) and the scheduler on.
-   `LOMA_FLEET_MAX_CONCURRENT` caps runs across all crews (default 8).
-2. User: open **Crew** in the sidebar, adjust settings, press **Turn on**.
-   Rituals whose time already passed today are skipped; use **Plan now**.
-
-## How it works
-
-Every crew agent is a taskboard conversation with a `fleet` block
-(`fleet/service.py`). `fleet/dispatcher.py` runs every 10 seconds:
-
-1. creates the morning plan / evening report when due (once per local day);
-2. wakes a parent when all its children finished (waiting costs nothing);
-3. picks up tasks whose escalation the owner answered;
-4. starts queued tasks whose `depends_on` are done, under the crew's
-   `max_concurrent` and daily USD budget.
-
-Agents grow the tree only through `tools/fleet.py` (`create`, `children`,
-`status`, `review`, `escalate`). Depth, fan-out, roles and the daily task cap
-are checked server side.
-
-## Safety
-
-- Every run acts as the crew owner. Children keep the parent's scope.
-- Crew runs carry a write guard (`agent/agent_scope.py`): sending email,
-  Slack or Telegram messages, changing calendar events and merging PRs are
-  denied on Claude and OpenCode, and Bash commands are checked on Codex.
-  Drafts and draft PRs are allowed. To act, an agent escalates; only the
-  owner's **Approve** on the human task lifts the guard for the resumed turn.
-- A run cut off by a restart is marked failed and never replayed.
-- **Pause** stops new dispatch. **Stop all** cancels open tasks and
-  interrupts running ones.
-
-## Settings
-
-| Setting | Default | Range |
+| Piece | What you set | Enforced in |
 |---|---|---|
-| Agents at once | 5 | 1-8 |
-| Daily budget | $25 | $1-500 |
-| Max depth | 3 (CoS, PM, worker) | 2-3 |
-| Tasks per parent | 8 | 1-12 |
-| Tasks per day | 40 | 1-100 |
-| Rework rounds | 2 | 0-3 |
+| **Member** | Name, one-line description, instructions, model. Optionally based on a Loma agent (Agents page): that agent's skills and tools then limit the member. Up to 12. | `fleet/service.py` `clean_members`, `member_tool_config` |
+| **Hand work to** | For each member, the members it may give tasks to. Any shape works (chains, fan-out, cycles); the depth limit bounds it. | `tool_create` |
+| **Reviewed by** | Another member that checks this member's result before it counts as done: accept, rework (up to the rework limit) or escalate to you. | `dispatcher.finish`, `apply_verdict` |
+| **Send and merge** | `ask` (default): sending email/Slack/Telegram, changing calendar events and merging PRs are blocked until you approve that exact action. `deny`: never, not even with approval. `allow`: no guard; only offered when the server sets `LOMA_CREWS_ALLOW_UNATTENDED_WRITES=true`. | `agent/agent_scope.py` write guard, `api/human_task_worker.py` |
+| **Can ask me** | Whether the member may open a Needs-you task for an answer or approval. | `tool_escalate` |
+| **Schedule** | Start a task for a member at a time on chosen weekdays, with a prompt. Optionally include today's crew activity (skipped on idle days) and deliver the reply to your Loma inbox and/or a Slack DM. | `dispatcher.run_schedules` |
+| **Give a task** | Hand any member a one-off task from the Crew page. Its reply comes to your inbox. | `POST /api/crew/tasks` |
+| **Limits** | Agents at once, daily USD, tasks per day, levels deep, tasks per parent, rework rounds. | dispatcher and `tool_create` |
+
+Templates on the Crew page (Chief of Staff team, Builder and reviewer, Inbox
+assistant, Blank) only pre-fill the editor; they live in
+`dashboard/src/lib/crew-templates.ts` and the backend knows nothing about them.
+
+## How a task moves
+
+`queued -> running -> waiting (on its own tasks) | in_review | blocked (needs you) -> accepted | done | failed | cancelled`
+
+- Every task is a taskboard conversation acting as you. Reviews stay off the board.
+- A member hands out work with `tools/fleet.py create --to <member-id>`, then ends its turn. It is woken with the results when all its tasks finish. Waiting costs nothing.
+- Links, permissions and limits are read from the current crew config on every call, so edits apply to running work at once. Removing a member fails its open tasks.
+- Runs cut off by a restart are marked failed, never replayed.
+- Pause stops new runs. Stop all also cancels open tasks.
+
+## Agent tool
+
+```
+python3 tools/fleet.py --user-email E --auth-token T --conversation-id C status
+python3 tools/fleet.py ... members
+python3 tools/fleet.py ... create --to MEMBER --title T --brief B --acceptance A --request-key K [--depends-on ID,ID]
+python3 tools/fleet.py ... children
+python3 tools/fleet.py ... review --verdict accept|rework|escalate --notes N
+python3 tools/fleet.py ... escalate --kind approval|information --title T --details D --request-key K
+```
+
+## Known limits
+
+- One backend replica (in-memory run claim and dispatcher).
+- Codex runs only partly respect the write guard (Codex is off by default).
+- An approval lifts the write guard for the whole resumed turn, not only the approved action.
+- Personal crews only; shared-board crews come later.

@@ -1,14 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   RiPauseLine,
   RiPlayLine,
   RiRefreshLine,
+  RiSendPlaneLine,
   RiStopLine,
-  RiSunLine,
-  RiMoonLine,
   RiTeamLine,
 } from "@remixicon/react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,29 +15,27 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState } from "@/components/EmptyState";
+import { MembersEditor, SchedulesEditor, WiringSummary } from "@/components/crew/CrewEditors";
 import { cn } from "@/lib/utils";
+import { AgentIdentity, fetchAgentIdentities } from "@/lib/agents-api";
 import {
   CrewAction,
   CrewNode,
+  CrewSchedule,
   CrewSettings,
-  CrewSource,
   CrewStatus,
   crewAction,
   fetchCrew,
   fetchCrewTree,
+  giveTask,
+  runSchedule,
   saveCrew,
 } from "@/lib/crew-api";
-
-const ROLE_LABEL: Record<string, string> = {
-  cos: "Chief of Staff",
-  pm: "PM",
-  worker: "Worker",
-  reviewer: "PM review",
-};
+import { CREW_TEMPLATES } from "@/lib/crew-templates";
 
 const STATE_STYLE: Record<string, string> = {
   queued: "bg-muted text-muted-foreground",
@@ -56,7 +53,7 @@ const STATE_LABEL: Record<string, string> = {
   queued: "Queued",
   running: "Running",
   waiting: "Waiting on team",
-  in_review: "In PM review",
+  in_review: "In review",
   blocked: "Needs you",
   accepted: "Accepted",
   done: "Done",
@@ -64,18 +61,11 @@ const STATE_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-const SOURCES: { key: CrewSource; label: string }[] = [
-  { key: "gmail", label: "Gmail (read only)" },
-  { key: "calendar", label: "Calendar" },
-  { key: "board", label: "Taskboard" },
-  { key: "slack", label: "Slack" },
-  { key: "linear", label: "Linear" },
-];
-
 const LIMIT_FIELDS: { key: keyof CrewSettings; label: string; min: number; max: number; step?: number }[] = [
   { key: "max_concurrent", label: "Agents at once", min: 1, max: 8 },
   { key: "daily_usd", label: "Daily budget (USD)", min: 1, max: 500, step: 1 },
   { key: "max_tasks_per_day", label: "Tasks per day", min: 1, max: 100 },
+  { key: "max_depth", label: "Levels deep", min: 1, max: 5 },
   { key: "max_fanout", label: "Tasks per parent", min: 1, max: 12 },
   { key: "max_rework", label: "Rework rounds", min: 0, max: 3 },
 ];
@@ -88,7 +78,9 @@ function NodeRow({ node, depth }: { node: CrewNode; depth: number }) {
         style={{ paddingLeft: depth * 20 }}
         data-testid="crew-node"
       >
-        <Badge variant="outline" className="shrink-0">{ROLE_LABEL[node.role] ?? node.role}</Badge>
+        <Badge variant="outline" className="shrink-0">
+          {node.kind === "review" ? `${node.member_name ?? node.member_id} (review)` : node.member_name ?? node.member_id}
+        </Badge>
         <div className="min-w-0 flex-1">
           <Link
             href={`/conversations/${node.conversation_id}`}
@@ -129,9 +121,12 @@ export default function CrewPage() {
   const [status, setStatus] = useState<CrewStatus | null>(null);
   const [draft, setDraft] = useState<CrewSettings | null>(null);
   const [roots, setRoots] = useState<CrewNode[]>([]);
+  const [agents, setAgents] = useState<AgentIdentity[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [template, setTemplate] = useState("chief-of-staff");
+  const [task, setTask] = useState({ member_id: "", title: "", brief: "" });
 
   const load = useCallback(async () => {
     try {
@@ -146,18 +141,28 @@ export default function CrewPage() {
 
   useEffect(() => {
     load();
+    fetchAgentIdentities().then((r) => setAgents(r.agents.filter((a) => a.status !== "disabled"))).catch(() => {});
     const id = setInterval(load, 10000);
     return () => clearInterval(id);
   }, [load]);
 
-  const act = async (action: CrewAction) => {
+  // Unsaved edits: Run now and Give task use the saved crew, so ask to save first.
+  const dirty = useMemo(() => {
+    if (!status || !draft) return false;
+    const pick = (c: CrewSettings) => JSON.stringify([c.members, c.schedules, c.notes, c.timezone,
+      c.max_concurrent, c.daily_usd, c.max_depth, c.max_fanout, c.max_rework, c.max_tasks_per_day]);
+    return pick(status.crew) !== pick(draft);
+  }, [status, draft]);
+
+  const run = async (fn: () => Promise<CrewStatus>, keepDraft = true) => {
     setBusy(true);
     setError(null);
     try {
-      const s = await crewAction(action);
+      const s = await fn();
       setStatus(s);
-      setDraft(s.crew);
+      if (!keepDraft) setDraft(s.crew);
       setRoots((await fetchCrewTree(3)).roots);
+      return s;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -165,22 +170,26 @@ export default function CrewPage() {
     }
   };
 
+  const act = (action: CrewAction) => run(() => crewAction(action));
+
   const save = async () => {
     if (!draft) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // The server keeps only the settings keys; state changes go through actions.
-      const s = await saveCrew(draft);
-      setStatus(s);
-      setDraft(s.crew);
+    const s = await run(() => saveCrew({
+      timezone: draft.timezone, notes: draft.notes, members: draft.members, schedules: draft.schedules,
+      max_concurrent: draft.max_concurrent, daily_usd: draft.daily_usd, max_depth: draft.max_depth,
+      max_fanout: draft.max_fanout, max_rework: draft.max_rework, max_tasks_per_day: draft.max_tasks_per_day,
+    }), false);
+    if (s) {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
     }
+  };
+
+  const applyTemplate = () => {
+    const t = CREW_TEMPLATES.find((x) => x.id === template);
+    if (!t || !draft) return;
+    if (draft.members.length && !window.confirm(`Replace your ${draft.members.length} members and schedules with "${t.name}"?`)) return;
+    setDraft({ ...draft, members: structuredClone(t.members), schedules: structuredClone(t.schedules) });
   };
 
   const set = <K extends keyof CrewSettings>(key: K, value: CrewSettings[K]) =>
@@ -200,6 +209,9 @@ export default function CrewPage() {
 
   const state = status.crew.exists ? status.crew.state : "paused";
   const active = state === "active";
+  const savedMembers = status.crew.members;
+  const canRun = (s: CrewSchedule) => active && !busy && !dirty && status.crew.schedules.some((x) => x.id === s.id);
+  const taskMember = task.member_id || savedMembers[0]?.id || "";
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
@@ -208,7 +220,7 @@ export default function CrewPage() {
           <div>
             <h1 className="text-lg font-semibold text-foreground">Crew</h1>
             <p className="text-sm text-muted-foreground">
-              A Chief of Staff plans your day, PMs split the work, workers do it and a PM review checks it.
+              Build your own team of agents: choose who is on it, what each one may do, who hands work to whom and who checks it.
             </p>
           </div>
           <div className="flex items-center gap-1">
@@ -222,7 +234,7 @@ export default function CrewPage() {
                 </Button>
               </>
             ) : (
-              <Button size="sm" disabled={busy || !status.enabled} onClick={() => act("activate")} data-testid="crew-activate">
+              <Button size="sm" disabled={busy || !status.enabled || !savedMembers.length} onClick={() => act("activate")} data-testid="crew-activate">
                 <RiPlayLine size={14} /> Turn on
               </Button>
             )}
@@ -259,20 +271,38 @@ export default function CrewPage() {
 
         <Card className="p-4">
           <CardContent className="p-0 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Today</h2>
-              <div className="flex gap-1">
-                <Button size="sm" variant="outline" disabled={busy || !active} onClick={() => act("run-plan")} data-testid="crew-run-plan">
-                  <RiSunLine size={14} /> Plan now
-                </Button>
-                <Button size="sm" variant="outline" disabled={busy || !active} onClick={() => act("run-report")} data-testid="crew-run-report">
-                  <RiMoonLine size={14} /> Report now
-                </Button>
-              </div>
+            <h2 className="text-sm font-semibold">Give a task</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <Select value={taskMember} onValueChange={(v) => setTask({ ...task, member_id: v })} disabled={!savedMembers.length}>
+                <SelectTrigger className="w-full" aria-label="Give to" data-testid="task-member"><SelectValue placeholder="Member" /></SelectTrigger>
+                <SelectContent>
+                  {savedMembers.map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Input className="sm:col-span-2" placeholder="Title" value={task.title} data-testid="task-title"
+                     onChange={(e) => setTask({ ...task, title: e.target.value })} />
             </div>
+            <Textarea rows={2} placeholder="What should they do?" value={task.brief} data-testid="task-brief"
+                      onChange={(e) => setTask({ ...task, brief: e.target.value })} />
+            <div className="flex justify-end">
+              <Button size="sm" data-testid="task-give"
+                      disabled={busy || !active || !taskMember || !task.title.trim() || !task.brief.trim()}
+                      onClick={async () => {
+                        if (await run(() => giveTask({ member_id: taskMember, title: task.title, brief: task.brief })))
+                          setTask({ member_id: taskMember, title: "", brief: "" });
+                      }}>
+                <RiSendPlaneLine size={14} /> Give task
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="p-4">
+          <CardContent className="p-0 space-y-3">
+            <h2 className="text-sm font-semibold">Activity</h2>
             {roots.length === 0 ? (
               <EmptyState icon={RiTeamLine} title="No crew work yet"
-                description="Turn the crew on. Your Chief of Staff plans every morning, or press Plan now." />
+                description="Give a member a task, or add a schedule and turn the crew on." />
             ) : (
               <div data-testid="crew-tree">
                 {roots.map((r) => <NodeRow key={r.conversation_id} node={r} depth={0} />)}
@@ -282,60 +312,61 @@ export default function CrewPage() {
         </Card>
 
         <Card className="p-4">
+          <CardContent className="p-0 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Members</h2>
+              <div className="flex items-center gap-1">
+                <Select value={template} onValueChange={setTemplate}>
+                  <SelectTrigger size="sm" className="w-52" aria-label="Template" data-testid="crew-template"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {CREW_TEMPLATES.map((t) => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Button size="sm" variant="outline" onClick={applyTemplate} data-testid="crew-apply-template">Use template</Button>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {CREW_TEMPLATES.find((t) => t.id === template)?.description} Templates only fill in the form; change anything before saving.
+            </p>
+            <WiringSummary members={draft.members} />
+            <MembersEditor
+              members={draft.members} schedules={draft.schedules} agents={agents}
+              allowUnattended={draft.unattended_writes_allowed}
+              onChange={(members, schedules) => setDraft({ ...draft, members, schedules })}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="p-4">
+          <CardContent className="p-0 space-y-3">
+            <h2 className="text-sm font-semibold">Schedules</h2>
+            {dirty && <p className="text-xs text-muted-foreground">Save your changes to use Run now.</p>}
+            <SchedulesEditor
+              schedules={draft.schedules} members={draft.members} canRun={canRun}
+              onChange={(schedules) => set("schedules", schedules)}
+              onRun={(s) => run(() => runSchedule(s.id))}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="p-4">
           <CardContent className="p-0 space-y-4">
-            <h2 className="text-sm font-semibold">Settings</h2>
+            <h2 className="text-sm font-semibold">Crew settings</h2>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="crew-morning">Morning plan</Label>
-                <Input id="crew-morning" type="time" value={draft.morning_time}
-                       onChange={(e) => set("morning_time", e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="crew-evening">Evening report</Label>
-                <Input id="crew-evening" type="time" value={draft.evening_time}
-                       onChange={(e) => set("evening_time", e.target.value)} />
-              </div>
               <div className="space-y-1">
                 <Label htmlFor="crew-tz">Timezone</Label>
                 <Input id="crew-tz" value={draft.timezone} onChange={(e) => set("timezone", e.target.value)} />
               </div>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="crew-focus">What should the crew focus on?</Label>
-              <Textarea id="crew-focus" rows={3} value={draft.focus}
+              <Label htmlFor="crew-notes">Notes every member sees</Label>
+              <Textarea id="crew-notes" rows={3} value={draft.notes}
                         placeholder="e.g. Ship the Q4 roadmap items, keep the inbox at zero, prep for customer calls"
-                        onChange={(e) => set("focus", e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium">Sources for the morning plan</p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {SOURCES.map((s) => (
-                  <label key={s.key} className="flex items-center gap-2 text-sm">
-                    <Switch checked={draft.sources[s.key]} data-testid={`crew-source-${s.key}`}
-                            onCheckedChange={(v) => set("sources", { ...draft.sources, [s.key]: v })} />
-                    {s.label}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium">Send the plan and report to</p>
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2 text-sm">
-                  <Switch checked={draft.reports.inbox}
-                          onCheckedChange={(v) => set("reports", { ...draft.reports, inbox: v })} />
-                  Loma inbox
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <Switch checked={draft.reports.slack_dm}
-                          onCheckedChange={(v) => set("reports", { ...draft.reports, slack_dm: v })} />
-                  Slack DM
-                </label>
-              </div>
+                        onChange={(e) => set("notes", e.target.value)} />
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium">Limits</p>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
                 {LIMIT_FIELDS.map((f) => (
                   <div key={f.key} className="space-y-1">
                     <Label htmlFor={`crew-${f.key}`} className="text-xs">{f.label}</Label>
@@ -346,17 +377,20 @@ export default function CrewPage() {
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                Crew agents can never send email or Slack messages, change your calendar or merge PRs on their own.
-                They ask you first under Needs you.
+                Every member acts as you. Sending email or Slack messages, changing your calendar and merging PRs follow each
+                member&apos;s &quot;Send and merge&quot; setting.
+                {!draft.unattended_writes_allowed && " This server only allows \"Ask me first\" or \"Never\"."}
               </p>
-            </div>
-            <div className="flex justify-end">
-              <Button size="sm" disabled={busy} onClick={save} data-testid="crew-save">
-                {saved ? "Saved" : "Save settings"}
-              </Button>
             </div>
           </CardContent>
         </Card>
+
+        <div className="sticky bottom-0 flex justify-end gap-2 bg-background/90 py-2 backdrop-blur">
+          {dirty && <Button size="sm" variant="ghost" onClick={() => setDraft(status.crew)}>Discard changes</Button>}
+          <Button size="sm" disabled={busy || !dirty} onClick={save} data-testid="crew-save">
+            {saved ? "Saved" : "Save crew"}
+          </Button>
+        </div>
       </div>
     </div>
   );

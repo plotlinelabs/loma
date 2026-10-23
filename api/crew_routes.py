@@ -1,4 +1,4 @@
-"""Personal crew settings, controls and the fleet view (/api/crew*)."""
+"""Personal crew config (members, links, permissions, schedules), controls and the fleet view (/api/crew*)."""
 
 import json
 import logging
@@ -70,12 +70,16 @@ async def handle_action(request):
                 await svc.save_crew(db, email, {})
             await svc.set_state(db, email, {"activate": "active", "pause": "paused",
                                             "stop": "stopped"}[action])
-        elif action in ("run-plan", "run-report"):
+        elif action == "run-schedule":
             crew = await svc.get_crew(db, email)
             if not crew or crew.get("state") != "active":
                 raise svc.FleetError("Turn the crew on first")
-            fn = dispatcher.start_plan if action == "run-plan" else dispatcher.start_report
-            doc, _ = await fn(db, crew)
+            body = await request.json() if request.can_read_body else {}
+            schedule = next((s for s in crew.get("schedules") or []
+                             if s["id"] == (body or {}).get("schedule_id")), None)
+            if not schedule:
+                raise svc.FleetError("Unknown schedule")
+            doc, _ = await dispatcher.start_schedule(db, crew, schedule)
             payload = await _status(request, db, email)
             payload["started"] = doc["conversation_id"]
             return _json(payload)
@@ -84,6 +88,18 @@ async def handle_action(request):
     except svc.FleetError as e:
         return _json({"error": str(e)}, 400)
     return _json(await _status(request, db, email))
+
+
+async def handle_task(request):
+    """The owner hands a task straight to one member."""
+    db, email = await _ctx(request)
+    try:
+        doc = await svc.owner_task(db, email, await request.json())
+    except (ValueError, json.JSONDecodeError) as e:
+        return _json({"error": str(e)}, 400)
+    payload = await _status(request, db, email)
+    payload["started"] = doc["conversation_id"]
+    return _json(payload)
 
 
 async def handle_tree(request):
@@ -101,4 +117,5 @@ def setup_crew_routes(app: web.Application):
     app.router.add_put("/api/crew", handle_put)
     app.router.add_get("/api/crew/tree", handle_tree)
     app.router.add_post("/api/crew/actions/{action}", handle_action)
+    app.router.add_post("/api/crew/tasks", handle_task)
     app.cleanup_ctx.append(lifecycle)

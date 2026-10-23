@@ -205,9 +205,14 @@ GUARDED_MCP_TOOLS = (
 
 
 def _write_blocked(scope: dict, target: str) -> dict:
-    return {"kind": "tool", "target": target, "reason": (
-        f"{target} is blocked for crew runs: sending or merging needs the owner's approval. "
-        "Draft the exact action and ask with `fleet.py escalate --kind approval`, then end your turn.")}
+    name = scope.get("agent_name") or "This crew member"
+    if scope.get("write_policy") == "deny":
+        reason = (f"{target} is not allowed for {name}: it may never send or merge. Do not retry "
+                  "or work around this. Leave a draft and put it in your result.")
+    else:
+        reason = (f"{target} is blocked for {name}: sending or merging needs the owner's approval. "
+                  "Draft the exact action and ask with `fleet.py escalate --kind approval`, then end your turn.")
+    return {"kind": "tool", "target": target, "reason": reason}
 
 
 def check_write_guard(scope: dict | None, tool_name: str, tool_input: Any) -> dict | None:

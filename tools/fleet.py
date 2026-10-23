@@ -1,4 +1,7 @@
-"""Crew tool: an agent on the owner's crew creates and checks child tasks.
+"""Crew tool: a member of the owner's crew hands out and checks work.
+
+Who a member can hand work to, who reviews it and whether it may ask the
+owner are all set by the owner on the Crew page; the server enforces them.
 
 Only conversations that are part of the caller's own crew can use it (see
 fleet/service.py). Caps (depth, fan-out, daily tasks) are enforced server
@@ -7,7 +10,8 @@ as human tasks and only the owner answers them in Loma.
 
 Commands:
   fleet.py --auth-token T --user-email E --conversation-id C status
-  fleet.py ... create --role worker --title T --brief B --acceptance A --request-key K [--depends-on ID,ID]
+  fleet.py ... members
+  fleet.py ... create --to MEMBER_ID --title T --brief B --acceptance A --request-key K [--depends-on ID,ID]
   fleet.py ... children
   fleet.py ... review --verdict accept|rework|escalate --notes N
   fleet.py ... escalate --kind approval|information --title T --details D --request-key K
@@ -31,8 +35,9 @@ def parser():
     commands = p.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     commands.add_parser("children")
+    commands.add_parser("members")
     create = commands.add_parser("create")
-    create.add_argument("--role", choices=("pm", "worker"), required=True)
+    create.add_argument("--to", required=True, help="member id to hand the task to")
     for flag in ("title", "brief", "acceptance", "request-key"):
         create.add_argument("--" + flag, required=True)
     create.add_argument("--depends-on", default="")
